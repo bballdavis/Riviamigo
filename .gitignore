@@ -1,0 +1,14 @@
+node_modules
+.turbo
+dist
+build
+storybook-static
+.env
+.env.local
+*.env.local
+target/
+*.lock.tmp
+.DS_Store
+coverage/
+playwright-report/
+test-results/
