@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Riviamigo — Rivian telemetry dashboard" />
+    <title>Riviamigo</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Theme FOUC prevention: apply saved theme before first paint -->
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('rm-auth');
+        } catch (e) {}
+        var saved = localStorage.getItem('rm-theme');
+        var isDark = saved !== 'light';
+        document.documentElement.classList.add(isDark ? 'dark' : 'light');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

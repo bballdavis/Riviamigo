@@ -1,0 +1,106 @@
+import * as React from 'react';
+import { createColumnHelper } from '@tanstack/react-table';
+import { format, parseISO } from 'date-fns';
+import { Badge } from '../primitives/Badge';
+import { formatKwh, formatDuration, formatCurrency, formatPercent } from '../lib/utils';
+
+export interface ChargeSessionRow {
+  id: string;
+  started_at: string;
+  duration_min: number | null;
+  energy_added_kwh: number | null;
+  soc_start: number | null;
+  soc_end: number | null;
+  peak_power_kw: number | null;
+  cost_usd: number | null;
+  charger_type: string | null;
+  location_name: string | null;
+}
+
+const col = createColumnHelper<ChargeSessionRow>();
+
+const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success'> = {
+  dcfc: 'accent', dc: 'info', ac: 'success',
+};
+
+export const chargingColumns = [
+  col.accessor('started_at', {
+    header: 'Date',
+    cell: (info) => (
+      <span className="text-fg font-medium">
+        {format(parseISO(info.getValue()), 'MMM d, yyyy')}
+      </span>
+    ),
+  }),
+  col.accessor('location_name', {
+    header: 'Location',
+    enableSorting: false,
+    cell: (info) => (
+      <span className="text-fg-secondary truncate max-w-[160px] block">
+        {info.getValue() ?? '—'}
+      </span>
+    ),
+  }),
+  col.accessor('charger_type', {
+    header: 'Type',
+    enableSorting: false,
+    cell: (info) => {
+      const t = info.getValue();
+      if (!t) return <span className="text-fg-tertiary">—</span>;
+      return (
+        <Badge variant={CHARGER_VARIANT[t] ?? 'default'} size="sm">
+          {t.toUpperCase()}
+        </Badge>
+      );
+    },
+  }),
+  col.accessor('energy_added_kwh', {
+    header: 'Energy Added',
+    cell: (info) => {
+      const v = info.getValue();
+      return v !== null ? (
+        <span className="font-mono">{formatKwh(v)}</span>
+      ) : <span className="text-fg-tertiary">—</span>;
+    },
+  }),
+  col.accessor('soc_start', {
+    header: 'SoC',
+    enableSorting: false,
+    cell: (info) => {
+      const row = info.row.original;
+      const start = row.soc_start;
+      const end = row.soc_end;
+      if (start === null || end === null) return <span className="text-fg-tertiary">—</span>;
+      return (
+        <span className="font-mono text-fg">
+          {formatPercent(start, 0)} → {formatPercent(end, 0)}
+        </span>
+      );
+    },
+  }),
+  col.accessor('peak_power_kw', {
+    header: 'Peak',
+    cell: (info) => {
+      const v = info.getValue();
+      return v !== null ? (
+        <span className="font-mono">{v.toFixed(1)} kW</span>
+      ) : <span className="text-fg-tertiary">—</span>;
+    },
+  }),
+  col.accessor('duration_min', {
+    header: 'Duration',
+    cell: (info) => {
+      const v = info.getValue();
+      return v !== null ? formatDuration(v) : <span className="text-fg-tertiary">—</span>;
+    },
+  }),
+  col.accessor('cost_usd', {
+    header: 'Cost',
+    cell: (info) => {
+      const v = info.getValue();
+      return v !== null ? (
+        <span className="font-mono text-accent">{formatCurrency(v)}</span>
+      ) : <span className="text-fg-tertiary">—</span>;
+    },
+  }),
+];
