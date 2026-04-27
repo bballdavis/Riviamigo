@@ -1,0 +1,38 @@
+import { useQuery } from '@tanstack/react-query';
+import { api } from './api';
+
+export function useTrips(vehicleId: string | null, from: string, to: string, page = 1) {
+  return useQuery({
+    queryKey: ['trips', 'list', vehicleId, from, to, page],
+    queryFn: () => api.listTrips(vehicleId!, from, to, page),
+    enabled: !!vehicleId,
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useTrip(tripId: string | null, vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['trips', 'detail', tripId, vehicleId],
+    queryFn: () => api.getTrip(tripId!, vehicleId!),
+    enabled: !!tripId && !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useTripTrack(tripId: string | null, vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['trips', 'track', tripId, vehicleId],
+    queryFn: () => api.getTripTrack(tripId!, vehicleId!),
+    enabled: !!tripId && !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useSpeedProfile(tripId: string | null, vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['trips', 'speed', tripId, vehicleId],
+    queryFn: () => api.getSpeedProfile(tripId!, vehicleId!),
+    enabled: !!tripId && !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+  });
+}

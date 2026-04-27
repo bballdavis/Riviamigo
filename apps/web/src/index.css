@@ -1,0 +1,19 @@
+@import '@riviamigo/ui/tokens/globals.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rm-border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background-color: var(--rm-border-strong); border-radius: 9999px; }
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--rm-accent);
+  outline-offset: 2px;
+}

@@ -1,0 +1,33 @@
+pub mod parser;
+pub mod trip_detector;
+pub mod charge_detector;
+pub mod session_store;
+pub mod rivian_auth;
+pub mod ws_client;
+pub mod poller;
+pub mod worker;
+pub mod supervisor;
+
+use sqlx::PgPool;
+use crate::config::Config;
+
+pub async fn start_workers(
+    pool:   PgPool,
+    redis:  redis::Client,
+    config: Config,
+) -> anyhow::Result<supervisor::SupervisorHandle> {
+    let handle = supervisor::WorkerSupervisor::start(pool.clone(), redis, config);
+
+    let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar!(
+        "SELECT v.id FROM riviamigo.vehicles v \
+         JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id"
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    for vid in enrolled {
+        handle.send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid }).await;
+    }
+
+    Ok(handle)
+}

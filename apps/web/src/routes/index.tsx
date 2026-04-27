@@ -1,0 +1,91 @@
+import React, { useState } from 'react';
+import { createRoute, useNavigate } from '@tanstack/react-router';
+import { rootRoute } from './__root';
+import { useAuth, useSummaryStats, useVehicles, useSocHistory } from '@riviamigo/hooks';
+import {
+  PageLayout, StatCardGrid, StatCard, ChartSection,
+  StatCardSkeleton, EmptyState, DateRangePicker,
+} from '@riviamigo/ui/primitives';
+import { SocAreaChart } from '@riviamigo/ui/charts';
+import { AppLayout } from '../components/layout/AppLayout';
+import { AuthGuard } from '../components/layout/AuthGuard';
+import { formatMiles, formatKwh } from '@riviamigo/ui/lib/utils';
+import { presetToRange, rangeToIso, DEFAULT_PRESET, type PresetKey } from '../lib/dates';
+import { Car } from 'lucide-react';
+
+export const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/',
+  component: DashboardPage,
+});
+
+function DashboardPage() {
+  return (
+    <AuthGuard>
+      <DashboardContent />
+    </AuthGuard>
+  );
+}
+
+function DashboardContent() {
+  const { defaultVehicleId } = useAuth();
+  const navigate = useNavigate();
+
+  const [preset, setPreset] = useState<PresetKey>(DEFAULT_PRESET);
+  const [range, setRange] = useState(presetToRange(DEFAULT_PRESET));
+  const { from, to } = rangeToIso(range);
+
+  const { data: stats, isLoading: statsLoading } = useSummaryStats(defaultVehicleId);
+  const { data: socData, isLoading: socLoading }  = useSocHistory(defaultVehicleId, from, to);
+  const { data: vehicles }                        = useVehicles();
+
+  const hasVehicle = !!defaultVehicleId;
+
+  return (
+    <AppLayout activeKey="dashboard">
+      <PageLayout
+        title="Dashboard"
+        subtitle={vehicles?.[0]?.display_name ?? undefined}
+        actions={
+          <DateRangePicker
+            value={range}
+            preset={preset}
+            onChange={(r, p) => { setRange(r); if (p) setPreset(p); }}
+          />
+        }
+      >
+        {!hasVehicle ? (
+          <EmptyState
+            icon={<Car />}
+            title="No vehicle connected"
+            description="Connect your Rivian account to start tracking telemetry."
+            action={{ label: 'Connect Rivian', onClick: () => navigate({ to: '/connect' }) }}
+          />
+        ) : (
+          <>
+            <StatCardGrid>
+              {statsLoading ? (
+                Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
+              ) : (
+                <>
+                  <StatCard label="Total Miles"   value={formatMiles(stats?.total_miles ?? 0)} accent />
+                  <StatCard label="Total Trips"   value={stats?.total_trips ?? 0} />
+                  <StatCard label="Energy Used"   value={formatKwh(stats?.total_energy_kwh ?? 0)} />
+                  <StatCard
+                    label="Avg Efficiency"
+                    value={stats?.avg_efficiency_wh_mi?.toFixed(0) ?? '—'}
+                    unit="Wh/mi"
+                  />
+                </>
+              )}
+            </StatCardGrid>
+
+            <ChartSection title="State of Charge" subtitle={`Last ${preset}`}>
+              <SocAreaChart data={socData ?? []} loading={socLoading} height={240} />
+            </ChartSection>
+          </>
+        )}
+      </PageLayout>
+    </AppLayout>
+  );
+}
