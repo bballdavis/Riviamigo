@@ -1,0 +1,27 @@
+{
+  "name": "@riviamigo/hooks",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint":      "eslint src --max-warnings 0"
+  },
+  "dependencies": {
+    "@riviamigo/types": "workspace:*",
+    "@tanstack/react-query": "^5.50.0",
+    "date-fns": "^3.6.0",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@riviamigo/config": "workspace:*",
+    "@types/react":      "^18.3.3",
+    "react":             "^18.3.1",
+    "typescript":        "^5.4.5"
+  },
+  "peerDependencies": {
+    "react": "^18"
+  }
+}

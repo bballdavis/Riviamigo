@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&display=swap');
+
+:root, .dark {
+  --rm-bg-page:        #0A0A0F;
+  --rm-bg-surface:     #12121A;
+  --rm-bg-elevated:    #1A1A24;
+  --rm-bg-glass:       rgba(26, 26, 36, 0.6);
+  --rm-bg-overlay:     rgba(0, 0, 0, 0.7);
+
+  --rm-text-primary:   #FAFAFA;
+  --rm-text-secondary: #A1A1A1;
+  --rm-text-tertiary:  #71717A;
+  --rm-text-disabled:  #52525B;
+  --rm-text-on-accent: #0A0A0F;
+
+  --rm-border-default: rgba(255, 255, 255, 0.08);
+  --rm-border-strong:  rgba(255, 255, 255, 0.15);
+  --rm-border-accent:  rgba(245, 158, 11, 0.3);
+
+  --rm-glow-sm:        0 0 20px rgba(245, 158, 11, 0.15);
+  --rm-glow-md:        0 0 40px rgba(245, 158, 11, 0.20);
+  --rm-glow-lg:        0 0 60px rgba(245, 158, 11, 0.25);
+  --rm-glow-button:    0 0 20px rgba(245, 158, 11, 0.40);
+
+  --rm-accent:         #F59E0B;
+  --rm-accent-hover:   #FBBF24;
+  --rm-accent-active:  #D97706;
+  --rm-accent-muted:   rgba(245, 158, 11, 0.15);
+
+  --rm-shadow-sm:      0 1px 2px rgba(0, 0, 0, 0.3);
+  --rm-shadow-md:      0 4px 6px rgba(0, 0, 0, 0.3);
+  --rm-shadow-lg:      0 10px 15px rgba(0, 0, 0, 0.3);
+  --rm-shadow-xl:      0 20px 25px rgba(0, 0, 0, 0.4);
+}
+
+.light {
+  --rm-bg-page:        #FAFAF7;
+  --rm-bg-surface:     #FFFFFF;
+  --rm-bg-elevated:    #F4F4EE;
+  --rm-bg-glass:       rgba(255, 255, 255, 0.7);
+  --rm-bg-overlay:     rgba(20, 20, 24, 0.4);
+
+  --rm-text-primary:   #18181B;
+  --rm-text-secondary: #52525B;
+  --rm-text-tertiary:  #71717A;
+  --rm-text-disabled:  #A1A1A1;
+  --rm-text-on-accent: #FAFAFA;
+
+  --rm-border-default: rgba(20, 20, 24, 0.08);
+  --rm-border-strong:  rgba(20, 20, 24, 0.18);
+  --rm-border-accent:  rgba(217, 119, 6, 0.35);
+
+  --rm-glow-sm:        0 0 0 1px rgba(217, 119, 6, 0.10);
+  --rm-glow-md:        0 1px 2px rgba(217, 119, 6, 0.15);
+  --rm-glow-lg:        0 2px 8px rgba(217, 119, 6, 0.20);
+  --rm-glow-button:    0 4px 12px rgba(217, 119, 6, 0.25);
+
+  --rm-accent:         #D97706;
+  --rm-accent-hover:   #B45309;
+  --rm-accent-active:  #92400E;
+  --rm-accent-muted:   rgba(217, 119, 6, 0.10);
+
+  --rm-shadow-sm:      0 1px 2px rgba(20, 20, 24, 0.06);
+  --rm-shadow-md:      0 2px 6px rgba(20, 20, 24, 0.08);
+  --rm-shadow-lg:      0 8px 20px rgba(20, 20, 24, 0.10);
+  --rm-shadow-xl:      0 16px 32px rgba(20, 20, 24, 0.12);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter Variable', 'Inter', system-ui, sans-serif;
+  background-color: var(--rm-bg-page);
+  color: var(--rm-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
