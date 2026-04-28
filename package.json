@@ -4,15 +4,16 @@
   "private": true,
   "engines": { "node": ">=20", "pnpm": ">=9" },
   "scripts": {
-    "dev":       "turbo dev",
-    "build":     "turbo build",
-    "test":      "turbo test",
-    "lint":      "turbo lint",
-    "typecheck": "turbo typecheck",
-    "storybook": "turbo storybook",
-    "clean":     "turbo clean && rm -rf node_modules",
-    "db:migrate":"cd apps/api && sqlx migrate run",
-    "db:reset":  "cd apps/api && sqlx database drop && sqlx database create && sqlx migrate run"
+    "dev":        "turbo dev",
+    "build":      "turbo build",
+    "start":      "./scripts/start.sh",
+    "test":       "turbo test",
+    "lint":       "turbo lint",
+    "typecheck":  "turbo typecheck",
+    "storybook":  "turbo storybook",
+    "clean":      "turbo clean && rm -rf node_modules",
+    "db:migrate": "cd apps/api && sqlx migrate run",
+    "db:reset":   "cd apps/api && sqlx database drop && sqlx database create && sqlx migrate run"
   },
   "devDependencies": {
     "turbo":    "^2.0.0",

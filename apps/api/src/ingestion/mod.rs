@@ -12,11 +12,12 @@ use sqlx::PgPool;
 use crate::config::Config;
 
 pub async fn start_workers(
-    pool:   PgPool,
-    redis:  redis::Client,
-    config: Config,
+    pool:    PgPool,
+    redis:   redis::Client,
+    age_key: String,
+    config:  Config,
 ) -> anyhow::Result<supervisor::SupervisorHandle> {
-    let handle = supervisor::WorkerSupervisor::start(pool.clone(), redis, config);
+    let handle = supervisor::WorkerSupervisor::start(pool.clone(), redis, age_key, config);
 
     let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar!(
         "SELECT v.id FROM riviamigo.vehicles v \
