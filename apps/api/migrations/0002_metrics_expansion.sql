@@ -44,16 +44,16 @@ SELECT
   avg(distance_to_empty_mi)    AS avg_range_mi,
   avg(speed_mph)               AS avg_speed_mph,
   max(speed_mph)               AS max_speed_mph,
-  avg(power_kw)                AS avg_power_kw,
-  sum(CASE WHEN regen_power_kw < 0 THEN regen_power_kw ELSE 0 END) AS regen_kw_sum,
-  avg(outside_temp_c)          AS avg_outside_temp_c,
   avg(cabin_temp_c)            AS avg_cabin_temp_c,
   last(power_state, ts)        AS power_state,
   last(charger_state, ts)      AS charger_state,
   last(drive_mode, ts)         AS drive_mode,
   last(odometer_miles, ts)     AS odometer_miles,
   max(battery_capacity_wh)     AS battery_capacity_wh,
-  count(*)                     AS sample_count
+  count(*)                     AS sample_count,
+  avg(power_kw)                AS avg_power_kw,
+  sum(CASE WHEN regen_power_kw < 0 THEN regen_power_kw ELSE 0 END) AS regen_kw_sum,
+  avg(outside_temp_c)          AS avg_outside_temp_c
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
@@ -67,11 +67,11 @@ SELECT
   avg(distance_to_empty_mi)   AS avg_range_mi,
   avg(speed_mph)               AS avg_speed_mph,
   max(speed_mph)               AS max_speed_mph,
-  avg(power_kw)                AS avg_power_kw,
-  avg(outside_temp_c)          AS avg_outside_temp_c,
   avg(cabin_temp_c)            AS avg_cabin_temp_c,
   max(battery_capacity_wh)     AS battery_capacity_wh,
-  count(*)                     AS sample_count
+  count(*)                     AS sample_count,
+  avg(power_kw)                AS avg_power_kw,
+  avg(outside_temp_c)          AS avg_outside_temp_c
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
@@ -85,8 +85,8 @@ SELECT
   avg(distance_to_empty_mi)   AS avg_range_mi,
   max(battery_capacity_wh)    AS battery_capacity_wh,
   avg(cabin_temp_c)           AS avg_cabin_temp_c,
-  avg(outside_temp_c)         AS avg_outside_temp_c,
-  count(*)                    AS sample_count
+  count(*)                    AS sample_count,
+  avg(outside_temp_c)         AS avg_outside_temp_c
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
