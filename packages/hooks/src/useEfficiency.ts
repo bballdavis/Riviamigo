@@ -18,3 +18,21 @@ export function useEfficiencyByMode(vehicleId: string | null, from: string, to: 
     staleTime: 5 * 60 * 1000,
   });
 }
+
+export function useEfficiencyTrend(vehicleId: string | null, from: string, to: string) {
+  return useQuery({
+    queryKey: ['efficiency', 'trend', vehicleId, from, to],
+    queryFn: () => api.getEfficiencyTrend(vehicleId!, from, to),
+    enabled: !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useEfficiencyVsTemp(vehicleId: string | null, from: string, to: string) {
+  return useQuery({
+    queryKey: ['efficiency', 'vs-temp', vehicleId, from, to],
+    queryFn: () => api.getEfficiencyVsTemp(vehicleId!, from, to),
+    enabled: !!vehicleId,
+    staleTime: 10 * 60 * 1000,
+  });
+}

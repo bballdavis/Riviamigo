@@ -35,3 +35,6 @@ export { StatusBar } from './StatusBar';
 export type { StatusBarProps, VehicleOnlineState } from './StatusBar';
 
 export { AmbientOrbs } from './AmbientOrbs';
+
+export { MetricTabs } from './MetricTabs';
+export type { MetricTabsProps, MetricTab } from './MetricTabs';

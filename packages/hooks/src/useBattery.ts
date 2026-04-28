@@ -27,3 +27,12 @@ export function usePhantomDrain(vehicleId: string | null, from: string, to: stri
     staleTime: 5 * 60 * 1000,
   });
 }
+
+export function useDegradation(vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['battery', 'degradation', vehicleId],
+    queryFn: () => api.getDegradation(vehicleId!),
+    enabled: !!vehicleId,
+    staleTime: 60 * 60 * 1000,
+  });
+}

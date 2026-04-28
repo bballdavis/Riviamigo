@@ -52,21 +52,6 @@ async fn main() -> anyhow::Result<()> {
         pool.clone(), redis, age_key, config.clone()
     ).await?;
 
-    let pool_ref = pool.clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(tokio::time::Duration::from_secs(3600));
-        loop {
-            tick.tick().await;
-            let _ = sqlx::query(
-                "REFRESH MATERIALIZED VIEW CONCURRENTLY timeseries.phantom_drain_periods"
-            ).execute(&pool_ref).await;
-            let _ = sqlx::query(
-                "REFRESH MATERIALIZED VIEW CONCURRENTLY timeseries.phantom_drain_daily"
-            ).execute(&pool_ref).await;
-            tracing::info!("phantom drain views refreshed");
-        }
-    });
-
     let app = routes::build_router(state);
 
     let addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;

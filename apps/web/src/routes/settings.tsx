@@ -20,7 +20,7 @@ function SettingsPage() {
   return <AuthGuard><SettingsContent /></AuthGuard>;
 }
 
-function SettingsContent() {
+export function SettingsContent() {
   const { logout } = useAuth();
   const navigate = useNavigate();
   const { data: vehicles } = useVehicles();

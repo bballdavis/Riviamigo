@@ -1,5 +1,5 @@
 use axum::{extract::State, routing::{get, post}, Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
@@ -163,14 +163,17 @@ async fn list_vehicles(
     .await?;
 
     let vehicles: Vec<_> = rows.iter().map(|r| serde_json::json!({
-        "id":                  r.id,
-        "rivian_vehicle_id":   r.rivian_vehicle_id,
-        "model":               r.model,
-        "trim":                r.trim,
-        "name":                r.name,
-        "battery_capacity_wh": r.battery_capacity_wh,
-        "home_latitude":       r.home_latitude,
-        "home_longitude":      r.home_longitude,
+        "id":                    r.id,
+        "user_id":               auth.user_id,
+        "rivian_vehicle_id":     r.rivian_vehicle_id,
+        "vin":                   serde_json::Value::Null,
+        "model":                 r.model,
+        "year":                  serde_json::Value::Null,
+        "trim":                  r.trim,
+        "color":                 serde_json::Value::Null,
+        "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
+        "display_name":          r.name.as_deref().unwrap_or(&r.model),
+        "created_at":            r.created_at,
     })).collect();
 
     Ok(Json(serde_json::json!({"vehicles": vehicles})))
