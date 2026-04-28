@@ -1,11 +1,11 @@
-use anyhow::Context;
 use age::secrecy::ExposeSecret;
+use anyhow::Context;
 use sqlx::PgPool;
 
 pub struct BootstrappedKeys {
     pub jwt_private_pem: String,
-    pub jwt_public_pem:  String,
-    pub age_key:         String,
+    pub jwt_public_pem: String,
+    pub age_key: String,
 }
 
 /// Returns active cryptographic keys, sourcing them in priority order:
@@ -13,10 +13,10 @@ pub struct BootstrappedKeys {
 ///   2. system_config table (persisted from a previous boot)
 ///   3. Freshly generated — stored in system_config for subsequent boots
 pub async fn bootstrap_keys(
-    pool:           &PgPool,
+    pool: &PgPool,
     env_jwt_secret: Option<String>,
     env_jwt_public: Option<String>,
-    env_age_key:    Option<String>,
+    env_age_key: Option<String>,
 ) -> anyhow::Result<BootstrappedKeys> {
     if let (Some(priv_pem), Some(pub_pem), Some(age)) =
         (env_jwt_secret, env_jwt_public, env_age_key)
@@ -24,8 +24,8 @@ pub async fn bootstrap_keys(
         tracing::info!("using JWT and AGE keys from environment variables");
         return Ok(BootstrappedKeys {
             jwt_private_pem: priv_pem,
-            jwt_public_pem:  pub_pem,
-            age_key:         age,
+            jwt_public_pem: pub_pem,
+            age_key: age,
         });
     }
 
@@ -34,7 +34,7 @@ pub async fn bootstrap_keys(
         "SELECT
             (SELECT value FROM riviamigo.system_config WHERE key = 'jwt_private_key'),
             (SELECT value FROM riviamigo.system_config WHERE key = 'jwt_public_key'),
-            (SELECT value FROM riviamigo.system_config WHERE key = 'age_key')"
+            (SELECT value FROM riviamigo.system_config WHERE key = 'age_key')",
     )
     .fetch_one(pool)
     .await
@@ -44,8 +44,8 @@ pub async fn bootstrap_keys(
         tracing::info!("loaded JWT and AGE keys from database");
         return Ok(BootstrappedKeys {
             jwt_private_pem: priv_pem,
-            jwt_public_pem:  pub_pem,
-            age_key:         age,
+            jwt_public_pem: pub_pem,
+            age_key: age,
         });
     }
 
@@ -55,12 +55,12 @@ pub async fn bootstrap_keys(
     let mut tx = pool.begin().await?;
     for (k, v) in [
         ("jwt_private_key", generated.jwt_private_pem.as_str()),
-        ("jwt_public_key",  generated.jwt_public_pem.as_str()),
-        ("age_key",         generated.age_key.as_str()),
+        ("jwt_public_key", generated.jwt_public_pem.as_str()),
+        ("age_key", generated.age_key.as_str()),
     ] {
         sqlx::query(
             "INSERT INTO riviamigo.system_config (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO NOTHING"
+             ON CONFLICT (key) DO NOTHING",
         )
         .bind(k)
         .bind(v)
@@ -78,8 +78,7 @@ pub(crate) fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
     use rsa::RsaPrivateKey;
 
     let mut rng = rand::thread_rng();
-    let private_key = RsaPrivateKey::new(&mut rng, 2048)
-        .context("RSA key generation")?;
+    let private_key = RsaPrivateKey::new(&mut rng, 2048).context("RSA key generation")?;
 
     let jwt_private_pem = private_key
         .to_pkcs8_pem(LineEnding::LF)
@@ -94,5 +93,9 @@ pub(crate) fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
     let age_identity = age::x25519::Identity::generate();
     let age_key = age_identity.to_string().expose_secret().to_owned();
 
-    Ok(BootstrappedKeys { jwt_private_pem, jwt_public_pem, age_key })
+    Ok(BootstrappedKeys {
+        jwt_private_pem,
+        jwt_public_pem,
+        age_key,
+    })
 }

@@ -18,10 +18,7 @@ pub enum ParseError {
 
 /// Parse a raw WebSocket message. Returns None for non-data messages.
 /// Never panics — all field parsing is defensive.
-pub fn parse_ws_message(
-    raw:        &str,
-    vehicle_id: Uuid,
-) -> Result<Option<TelemetryEvent>, ParseError> {
+pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryEvent>, ParseError> {
     let msg: Value = serde_json::from_str(raw)?;
 
     match msg.get("type").and_then(Value::as_str) {
@@ -42,27 +39,24 @@ pub fn parse_ws_message(
         vehicle_id,
         ts,
 
-        latitude:  extract_f64(state, "/gnssLocation/latitude"),
+        latitude: extract_f64(state, "/gnssLocation/latitude"),
         longitude: extract_f64(state, "/gnssLocation/longitude"),
-        altitude_m:extract_f64(state, "/gnssAltitude/value"),
+        altitude_m: extract_f64(state, "/gnssAltitude/value"),
         speed_mph: extract_f64(state, "/gnssSpeed/value").map(ms_to_mph),
 
-        battery_level:        extract_f64(state, "/batteryLevel/value"),
-        battery_capacity_wh:  extract_f64(state, "/batteryCapacity/value"),
+        battery_level: extract_f64(state, "/batteryLevel/value"),
+        battery_capacity_wh: extract_f64(state, "/batteryCapacity/value"),
         distance_to_empty_mi: extract_f64(state, "/distanceToEmpty/value"),
-        battery_limit:        extract_f64(state, "/batteryLimit/value"),
+        battery_limit: extract_f64(state, "/batteryLimit/value"),
 
-        power_state:   extract_str(state, "/powerState/value")
-                          .and_then(|s| s.parse().ok()),
-        charger_state: extract_str(state, "/chargerState/value")
-                          .and_then(|s| s.parse().ok()),
+        power_state: extract_str(state, "/powerState/value").and_then(|s| s.parse().ok()),
+        charger_state: extract_str(state, "/chargerState/value").and_then(|s| s.parse().ok()),
         charger_status: extract_str(state, "/chargerStatus/value").map(String::from),
         time_to_end_of_charge_min: extract_i32(state, "/timeToEndOfCharge/value"),
-        drive_mode:    extract_str(state, "/driveMode/value")
-                          .and_then(|s| s.parse().ok()),
-        gear_status:   extract_str(state, "/gearStatus/value").map(String::from),
+        drive_mode: extract_str(state, "/driveMode/value").and_then(|s| s.parse().ok()),
+        gear_status: extract_str(state, "/gearStatus/value").map(String::from),
 
-        cabin_temp_c:  extract_f64(state, "/cabinClimateInteriorTemperature/value"),
+        cabin_temp_c: extract_f64(state, "/cabinClimateInteriorTemperature/value"),
         driver_temp_c: extract_f64(state, "/cabinClimateDriverTemperature/value"),
         outside_temp_c: extract_f64(state, "/cabinClimateExteriorTemperature/value"),
         hvac_active: extract_bool(state, "/cabinClimateRunning/value"),
@@ -72,14 +66,14 @@ pub fn parse_ws_message(
 
         heading_deg: extract_f64(state, "/gnssHeading/value"),
 
-        odometer_miles:     extract_f64(state, "/vehicleMileage/value"),
+        odometer_miles: extract_f64(state, "/vehicleMileage/value"),
 
         tire_fl_psi: extract_f64(state, "/tirePressureFrontLeft/value"),
         tire_fr_psi: extract_f64(state, "/tirePressureFrontRight/value"),
         tire_rl_psi: extract_f64(state, "/tirePressureRearLeft/value"),
         tire_rr_psi: extract_f64(state, "/tirePressureRearRight/value"),
 
-        hv_thermal_event:   extract_str(state, "/batteryHvThermalEvent/value").map(String::from),
+        hv_thermal_event: extract_str(state, "/batteryHvThermalEvent/value").map(String::from),
         twelve_volt_health: extract_str(state, "/twelveVoltBatteryHealth/value").map(String::from),
         is_online,
     }))
@@ -122,20 +116,26 @@ fn collect_timestamps(v: &Value, latest: &mut Option<DateTime<Utc>>) {
             }
         }
         Value::Array(arr) => {
-            for val in arr { collect_timestamps(val, latest); }
+            for val in arr {
+                collect_timestamps(val, latest);
+            }
         }
         _ => {}
     }
 }
 
-fn ms_to_mph(ms: f64) -> f64 { ms * 2.236_94 }
+fn ms_to_mph(ms: f64) -> f64 {
+    ms * 2.236_94
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::telemetry::PowerState;
 
-    fn vid() -> Uuid { Uuid::new_v4() }
+    fn vid() -> Uuid {
+        Uuid::new_v4()
+    }
 
     #[test]
     fn connection_ack_returns_none() {
@@ -151,7 +151,8 @@ mod tests {
                 "batteryLevel": { "timeStamp": "2024-01-15T10:30:00.000Z", "value": 82.5 },
                 "powerState":   { "timeStamp": "2024-01-15T10:30:00.000Z", "value": "ready" }
             }}}
-        }).to_string();
+        })
+        .to_string();
         let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
         assert_eq!(ev.battery_level, Some(82.5));
         assert_eq!(ev.power_state, Some(PowerState::Ready));
@@ -162,8 +163,12 @@ mod tests {
         let msg = serde_json::json!({
             "type": "next",
             "payload": { "data": {} }
-        }).to_string();
-        assert!(matches!(parse_ws_message(&msg, vid()), Err(ParseError::MissingVehicleState)));
+        })
+        .to_string();
+        assert!(matches!(
+            parse_ws_message(&msg, vid()),
+            Err(ParseError::MissingVehicleState)
+        ));
     }
 
     #[test]
@@ -173,7 +178,8 @@ mod tests {
             "payload": { "data": { "vehicleState": {
                 "batteryLevel": { "timeStamp": "2024-01-15T10:30:00Z", "value": 75.0 }
             }}}
-        }).to_string();
+        })
+        .to_string();
         let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
         assert_eq!(ev.battery_level, Some(75.0));
         assert!(ev.latitude.is_none());

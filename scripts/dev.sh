@@ -6,6 +6,7 @@ COMPOSE_PROJECT_NAME="riviamigo"
 export COMPOSE_PROJECT_NAME
 COMPOSE_FILE="$ROOT_DIR/infra/docker-compose.yml"
 API_DIR="$ROOT_DIR/apps/api"
+MIGRATIONS_DIR="$API_DIR/migrations"
 API_HEALTH_URL="http://localhost:3001/health"
 WEB_URL="http://localhost:5173"
 
@@ -14,8 +15,8 @@ cleanup() {
     kill "$WEB_PID" 2>/dev/null || true
   fi
 
-  if [[ "${API_MODE:-}" == "local" ]] && [[ -n "${API_PID:-}" ]] && kill -0 "$API_PID" 2>/dev/null; then
-    kill "$API_PID" 2>/dev/null || true
+  if [[ "${API_MODE:-}" == "local" ]]; then
+    kill_existing_api_server
   fi
 }
 
@@ -115,12 +116,7 @@ wait_for_api_ready() {
   local elapsed=0
 
   until curl -fsS --max-time 2 "$API_HEALTH_URL" >/dev/null 2>&1; do
-    if [[ "$API_MODE" == "local" ]]; then
-      if ! kill -0 "$API_PID" 2>/dev/null; then
-        echo "❌ API dev server exited before becoming ready."
-        return 1
-      fi
-    else
+    if [[ "$API_MODE" == "docker" ]]; then
       local container_status
       container_status="$(api_container_status || true)"
       if [[ "$container_status" == "exited" || "$container_status" == "dead" ]]; then
@@ -163,6 +159,104 @@ wait_for_web_ready() {
   done
 }
 
+kill_existing_web_server() {
+  local port="5173"
+
+  if command -v lsof &> /dev/null; then
+    local pids
+    pids="$(lsof -ti tcp:"$port" 2>/dev/null || true)"
+
+    if [[ -n "$pids" ]]; then
+      echo "🧹 Stopping stale process(es) on port $port..."
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        kill "$pid" 2>/dev/null || true
+      done <<< "$pids"
+      sleep 1
+    fi
+    return 0
+  fi
+
+  if command -v netstat &> /dev/null && command -v taskkill &> /dev/null; then
+    local pids
+    pids="$(netstat -ano -p tcp 2>/dev/null | awk -v port=":$port" '$0 ~ port && $6 == "LISTENING" { print $5 }' | sort -u)"
+
+    if [[ -n "$pids" ]]; then
+      echo "🧹 Stopping stale process(es) on port $port..."
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        taskkill /F /PID "$pid" >/dev/null 2>&1 || true
+      done <<< "$pids"
+      sleep 1
+    fi
+  fi
+}
+
+kill_existing_api_server() {
+  local port="3001"
+
+  if command -v lsof &> /dev/null; then
+    local pids
+    pids="$(lsof -ti tcp:"$port" 2>/dev/null || true)"
+
+    if [[ -n "$pids" ]]; then
+      echo "🧹 Stopping stale process(es) on port $port..."
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        kill "$pid" 2>/dev/null || true
+      done <<< "$pids"
+      sleep 1
+    fi
+    return 0
+  fi
+
+  if command -v netstat &> /dev/null && command -v taskkill &> /dev/null; then
+    local pids
+    pids="$(netstat -ano -p tcp 2>/dev/null | awk -v port=":$port" '$0 ~ port && $6 == "LISTENING" { print $5 }' | sort -u)"
+
+    if [[ -n "$pids" ]]; then
+      echo "🧹 Stopping stale process(es) on port $port..."
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        taskkill /F /PID "$pid" >/dev/null 2>&1 || true
+      done <<< "$pids"
+      sleep 1
+    fi
+  fi
+}
+
+apply_local_schema_migrations() {
+  apply_migration_if_missing "to_regclass('riviamigo.users')" \
+    "$MIGRATIONS_DIR/0001_schema_init.sql" \
+    "0001_schema_init.sql"
+
+  apply_migration_if_missing "to_regclass('riviamigo.battery_capacity_snapshots')" \
+    "$MIGRATIONS_DIR/0002_metrics_expansion.sql" \
+    "0002_metrics_expansion.sql"
+}
+
+apply_migration_if_missing() {
+  local sentinel_sql="$1"
+  local migration_file="$2"
+  local migration_name="$3"
+
+  if [[ ! -f "$migration_file" ]]; then
+    echo "❌ Missing migration file: $migration_file"
+    exit 1
+  fi
+
+  if docker compose -f "$COMPOSE_FILE" exec -T timescaledb \
+    psql -U riviamigo -d riviamigo -Atqc "SELECT CASE WHEN ${sentinel_sql} IS NULL THEN 'missing' ELSE 'present' END" \
+    | grep -qx 'present'; then
+    echo "✅ $migration_name already applied"
+    return 0
+  fi
+
+  echo "📐 Applying $migration_name..."
+  docker compose -f "$COMPOSE_FILE" exec -T timescaledb \
+    psql -U riviamigo -d riviamigo -v ON_ERROR_STOP=1 -f - < "$migration_file"
+}
+
 ensure_docker_ready
 
 echo "📦 Starting infrastructure (TimescaleDB, Redis, Garage)..."
@@ -197,6 +291,11 @@ echo "   • TimescaleDB: postgresql://localhost:5432"
 echo "   • Redis: redis://localhost:6379"
 echo "   • S3 (Garage): http://localhost:3900"
 echo ""
+
+echo "📐 Ensuring database schema is initialized..."
+apply_local_schema_migrations
+
+echo ""
 echo "🏃 Starting local dev servers..."
 echo "   • API:  http://localhost:3001"
 echo "   • Web:  http://localhost:5173"
@@ -209,6 +308,7 @@ fi
 
 if [[ "$API_MODE" == "local" ]]; then
   echo "📦 Running API locally with cargo..."
+  kill_existing_api_server
   (
     cd "$API_DIR"
     DATABASE_URL="postgresql://riviamigo:devpassword@localhost:5432/riviamigo" \
@@ -220,7 +320,6 @@ if [[ "$API_MODE" == "local" ]]; then
     ALLOWED_ORIGINS="http://localhost:5173" \
     cargo run
   ) &
-  API_PID=$!
 else
   echo "📦 Rust toolchain not found; building and running the API container instead..."
   if run_with_timeout 600 env DOCKER_BUILDKIT=1 docker compose --progress=plain -f "$COMPOSE_FILE" build api; then
@@ -259,22 +358,18 @@ echo "   docker compose -f $COMPOSE_FILE logs -f"
 echo ""
 
 WEB_MODE="managed"
+kill_existing_web_server
 
-if curl -fsS --max-time 2 "$WEB_URL" >/dev/null 2>&1; then
-  WEB_MODE="external"
-  echo "✅ Web dev server is already responding at $WEB_URL"
+(
+  cd "$ROOT_DIR"
+  pnpm --filter @riviamigo/web exec vite --strictPort --port 5173
+) &
+WEB_PID=$!
+
+if wait_for_web_ready 120; then
+  echo "✅ Web dev server is responding at $WEB_URL"
 else
-  (
-    cd "$ROOT_DIR"
-    pnpm --filter @riviamigo/web dev -- --strictPort --port 5173
-  ) &
-  WEB_PID=$!
-
-  if wait_for_web_ready 120; then
-    echo "✅ Web dev server is responding at $WEB_URL"
-  else
-    exit 1
-  fi
+  exit 1
 fi
 
 API_UNHEALTHY_CHECKS=0
@@ -282,9 +377,16 @@ WEB_UNHEALTHY_CHECKS=0
 
 while true; do
   if [[ "$API_MODE" == "local" ]]; then
-    if ! kill -0 "$API_PID" 2>/dev/null; then
-      echo "❌ API dev server exited."
-      exit 1
+    if curl -fsS --max-time 2 "$API_HEALTH_URL" >/dev/null 2>&1; then
+      API_UNHEALTHY_CHECKS=0
+    else
+      API_UNHEALTHY_CHECKS=$((API_UNHEALTHY_CHECKS + 1))
+
+      if [[ $API_UNHEALTHY_CHECKS -ge 5 ]]; then
+        echo "❌ API health endpoint is no longer responding."
+        kill_existing_api_server
+        exit 1
+      fi
     fi
   else
     if curl -fsS --max-time 2 "$API_HEALTH_URL" >/dev/null 2>&1; then

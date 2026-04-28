@@ -1,10 +1,10 @@
+use crate::errors::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
-use crate::errors::AppError;
 
 pub async fn require_vehicle_owned(
-    pool:       &PgPool,
-    user_id:    Uuid,
+    pool: &PgPool,
+    user_id: Uuid,
     vehicle_id: Uuid,
 ) -> Result<(), AppError> {
     let owns = sqlx::query_scalar!(
@@ -23,7 +23,7 @@ pub async fn require_vehicle_owned(
 }
 
 pub async fn get_default_vehicle_id(
-    pool:    &PgPool,
+    pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
     let row = sqlx::query_scalar!(
@@ -36,7 +36,7 @@ pub async fn get_default_vehicle_id(
 }
 
 pub async fn get_vehicle_battery_capacity(
-    pool:       &PgPool,
+    pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Result<Option<f64>, AppError> {
     let cap = sqlx::query_scalar!(

@@ -21,17 +21,20 @@ const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
-    pool:       PgPool,
-    redis:      redis::Client,
-    age_key:    String,
-    config:     Config,
-    shutdown:   broadcast::Receiver<()>,
+    pool: PgPool,
+    redis: redis::Client,
+    age_key: String,
+    config: Config,
+    shutdown: broadcast::Receiver<()>,
 ) {
     tracing::info!(vehicle_id = %vehicle_id, "worker starting");
 
     let identity = match age_key.parse::<age::x25519::Identity>() {
         Ok(k) => k,
-        Err(e) => { tracing::error!(vehicle_id=%vehicle_id, err=%e, "bad age key"); return; }
+        Err(e) => {
+            tracing::error!(vehicle_id=%vehicle_id, err=%e, "bad age key");
+            return;
+        }
     };
 
     // Load credentials
@@ -51,8 +54,14 @@ pub async fn run_vehicle_worker(
                 return;
             }
         },
-        Ok(None) => { tracing::warn!(vehicle_id=%vehicle_id, "no credentials"); return; }
-        Err(e)   => { tracing::error!(vehicle_id=%vehicle_id, err=%e, "db error"); return; }
+        Ok(None) => {
+            tracing::warn!(vehicle_id=%vehicle_id, "no credentials");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(vehicle_id=%vehicle_id, err=%e, "db error");
+            return;
+        }
     };
 
     upsert_health(&pool, vehicle_id, true, "connected", "").await;
@@ -71,7 +80,10 @@ pub async fn run_vehicle_worker(
 
     let rivian_vehicle_id = match riv_id {
         Some(id) => id,
-        None => { tracing::error!(vehicle_id=%vehicle_id, "no rivian_vehicle_id"); return; }
+        None => {
+            tracing::error!(vehicle_id=%vehicle_id, "no rivian_vehicle_id");
+            return;
+        }
     };
 
     let mut ws_shutdown = shutdown.resubscribe();
@@ -79,14 +91,24 @@ pub async fn run_vehicle_worker(
     let tokens_clone = tokens.clone();
     let riv_id_clone = rivian_vehicle_id.clone();
     tokio::spawn(async move {
-        ws_client::run_ws_loop(vehicle_id, riv_id_clone, tokens_clone, ev_tx_ws, ws_shutdown).await;
+        ws_client::run_ws_loop(
+            vehicle_id,
+            riv_id_clone,
+            tokens_clone,
+            ev_tx_ws,
+            ws_shutdown,
+        )
+        .await;
     });
 
-    let mut trip_det   = TripDetectorState::new(vehicle_id);
+    let mut trip_det = TripDetectorState::new(vehicle_id);
     let mut charge_det = ChargeDetectorState::new(vehicle_id);
     let mut redis_conn = match redis.get_multiplexed_async_connection().await {
         Ok(c) => c,
-        Err(e) => { tracing::error!(err=%e, "redis connect failed"); return; }
+        Err(e) => {
+            tracing::error!(err=%e, "redis connect failed");
+            return;
+        }
     };
 
     while let Some(event) = ev_rx.recv().await {
@@ -161,19 +183,24 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
 }
 
 async fn persist_trip(
-    pool:     &PgPool,
-    trip:     &crate::ingestion::trip_detector::CompletedTripData,
+    pool: &PgPool,
+    trip: &crate::ingestion::trip_detector::CompletedTripData,
     distance: f64,
 ) -> anyhow::Result<()> {
     let duration = (trip.ended_at - trip.started_at).num_seconds() as i32;
-    let max_speed = trip.points.iter().map(|p| p.speed_mph).fold(0.0_f64, f64::max);
+    let max_speed = trip
+        .points
+        .iter()
+        .map(|p| p.speed_mph)
+        .fold(0.0_f64, f64::max);
     let efficiency = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
-        (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1
-            => Some(((s0 - s1) / 100.0) * cap / distance),
+        (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
+            Some(((s0 - s1) / 100.0) * cap / distance)
+        }
         _ => None,
     };
     let start = trip.points.first();
-    let end   = trip.points.last();
+    let end = trip.points.last();
 
     sqlx::query!(
         r#"INSERT INTO riviamigo.trips
@@ -181,12 +208,19 @@ async fn persist_trip(
             distance_miles, duration_seconds, soc_start, soc_end,
             efficiency_wh_per_mile, max_speed_mph, drive_mode)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
-        trip.vehicle_id, trip.started_at, trip.ended_at,
-        start.map(|p| p.lat), start.map(|p| p.lng),
-        end.map(|p| p.lat), end.map(|p| p.lng),
-        distance, duration,
-        trip.soc_start, trip.soc_end,
-        efficiency, max_speed,
+        trip.vehicle_id,
+        trip.started_at,
+        trip.ended_at,
+        start.map(|p| p.lat),
+        start.map(|p| p.lng),
+        end.map(|p| p.lat),
+        end.map(|p| p.lng),
+        distance,
+        duration,
+        trip.soc_start,
+        trip.soc_end,
+        efficiency,
+        max_speed,
         trip.dominant_drive_mode
     )
     .execute(pool)
@@ -195,7 +229,7 @@ async fn persist_trip(
 }
 
 async fn persist_charge_session(
-    pool:    &PgPool,
+    pool: &PgPool,
     session: &crate::ingestion::charge_detector::CompletedChargeSession,
 ) -> anyhow::Result<()> {
     let duration_minutes = ((session.ended_at - session.started_at).num_seconds() / 60) as i32;
@@ -204,10 +238,15 @@ async fn persist_charge_session(
            (vehicle_id, started_at, ended_at, location_lat, location_lng,
             soc_start, soc_end, charge_limit, duration_minutes)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
-        session.vehicle_id, session.started_at, session.ended_at,
-        session.location_lat, session.location_lng,
-        session.soc_start, session.soc_end,
-        session.charge_limit, duration_minutes
+        session.vehicle_id,
+        session.started_at,
+        session.ended_at,
+        session.location_lat,
+        session.location_lng,
+        session.soc_start,
+        session.soc_end,
+        session.charge_limit,
+        duration_minutes
     )
     .execute(pool)
     .await?;
@@ -221,7 +260,10 @@ async fn upsert_health(pool: &PgPool, vehicle_id: Uuid, online: bool, health: &s
            VALUES ($1,$2,$3,$4,now())
            ON CONFLICT (vehicle_id) DO UPDATE
            SET is_online=$2, worker_health=$3, worker_health_msg=$4, updated_at=now()"#,
-        vehicle_id, online, health, msg
+        vehicle_id,
+        online,
+        health,
+        msg
     )
     .execute(pool)
     .await;
@@ -234,7 +276,9 @@ async fn upsert_online(pool: &PgPool, vehicle_id: Uuid, online: bool, ts: chrono
            VALUES ($1,$2,$3,now())
            ON CONFLICT (vehicle_id) DO UPDATE
            SET is_online=$2, last_event_at=$3, updated_at=now()"#,
-        vehicle_id, online, ts
+        vehicle_id,
+        online,
+        ts
     )
     .execute(pool)
     .await;

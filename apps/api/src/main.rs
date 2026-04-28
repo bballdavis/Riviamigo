@@ -5,8 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use riviamigo_api::{
     config::Config,
     db::pool::create_pool,
-    ingestion,
-    keys,
+    ingestion, keys,
     middleware::auth::{AppState, JwtKeys},
     routes,
 };
@@ -14,13 +13,15 @@ use riviamigo_api::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "riviamigo_api=debug,tower_http=info".into()))
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "riviamigo_api=debug,tower_http=info".into()),
+        )
         .with(tracing_subscriber::fmt::layer().json())
         .init();
 
     let config = Config::from_env()?;
-    let pool   = create_pool(&config.database_url).await?;
+    let pool = create_pool(&config.database_url).await?;
 
     sqlx::migrate!("./migrations").run(&pool).await?;
     tracing::info!("migrations applied");
@@ -30,27 +31,28 @@ async fn main() -> anyhow::Result<()> {
         config.jwt_secret.clone(),
         config.jwt_public_key.clone(),
         config.age_encryption_key.clone(),
-    ).await?;
+    )
+    .await?;
 
-    let jwt_keys = Arc::new(
-        JwtKeys::new(&active_keys.jwt_private_pem, &active_keys.jwt_public_pem)?
-    );
+    let jwt_keys = Arc::new(JwtKeys::new(
+        &active_keys.jwt_private_pem,
+        &active_keys.jwt_public_pem,
+    )?);
 
     let redis = redis::Client::open(config.redis_url.clone())?;
 
     let age_key = active_keys.age_key;
 
     let state = AppState {
-        pool:    pool.clone(),
-        redis:   redis.clone(),
+        pool: pool.clone(),
+        redis: redis.clone(),
         jwt_keys,
         age_key: age_key.clone(),
-        config:  config.clone(),
+        config: config.clone(),
     };
 
-    let _supervisor = ingestion::start_workers(
-        pool.clone(), redis, age_key, config.clone()
-    ).await?;
+    let _supervisor =
+        ingestion::start_workers(pool.clone(), redis, age_key, config.clone()).await?;
 
     let app = routes::build_router(state);
 

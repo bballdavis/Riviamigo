@@ -28,7 +28,8 @@ class ApiClient {
     method: string,
     path: string,
     body?: unknown,
-    params?: Record<string, string | number>
+    params?: Record<string, string | number>,
+    retryOnUnauthorized = true
   ): Promise<T> {
     let url = `${BASE}${path}`;
     if (params) {
@@ -46,6 +47,12 @@ class ApiClient {
     });
 
     if (!res.ok) {
+      if (res.status === 401 && retryOnUnauthorized && path !== '/v1/auth/refresh') {
+        const tokens = await this.request<AuthTokens>('POST', '/v1/auth/refresh', undefined, undefined, false);
+        this.setToken(tokens.access_token);
+        return this.request<T>(method, path, body, params, false);
+      }
+
       const body = await res.json().catch(() => null);
       const err: ApiError = body?.error ?? { code: 'unknown', message: res.statusText };
       throw Object.assign(new Error(err.message), { status: res.status, code: err.code });
@@ -93,7 +100,7 @@ class ApiClient {
   }
 
   async connectRivianOtp(challengeId: string, otp: string): Promise<ConnectResult> {
-    return this.request('POST', '/v1/vehicles/connect/otp', { challenge_id: challengeId, otp });
+    return this.request('POST', '/v1/vehicles/connect/otp', { challenge_id: challengeId, otp_code: otp });
   }
 
   // ── Battery ───────────────────────────────────────────────────────────────

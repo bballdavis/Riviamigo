@@ -36,7 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_capacity_snapshots_vehicle_ts
   ON riviamigo.battery_capacity_snapshots (vehicle_id, snapshotted_at DESC);
 
 -- Updated 1-min view to include new columns
-CREATE OR REPLACE VIEW timeseries.telemetry_1min AS
+DROP VIEW IF EXISTS timeseries.telemetry_1min CASCADE;
+CREATE VIEW timeseries.telemetry_1min AS
 SELECT
   time_bucket('1 minute', ts) AS bucket,
   vehicle_id,
@@ -57,7 +58,8 @@ SELECT
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
-CREATE OR REPLACE VIEW timeseries.telemetry_1hr AS
+DROP VIEW IF EXISTS timeseries.telemetry_1hr CASCADE;
+CREATE VIEW timeseries.telemetry_1hr AS
 SELECT
   time_bucket('1 hour', ts) AS bucket,
   vehicle_id,
@@ -75,7 +77,8 @@ SELECT
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
-CREATE OR REPLACE VIEW timeseries.telemetry_1day AS
+DROP VIEW IF EXISTS timeseries.telemetry_1day CASCADE;
+CREATE VIEW timeseries.telemetry_1day AS
 SELECT
   time_bucket('1 day', ts) AS bucket,
   vehicle_id,
@@ -91,7 +94,8 @@ FROM timeseries.telemetry
 GROUP BY 1, 2;
 
 -- Efficiency vs outside temperature (binned by 5°C)
-CREATE OR REPLACE VIEW timeseries.efficiency_vs_temp AS
+DROP VIEW IF EXISTS timeseries.efficiency_vs_temp CASCADE;
+CREATE VIEW timeseries.efficiency_vs_temp AS
 SELECT
   vehicle_id,
   width_bucket(outside_temp_c, -20, 45, 13) AS temp_bucket,
@@ -105,7 +109,8 @@ WHERE t.outside_temp_c IS NOT NULL
 GROUP BY 1, 2, 3, 4;
 
 -- Efficiency trend: 7-day rolling average from trip data
-CREATE OR REPLACE VIEW timeseries.efficiency_trend_7d AS
+DROP VIEW IF EXISTS timeseries.efficiency_trend_7d CASCADE;
+CREATE VIEW timeseries.efficiency_trend_7d AS
 SELECT
   vehicle_id,
   started_at::date AS day,

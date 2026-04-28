@@ -93,6 +93,7 @@ export interface ApiError {
 }
 
 export interface ConnectResult {
+  status: 'connected' | 'otp_required';
   requires_otp: boolean;
   challenge_id: string | null;
   vehicle_id: string | null;
@@ -100,5 +101,6 @@ export interface ConnectResult {
 
 export interface AuthTokens {
   access_token: string;
+  expires_in: number;
   default_vehicle_id: string | null;
 }
