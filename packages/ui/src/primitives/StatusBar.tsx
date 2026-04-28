@@ -5,12 +5,12 @@ import { cn } from '../lib/utils';
 export type VehicleOnlineState = 'online' | 'offline' | 'connecting';
 
 export interface StatusBarProps {
-  vehicleName?: string;
+  vehicleName?: string | undefined;
   onlineState: VehicleOnlineState;
-  socPercent?: number;
-  isCharging?: boolean;
-  rangeEstimateMi?: number;
-  className?: string;
+  socPercent?: number | undefined;
+  isCharging?: boolean | undefined;
+  rangeEstimateMi?: number | undefined;
+  className?: string | undefined;
 }
 
 export function StatusBar({

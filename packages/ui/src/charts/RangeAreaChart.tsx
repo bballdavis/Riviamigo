@@ -53,7 +53,7 @@ export function RangeAreaChart({
           width={40}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [formatMiles(v), 'Range']} />}
+          content={<ChartTooltip formatter={(v) => [formatMiles(v ?? 0), 'Range']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Area

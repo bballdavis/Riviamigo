@@ -15,7 +15,8 @@ import { EmptyState } from '../primitives/EmptyState';
 
 export interface DataTableProps<TData> {
   data: TData[];
-  columns: ColumnDef<TData, unknown>[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  columns: ColumnDef<TData, any>[];
   loading?: boolean;
   loadingRows?: number;
   onRowClick?: (row: Row<TData>) => void;
