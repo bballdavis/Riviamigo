@@ -4,7 +4,7 @@ use crate::ingestion::session_store::RivianTokenBundle;
 use serde::Deserialize;
 use uuid::Uuid;
 
-const GATEWAY_URL: &str = "https://rivian.com/api/gql/gateway/graphql";
+const DEFAULT_GATEWAY_URL: &str = "https://rivian.com/api/gql/gateway/graphql";
 const APOLLO_CLIENT_NAME: &str = "com.rivian.ios.consumer-apollo-ios";
 const USER_AGENT: &str = "RivianApp/707 CFNetwork/1237 Darwin/20.4.0";
 
@@ -250,7 +250,7 @@ async fn post_graphql(
     session: Option<&CsrfSession>,
 ) -> Result<LoginResponse, RivianAuthError> {
     let mut req = client
-        .post(GATEWAY_URL)
+        .post(gateway_url())
         .header("User-Agent", USER_AGENT)
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
@@ -325,4 +325,144 @@ fn format_gql_error(errors: &[GqlError]) -> String {
             msg
         })
         .unwrap_or_else(|| "unknown Rivian GraphQL error".into())
+}
+
+fn gateway_url() -> String {
+    std::env::var("RIVIAN_GRAPHQL_GATEWAY_URL").unwrap_or_else(|_| DEFAULT_GATEWAY_URL.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        routing::post,
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug, Clone)]
+    struct RecordedRequest {
+        operation_name: String,
+        headers: HeaderMap,
+        body: Value,
+    }
+
+    #[tokio::test]
+    async fn login_and_otp_follow_current_rivian_graphql_shape() {
+        let recorded = Arc::new(Mutex::new(Vec::<RecordedRequest>::new()));
+        let app = Router::new()
+            .route("/api/gql/gateway/graphql", post(mock_rivian_gateway))
+            .with_state(recorded.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        std::env::set_var(
+            "RIVIAN_GRAPHQL_GATEWAY_URL",
+            format!("http://{addr}/api/gql/gateway/graphql"),
+        );
+
+        let client = reqwest::Client::new();
+        let challenge = match rivian_login(&client, "driver@example.com", "secret")
+            .await
+            .unwrap()
+        {
+            LoginResult::OtpRequired(challenge) => challenge,
+            LoginResult::Authenticated(_) => panic!("expected MFA challenge"),
+        };
+
+        assert_eq!(challenge.email, "driver@example.com");
+        assert_eq!(challenge.otp_token, "otp-token");
+
+        let tokens = rivian_login_otp(&client, &challenge, "123456")
+            .await
+            .unwrap();
+        assert_eq!(tokens.access_token, "access-token");
+        assert_eq!(tokens.refresh_token, "refresh-token");
+        assert_eq!(tokens.user_session_token, "user-session-token");
+        assert_eq!(tokens.app_session_token, "app-session-token");
+        assert_eq!(tokens.csrf_token, "csrf-token");
+
+        let requests = recorded.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].operation_name, "CreateCSRFToken");
+        assert!(requests[0].headers.get("csrf-token").is_none());
+        assert!(requests[0].headers.get("a-sess").is_none());
+
+        assert_eq!(requests[1].operation_name, "Login");
+        assert_eq!(requests[1].headers["csrf-token"], "csrf-token");
+        assert_eq!(requests[1].headers["a-sess"], "app-session-token");
+        assert_eq!(
+            requests[1].headers["apollographql-client-name"],
+            APOLLO_CLIENT_NAME
+        );
+        assert_eq!(requests[1].body["variables"]["email"], "driver@example.com");
+        assert_eq!(requests[1].body["variables"]["password"], "secret");
+
+        assert_eq!(requests[2].operation_name, "LoginWithOTP");
+        assert_eq!(requests[2].headers["csrf-token"], "csrf-token");
+        assert_eq!(requests[2].headers["a-sess"], "app-session-token");
+        assert_eq!(requests[2].body["variables"]["email"], "driver@example.com");
+        assert_eq!(requests[2].body["variables"]["otpCode"], "123456");
+        assert_eq!(requests[2].body["variables"]["otpToken"], "otp-token");
+
+        std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
+    }
+
+    async fn mock_rivian_gateway(
+        State(recorded): State<Arc<Mutex<Vec<RecordedRequest>>>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        let operation_name = body["operationName"].as_str().unwrap_or("").to_string();
+        recorded.lock().unwrap().push(RecordedRequest {
+            operation_name: operation_name.clone(),
+            headers,
+            body,
+        });
+
+        let response = match operation_name.as_str() {
+            "CreateCSRFToken" => json!({
+                "data": {
+                    "createCsrfToken": {
+                        "__typename": "CreateCSRFTokenResponse",
+                        "csrfToken": "csrf-token",
+                        "appSessionToken": "app-session-token"
+                    }
+                }
+            }),
+            "Login" => json!({
+                "data": {
+                    "login": {
+                        "__typename": "MobileMFALoginResponse",
+                        "otpToken": "otp-token"
+                    }
+                }
+            }),
+            "LoginWithOTP" => json!({
+                "data": {
+                    "loginWithOTP": {
+                        "__typename": "MobileLoginResponse",
+                        "accessToken": "access-token",
+                        "refreshToken": "refresh-token",
+                        "userSessionToken": "user-session-token"
+                    }
+                }
+            }),
+            _ => json!({
+                "errors": [{
+                    "message": "unexpected operation",
+                    "extensions": { "code": "BAD_REQUEST" }
+                }]
+            }),
+        };
+
+        (StatusCode::OK, Json(response))
+    }
 }

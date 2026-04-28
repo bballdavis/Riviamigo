@@ -13,6 +13,7 @@ interface AuthState {
   logout: () => Promise<void>;
   refresh: () => Promise<boolean>;
   setTokens: (accessToken: string, defaultVehicleId: string | null) => void;
+  clearSession: () => void;
 }
 
 export const useAuth = create<AuthState>()(
@@ -26,6 +27,11 @@ export const useAuth = create<AuthState>()(
       setTokens: (accessToken, defaultVehicleId) => {
         api.setToken(accessToken);
         set({ accessToken, defaultVehicleId, isAuthenticated: true });
+      },
+
+      clearSession: () => {
+        api.setToken(null);
+        set({ accessToken: null, userId: null, defaultVehicleId: null, isAuthenticated: false });
       },
 
       login: async (email, password) => {
@@ -50,8 +56,7 @@ export const useAuth = create<AuthState>()(
 
       logout: async () => {
         try { await api.logout(); } catch {}
-        api.setToken(null);
-        set({ accessToken: null, userId: null, defaultVehicleId: null, isAuthenticated: false });
+        get().clearSession();
       },
 
       refresh: async () => {

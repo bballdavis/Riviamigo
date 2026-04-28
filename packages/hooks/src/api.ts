@@ -11,6 +11,14 @@ import type {
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
 
+interface ApiFailureDetail {
+  status: number;
+  code: string;
+  message: string;
+  method: string;
+  path: string;
+}
+
 class ApiClient {
   private accessToken: string | null = null;
 
@@ -29,7 +37,8 @@ class ApiClient {
     path: string,
     body?: unknown,
     params?: Record<string, string | number>,
-    retryOnUnauthorized = true
+    retryOnUnauthorized = true,
+    reportErrors = true
   ): Promise<T> {
     let url = `${BASE}${path}`;
     if (params) {
@@ -48,14 +57,35 @@ class ApiClient {
 
     if (!res.ok) {
       if (res.status === 401 && retryOnUnauthorized && path !== '/v1/auth/refresh') {
-        const tokens = await this.request<AuthTokens>('POST', '/v1/auth/refresh', undefined, undefined, false);
-        this.setToken(tokens.access_token);
-        return this.request<T>(method, path, body, params, false);
+        try {
+          const tokens = await this.request<AuthTokens>('POST', '/v1/auth/refresh', undefined, undefined, false, false);
+          this.setToken(tokens.access_token);
+          return this.request<T>(method, path, body, params, false);
+        } catch {
+          this.setToken(null);
+          const detail = {
+            status: res.status,
+            code: 'AUTH_EXPIRED',
+            message: `Session expired while calling ${method} ${path}. Sign in again.`,
+            method,
+            path,
+          };
+          this.reportFailure(detail);
+          throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: detail.code, detail });
+        }
       }
 
       const body = await res.json().catch(() => null);
       const err: ApiError = body?.error ?? { code: 'unknown', message: res.statusText };
-      throw Object.assign(new Error(err.message), { status: res.status, code: err.code });
+      const detail = {
+        status: res.status,
+        code: err.code,
+        message: err.message,
+        method,
+        path,
+      };
+      if (reportErrors) this.reportFailure(detail);
+      throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
     }
 
     if (res.status === 204) return undefined as T;
@@ -212,6 +242,41 @@ class ApiClient {
   async getStats(vehicleId: string) {
     return this.request<StatsSummary>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
   }
+
+  private reportFailure(detail: ApiFailureDetail) {
+    const message = formatApiError(detail);
+    console.warn('[Riviamigo API] request failed', {
+      status: detail.status,
+      code: detail.code,
+      method: detail.method,
+      path: detail.path,
+      message: truncate(detail.message, 240),
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('riviamigo:toast', {
+        detail: {
+          title: 'Request failed',
+          message,
+          variant: 'error',
+          code: detail.code,
+        },
+      }));
+
+      if (detail.code === 'AUTH_EXPIRED') {
+        window.dispatchEvent(new CustomEvent('riviamigo:auth-expired', { detail }));
+      }
+    }
+  }
 }
 
 export const api = new ApiClient();
+
+function formatApiError(detail: ApiFailureDetail) {
+  return `${detail.status} ${detail.code}: ${truncate(detail.message, 160)}`;
+}
+
+function truncate(value: string, maxLength: number) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
+}
