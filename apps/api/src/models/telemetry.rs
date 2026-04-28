@@ -26,10 +26,22 @@ pub struct TelemetryEvent {
     pub drive_mode:                Option<DriveMode>,
     pub gear_status:               Option<String>,
 
-    pub cabin_temp_c:  Option<f64>,
-    pub driver_temp_c: Option<f64>,
+    pub cabin_temp_c:    Option<f64>,
+    pub driver_temp_c:   Option<f64>,
+    pub outside_temp_c:  Option<f64>,
+    pub hvac_active:     Option<bool>,
 
-    pub odometer_miles:     Option<f64>,
+    pub power_kw:        Option<f64>,
+    pub regen_power_kw:  Option<f64>,
+
+    pub heading_deg:     Option<f64>,
+    pub odometer_miles:  Option<f64>,
+
+    pub tire_fl_psi:     Option<f64>,
+    pub tire_fr_psi:     Option<f64>,
+    pub tire_rl_psi:     Option<f64>,
+    pub tire_rr_psi:     Option<f64>,
+
     pub hv_thermal_event:   Option<String>,
     pub twelve_volt_health: Option<String>,
     pub is_online:          Option<bool>,

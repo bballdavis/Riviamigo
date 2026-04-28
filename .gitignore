@@ -12,8 +12,11 @@ jwt_private.pem
 jwt_public.pem
 age_key.txt
 target/
+apps/api/Cargo.lock
+apps/api/.sqlx/
 *.lock.tmp
 .DS_Store
 coverage/
 playwright-report/
 test-results/
+infra/resolv.conf
