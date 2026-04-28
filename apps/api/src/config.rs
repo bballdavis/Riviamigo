@@ -2,25 +2,29 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub database_url:    String,
-    pub redis_url:       String,
+    pub database_url: String,
+    pub redis_url: String,
     /// RSA private key PEM. Auto-generated and persisted to DB if not set.
-    pub jwt_secret:      Option<String>,
+    pub jwt_secret: Option<String>,
     /// RSA public key PEM. Auto-generated and persisted to DB if not set.
-    pub jwt_public_key:  Option<String>,
+    pub jwt_public_key: Option<String>,
     /// age X25519 secret key. Auto-generated and persisted to DB if not set.
     pub age_encryption_key: Option<String>,
     #[serde(default = "default_port")]
-    pub port:            u16,
+    pub port: u16,
     #[serde(default = "default_origins")]
     pub allowed_origins: Vec<String>,
-    pub s3_endpoint:     Option<String>,
-    pub s3_access_key:   Option<String>,
-    pub s3_secret_key:   Option<String>,
+    pub s3_endpoint: Option<String>,
+    pub s3_access_key: Option<String>,
+    pub s3_secret_key: Option<String>,
 }
 
-fn default_port() -> u16 { 3001 }
-fn default_origins() -> Vec<String> { vec!["http://localhost:3000".into()] }
+fn default_port() -> u16 {
+    3001
+}
+fn default_origins() -> Vec<String> {
+    vec!["http://localhost:3000".into()]
+}
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {

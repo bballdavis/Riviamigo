@@ -11,9 +11,10 @@ import {
 import { SocAreaChart, EfficiencyTrendChart } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { formatMiles, formatKwh } from '@riviamigo/ui/lib/utils';
 import { presetToRange, rangeToIso, DEFAULT_PRESET, type PresetKey } from '../lib/dates';
-import { Car, Battery, TrendingUp } from 'lucide-react';
+import { Battery, TrendingUp } from 'lucide-react';
 
 export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -64,12 +65,7 @@ function DashboardContent() {
         }
       >
         {!hasVehicle ? (
-          <EmptyState
-            icon={<Car />}
-            title="No vehicle connected"
-            description="Connect your Rivian account to start tracking telemetry."
-            action={{ label: 'Connect Rivian', onClick: () => navigate({ to: '/connect' }) }}
-          />
+          <NoVehicleState />
         ) : (
           <>
             <StatCardGrid>

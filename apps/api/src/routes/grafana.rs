@@ -2,9 +2,15 @@
 use axum::{http::StatusCode, response::IntoResponse};
 
 pub async fn query_stub() -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, "Grafana endpoint not yet implemented")
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "Grafana endpoint not yet implemented",
+    )
 }
 
 pub async fn search_stub() -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, "Grafana endpoint not yet implemented")
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "Grafana endpoint not yet implemented",
+    )
 }

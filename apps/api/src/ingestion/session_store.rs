@@ -6,14 +6,21 @@ use std::io::{Read, Write};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RivianTokenBundle {
-    pub a_sess:     String,
-    pub u_sess:     String,
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub app_session_token: String,
+    #[serde(default)]
+    pub user_session_token: String,
+    #[serde(default)]
     pub csrf_token: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub fn encrypt_tokens(
-    bundle:   &RivianTokenBundle,
+    bundle: &RivianTokenBundle,
     identity: &x25519::Identity,
 ) -> anyhow::Result<Vec<u8>> {
     let recipient = identity.to_public();
@@ -31,7 +38,7 @@ pub fn encrypt_tokens(
 
 pub fn decrypt_tokens(
     ciphertext: &[u8],
-    identity:   &x25519::Identity,
+    identity: &x25519::Identity,
 ) -> anyhow::Result<RivianTokenBundle> {
     let decryptor = match age::Decryptor::new(ciphertext)? {
         age::Decryptor::Recipients(d) => d,

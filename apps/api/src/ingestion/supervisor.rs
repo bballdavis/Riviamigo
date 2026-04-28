@@ -10,7 +10,7 @@ use crate::{config::Config, ingestion::worker::run_vehicle_worker};
 #[derive(Debug)]
 pub enum SupervisorCommand {
     StartWorker { vehicle_id: Uuid },
-    StopWorker  { vehicle_id: Uuid },
+    StopWorker { vehicle_id: Uuid },
     Shutdown,
 }
 
@@ -26,25 +26,28 @@ impl SupervisorHandle {
 }
 
 pub struct WorkerSupervisor {
-    pool:        sqlx::PgPool,
-    redis:       redis::Client,
-    age_key:     String,
-    config:      Config,
-    workers:     HashMap<Uuid, (JoinHandle<()>, broadcast::Sender<()>)>,
-    cmd_rx:      mpsc::Receiver<SupervisorCommand>,
+    pool: sqlx::PgPool,
+    redis: redis::Client,
+    age_key: String,
+    config: Config,
+    workers: HashMap<Uuid, (JoinHandle<()>, broadcast::Sender<()>)>,
+    cmd_rx: mpsc::Receiver<SupervisorCommand>,
 }
 
 impl WorkerSupervisor {
     pub fn start(
-        pool:    sqlx::PgPool,
-        redis:   redis::Client,
+        pool: sqlx::PgPool,
+        redis: redis::Client,
         age_key: String,
-        config:  Config,
+        config: Config,
     ) -> SupervisorHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
 
         let mut sup = WorkerSupervisor {
-            pool, redis, age_key, config,
+            pool,
+            redis,
+            age_key,
+            config,
             workers: HashMap::new(),
             cmd_rx,
         };
@@ -58,7 +61,9 @@ impl WorkerSupervisor {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 SupervisorCommand::StartWorker { vehicle_id } => {
-                    if self.workers.contains_key(&vehicle_id) { continue; }
+                    if self.workers.contains_key(&vehicle_id) {
+                        continue;
+                    }
                     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
                     let handle = tokio::spawn(run_vehicle_worker(
                         vehicle_id,

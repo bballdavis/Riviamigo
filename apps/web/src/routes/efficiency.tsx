@@ -13,6 +13,7 @@ import {
 } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { presetToRange, rangeToIso, DEFAULT_PRESET, type PresetKey } from '../lib/dates';
 import { BarChart2, TrendingUp, Thermometer, Gauge } from 'lucide-react';
 
@@ -44,6 +45,7 @@ export function EfficiencyContent() {
   const { data: byMode,  isLoading: byModeLoading }  = useEfficiencyByMode(defaultVehicleId, from, to);
   const { data: trend,   isLoading: trendLoading }   = useEfficiencyTrend(defaultVehicleId, from, to);
   const { data: vsTemp,  isLoading: vsTempLoading }  = useEfficiencyVsTemp(defaultVehicleId, from, to);
+  const hasVehicle = !!defaultVehicleId;
 
   return (
     <AppLayout activeKey="efficiency">
@@ -57,6 +59,10 @@ export function EfficiencyContent() {
           />
         }
       >
+        {!hasVehicle ? (
+          <NoVehicleState description="Connect your Rivian account to unlock efficiency trends, drive mode breakdowns, and temperature comparisons." />
+        ) : (
+          <>
         <StatCardGrid>
           <StatCard label="Avg Efficiency" value={summary ? `${summary.avg_wh_per_mi.toFixed(0)}` : '—'} unit="Wh/mi" accent icon={<Gauge className="h-4 w-4" />} />
           <StatCard label="Best 10%"        value={summary ? `${(summary.p10_wh_per_mi ?? 0).toFixed(0)}` : '—'} unit="Wh/mi" />
@@ -90,6 +96,8 @@ export function EfficiencyContent() {
             <EfficiencyVsTempChart data={vsTemp ?? []} loading={vsTempLoading} height={280} />
           )}
         </MetricTabs>
+          </>
+        )}
       </PageLayout>
     </AppLayout>
   );

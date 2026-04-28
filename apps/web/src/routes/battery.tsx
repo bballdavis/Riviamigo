@@ -12,6 +12,7 @@ import {
 } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { presetToRange, rangeToIso, DEFAULT_PRESET, type PresetKey } from '../lib/dates';
 import { Battery, TrendingDown, Moon, Activity } from 'lucide-react';
 
@@ -51,6 +52,7 @@ export function BatteryContent() {
     ? drainData.reduce((s, d) => s + (d.avg_drain_rate ?? 0), 0) / drainData.length
     : undefined;
   const latestCapacity = degradData?.[degradData.length - 1]?.capacity_pct;
+  const hasVehicle = !!defaultVehicleId;
 
   return (
     <AppLayout activeKey="battery">
@@ -64,6 +66,10 @@ export function BatteryContent() {
           />
         }
       >
+        {!hasVehicle ? (
+          <NoVehicleState description="Connect your Rivian account to view battery health, range, and drain analytics." />
+        ) : (
+          <>
         <StatCardGrid>
           <StatCard
             label="Current SoC"
@@ -101,6 +107,8 @@ export function BatteryContent() {
             <DegradationChart data={degradData ?? []} loading={degradLoading} height={240} />
           )}
         </MetricTabs>
+          </>
+        )}
       </PageLayout>
     </AppLayout>
   );

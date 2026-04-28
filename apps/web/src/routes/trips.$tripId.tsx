@@ -12,6 +12,7 @@ import {
 } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { formatMiles, formatDuration, formatKwh } from '@riviamigo/ui/lib/utils';
 import { format, parseISO } from 'date-fns';
 import { ArrowLeft, Map, Gauge, Mountain } from 'lucide-react';
@@ -32,7 +33,7 @@ function TripDetailPage() {
   return <AuthGuard><TripDetailContent /></AuthGuard>;
 }
 
-function TripDetailContent() {
+export function TripDetailContent() {
   const { defaultVehicleId } = useAuth();
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
@@ -42,6 +43,7 @@ function TripDetailContent() {
   const { data: track, isLoading: trackLoading } = useTripTrack(tripId, defaultVehicleId);
   const { data: speed, isLoading: speedLoading } = useSpeedProfile(tripId, defaultVehicleId);
   const { data: elev,  isLoading: elevLoading  } = useElevationProfile(tripId, defaultVehicleId);
+  const hasVehicle = !!defaultVehicleId;
 
   const title = trip
     ? format(parseISO(trip.started_at), 'MMMM d, yyyy · h:mm a')
@@ -61,6 +63,13 @@ function TripDetailContent() {
           </Button>
         }
       >
+        {!hasVehicle ? (
+          <NoVehicleState
+            title="No vehicle selected"
+            description="Connect your Rivian account before opening trip details."
+          />
+        ) : (
+          <>
         <StatCardGrid>
           <StatCard label="Distance"    value={trip ? formatMiles(trip.distance_mi) : '—'} accent />
           <StatCard label="Duration"    value={durationMin !== undefined ? formatDuration(durationMin) : '—'} />
@@ -83,6 +92,8 @@ function TripDetailContent() {
             <ElevationProfileChart data={elev ?? []} loading={elevLoading} height={280} />
           )}
         </MetricTabs>
+          </>
+        )}
       </PageLayout>
     </AppLayout>
   );

@@ -1,94 +1,125 @@
-use axum::{extract::{Path, Query, State}, routing::get, Json, Router};
+use axum::{
+    extract::{Path, Query, State},
+    routing::get,
+    Json, Router,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{db::vehicles::require_vehicle_owned, errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    db::vehicles::require_vehicle_owned,
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/charging/sessions",    get(list_sessions))
-        .route("/charging/sessions/:id",get(get_session))
-        .route("/charging/summary",     get(get_summary))
+        .route("/charging/sessions", get(list_sessions))
+        .route("/charging/sessions/:id", get(get_session))
+        .route("/charging/summary", get(get_summary))
 }
 
 #[derive(Deserialize)]
 struct SessionListParams {
     vehicle_id: Option<Uuid>,
-    from:       Option<DateTime<Utc>>,
-    to:         Option<DateTime<Utc>>,
-    limit:      Option<i64>,
-    offset:     Option<i64>,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
-struct VehicleParam { vehicle_id: Option<Uuid> }
+struct VehicleParam {
+    vehicle_id: Option<Uuid>,
+}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct SessionRow {
-    id:                 Uuid,
-    started_at:         DateTime<Utc>,
-    ended_at:           Option<DateTime<Utc>>,
-    location_lat:       Option<f64>,
-    location_lng:       Option<f64>,
-    is_home:            Option<bool>,
-    charger_type:       Option<String>,
-    kwh_added:          Option<f64>,
-    soc_start:          Option<f64>,
-    soc_end:            Option<f64>,
+    id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: Option<DateTime<Utc>>,
+    location_lat: Option<f64>,
+    location_lng: Option<f64>,
+    is_home: Option<bool>,
+    charger_type: Option<String>,
+    kwh_added: Option<f64>,
+    soc_start: Option<f64>,
+    soc_end: Option<f64>,
     max_charge_rate_kw: Option<f64>,
-    duration_minutes:   Option<i32>,
-    cost_usd:           Option<f64>,
+    duration_minutes: Option<i32>,
+    cost_usd: Option<f64>,
 }
 
 async fn list_sessions(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Query(p):     Query<SessionListParams>,
+    auth: AuthUser,
+    Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid    = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from   = p.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
-    let to     = p.to.unwrap_or_else(Utc::now);
-    let limit  = p.limit.unwrap_or(50).min(200);
+    let from = p
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
+    let to = p.to.unwrap_or_else(Utc::now);
+    let limit = p.limit.unwrap_or(50).min(200);
     let offset = p.offset.unwrap_or(0);
 
     // Compute cost per session using user's electricity rate
     let rate = crate::db::users::get_electricity_rate(&state.pool, auth.user_id).await?;
 
-    let rows = sqlx::query_as!(SessionRow,
+    let rows = sqlx::query_as!(
+        SessionRow,
         "SELECT id, started_at, ended_at, location_lat, location_lng, is_home, charger_type, \
                 kwh_added, soc_start, soc_end, max_charge_rate_kw, duration_minutes, \
                 CASE WHEN kwh_added IS NOT NULL THEN kwh_added * $6 ELSE cost_usd END AS cost_usd \
          FROM riviamigo.charge_sessions \
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3 \
          ORDER BY started_at DESC LIMIT $4 OFFSET $5",
-        vid, from, to, limit, offset, rate
-    ).fetch_all(&state.pool).await?;
+        vid,
+        from,
+        to,
+        limit,
+        offset,
+        rate
+    )
+    .fetch_all(&state.pool)
+    .await?;
 
     let total: i64 = sqlx::query_scalar!(
         "SELECT COUNT(*) FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3",
         vid, from, to
     ).fetch_one(&state.pool).await?.unwrap_or(0);
 
-    Ok(Json(serde_json::json!({"data": rows, "total": total, "limit": limit, "offset": offset})))
+    Ok(Json(
+        serde_json::json!({"data": rows, "total": total, "limit": limit, "offset": offset}),
+    ))
 }
 
 async fn get_session(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Path(id):     Path<Uuid>,
-    Query(p):     Query<VehicleParam>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(p): Query<VehicleParam>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let session = sqlx::query_as!(SessionRow,
+    let session = sqlx::query_as!(
+        SessionRow,
         "SELECT id, started_at, ended_at, location_lat, location_lng, is_home, charger_type, \
                 kwh_added, soc_start, soc_end, max_charge_rate_kw, duration_minutes, cost_usd \
          FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
-        id, vid
-    ).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+        id,
+        vid
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
 
     // Charge curve
     let curve = if let (Some(start), Some(end)) = (Some(session.started_at), session.ended_at) {
@@ -109,19 +140,25 @@ async fn get_session(
                FROM samples
                WHERE avg_soc IS NOT NULL
                ORDER BY bucket"#,
-            vid, start, end
-        ).fetch_all(&state.pool).await
-         .unwrap_or_default()
-         .into_iter()
-         .filter_map(|r| {
-             Some(serde_json::json!({
-                 "minutes_elapsed": r.minutes_elapsed,
-                 "charge_rate_kw":  r.charge_rate_kw,
-                 "soc":             r.soc,
-             }))
-         })
-         .collect::<Vec<_>>()
-    } else { vec![] };
+            vid,
+            start,
+            end
+        )
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|r| {
+            Some(serde_json::json!({
+                "minutes_elapsed": r.minutes_elapsed,
+                "charge_rate_kw":  r.charge_rate_kw,
+                "soc":             r.soc,
+            }))
+        })
+        .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
 
     Ok(Json(serde_json::json!({
         "session": session,
@@ -131,13 +168,17 @@ async fn get_session(
 
 async fn get_summary(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Query(p):     Query<SessionListParams>,
+    auth: AuthUser,
+    Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid  = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
-    let to   = p.to.unwrap_or_else(Utc::now);
+    let from = p
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
+    let to = p.to.unwrap_or_else(Utc::now);
     let rate = crate::db::users::get_electricity_rate(&state.pool, auth.user_id).await?;
 
     let agg = sqlx::query!(
@@ -160,8 +201,12 @@ async fn get_summary(
          FROM riviamigo.charge_sessions
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
          GROUP BY 1 ORDER BY 1",
-        vid, from, to
-    ).fetch_all(&state.pool).await?;
+        vid,
+        from,
+        to
+    )
+    .fetch_all(&state.pool)
+    .await?;
 
     let total_kwh = agg.total_kwh.unwrap_or(0.0);
     Ok(Json(serde_json::json!({
