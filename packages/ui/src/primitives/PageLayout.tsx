@@ -5,10 +5,10 @@ import { cn } from '../lib/utils';
 
 export interface PageLayoutProps {
   title: string;
-  subtitle?: string;
-  actions?: React.ReactNode;
+  subtitle?: string | undefined;
+  actions?: React.ReactNode | undefined;
   children: React.ReactNode;
-  className?: string;
+  className?: string | undefined;
 }
 
 export function PageLayout({ title, subtitle, actions, children, className }: PageLayoutProps) {
@@ -46,10 +46,10 @@ export function StatCardGrid({
 
 export interface ChartSectionProps {
   title: string;
-  subtitle?: string;
-  actions?: React.ReactNode;
+  subtitle?: string | undefined;
+  actions?: React.ReactNode | undefined;
   children: React.ReactNode;
-  className?: string;
+  className?: string | undefined;
 }
 
 export function ChartSection({ title, subtitle, actions, children, className }: ChartSectionProps) {

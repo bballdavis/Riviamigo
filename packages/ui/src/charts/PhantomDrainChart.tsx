@@ -53,7 +53,7 @@ export function PhantomDrainChart({
           width={32}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [formatPercent(v, 1), 'Drain']} />}
+          content={<ChartTooltip formatter={(v) => [formatPercent(v ?? 0, 1), 'Drain']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar dataKey="drain_pct" radius={[4, 4, 0, 0]} isAnimationActive={false}>

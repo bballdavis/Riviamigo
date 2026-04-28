@@ -51,7 +51,7 @@ function TripsContent() {
       >
         <ChartSection title="Trip History">
           <DataTable
-            data={(data?.items ?? []) as TripRow[]}
+            data={(data?.items ?? []) as unknown as TripRow[]}
             columns={tripColumns}
             loading={isLoading}
             onRowClick={handleRowClick}

@@ -1,21 +1,29 @@
 import * as React from 'react';
-import type { TooltipProps } from 'recharts';
 
-export interface ChartTooltipProps {
-  title?: string;
-  formatter?: (value: number, name: string) => [string, string];
+interface TooltipEntry {
+  name: string;
+  value: number | undefined;
+  color?: string | undefined;
 }
 
-/**
- * Custom Recharts tooltip with Riviamigo dark glass style.
- */
+interface RechartTooltipRenderProps {
+  active?: boolean | undefined;
+  payload?: TooltipEntry[] | undefined;
+  label?: string | number | undefined;
+}
+
+export interface ChartTooltipProps {
+  title?: string | undefined;
+  formatter?: (value: number | undefined, name: string) => [string, string];
+}
+
 export function ChartTooltip({
   active,
   payload,
   label,
   title,
   formatter,
-}: TooltipProps<number, string> & ChartTooltipProps) {
+}: RechartTooltipRenderProps & ChartTooltipProps) {
   if (!active || !payload?.length) return null;
 
   return (
@@ -25,8 +33,8 @@ export function ChartTooltip({
       )}
       {payload.map((entry) => {
         const [fmtValue, fmtName] = formatter
-          ? formatter(entry.value as number, entry.name as string)
-          : [`${entry.value}`, entry.name as string];
+          ? formatter(entry.value, entry.name)
+          : [`${entry.value ?? ''}`, entry.name];
 
         return (
           <div key={entry.name} className="flex items-center justify-between gap-4">

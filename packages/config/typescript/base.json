@@ -12,7 +12,8 @@
     "target": "ES2022",
     "lib": ["ES2022"],
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "allowArbitraryExtensions": true
   },
   "exclude": ["node_modules"]
 }
