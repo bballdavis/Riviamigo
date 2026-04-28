@@ -8,6 +8,7 @@ import {
 import { ChargeCurveChart } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '@riviamigo/ui/lib/utils';
 import { format, parseISO } from 'date-fns';
 import { ArrowLeft } from 'lucide-react';
@@ -22,13 +23,14 @@ function ChargeSessionDetailPage() {
   return <AuthGuard><ChargeSessionContent /></AuthGuard>;
 }
 
-function ChargeSessionContent() {
+export function ChargeSessionContent() {
   const { defaultVehicleId } = useAuth();
   const navigate = useNavigate();
   const { sessionId } = useParams({ from: '/charging/$sessionId' });
 
   const { data: session }                         = useChargeSession(sessionId, defaultVehicleId);
   const { data: curve, isLoading: curveLoading }  = useChargeCurve(sessionId, defaultVehicleId);
+  const hasVehicle = !!defaultVehicleId;
 
   const title = session
     ? format(parseISO(session.started_at), 'MMMM d, yyyy · h:mm a')
@@ -46,6 +48,13 @@ function ChargeSessionContent() {
           </Button>
         }
       >
+        {!hasVehicle ? (
+          <NoVehicleState
+            title="No vehicle selected"
+            description="Connect your Rivian account before opening charging session details."
+          />
+        ) : (
+          <>
         <StatCardGrid>
           <StatCard label="Energy Added" value={session ? formatKwh(session.energy_added_kwh ?? 0) : '—'} accent />
           <StatCard
@@ -73,6 +82,8 @@ function ChargeSessionContent() {
             height={240}
           />
         </ChartSection>
+          </>
+        )}
       </PageLayout>
     </AppLayout>
   );

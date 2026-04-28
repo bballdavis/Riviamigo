@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "turbo dev",
+    "dev:stack": "node ./scripts/dev.mjs",
     "build": "turbo build",
     "start": "./scripts/start.sh",
     "test": "turbo test",

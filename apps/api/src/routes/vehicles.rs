@@ -1,41 +1,56 @@
-use axum::{extract::State, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/vehicles/connect",     post(connect))
+        .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
-        .route("/vehicles",             post(add_vehicle).get(list_vehicles))
-        .route("/vehicles/:id/status",  get(vehicle_status))
+        .route("/vehicles", post(add_vehicle).get(list_vehicles))
+        .route("/vehicles/:id/status", get(vehicle_status))
 }
 
 #[derive(Deserialize)]
-struct ConnectBody { email: String, password: String }
+struct ConnectBody {
+    email: String,
+    password: String,
+}
 
 #[derive(Deserialize)]
-struct OtpBody { challenge_id: String, otp_code: String }
+struct OtpBody {
+    challenge_id: String,
+    #[serde(alias = "otp")]
+    otp_code: String,
+}
 
 #[derive(Deserialize)]
 struct AddVehicleBody {
     rivian_vehicle_id: String,
-    name:              Option<String>,
-    home_lat:          Option<f64>,
-    home_lng:          Option<f64>,
-    model:             Option<String>,
-    trim:              Option<String>,
-    vin:               Option<String>,
+    name: Option<String>,
+    home_lat: Option<f64>,
+    home_lng: Option<f64>,
+    model: Option<String>,
+    trim: Option<String>,
+    vin: Option<String>,
 }
 
 async fn connect(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Json(body):   Json<ConnectBody>,
+    auth: AuthUser,
+    Json(body): Json<ConnectBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let client = reqwest::Client::new();
-    match crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password).await
+    match crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password)
+        .await
         .map_err(|e| AppError::RivianApi(e.to_string()))?
     {
         crate::ingestion::rivian_auth::LoginResult::Authenticated(tokens) => {
@@ -44,27 +59,40 @@ async fn connect(
             let key = format!("rivian:connect:{}", auth.user_id);
             let json = serde_json::to_string(&tokens).unwrap_or_default();
             let _: () = redis::AsyncCommands::set_ex(&mut conn, &key, json, 300).await?;
-            Ok(Json(serde_json::json!({"status":"connected"})))
+            Ok(Json(serde_json::json!({
+                "status": "connected",
+                "requires_otp": false,
+                "challenge_id": serde_json::Value::Null,
+                "vehicle_id": serde_json::Value::Null
+            })))
         }
         crate::ingestion::rivian_auth::LoginResult::OtpRequired(challenge) => {
             let challenge_id = Uuid::new_v4().to_string();
             let mut conn = state.redis.get_multiplexed_async_connection().await?;
             let key = format!("rivian:otp:{challenge_id}");
             let val = serde_json::to_string(&serde_json::json!({
-                "otp_token":  challenge.otp_token,
-                "session_id": challenge.session_id,
-                "user_id":    auth.user_id,
-            })).unwrap_or_default();
+                "email":             challenge.email,
+                "otp_token":         challenge.otp_token,
+                "csrf_token":        challenge.csrf_token,
+                "app_session_token": challenge.app_session_token,
+                "user_id":           auth.user_id,
+            }))
+            .unwrap_or_default();
             let _: () = redis::AsyncCommands::set_ex(&mut conn, &key, val, 300).await?;
-            Ok(Json(serde_json::json!({"status":"otp_required","challenge_id":challenge_id})))
+            Ok(Json(serde_json::json!({
+                "status": "otp_required",
+                "requires_otp": true,
+                "challenge_id": challenge_id,
+                "vehicle_id": serde_json::Value::Null
+            })))
         }
     }
 }
 
 async fn connect_otp(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Json(body):   Json<OtpBody>,
+    auth: AuthUser,
+    Json(body): Json<OtpBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:otp:{}", body.challenge_id);
@@ -75,27 +103,35 @@ async fn connect_otp(
         .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt challenge")))?;
 
     let challenge = crate::ingestion::rivian_auth::RivianOtpChallenge {
-        otp_token:  data["otp_token"].as_str().unwrap_or("").to_string(),
-        session_id: data["session_id"].as_str().unwrap_or("").to_string(),
+        email: data["email"].as_str().unwrap_or("").to_string(),
+        otp_token: data["otp_token"].as_str().unwrap_or("").to_string(),
+        csrf_token: data["csrf_token"].as_str().unwrap_or("").to_string(),
+        app_session_token: data["app_session_token"].as_str().unwrap_or("").to_string(),
     };
 
     let client = reqwest::Client::new();
-    let tokens = crate::ingestion::rivian_auth::rivian_login_otp(&client, &challenge, &body.otp_code)
-        .await
-        .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    let tokens =
+        crate::ingestion::rivian_auth::rivian_login_otp(&client, &challenge, &body.otp_code)
+            .await
+            .map_err(|e| AppError::RivianApi(e.to_string()))?;
 
     let connect_key = format!("rivian:connect:{}", auth.user_id);
     let json = serde_json::to_string(&tokens).unwrap_or_default();
     let _: () = redis::AsyncCommands::set_ex(&mut conn, &connect_key, json, 300).await?;
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
 
-    Ok(Json(serde_json::json!({"status":"connected"})))
+    Ok(Json(serde_json::json!({
+        "status": "connected",
+        "requires_otp": false,
+        "challenge_id": serde_json::Value::Null,
+        "vehicle_id": serde_json::Value::Null
+    })))
 }
 
 async fn add_vehicle(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Json(body):   Json<AddVehicleBody>,
+    auth: AuthUser,
+    Json(body): Json<AddVehicleBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Retrieve tokens from Redis
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
@@ -106,7 +142,9 @@ async fn add_vehicle(
     let tokens: crate::ingestion::session_store::RivianTokenBundle = serde_json::from_str(&raw)
         .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt token")))?;
 
-    let identity = state.age_key.parse::<age::x25519::Identity>()
+    let identity = state
+        .age_key
+        .parse::<age::x25519::Identity>()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(|e| AppError::Internal(e))?;
@@ -139,7 +177,8 @@ async fn add_vehicle(
     sqlx::query!(
         "UPDATE riviamigo.users SET default_vehicle_id = $1 \
          WHERE id = $2 AND default_vehicle_id IS NULL",
-        vehicle_id, auth.user_id
+        vehicle_id,
+        auth.user_id
     )
     .execute(&state.pool)
     .await?;
@@ -151,7 +190,7 @@ async fn add_vehicle(
 
 async fn list_vehicles(
     State(state): State<AppState>,
-    auth:         AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query!(
         "SELECT id, rivian_vehicle_id, model, trim, name, battery_capacity_wh, \
@@ -162,27 +201,32 @@ async fn list_vehicles(
     .fetch_all(&state.pool)
     .await?;
 
-    let vehicles: Vec<_> = rows.iter().map(|r| serde_json::json!({
-        "id":                    r.id,
-        "user_id":               auth.user_id,
-        "rivian_vehicle_id":     r.rivian_vehicle_id,
-        "vin":                   serde_json::Value::Null,
-        "model":                 r.model,
-        "year":                  serde_json::Value::Null,
-        "trim":                  r.trim,
-        "color":                 serde_json::Value::Null,
-        "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
-        "display_name":          r.name.as_deref().unwrap_or(&r.model),
-        "created_at":            r.created_at,
-    })).collect();
+    let vehicles: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id":                    r.id,
+                "user_id":               auth.user_id,
+                "rivian_vehicle_id":     r.rivian_vehicle_id,
+                "vin":                   serde_json::Value::Null,
+                "model":                 r.model,
+                "year":                  serde_json::Value::Null,
+                "trim":                  r.trim,
+                "color":                 serde_json::Value::Null,
+                "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
+                "display_name":          r.name.as_deref().unwrap_or(&r.model),
+                "created_at":            r.created_at,
+            })
+        })
+        .collect();
 
     Ok(Json(serde_json::json!({"vehicles": vehicles})))
 }
 
 async fn vehicle_status(
-    State(state):               State<AppState>,
-    auth:                       AuthUser,
-    axum::extract::Path(vid):   axum::extract::Path<Uuid>,
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 

@@ -200,7 +200,8 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_vehicle_charger_state_ts
 
 -- Keep first boot deterministic: the API reads analytics through stable view names,
 -- and we can add materialization or policies later as an optimization if needed.
-CREATE OR REPLACE VIEW timeseries.telemetry_1min AS
+DROP VIEW IF EXISTS timeseries.telemetry_1min CASCADE;
+CREATE VIEW timeseries.telemetry_1min AS
 SELECT
   time_bucket('1 minute', ts) AS bucket,
   vehicle_id,
@@ -218,7 +219,8 @@ SELECT
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
-CREATE OR REPLACE VIEW timeseries.telemetry_1hr AS
+DROP VIEW IF EXISTS timeseries.telemetry_1hr CASCADE;
+CREATE VIEW timeseries.telemetry_1hr AS
 SELECT
   time_bucket('1 hour', ts) AS bucket,
   vehicle_id,
@@ -234,7 +236,8 @@ SELECT
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
-CREATE OR REPLACE VIEW timeseries.telemetry_1day AS
+DROP VIEW IF EXISTS timeseries.telemetry_1day CASCADE;
+CREATE VIEW timeseries.telemetry_1day AS
 SELECT
   time_bucket('1 day', ts) AS bucket,
   vehicle_id,
@@ -248,7 +251,8 @@ SELECT
 FROM timeseries.telemetry
 GROUP BY 1, 2;
 
-CREATE OR REPLACE VIEW timeseries.phantom_drain_periods AS
+DROP VIEW IF EXISTS timeseries.phantom_drain_periods CASCADE;
+CREATE VIEW timeseries.phantom_drain_periods AS
 WITH parked_segments AS (
   SELECT
     vehicle_id,
@@ -285,7 +289,8 @@ SELECT
   soc_lost / NULLIF(hours_elapsed, 0) AS drain_rate_soc_per_hour
 FROM drain_events;
 
-CREATE OR REPLACE VIEW timeseries.phantom_drain_daily AS
+DROP VIEW IF EXISTS timeseries.phantom_drain_daily CASCADE;
+CREATE VIEW timeseries.phantom_drain_daily AS
 SELECT
   date_trunc('day', period_start) AS day,
   vehicle_id,

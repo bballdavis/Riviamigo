@@ -1,21 +1,21 @@
-pub mod parser;
-pub mod trip_detector;
 pub mod charge_detector;
-pub mod session_store;
-pub mod rivian_auth;
-pub mod ws_client;
+pub mod parser;
 pub mod poller;
-pub mod worker;
+pub mod rivian_auth;
+pub mod session_store;
 pub mod supervisor;
+pub mod trip_detector;
+pub mod worker;
+pub mod ws_client;
 
-use sqlx::PgPool;
 use crate::config::Config;
+use sqlx::PgPool;
 
 pub async fn start_workers(
-    pool:    PgPool,
-    redis:   redis::Client,
+    pool: PgPool,
+    redis: redis::Client,
     age_key: String,
-    config:  Config,
+    config: Config,
 ) -> anyhow::Result<supervisor::SupervisorHandle> {
     let handle = supervisor::WorkerSupervisor::start(pool.clone(), redis, age_key, config);
 
@@ -27,7 +27,9 @@ pub async fn start_workers(
     .await?;
 
     for vid in enrolled {
-        handle.send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid }).await;
+        handle
+            .send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid })
+            .await;
     }
 
     Ok(handle)
