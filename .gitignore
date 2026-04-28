@@ -6,6 +6,11 @@ storybook-static
 .env
 .env.local
 *.env.local
+.env.*
+!.env.example
+jwt_private.pem
+jwt_public.pem
+age_key.txt
 target/
 *.lock.tmp
 .DS_Store
