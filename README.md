@@ -33,7 +33,7 @@ infra/
 ```bash
 git clone https://github.com/bballdavis/Riviamigo.git
 cd Riviamigo
-pnpm install
+npm install
 ```
 
 ### 2. Generate secrets
@@ -47,6 +47,8 @@ openssl rsa -in jwt_private.pem -pubout -out jwt_public.pem
 age-keygen -o age_key.txt
 # Copy the public key line from age_key.txt into .env
 ```
+
+> Keep all generated secret files local. Do not commit `jwt_private.pem`, `age_key.txt`, or any `.env` file to the repository.
 
 ### 3. Configure environment
 
@@ -87,6 +89,38 @@ Open [http://localhost:5173](http://localhost:5173).
 2. Navigate to Settings → Add Vehicle
 3. Enter your Rivian credentials (they're encrypted with `age` before storage)
 4. Complete the OTP step if prompted
+
+## Scripts
+
+All common tasks are available as npm scripts:
+
+```bash
+# Development
+pnpm dev              # Start all dev servers (API + web)
+pnpm build            # Build all packages
+
+# Production
+pnpm start            # Run production API server (auto-builds web if needed)
+
+# Quality assurance
+pnpm typecheck        # Run TypeScript checks across all packages
+pnpm lint             # Run ESLint across all packages
+pnpm test             # Run tests across all packages
+
+# Infrastructure
+pnpm db:migrate       # Run database migrations
+pnpm db:reset         # Drop, recreate, and migrate database
+pnpm storybook        # Start component explorer
+pnpm clean            # Clean all build artifacts and node_modules
+```
+
+Or use the shell scripts directly from `scripts/`:
+
+```bash
+./scripts/dev.sh      # Start development servers
+./scripts/build.sh    # Build for production
+./scripts/start.sh    # Run production server
+```
 
 ## Development
 
