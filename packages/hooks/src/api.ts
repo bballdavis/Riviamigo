@@ -46,7 +46,8 @@ class ApiClient {
     });
 
     if (!res.ok) {
-      const err: ApiError = await res.json().catch(() => ({ code: 'unknown', message: res.statusText }));
+      const body = await res.json().catch(() => null);
+      const err: ApiError = body?.error ?? { code: 'unknown', message: res.statusText };
       throw Object.assign(new Error(err.message), { status: res.status, code: err.code });
     }
 
