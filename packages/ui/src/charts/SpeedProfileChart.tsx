@@ -58,7 +58,7 @@ export function SpeedProfileChart({
           width={28}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [formatMph(v), 'Speed']} />}
+          content={<ChartTooltip formatter={(v) => [formatMph(v ?? 0), 'Speed']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Area

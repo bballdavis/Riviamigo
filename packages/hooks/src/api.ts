@@ -42,7 +42,7 @@ class ApiClient {
       method,
       headers: this.headers(),
       credentials: 'include',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
 
     if (!res.ok) {

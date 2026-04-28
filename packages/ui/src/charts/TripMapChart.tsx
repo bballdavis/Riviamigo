@@ -31,10 +31,11 @@ export function TripMapChart({ track, height = 320, className }: TripMapChartPro
       const maplibregl = await import('maplibre-gl');
       await import('maplibre-gl/dist/maplibre-gl.css');
 
+      const first = track[0]!;
       const bounds = track.reduce(
         (b, p) => [[Math.min(b[0][0], p.lng), Math.min(b[0][1], p.lat)],
                    [Math.max(b[1][0], p.lng), Math.max(b[1][1], p.lat)]] as [[number,number],[number,number]],
-        [[track[0].lng, track[0].lat], [track[0].lng, track[0].lat]] as [[number,number],[number,number]]
+        [[first.lng, first.lat], [first.lng, first.lat]] as [[number,number],[number,number]]
       );
 
       map = new maplibregl.default.Map({

@@ -3,15 +3,15 @@ import { cn } from '../lib/utils';
 import { Button, type ButtonProps } from './Button';
 
 export interface EmptyStateProps {
-  icon?: React.ReactNode;
+  icon?: React.ReactNode | undefined;
   title: string;
-  description?: string;
+  description?: string | undefined;
   action?: {
     label: string;
     onClick: () => void;
-    variant?: ButtonProps['variant'];
-  };
-  className?: string;
+    variant?: ButtonProps['variant'] | undefined;
+  } | undefined;
+  className?: string | undefined;
 }
 
 export function EmptyState({
