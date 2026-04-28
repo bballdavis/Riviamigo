@@ -17,32 +17,31 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
-    "@tanstack/react-table": "^8.17.0",
+    "@tanstack/react-table": "^8.21.0",
     "clsx":         "^2.1.1",
     "d3":           "^7.9.0",
     "date-fns":     "^3.6.0",
     "framer-motion":"^11.2.0",
     "lucide-react": "^0.390.0",
-    "maplibre-gl":  "^4.4.0",
+    "maplibre-gl":  "^5.24.0",
     "react":        "^18.3.1",
     "react-dom":    "^18.3.1",
-    "recharts":     "^2.12.0",
+    "recharts":     "^3.8.0",
     "tailwind-merge":"^2.3.0"
   },
   "devDependencies": {
     "@riviamigo/config":             "workspace:*",
-    "@storybook/addon-a11y":         "^8.1.0",
-    "@storybook/addon-essentials":   "^8.1.0",
-    "@storybook/react-vite":         "^8.1.0",
+    "@storybook/addon-a11y":         "^8.6.0",
+    "@storybook/addon-essentials":   "^8.6.0",
+    "@storybook/react-vite":         "^8.6.0",
     "@types/d3":                     "^7.4.3",
-    "@types/maplibre-gl":            "^1.14.0",
     "@types/react":                  "^18.3.3",
     "@types/react-dom":              "^18.3.0",
     "autoprefixer":                  "^10.4.19",
     "postcss":                       "^8.4.38",
-    "tailwindcss":                   "^3.4.4",
-    "typescript":                    "^5.4.5",
-    "vite":                          "^5.3.1"
+    "tailwindcss":                   "^4.0.0",
+    "typescript":                    "^6.0.0",
+    "vite":                          "^5.4.0"
   },
   "peerDependencies": {
     "react":     "^18",
