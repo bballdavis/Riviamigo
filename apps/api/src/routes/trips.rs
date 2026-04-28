@@ -130,12 +130,12 @@ async fn get_track(
             vid, trip.started_at, trip.ended_at
         ).fetch_all(&state.pool).await?,
         _ => sqlx::query_as!(TrackPoint,
-            r#"SELECT time_bucket($1::interval, ts) AS "ts!", avg(latitude) AS lat, avg(longitude) AS lng,
+            r#"SELECT time_bucket('15 seconds'::interval, ts) AS "ts!", avg(latitude) AS lat, avg(longitude) AS lng,
                       avg(speed_mph) AS speed_mph, avg(altitude_m) AS altitude_m
                FROM timeseries.telemetry
-               WHERE vehicle_id=$2 AND ts>=$3 AND ts<=$4 AND latitude IS NOT NULL
+               WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL
                GROUP BY 1 ORDER BY 1 LIMIT 5000"#,
-            bucket, vid, trip.started_at, trip.ended_at
+            vid, trip.started_at, trip.ended_at
         ).fetch_all(&state.pool).await?,
     };
 

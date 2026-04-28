@@ -1,6 +1,6 @@
 use axum::{extract::{Query, State}, routing::get, Json, Router};
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{db::vehicles::require_vehicle_owned, errors::AppError, middleware::auth::{AppState, AuthUser}};
@@ -10,6 +10,8 @@ pub fn router() -> Router<AppState> {
         .route("/efficiency/summary",      get(get_summary))
         .route("/efficiency/by-mode",      get(get_by_mode))
         .route("/efficiency/range-vs-temp",get(get_range_vs_temp))
+        .route("/efficiency/vs-temp",      get(get_vs_temp_binned))
+        .route("/efficiency/trend",        get(get_trend))
 }
 
 #[derive(Deserialize)]
@@ -17,6 +19,21 @@ struct Params {
     vehicle_id: Option<Uuid>,
     from:       Option<DateTime<Utc>>,
     to:         Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct VsTempPoint {
+    temp_c_low:           i32,
+    temp_c_high:          i32,
+    avg_efficiency_wh_mi: Option<f64>,
+    trip_count:           i64,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TrendPoint {
+    day:               NaiveDate,
+    day_avg_wh_mi:     Option<f64>,
+    rolling_7d_wh_mi:  Option<f64>,
 }
 
 async fn get_summary(
@@ -77,6 +94,69 @@ async fn get_by_mode(
     })).collect::<Vec<_>>())))
 }
 
+async fn get_vs_temp_binned(
+    State(state): State<AppState>,
+    auth:         AuthUser,
+    Query(p):     Query<Params>,
+) -> Result<Json<Vec<VsTempPoint>>, AppError> {
+    let vid  = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let from = p.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
+    let to   = p.to.unwrap_or_else(Utc::now);
+
+    let rows = sqlx::query_as::<_, VsTempPoint>(
+        "SELECT
+           width_bucket(t.outside_temp_c, -20, 45, 13) AS bucket,
+           round(((-20 + (width_bucket(t.outside_temp_c, -20, 45, 13) - 1) * 5))::numeric, 0)::int AS temp_c_low,
+           round(((-20 + (width_bucket(t.outside_temp_c, -20, 45, 13)) * 5))::numeric, 0)::int      AS temp_c_high,
+           avg(t.efficiency_wh_per_mile) AS avg_efficiency_wh_mi,
+           count(*) AS trip_count
+         FROM riviamigo.trips t
+         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
+           AND t.outside_temp_c IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL
+         GROUP BY 1, 2, 3 ORDER BY 2",
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+async fn get_trend(
+    State(state): State<AppState>,
+    auth:         AuthUser,
+    Query(p):     Query<Params>,
+) -> Result<Json<Vec<TrendPoint>>, AppError> {
+    let vid  = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let from = p.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
+    let to   = p.to.unwrap_or_else(Utc::now);
+
+    let rows = sqlx::query_as::<_, TrendPoint>(
+        "SELECT
+           started_at::date AS day,
+           avg(efficiency_wh_per_mile) AS day_avg_wh_mi,
+           avg(avg(efficiency_wh_per_mile)) OVER (
+             ORDER BY started_at::date
+             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+           ) AS rolling_7d_wh_mi
+         FROM riviamigo.trips
+         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
+           AND efficiency_wh_per_mile IS NOT NULL
+         GROUP BY started_at::date ORDER BY 1",
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows))
+}
+
 async fn get_range_vs_temp(
     State(state): State<AppState>,
     auth:         AuthUser,
@@ -91,7 +171,7 @@ async fn get_range_vs_temp(
         "SELECT t.id,
                 t.distance_miles,
                 t.efficiency_wh_per_mile,
-                (SELECT AVG(tel.cabin_temp_c)
+                                (SELECT AVG(tel.avg_cabin_temp_c)
                  FROM timeseries.telemetry_1hr tel
                  WHERE tel.vehicle_id=t.vehicle_id
                    AND tel.bucket BETWEEN t.started_at AND t.ended_at
