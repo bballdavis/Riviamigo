@@ -1,7 +1,7 @@
 //! Rivian authentication flow.
 
 use crate::ingestion::session_store::RivianTokenBundle;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const DEFAULT_GATEWAY_URL: &str = "https://rivian.com/api/gql/gateway/graphql";
@@ -31,6 +31,15 @@ pub struct RivianOtpChallenge {
 pub enum LoginResult {
     Authenticated(RivianTokenBundle),
     OtpRequired(RivianOtpChallenge),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RivianVehicleSummary {
+    pub id: String,
+    pub name: Option<String>,
+    pub vin: Option<String>,
+    pub model: Option<String>,
+    pub model_year: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +86,38 @@ struct GqlErrorExtensions {
 struct CreateCsrfTokenPayload {
     csrf_token: String,
     app_session_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserInfoResponse {
+    data: Option<UserInfoData>,
+    errors: Option<Vec<GqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserInfoData {
+    current_user: Option<CurrentUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentUser {
+    vehicles: Option<Vec<UserVehicle>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserVehicle {
+    id: String,
+    vin: Option<String>,
+    name: Option<String>,
+    vehicle: Option<UserVehicleDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserVehicleDetails {
+    model_year: Option<i32>,
+    model: Option<String>,
 }
 
 struct CsrfSession {
@@ -203,6 +244,83 @@ pub async fn rivian_login_otp(
         csrf_token: challenge.csrf_token.clone(),
         created_at: chrono::Utc::now(),
     })
+}
+
+pub async fn rivian_user_vehicles(
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<Vec<RivianVehicleSummary>, RivianAuthError> {
+    let query = r#"
+      query getUserInfo {
+        currentUser {
+          vehicles {
+            id
+            vin
+            name
+            vehicle {
+              modelYear
+              model
+            }
+          }
+        }
+      }
+    "#;
+
+    let body = serde_json::json!({
+        "operationName": "getUserInfo",
+        "query": query,
+        "variables": serde_json::Value::Null
+    });
+
+    let mut req = client
+        .post(gateway_url())
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+        .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
+        .header("A-Sess", &tokens.app_session_token)
+        .header("U-Sess", &tokens.user_session_token)
+        .json(&body);
+
+    if !tokens.csrf_token.is_empty() {
+        req = req.header("Csrf-Token", &tokens.csrf_token);
+    }
+    if !tokens.access_token.is_empty() {
+        req = req.bearer_auth(&tokens.access_token);
+    }
+
+    let response = req.send().await?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(RivianAuthError::InvalidCredentials);
+    }
+
+    let parsed = response.json::<UserInfoResponse>().await?;
+    if let Some(errors) = parsed.errors {
+        if !errors.is_empty() {
+            return Err(RivianAuthError::UnexpectedResponse(format_gql_error(
+                &errors,
+            )));
+        }
+    }
+
+    let vehicles = parsed
+        .data
+        .and_then(|d| d.current_user)
+        .and_then(|u| u.vehicles)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| RivianVehicleSummary {
+            id: v.id,
+            name: v.name,
+            vin: v.vin,
+            model: v.vehicle.as_ref().and_then(|details| details.model.clone()),
+            model_year: v.vehicle.and_then(|details| details.model_year),
+        })
+        .collect();
+
+    Ok(vehicles)
 }
 
 async fn create_csrf_session(client: &reqwest::Client) -> Result<CsrfSession, RivianAuthError> {
@@ -389,8 +507,20 @@ mod tests {
         assert_eq!(tokens.app_session_token, "app-session-token");
         assert_eq!(tokens.csrf_token, "csrf-token");
 
+        let vehicles = rivian_user_vehicles(&client, &tokens).await.unwrap();
+        assert_eq!(
+            vehicles,
+            vec![RivianVehicleSummary {
+                id: "vehicle-123".into(),
+                name: Some("Compass Yellow".into()),
+                vin: Some("7FCTGAAL0NN000001".into()),
+                model: Some("R1T".into()),
+                model_year: Some(2022),
+            }]
+        );
+
         let requests = recorded.lock().unwrap();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
         assert_eq!(requests[0].operation_name, "CreateCSRFToken");
         assert!(requests[0].headers.get("csrf-token").is_none());
         assert!(requests[0].headers.get("a-sess").is_none());
@@ -411,6 +541,12 @@ mod tests {
         assert_eq!(requests[2].body["variables"]["email"], "driver@example.com");
         assert_eq!(requests[2].body["variables"]["otpCode"], "123456");
         assert_eq!(requests[2].body["variables"]["otpToken"], "otp-token");
+
+        assert_eq!(requests[3].operation_name, "getUserInfo");
+        assert_eq!(requests[3].headers["csrf-token"], "csrf-token");
+        assert_eq!(requests[3].headers["a-sess"], "app-session-token");
+        assert_eq!(requests[3].headers["u-sess"], "user-session-token");
+        assert_eq!(requests[3].headers["authorization"], "Bearer access-token");
 
         std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
     }
@@ -452,6 +588,21 @@ mod tests {
                         "accessToken": "access-token",
                         "refreshToken": "refresh-token",
                         "userSessionToken": "user-session-token"
+                    }
+                }
+            }),
+            "getUserInfo" => json!({
+                "data": {
+                    "currentUser": {
+                        "vehicles": [{
+                            "id": "vehicle-123",
+                            "vin": "7FCTGAAL0NN000001",
+                            "name": "Compass Yellow",
+                            "vehicle": {
+                                "modelYear": 2022,
+                                "model": "R1T"
+                            }
+                        }]
                     }
                 }
             }),

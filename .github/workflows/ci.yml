@@ -13,42 +13,9 @@ env:
   RUST_TOOLCHAIN: stable
 
 jobs:
-  # ── Rust ────────────────────────────────────────────────────────────────────
-  rust:
-    name: Rust (clippy · test · audit)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/api
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/api
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Test
-        run: cargo test --all
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
-      - name: Audit dependencies
-        run: cargo audit
-
-  # ── Frontend ─────────────────────────────────────────────────────────────────
+  # ── Frontend ────────────────────────────────────────────────────────────────
   frontend:
-    name: Frontend (typecheck · lint · storybook)
+    name: Frontend (lint · typecheck · test · storybook · e2e)
     runs-on: ubuntu-latest
 
     steps:
@@ -68,11 +35,82 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Playwright browsers
+        run: pnpm --filter @riviamigo/web exec playwright install --with-deps chromium
+
       - name: Typecheck
         run: pnpm turbo typecheck
 
       - name: Lint
         run: pnpm turbo lint
 
+      - name: Test
+        run: pnpm turbo test
+
       - name: Build Storybook
         run: pnpm turbo build-storybook
+
+      - name: E2E
+        run: pnpm turbo test:e2e
+
+  # ── Backend ─────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend (fmt · clippy · test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/api
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all
+
+  # ── Security ────────────────────────────────────────────────────────────────
+  security:
+    name: Security (dependency audit · secret scan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit
+        working-directory: apps/api
+        run: cargo audit
+
+      - name: pnpm audit
+        run: pnpm audit --prod
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2

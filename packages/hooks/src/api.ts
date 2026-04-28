@@ -6,7 +6,7 @@
 import type {
   Vehicle, VehicleStatus, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
   StatsSummary, EfficiencyByMode, ChargingSummary, PaginatedResponse,
-  AuthTokens, ConnectResult, ApiError,
+  AuthTokens, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -75,8 +75,8 @@ class ApiClient {
         }
       }
 
-      const body = await res.json().catch(() => null);
-      const err: ApiError = body?.error ?? { code: 'unknown', message: res.statusText };
+      const responseBody = await res.json().catch(() => null);
+      const err: ApiError = responseBody?.error ?? { code: 'unknown', message: res.statusText };
       const detail = {
         status: res.status,
         code: err.code,
@@ -123,6 +123,10 @@ class ApiClient {
 
   async vehicleStatus(vehicleId: string): Promise<VehicleStatus> {
     return this.request('GET', '/v1/vehicles/status', undefined, { vehicle_id: vehicleId });
+  }
+
+  async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {
+    return this.request('POST', '/v1/vehicles', body);
   }
 
   async connectRivian(email: string, password: string): Promise<ConnectResult> {
