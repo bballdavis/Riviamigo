@@ -35,6 +35,7 @@ Authenticated GraphQL requests generally use:
 
 - `A-Sess: <appSessionToken>`
 - `U-Sess: <userSessionToken>`
+- `Authorization: Bearer <accessToken>`
 
 The GraphQL WebSocket uses the `graphql-transport-ws` subprotocol and sends
 `u-sess` in the `connection_init` payload.
@@ -49,6 +50,14 @@ The GraphQL WebSocket uses the `graphql-transport-ws` subprotocol and sends
 5. Call `LoginWithOTP` with email, `otpCode`, and `otpToken`.
 6. Save `accessToken`, `refreshToken`, `userSessionToken`, `appSessionToken`,
    `csrfToken`, and the creation timestamp.
+7. Call `getUserInfo` against the same gateway to read
+   `currentUser.vehicles[].id`, `vin`, `name`, `vehicle.modelYear`, and
+   `vehicle.model`.
+8. `/v1/vehicles/connect` returns those vehicle summaries. The browser must
+   follow a successful connect by calling `POST /v1/vehicles`, which encrypts
+   and persists the temporary token bundle from Redis into
+   `riviamigo.vehicle_credentials` and sets `users.default_vehicle_id` if it is
+   currently empty.
 
 ## Local Riviamigo Auth Gotcha
 
@@ -56,3 +65,12 @@ The GraphQL WebSocket uses the `graphql-transport-ws` subprotocol and sends
 `401 Unauthorized` on that route can mean the local 15-minute Riviamigo access
 token expired before Rivian was contacted. The web API client retries protected
 requests once after calling `/v1/auth/refresh`.
+
+If the UI returns to "Add a Vehicle" after a successful Rivian login, check:
+
+- Redis key `rivian:connect:<user_id>` exists: Rivian auth succeeded but has not
+  been persisted.
+- `riviamigo.vehicles` has no row for the user: the browser did not complete
+  `POST /v1/vehicles`.
+- `users.default_vehicle_id` is null: the dashboard will continue to show the
+  empty vehicle state even though Rivian auth temporarily succeeded.

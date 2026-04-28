@@ -3,11 +3,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     errors::AppError,
+    ingestion::rivian_auth::RivianVehicleSummary,
     middleware::auth::{AppState, AuthUser},
 };
 
@@ -43,6 +44,15 @@ struct AddVehicleBody {
     vin: Option<String>,
 }
 
+#[derive(Serialize)]
+struct ConnectResponse {
+    status: &'static str,
+    requires_otp: bool,
+    challenge_id: Option<String>,
+    vehicle_id: Option<Uuid>,
+    vehicles: Vec<RivianVehicleSummary>,
+}
+
 async fn connect(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -54,17 +64,23 @@ async fn connect(
         .map_err(|e| AppError::RivianApi(e.to_string()))?
     {
         crate::ingestion::rivian_auth::LoginResult::Authenticated(tokens) => {
-            // Store challenge result in Redis for vehicle add step
+            let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
+                .await
+                .map_err(|e| AppError::RivianApi(e.to_string()))?;
             let mut conn = state.redis.get_multiplexed_async_connection().await?;
             let key = format!("rivian:connect:{}", auth.user_id);
             let json = serde_json::to_string(&tokens).unwrap_or_default();
             let _: () = redis::AsyncCommands::set_ex(&mut conn, &key, json, 300).await?;
-            Ok(Json(serde_json::json!({
-                "status": "connected",
-                "requires_otp": false,
-                "challenge_id": serde_json::Value::Null,
-                "vehicle_id": serde_json::Value::Null
-            })))
+            Ok(Json(
+                serde_json::to_value(ConnectResponse {
+                    status: "connected",
+                    requires_otp: false,
+                    challenge_id: None,
+                    vehicle_id: None,
+                    vehicles,
+                })
+                .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?,
+            ))
         }
         crate::ingestion::rivian_auth::LoginResult::OtpRequired(challenge) => {
             let challenge_id = Uuid::new_v4().to_string();
@@ -79,12 +95,16 @@ async fn connect(
             }))
             .unwrap_or_default();
             let _: () = redis::AsyncCommands::set_ex(&mut conn, &key, val, 300).await?;
-            Ok(Json(serde_json::json!({
-                "status": "otp_required",
-                "requires_otp": true,
-                "challenge_id": challenge_id,
-                "vehicle_id": serde_json::Value::Null
-            })))
+            Ok(Json(
+                serde_json::to_value(ConnectResponse {
+                    status: "otp_required",
+                    requires_otp: true,
+                    challenge_id: Some(challenge_id),
+                    vehicle_id: None,
+                    vehicles: Vec::new(),
+                })
+                .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?,
+            ))
         }
     }
 }
@@ -114,18 +134,25 @@ async fn connect_otp(
         crate::ingestion::rivian_auth::rivian_login_otp(&client, &challenge, &body.otp_code)
             .await
             .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
+        .await
+        .map_err(|e| AppError::RivianApi(e.to_string()))?;
 
     let connect_key = format!("rivian:connect:{}", auth.user_id);
     let json = serde_json::to_string(&tokens).unwrap_or_default();
     let _: () = redis::AsyncCommands::set_ex(&mut conn, &connect_key, json, 300).await?;
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
 
-    Ok(Json(serde_json::json!({
-        "status": "connected",
-        "requires_otp": false,
-        "challenge_id": serde_json::Value::Null,
-        "vehicle_id": serde_json::Value::Null
-    })))
+    Ok(Json(
+        serde_json::to_value(ConnectResponse {
+            status: "connected",
+            requires_otp: false,
+            challenge_id: None,
+            vehicle_id: None,
+            vehicles,
+        })
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?,
+    ))
 }
 
 async fn add_vehicle(
@@ -182,6 +209,8 @@ async fn add_vehicle(
     )
     .execute(&state.pool)
     .await?;
+
+    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
 
     // Spawn worker
     // (supervisor handle is stored in AppState in main — passed via extension)
