@@ -34,7 +34,7 @@ struct AccessTokenResponse { access_token: String, expires_in: u64 }
 async fn register(
     State(state): State<AppState>,
     Json(body):   Json<RegisterBody>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     if body.email.is_empty() || body.password.len() < 8 {
         return Err(AppError::Validation("email required, password min 8 chars".into()));
     }
@@ -59,7 +59,17 @@ async fn register(
         user_id
     ).execute(&state.pool).await;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "user_id": user_id }))))
+    // auto-login: issue tokens so the client is immediately authenticated
+    let token = issue_access_token(user_id, None, &state.jwt_keys)?;
+    let refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let cookie = format!(
+        "refresh_token={refresh}; HttpOnly; Secure; SameSite=Strict; Path=/auth/refresh; Max-Age=2592000"
+    );
+    Ok((
+        StatusCode::CREATED,
+        [(SET_COOKIE, cookie)],
+        Json(AccessTokenResponse { access_token: token, expires_in: 900 }),
+    ).into_response())
 }
 
 async fn login(

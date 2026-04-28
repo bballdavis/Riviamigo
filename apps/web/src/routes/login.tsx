@@ -3,7 +3,7 @@ import { createRoute, useNavigate } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import { useAuth } from '@riviamigo/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
-import { AmbientOrbs } from '@riviamigo/ui/primitives';
+import { Zap, Route, Battery } from 'lucide-react';
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -11,7 +11,7 @@ export const loginRoute = createRoute({
   component: LoginPage,
 });
 
-function LoginPage() {
+export function LoginPage() {
   const navigate = useNavigate();
   const { login, register } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -39,18 +39,39 @@ function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-bg-page flex items-center justify-center px-4">
-      <AmbientOrbs />
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-semibold font-display text-fg tracking-tight">Riviamigo</h1>
-          <p className="mt-1 text-sm text-fg-tertiary">Your Rivian, deeply understood.</p>
+    <div className="min-h-screen bg-bg-page flex items-center justify-center px-4 relative overflow-hidden">
+      {/* Deep amber glow behind everything */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 flex items-center justify-center"
+      >
+        <div className="w-[700px] h-[700px] rounded-full bg-accent/[0.07] blur-[140px]" />
+      </div>
+      {/* Corner orbs */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -top-64 -left-64 w-[500px] h-[500px] rounded-full bg-accent/[0.04] blur-3xl" />
+        <div className="absolute -bottom-80 -right-64 w-[700px] h-[700px] rounded-full bg-accent/[0.03] blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-sm relative z-10">
+        {/* Brand mark */}
+        <div className="flex flex-col items-center mb-10">
+          <div className="relative mb-5">
+            <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center shadow-[0_0_40px_rgba(245,158,11,0.2)]">
+              <span className="font-display font-bold text-3xl text-accent leading-none">R</span>
+            </div>
+            {/* Subtle ring */}
+            <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-accent/10" />
+          </div>
+          <h1 className="text-2xl font-bold font-display text-fg tracking-tight">Riviamigo</h1>
+          <p className="mt-1.5 text-sm text-fg-tertiary">Your Rivian, deeply understood.</p>
         </div>
 
-        <div className="bg-bg-surface border border-border rounded-2xl p-6">
-          <h2 className="text-base font-semibold text-fg mb-5">
+        {/* Auth card */}
+        <div className="bg-bg-glass backdrop-blur-md border border-border rounded-2xl p-6 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+          <p className="text-[11px] font-semibold text-fg-tertiary uppercase tracking-widest mb-5">
             {mode === 'login' ? 'Sign in' : 'Create account'}
-          </h2>
+          </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <Input
@@ -71,22 +92,45 @@ function LoginPage() {
               required
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             />
-            {error && <p className="text-xs text-[#F87171]">{error}</p>}
-            <Button type="submit" loading={loading} className="mt-1 w-full">
+            {error && (
+              <p className="text-xs text-[#F87171] bg-[#7F1D1D]/20 border border-[#F87171]/20 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
+            <Button type="submit" loading={loading} size="lg" className="mt-1 w-full">
               {mode === 'login' ? 'Sign in' : 'Create account'}
             </Button>
           </form>
 
-          <p className="mt-4 text-center text-xs text-fg-tertiary">
-            {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-            <button
-              type="button"
-              onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-              className="text-accent hover:text-accent-hover transition-colors"
-            >
-              {mode === 'login' ? 'Create one' : 'Sign in'}
-            </button>
-          </p>
+          <div className="mt-5 pt-5 border-t border-border text-center">
+            <p className="text-xs text-fg-tertiary">
+              {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+              <button
+                type="button"
+                onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
+                className="text-accent hover:text-accent-hover transition-colors font-medium"
+              >
+                {mode === 'login' ? 'Create one' : 'Sign in'}
+              </button>
+            </p>
+          </div>
+        </div>
+
+        {/* Feature callouts */}
+        <div className="mt-8 grid grid-cols-3 gap-3">
+          {[
+            { icon: Route, label: 'Trip analytics', sub: 'Every drive logged' },
+            { icon: Zap, label: 'Charge history', sub: 'Sessions & cost' },
+            { icon: Battery, label: 'Battery health', sub: 'SOC over time' },
+          ].map(({ icon: Icon, label, sub }) => (
+            <div key={label} className="text-center">
+              <div className="flex justify-center mb-1.5">
+                <Icon className="h-3.5 w-3.5 text-accent/70" />
+              </div>
+              <p className="text-[11px] font-medium text-fg-secondary">{label}</p>
+              <p className="text-[10px] text-fg-tertiary mt-0.5">{sub}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>
