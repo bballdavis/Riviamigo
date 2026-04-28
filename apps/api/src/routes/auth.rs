@@ -40,9 +40,10 @@ async fn register(
     }
 
     let hash = argon2_hash(&body.password)?;
+    let email = body.email.to_lowercase();
     let user_id: Uuid = sqlx::query_scalar!(
         "INSERT INTO riviamigo.users (email, password_hash) VALUES ($1, $2) RETURNING id",
-        body.email.to_lowercase().trim(),
+        email.trim(),
         hash,
     )
     .fetch_one(&state.pool)
@@ -76,9 +77,10 @@ async fn login(
     State(state): State<AppState>,
     Json(body):   Json<LoginBody>,
 ) -> Result<Response, AppError> {
+    let email = body.email.to_lowercase();
     let row = sqlx::query!(
         "SELECT id, password_hash, default_vehicle_id FROM riviamigo.users WHERE email = $1",
-        body.email.to_lowercase().trim()
+        email.trim()
     )
     .fetch_optional(&state.pool)
     .await?

@@ -80,7 +80,8 @@ class ApiClient {
   // ── Vehicles ──────────────────────────────────────────────────────────────
 
   async listVehicles(): Promise<Vehicle[]> {
-    return this.request('GET', '/v1/vehicles');
+    const res = await this.request<{ vehicles: Vehicle[] }>('GET', '/v1/vehicles');
+    return res.vehicles ?? [];
   }
 
   async vehicleStatus(vehicleId: string): Promise<VehicleStatus> {
@@ -115,6 +116,12 @@ class ApiClient {
     );
   }
 
+  async getDegradation(vehicleId: string) {
+    return this.request<{ ts: string; usable_kwh: number; rated_kwh: number | null; capacity_pct: number }[]>(
+      'GET', '/v1/battery/degradation', undefined, { vehicle_id: vehicleId }
+    );
+  }
+
   // ── Trips ─────────────────────────────────────────────────────────────────
 
   async listTrips(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
@@ -134,6 +141,12 @@ class ApiClient {
   async getSpeedProfile(tripId: string, vehicleId: string) {
     return this.request<{ elapsed_s: number; speed_mph: number }[]>(
       'GET', `/v1/trips/${tripId}/speed`, undefined, { vehicle_id: vehicleId }
+    );
+  }
+
+  async getElevationProfile(tripId: string, vehicleId: string) {
+    return this.request<{ ts: string; value: number | null }[]>(
+      'GET', `/v1/trips/${tripId}/elevation`, undefined, { vehicle_id: vehicleId }
     );
   }
 
@@ -173,6 +186,18 @@ class ApiClient {
     return this.request<EfficiencyByMode[]>('GET', '/v1/efficiency/by-mode', undefined, {
       vehicle_id: vehicleId, from, to,
     });
+  }
+
+  async getEfficiencyTrend(vehicleId: string, from: string, to: string) {
+    return this.request<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }[]>(
+      'GET', '/v1/efficiency/trend', undefined, { vehicle_id: vehicleId, from, to }
+    );
+  }
+
+  async getEfficiencyVsTemp(vehicleId: string, from: string, to: string) {
+    return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number }[]>(
+      'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
+    );
   }
 
   // ── Stats ─────────────────────────────────────────────────────────────────

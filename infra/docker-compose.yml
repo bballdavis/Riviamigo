@@ -27,17 +27,16 @@ services:
 
   garage:
     image: dxflrs/garage:v1.0.0
-    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    command: ["/garage", "-c", "/config/garage.toml", "server"]
     ports:
       - "3900:3900"   # S3 API
       - "3903:3903"   # Admin API
     volumes:
-      - ./garage.toml:/etc/garage.toml:ro
-      - ./garage-entrypoint.sh:/entrypoint.sh:ro
+      - ./garage.toml:/config/garage.toml:ro
       - garage_meta:/var/lib/garage/meta
       - garage_data:/var/lib/garage/data
     healthcheck:
-      test: ["CMD", "garage", "-c", "/etc/garage.toml", "status"]
+      test: ["CMD", "/garage", "-c", "/config/garage.toml", "status"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -55,7 +54,7 @@ services:
       S3_ACCESS_KEY: GKdeadbeef0000000000000000000000
       S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
       PORT: 3001
-      ALLOWED_ORIGINS: http://localhost:3000
+      ALLOWED_ORIGINS: http://localhost:5173
       RUST_LOG: riviamigo_api=info,tower_http=info
       # JWT_SECRET, JWT_PUBLIC_KEY, AGE_ENCRYPTION_KEY are intentionally omitted.
       # On first boot the API auto-generates an RSA-2048 keypair and age X25519 key
