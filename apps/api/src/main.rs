@@ -2,18 +2,14 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-mod config;
-mod db;
-mod errors;
-mod ingestion;
-mod keys;
-mod middleware;
-mod models;
-mod routes;
-
-use config::Config;
-use db::pool::create_pool;
-use middleware::auth::{AppState, JwtKeys};
+use riviamigo_api::{
+    config::Config,
+    db::pool::create_pool,
+    ingestion,
+    keys,
+    middleware::auth::{AppState, JwtKeys},
+    routes,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
