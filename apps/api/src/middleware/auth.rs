@@ -2,7 +2,7 @@ use axum::{
     extract::FromRequestParts,
     http::{header::AUTHORIZATION, request::Parts},
 };
-use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,7 +19,7 @@ pub struct Claims {
 
 #[derive(Debug, Clone)]
 pub struct AuthUser {
-    pub user_id:            Uuid,
+    pub user_id: Uuid,
     pub default_vehicle_id: Option<Uuid>,
 }
 
@@ -47,11 +47,11 @@ impl JwtKeys {
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub pool:     sqlx::PgPool,
-    pub redis:    redis::Client,
+    pub pool: sqlx::PgPool,
+    pub redis: redis::Client,
     pub jwt_keys: std::sync::Arc<JwtKeys>,
-    pub age_key:  String,
-    pub config:   crate::config::Config,
+    pub age_key: String,
+    pub config: crate::config::Config,
 }
 
 #[async_trait::async_trait]
@@ -83,16 +83,16 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
             .claims;
 
         Ok(AuthUser {
-            user_id:            claims.sub,
+            user_id: claims.sub,
             default_vehicle_id: claims.default_vehicle_id,
         })
     }
 }
 
 pub fn issue_access_token(
-    user_id:            Uuid,
+    user_id: Uuid,
     default_vehicle_id: Option<Uuid>,
-    keys:               &JwtKeys,
+    keys: &JwtKeys,
 ) -> anyhow::Result<String> {
     use jsonwebtoken::{encode, Header};
     let now = chrono::Utc::now().timestamp();
@@ -103,5 +103,9 @@ pub fn issue_access_token(
         iat: now,
         default_vehicle_id,
     };
-    Ok(encode(&Header::new(Algorithm::RS256), &claims, &keys.encoding)?)
+    Ok(encode(
+        &Header::new(Algorithm::RS256),
+        &claims,
+        &keys.encoding,
+    )?)
 }

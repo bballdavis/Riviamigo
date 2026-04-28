@@ -16,27 +16,39 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/register", post(register))
-        .route("/auth/login",    post(login))
-        .route("/auth/refresh",  post(refresh))
-        .route("/auth/logout",   post(logout))
-        .route("/auth/me",       axum::routing::get(me))
+        .route("/auth/login", post(login))
+        .route("/auth/refresh", post(refresh))
+        .route("/auth/logout", post(logout))
+        .route("/auth/me", axum::routing::get(me))
 }
 
 #[derive(Deserialize)]
-struct RegisterBody { email: String, password: String }
+struct RegisterBody {
+    email: String,
+    password: String,
+}
 
 #[derive(Deserialize)]
-struct LoginBody { email: String, password: String }
+struct LoginBody {
+    email: String,
+    password: String,
+}
 
 #[derive(Serialize)]
-struct AccessTokenResponse { access_token: String, expires_in: u64 }
+struct AccessTokenResponse {
+    access_token: String,
+    expires_in: u64,
+    default_vehicle_id: Option<Uuid>,
+}
 
 async fn register(
     State(state): State<AppState>,
-    Json(body):   Json<RegisterBody>,
+    Json(body): Json<RegisterBody>,
 ) -> Result<Response, AppError> {
     if body.email.is_empty() || body.password.len() < 8 {
-        return Err(AppError::Validation("email required, password min 8 chars".into()));
+        return Err(AppError::Validation(
+            "email required, password min 8 chars".into(),
+        ));
     }
 
     let hash = argon2_hash(&body.password)?;
@@ -49,8 +61,9 @@ async fn register(
     .fetch_one(&state.pool)
     .await
     .map_err(|e| match e {
-        sqlx::Error::Database(ref db) if db.constraint() == Some("users_email_key") =>
-            AppError::Validation("email already registered".into()),
+        sqlx::Error::Database(ref db) if db.constraint() == Some("users_email_key") => {
+            AppError::Validation("email already registered".into())
+        }
         other => AppError::Database(other),
     })?;
 
@@ -58,24 +71,29 @@ async fn register(
     let _ = sqlx::query!(
         "INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
         user_id
-    ).execute(&state.pool).await;
+    )
+    .execute(&state.pool)
+    .await;
 
     // auto-login: issue tokens so the client is immediately authenticated
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
-    let cookie = format!(
-        "refresh_token={refresh}; HttpOnly; Secure; SameSite=Strict; Path=/auth/refresh; Max-Age=2592000"
-    );
+    let cookie = refresh_cookie(&refresh, 2_592_000);
     Ok((
         StatusCode::CREATED,
         [(SET_COOKIE, cookie)],
-        Json(AccessTokenResponse { access_token: token, expires_in: 900 }),
-    ).into_response())
+        Json(AccessTokenResponse {
+            access_token: token,
+            expires_in: 900,
+            default_vehicle_id: None,
+        }),
+    )
+        .into_response())
 }
 
 async fn login(
     State(state): State<AppState>,
-    Json(body):   Json<LoginBody>,
+    Json(body): Json<LoginBody>,
 ) -> Result<Response, AppError> {
     let email = body.email.to_lowercase();
     let row = sqlx::query!(
@@ -91,18 +109,21 @@ async fn login(
     let token = issue_access_token(row.id, row.default_vehicle_id, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, row.id).await?;
 
-    let cookie = format!(
-        "refresh_token={refresh}; HttpOnly; Secure; SameSite=Strict; Path=/auth/refresh; Max-Age=2592000"
-    );
+    let cookie = refresh_cookie(&refresh, 2_592_000);
     Ok((
         [(SET_COOKIE, cookie)],
-        Json(AccessTokenResponse { access_token: token, expires_in: 900 }),
-    ).into_response())
+        Json(AccessTokenResponse {
+            access_token: token,
+            expires_in: 900,
+            default_vehicle_id: row.default_vehicle_id,
+        }),
+    )
+        .into_response())
 }
 
 async fn refresh(
     State(state): State<AppState>,
-    headers:      axum::http::HeaderMap,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
     let cookie_str = headers
         .get("cookie")
@@ -136,15 +157,23 @@ async fn refresh(
     .flatten();
 
     let access_token = issue_access_token(row.user_id, default_vehicle_id, &state.jwt_keys)?;
-    Ok(Json(AccessTokenResponse { access_token, expires_in: 900 }).into_response())
+    Ok(Json(AccessTokenResponse {
+        access_token,
+        expires_in: 900,
+        default_vehicle_id,
+    })
+    .into_response())
 }
 
 async fn logout(
     State(state): State<AppState>,
-    headers:      axum::http::HeaderMap,
+    headers: axum::http::HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     if let Some(cookie_str) = headers.get("cookie").and_then(|v| v.to_str().ok()) {
-        if let Some(token) = cookie_str.split(';').find_map(|p| p.trim().strip_prefix("refresh_token=")) {
+        if let Some(token) = cookie_str
+            .split(';')
+            .find_map(|p| p.trim().strip_prefix("refresh_token="))
+        {
             let hash = sha2_hash(token);
             let _ = sqlx::query!(
                 "UPDATE riviamigo.refresh_tokens SET revoked_at = now() WHERE token_hash = $1",
@@ -154,14 +183,11 @@ async fn logout(
             .await;
         }
     }
-    let clear_cookie = "refresh_token=; HttpOnly; Secure; SameSite=Strict; Path=/auth/refresh; Max-Age=0";
+    let clear_cookie = refresh_cookie("", 0);
     Ok(([("Set-Cookie", clear_cookie)], StatusCode::NO_CONTENT))
 }
 
-async fn me(
-    State(state): State<AppState>,
-    auth:         AuthUser,
-) -> Result<impl IntoResponse, AppError> {
+async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoResponse, AppError> {
     let row = sqlx::query!(
         "SELECT email, default_vehicle_id FROM riviamigo.users WHERE id = $1",
         auth.user_id
@@ -180,7 +206,10 @@ async fn me(
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn argon2_hash(password: &str) -> Result<String, AppError> {
-    use argon2::{password_hash::{rand_core::OsRng, PasswordHasher, SaltString}, Argon2};
+    use argon2::{
+        password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+        Argon2,
+    };
     let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -189,9 +218,11 @@ fn argon2_hash(password: &str) -> Result<String, AppError> {
 }
 
 fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
-    use argon2::{password_hash::{PasswordHash, PasswordVerifier}, Argon2};
-    let parsed = PasswordHash::new(hash)
-        .map_err(|_| AppError::Unauthorized)?;
+    use argon2::{
+        password_hash::{PasswordHash, PasswordVerifier},
+        Argon2,
+    };
+    let parsed = PasswordHash::new(hash).map_err(|_| AppError::Unauthorized)?;
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .map_err(|_| AppError::Unauthorized)
@@ -200,6 +231,17 @@ fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
 fn sha2_hash(token: &str) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     Sha256::digest(token.as_bytes()).to_vec()
+}
+
+fn refresh_cookie(value: &str, max_age: u64) -> String {
+    let secure = if cfg!(debug_assertions) {
+        ""
+    } else {
+        "; Secure"
+    };
+    format!(
+        "refresh_token={value}; HttpOnly{secure}; SameSite=Lax; Path=/v1/auth; Max-Age={max_age}"
+    )
 }
 
 async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<String, AppError> {
@@ -211,7 +253,9 @@ async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<Strin
     let expires_at = chrono::Utc::now() + chrono::Duration::days(30);
     sqlx::query!(
         "INSERT INTO riviamigo.refresh_tokens (token_hash, user_id, expires_at) VALUES ($1,$2,$3)",
-        hash.as_slice(), user_id, expires_at
+        hash.as_slice(),
+        user_id,
+        expires_at
     )
     .execute(pool)
     .await?;

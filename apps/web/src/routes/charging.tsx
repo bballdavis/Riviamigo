@@ -9,6 +9,7 @@ import { EnergyBarChart } from '@riviamigo/ui/charts';
 import { DataTable, chargingColumns, type ChargeSessionRow } from '@riviamigo/ui/tables';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { presetToRange, rangeToIso, DEFAULT_PRESET, type PresetKey } from '../lib/dates';
 import { formatKwh, formatCurrency } from '@riviamigo/ui/lib/utils';
 import type { Row } from '@tanstack/react-table';
@@ -48,6 +49,7 @@ export function ChargingContent() {
   }));
 
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const hasVehicle = !!defaultVehicleId;
 
   function handleRowClick(row: Row<ChargeSessionRow>) {
     navigate({ to: '/charging/$sessionId', params: { sessionId: row.original.id } });
@@ -66,6 +68,10 @@ export function ChargingContent() {
           />
         }
       >
+        {!hasVehicle ? (
+          <NoVehicleState description="Connect your Rivian account to track charging sessions and cost over time." />
+        ) : (
+          <>
         <StatCardGrid>
           <StatCard label="Total Energy"  value={formatKwh(summary?.total_energy_kwh ?? 0)} accent />
           <StatCard label="Sessions"      value={summary?.session_count ?? 0} />
@@ -118,6 +124,8 @@ export function ChargingContent() {
             <EnergyBarChart data={energyData} loading={isLoading} height={280} />
           )}
         </MetricTabs>
+          </>
+        )}
       </PageLayout>
     </AppLayout>
   );

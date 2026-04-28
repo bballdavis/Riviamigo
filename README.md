@@ -44,12 +44,18 @@ pnpm install
 
 ### 2. Start development
 
-The dev script starts the full development stack — infrastructure (database, cache, S3) plus the API and Vite dev server. If `cargo` is available, the API runs locally; otherwise the script builds and runs the API container.
+The dev script starts the full development stack — infrastructure (database, cache, S3) plus the API and Vite dev server. If `cargo` is available, the API runs locally; otherwise the script builds and runs the API container. On local Rust startup, the script first applies the checked-in SQL migrations to the dev database so `sqlx` can compile cleanly against an empty first-run database.
 
 On first boot, the API applies a single flat baseline migration that creates the application schema, the telemetry hypertable, and the derived `timeseries.*` views the routes expect. The bootstrap does not install Timescale continuous aggregate or compression jobs.
 
 ```bash
 ./scripts/dev.sh
+```
+
+OR
+
+```bash
+pnpm run dev:stack
 ```
 
 The dev script will output the URLs where services are running:
@@ -94,6 +100,10 @@ docker compose -f infra/docker-compose.yml up -d --build
 3. Enter your Rivian credentials (encrypted with the auto-generated age key)
 4. Complete the OTP step if prompted
 
+Rivian cloud authentication uses an unofficial API shape that can change. Before
+changing onboarding/auth code, compare against [`docs/RIVIAN_AUTH.md`](docs/RIVIAN_AUTH.md)
+and the current Home Assistant Rivian integration.
+
 ## Scripts
 
 **Recommended — Use these shell scripts:**
@@ -101,6 +111,9 @@ docker compose -f infra/docker-compose.yml up -d --build
 ```bash
 # Development: Start full stack (infrastructure + Vite dev server)
 ./scripts/dev.sh
+
+# Same full-stack flow, but launched through a terminal-native wrapper
+pnpm run dev:stack
 
 # Production: Build all packages for production (workspace artifacts, not Docker images)
 ./scripts/build.sh
@@ -180,6 +193,8 @@ Toggle theme by adding `.dark` or `.light` to `<html>`. The FOUC-prevention scri
 ## API
 
 Base URL: `http://localhost:3001`
+
+Rivian connect flow implementation notes are in [`docs/RIVIAN_AUTH.md`](docs/RIVIAN_AUTH.md).
 
 | Verb | Path | Description |
 |------|------|-------------|

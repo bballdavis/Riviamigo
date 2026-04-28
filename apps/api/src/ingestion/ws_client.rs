@@ -3,7 +3,7 @@
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use crate::ingestion::{parser, session_store::RivianTokenBundle};
@@ -38,16 +38,17 @@ subscription VehicleState($vehicleID: ID!) {
 "#;
 
 pub async fn run_ws_loop(
-    vehicle_id:    Uuid,
+    vehicle_id: Uuid,
     rivian_veh_id: String,
-    tokens:        RivianTokenBundle,
-    tx:            mpsc::Sender<TelemetryEvent>,
-    mut shutdown:  tokio::sync::broadcast::Receiver<()>,
+    tokens: RivianTokenBundle,
+    tx: mpsc::Sender<TelemetryEvent>,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) {
     let mut backoff_secs = 1u64;
 
     loop {
-        match connect_and_subscribe(&vehicle_id, &rivian_veh_id, &tokens, &tx, &mut shutdown).await {
+        match connect_and_subscribe(&vehicle_id, &rivian_veh_id, &tokens, &tx, &mut shutdown).await
+        {
             Ok(()) => {
                 tracing::info!(vehicle_id = %vehicle_id, "WS connection closed gracefully");
                 break;
@@ -65,37 +66,42 @@ pub async fn run_ws_loop(
 }
 
 async fn connect_and_subscribe(
-    vehicle_id:    &Uuid,
+    vehicle_id: &Uuid,
     rivian_veh_id: &str,
-    tokens:        &RivianTokenBundle,
-    tx:            &mpsc::Sender<TelemetryEvent>,
-    shutdown:      &mut tokio::sync::broadcast::Receiver<()>,
+    tokens: &RivianTokenBundle,
+    tx: &mpsc::Sender<TelemetryEvent>,
+    shutdown: &mut tokio::sync::broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    use http::header::{HeaderMap, HeaderValue};
-    let mut headers = HeaderMap::new();
-    headers.insert("a-sess",     HeaderValue::from_str(&tokens.a_sess)?);
-    headers.insert("u-sess",     HeaderValue::from_str(&tokens.u_sess)?);
-    headers.insert("csrf-token", HeaderValue::from_str(&tokens.csrf_token)?);
-
     let request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
         .uri(WS_URL)
-        .header("a-sess", &tokens.a_sess)
-        .header("u-sess", &tokens.u_sess)
-        .header("csrf-token", &tokens.csrf_token)
         .header("Sec-WebSocket-Protocol", "graphql-transport-ws")
         .body(())?;
 
     let (mut ws, _) = tokio_tungstenite::connect_async(request).await?;
 
     // connection_init
-    ws.send(Message::Text(json!({"type":"connection_init","payload":{}}).to_string())).await?;
+    ws.send(Message::Text(
+        json!({
+            "type": "connection_init",
+            "payload": {
+                "client-name": "com.rivian.ios.consumer-apollo-ios",
+                "client-version": "1.13.0-1494",
+                "dc-cid": format!("m-ios-{}", uuid::Uuid::new_v4()),
+                "u-sess": &tokens.user_session_token
+            }
+        })
+        .to_string(),
+    ))
+    .await?;
 
     // Wait for connection_ack
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(t))) => {
                 let v: serde_json::Value = serde_json::from_str(&t).unwrap_or_default();
-                if v.get("type").and_then(|x| x.as_str()) == Some("connection_ack") { break; }
+                if v.get("type").and_then(|x| x.as_str()) == Some("connection_ack") {
+                    break;
+                }
             }
             _ => anyhow::bail!("Did not receive connection_ack"),
         }
