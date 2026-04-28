@@ -52,8 +52,8 @@ export function ChargeCurveChart({
             <ChartTooltip
               formatter={(v, name) =>
                 name === 'power_kw'
-                  ? [formatKwh(v), 'Power']
-                  : [formatPercent(v), 'SoC']
+                  ? [formatKwh(v ?? 0), 'Power']
+                  : [formatPercent(v ?? 0), 'SoC']
               }
             />
           }

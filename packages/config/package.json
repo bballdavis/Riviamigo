@@ -4,7 +4,8 @@
   "private": true,
   "exports": {
     "./eslint/*": "./eslint/*.js",
-    "./typescript/*": "./typescript/*.json",
+    "./typescript/base.json": "./typescript/base.json",
+    "./typescript/react.json": "./typescript/react.json",
     "./tailwind/*": "./tailwind/*.ts"
   },
   "devDependencies": {

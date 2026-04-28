@@ -71,7 +71,7 @@ export function SocAreaChart({
 
         <Tooltip
           content={<ChartTooltip
-            formatter={(v) => [formatPercent(v, 0), 'SoC']}
+            formatter={(v) => [formatPercent(v ?? 0, 0), 'SoC']}
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />

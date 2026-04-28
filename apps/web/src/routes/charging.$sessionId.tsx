@@ -51,7 +51,7 @@ function ChargeSessionContent() {
           <StatCard
             label="SoC"
             value={
-              session?.soc_start !== undefined && session?.soc_end !== undefined
+              session?.soc_start != null && session?.soc_end != null
                 ? `${formatPercent(session.soc_start, 0)} → ${formatPercent(session.soc_end, 0)}`
                 : '—'
             }
