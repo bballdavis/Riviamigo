@@ -72,7 +72,7 @@ pub async fn bootstrap_keys(
     Ok(generated)
 }
 
-fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
+pub(crate) fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
     use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
     use rsa::RsaPrivateKey;
 
