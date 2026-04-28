@@ -647,22 +647,36 @@ const preview: Preview = {
 export default preview;
 ```
 
-### 3.13 Environment + key generation
+### 3.13 Cryptographic key initialization
 
-Keys to generate **once per environment** before first run; documented in `apps/api/README.md`:
+**Auto-generation on first boot:**
+
+The API automatically generates the following keys on first container startup and persists them in the `system_config` database table:
+1. RSA-2048 keypair (JWT signing) → `jwt_private_key`, `jwt_public_key` columns
+2. age X25519 identity (Rivian token encryption) → `age_key` column
+
+**No manual keygen needed.** Just start the container; keys are generated and persisted within the first few seconds. The database volume ensures they survive restarts.
+
+**Production key override:**
+
+To use externally-managed or rotated keys:
 
 ```bash
-# RS256 keypair
+# Generate your own RSA keypair (optional)
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt_private.pem
-openssl pkey -in jwt_private.pem -pubout -out jwt_public.pem
-# Set JWT_SECRET=<contents of jwt_private.pem>, JWT_PUBLIC_KEY=<contents of jwt_public.pem>
+openssl rsa -in jwt_private.pem -pubout -out jwt_public.pem
 
-# age identity for Rivian token encryption
-age-keygen -o age.key
-# Set AGE_ENCRYPTION_KEY=<contents of age.key>
+# Generate your own age identity (optional)
+age-keygen
+
+# Pass to the API container via environment variables
+docker compose -f infra/docker-compose.yml up -d --build \
+  -e JWT_SECRET="$(cat jwt_private.pem)" \
+  -e JWT_PUBLIC_KEY="$(cat jwt_public.pem)" \
+  -e AGE_ENCRYPTION_KEY="AGE-SECRET-KEY-..."
 ```
 
-For local dev, ship a checked-in `apps/api/.env.dev` with throwaway keys. Production must use real ones; CI checks for presence.
+Environment variables always override the database values. Omit them to use auto-generated keys.
 
 ### 3.14 Rate limiting wiring
 
@@ -710,14 +724,36 @@ Adjust `connect-src` host for prod deployment.
 
 ```rust
 async fn main() -> anyhow::Result<()> {
-    // ...config + pool + migrations as in original §18...
-    let redis    = redis::Client::open(config.redis_url.clone())?;
-    let age_key  = age::x25519::Identity::from_str(&config.age_key)
-                    .map_err(|e| anyhow::anyhow!("invalid age key: {e}"))?;
+    // ...config + pool + migrations...
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let supervisor = ingestion::supervisor::WorkerSupervisor::start(
-        pool.clone(), redis.clone(), age_key,
+    // Auto-generate or load keys from DB
+    let active_keys = crate::keys::bootstrap_keys(
+        &pool,
+        config.jwt_secret.clone(),
+        config.jwt_public_key.clone(),
+        config.age_encryption_key.clone(),
+    ).await?;
+
+    let jwt_keys = Arc::new(
+        JwtKeys::new(&active_keys.jwt_private_pem, &active_keys.jwt_public_pem)?
     );
+
+    let redis = redis::Client::open(config.redis_url.clone())?;
+    let age_key = active_keys.age_key;
+
+    let state = AppState {
+        pool: pool.clone(),
+        redis: redis.clone(),
+        jwt_keys,
+        age_key: age_key.clone(),
+        config: config.clone(),
+    };
+
+    // Start ingestion workers
+    let _supervisor = ingestion::start_workers(
+        pool.clone(), redis, age_key, config.clone(),
+    ).await?;
 
     // Bootstrap workers for all enrolled vehicles
     let enrolled: Vec<Uuid> = sqlx::query_scalar!(
@@ -725,13 +761,13 @@ async fn main() -> anyhow::Result<()> {
            JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id"
     ).fetch_all(&pool).await?;
     for vid in enrolled {
-        supervisor.send(SupervisorCommand::StartWorker { vehicle_id: vid }).await;
+        // Workers are auto-started by supervisor
     }
 
     // Phantom-drain refresh cron (§3.8)
     spawn_phantom_drain_refresh(pool.clone());
 
-    // ...build router with state { pool, redis, supervisor_tx }, serve...
+    // ...build router with state, serve...
 }
 ```
 
