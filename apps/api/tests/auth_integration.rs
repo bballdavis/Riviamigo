@@ -39,7 +39,10 @@ impl TestApp {
         let db_url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
 
         let pool = PgPool::connect(&db_url).await.expect("db connect");
-        sqlx::migrate!("./migrations").run(&pool).await.expect("migrate");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("migrate");
 
         let keys = generate_keys().expect("generate_keys");
         let jwt_keys = Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).unwrap());
@@ -60,11 +63,20 @@ impl TestApp {
             s3_secret_key: None,
         };
 
-        let state = AppState { pool, redis, jwt_keys, age_key: keys.age_key, config };
+        let state = AppState {
+            pool,
+            redis,
+            jwt_keys,
+            age_key: keys.age_key,
+            config,
+        };
         let app = routes::build_router(state);
         let server = TestServer::new(app).expect("test server");
 
-        TestApp { server, _db: postgres }
+        TestApp {
+            server,
+            _db: postgres,
+        }
     }
 }
 
@@ -73,21 +85,26 @@ impl TestApp {
 #[tokio::test]
 async fn register_success_returns_access_token() {
     let app = TestApp::new().await;
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/register")
         .json(&json!({"email": "alice@example.com", "password": "hunter2hunter2"}))
         .await;
 
     assert_eq!(res.status_code(), 201);
     let body: Value = res.json();
-    assert!(body["access_token"].is_string(), "access_token missing: {body}");
+    assert!(
+        body["access_token"].is_string(),
+        "access_token missing: {body}"
+    );
     assert!(body["expires_in"].is_number());
 }
 
 #[tokio::test]
 async fn register_auto_login_sets_refresh_cookie() {
     let app = TestApp::new().await;
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/register")
         .json(&json!({"email": "bob@example.com", "password": "hunter2hunter2"}))
         .await;
@@ -95,7 +112,10 @@ async fn register_auto_login_sets_refresh_cookie() {
     assert_eq!(res.status_code(), 201);
     let cookie_header = res.header("Set-Cookie");
     assert!(
-        cookie_header.to_str().unwrap_or("").contains("refresh_token="),
+        cookie_header
+            .to_str()
+            .unwrap_or("")
+            .contains("refresh_token="),
         "no refresh cookie in Set-Cookie: {cookie_header:?}"
     );
 }
@@ -118,7 +138,8 @@ async fn register_duplicate_email_returns_validation_error() {
 #[tokio::test]
 async fn register_short_password_returns_validation_error() {
     let app = TestApp::new().await;
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/register")
         .json(&json!({"email": "dave@example.com", "password": "short"}))
         .await;
@@ -131,7 +152,8 @@ async fn register_short_password_returns_validation_error() {
 #[tokio::test]
 async fn register_empty_email_returns_validation_error() {
     let app = TestApp::new().await;
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/register")
         .json(&json!({"email": "", "password": "hunter2hunter2"}))
         .await;
@@ -165,7 +187,8 @@ async fn login_wrong_password_returns_401() {
         .json(&json!({"email": "frank@example.com", "password": "correctpassword"}))
         .await;
 
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/login")
         .json(&json!({"email": "frank@example.com", "password": "wrongpassword"}))
         .await;
@@ -176,7 +199,8 @@ async fn login_wrong_password_returns_401() {
 #[tokio::test]
 async fn login_unknown_email_returns_401() {
     let app = TestApp::new().await;
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/login")
         .json(&json!({"email": "ghost@example.com", "password": "doesnotmatter"}))
         .await;
@@ -192,7 +216,8 @@ async fn login_email_is_case_insensitive() {
         .json(&json!({"email": "Grace@Example.COM", "password": "mypassword123"}))
         .await;
 
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/login")
         .json(&json!({"email": "grace@example.com", "password": "mypassword123"}))
         .await;
@@ -205,7 +230,8 @@ async fn login_email_is_case_insensitive() {
 #[tokio::test]
 async fn me_returns_user_info_with_valid_token() {
     let app = TestApp::new().await;
-    let reg: Value = app.server
+    let reg: Value = app
+        .server
         .post("/auth/register")
         .json(&json!({"email": "henry@example.com", "password": "mypassword123"}))
         .await
@@ -213,7 +239,8 @@ async fn me_returns_user_info_with_valid_token() {
 
     let token = reg["access_token"].as_str().unwrap();
 
-    let res = app.server
+    let res = app
+        .server
         .get("/v1/auth/me")
         .add_header("Authorization", format!("Bearer {token}"))
         .await;
@@ -235,7 +262,8 @@ async fn me_returns_401_without_token() {
 #[tokio::test]
 async fn logout_clears_cookie() {
     let app = TestApp::new().await;
-    let reg: Value = app.server
+    let reg: Value = app
+        .server
         .post("/auth/register")
         .json(&json!({"email": "iris@example.com", "password": "mypassword123"}))
         .await
@@ -243,7 +271,8 @@ async fn logout_clears_cookie() {
 
     let token = reg["access_token"].as_str().unwrap();
 
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/logout")
         .add_header("Authorization", format!("Bearer {token}"))
         .await;
@@ -261,13 +290,17 @@ async fn logout_clears_cookie() {
 #[tokio::test]
 async fn error_responses_have_nested_error_field() {
     let app = TestApp::new().await;
-    let res = app.server
+    let res = app
+        .server
         .post("/auth/login")
         .json(&json!({"email": "nobody@example.com", "password": "whatever"}))
         .await;
 
     let body: Value = res.json();
-    assert!(body["error"].is_object(), "expected {{\"error\":{{...}}}}: {body}");
+    assert!(
+        body["error"].is_object(),
+        "expected {{\"error\":{{...}}}}: {body}"
+    );
     assert!(body["error"]["code"].is_string());
     assert!(body["error"]["message"].is_string());
 }

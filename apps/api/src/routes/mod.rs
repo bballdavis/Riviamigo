@@ -56,21 +56,20 @@ pub fn build_router(state: AppState) -> Router {
         .merge(efficiency::router())
         .merge(stats::router())
         .merge(live::router())
-        .layer(middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
-            let key = decoding_key.clone();
-            async move {
-                req.extensions_mut().insert(key);
-                next.run(req).await
-            }
-        }));
+        .layer(middleware::from_fn(
+            move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+                let key = decoding_key.clone();
+                async move {
+                    req.extensions_mut().insert(key);
+                    next.run(req).await
+                }
+            },
+        ));
 
     Router::new()
         .route("/health", get(health))
-        .nest("/v1", Router::new()
-            .merge(auth::router())
-            .merge(protected)
-        )
-        .route("/grafana/query",  axum::routing::post(grafana::query_stub))
+        .nest("/v1", Router::new().merge(auth::router()).merge(protected))
+        .route("/grafana/query", axum::routing::post(grafana::query_stub))
         .route("/grafana/search", axum::routing::post(grafana::search_stub))
         .layer(cors)
         .layer(CompressionLayer::new())
@@ -103,4 +102,6 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health() -> &'static str { "ok" }
+async fn health() -> &'static str {
+    "ok"
+}

@@ -1,7 +1,10 @@
 //! Backend live-status WebSocket: JWT via Sec-WebSocket-Protocol, fan-out from Redis.
 
 use axum::{
-    extract::{Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        ws::{Message, WebSocket},
+        Query, State, WebSocketUpgrade,
+    },
     response::IntoResponse,
     routing::get,
     Router,
@@ -22,15 +25,19 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Deserialize)]
-struct LiveParams { vehicle_id: Option<Uuid> }
+struct LiveParams {
+    vehicle_id: Option<Uuid>,
+}
 
 async fn live_handler(
     State(state): State<AppState>,
-    Query(p):     Query<LiveParams>,
-    headers:      axum::http::HeaderMap,
-    ws:           WebSocketUpgrade,
+    Query(p): Query<LiveParams>,
+    headers: axum::http::HeaderMap,
+    ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, AppError> {
-    let vid = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
 
     // Extract JWT from Sec-WebSocket-Protocol: bearer.<token>
     let proto_header = headers
@@ -65,10 +72,14 @@ async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client
 
     let mut pubsub = match redis.get_async_pubsub().await {
         Ok(c) => c,
-        Err(e) => { tracing::error!(err=%e, "redis pubsub connect failed"); return; }
+        Err(e) => {
+            tracing::error!(err=%e, "redis pubsub connect failed");
+            return;
+        }
     };
     if let Err(e) = pubsub.subscribe(&topic).await {
-        tracing::error!(err=%e, "redis subscribe failed"); return;
+        tracing::error!(err=%e, "redis subscribe failed");
+        return;
     }
 
     let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));

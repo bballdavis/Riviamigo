@@ -1,22 +1,34 @@
-use axum::{extract::{Query, State}, routing::get, Json, Router};
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Json, Router,
+};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{db::vehicles::require_vehicle_owned, errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    db::vehicles::require_vehicle_owned,
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/stats/summary", get(get_summary))
 }
 
 #[derive(Deserialize)]
-struct Params { vehicle_id: Option<Uuid> }
+struct Params {
+    vehicle_id: Option<Uuid>,
+}
 
 async fn get_summary(
     State(state): State<AppState>,
-    auth:         AuthUser,
-    Query(p):     Query<Params>,
+    auth: AuthUser,
+    Query(p): Query<Params>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let vid  = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let rate = crate::db::users::get_electricity_rate(&state.pool, auth.user_id).await?;
 
@@ -28,13 +40,17 @@ async fn get_summary(
                      ELSE NULL END AS lifetime_efficiency
          FROM riviamigo.trips WHERE vehicle_id=$1",
         vid
-    ).fetch_one(&state.pool).await?;
+    )
+    .fetch_one(&state.pool)
+    .await?;
 
     let charging = sqlx::query!(
         "SELECT COALESCE(SUM(kwh_added),0) AS total_kwh, COUNT(*) AS sessions
          FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
         vid
-    ).fetch_one(&state.pool).await?;
+    )
+    .fetch_one(&state.pool)
+    .await?;
 
     let total_kwh = charging.total_kwh.unwrap_or(0.0);
     Ok(Json(serde_json::json!({
