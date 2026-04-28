@@ -48,10 +48,6 @@ pub fn build_router(state: AppState) -> Router {
     // Inject decoding key into request extensions so AuthUser extractor can find it
     let decoding_key = state.jwt_keys.decoding.clone();
 
-    let public = Router::new()
-        .merge(auth::router())
-        .route("/health", get(health));
-
     let protected = Router::new()
         .merge(vehicles::router())
         .merge(battery::router())
@@ -69,8 +65,11 @@ pub fn build_router(state: AppState) -> Router {
         }));
 
     Router::new()
-        .merge(public)
-        .nest("/v1", protected)
+        .route("/health", get(health))
+        .nest("/v1", Router::new()
+            .merge(auth::router())
+            .merge(protected)
+        )
         .route("/grafana/query",  axum::routing::post(grafana::query_stub))
         .route("/grafana/search", axum::routing::post(grafana::search_stub))
         .layer(cors)
