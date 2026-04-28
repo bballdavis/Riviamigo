@@ -38,9 +38,9 @@ impl WorkerSupervisor {
     pub fn start(
         pool:    sqlx::PgPool,
         redis:   redis::Client,
+        age_key: String,
         config:  Config,
     ) -> SupervisorHandle {
-        let age_key = config.age_key.clone();
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
 
         let mut sup = WorkerSupervisor {
