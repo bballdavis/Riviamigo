@@ -7,7 +7,7 @@ import { useAuth } from '@riviamigo/hooks';
  * Avoids calling hooks inside conditionals in every route.
  */
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, clearSession } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -15,6 +15,16 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       navigate({ to: '/login' });
     }
   }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    function handleAuthExpired() {
+      clearSession();
+      navigate({ to: '/login' });
+    }
+
+    window.addEventListener('riviamigo:auth-expired', handleAuthExpired);
+    return () => window.removeEventListener('riviamigo:auth-expired', handleAuthExpired);
+  }, [clearSession, navigate]);
 
   if (!isAuthenticated) return null;
   return <>{children}</>;
