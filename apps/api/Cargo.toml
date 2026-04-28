@@ -39,6 +39,7 @@ argon2          = "0.5"
 
 # Encryption
 age             = { version = "0.10", features = ["async"] }
+rsa             = { version = "0.9", features = ["pem"] }
 
 # Types
 uuid            = { version = "1", features = ["v4", "serde"] }

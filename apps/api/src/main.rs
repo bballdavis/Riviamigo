@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod errors;
 mod ingestion;
+mod keys;
 mod middleware;
 mod models;
 mod routes;
@@ -28,22 +29,33 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await?;
     tracing::info!("migrations applied");
 
-    let jwt_keys = Arc::new(JwtKeys::new(&config.jwt_secret, &config.jwt_public_key)?);
+    let active_keys = keys::bootstrap_keys(
+        &pool,
+        config.jwt_secret.clone(),
+        config.jwt_public_key.clone(),
+        config.age_encryption_key.clone(),
+    ).await?;
+
+    let jwt_keys = Arc::new(
+        JwtKeys::new(&active_keys.jwt_private_pem, &active_keys.jwt_public_pem)?
+    );
 
     let redis = redis::Client::open(config.redis_url.clone())?;
 
+    let age_key = active_keys.age_key;
+
     let state = AppState {
-        pool:     pool.clone(),
-        redis:    redis.clone(),
+        pool:    pool.clone(),
+        redis:   redis.clone(),
         jwt_keys,
-        age_key:  config.age_key.clone(),
-        config:   config.clone(),
+        age_key: age_key.clone(),
+        config:  config.clone(),
     };
 
-    // Start ingestion workers
-    let _supervisor = ingestion::start_workers(pool.clone(), redis, config.clone()).await?;
+    let _supervisor = ingestion::start_workers(
+        pool.clone(), redis, age_key, config.clone()
+    ).await?;
 
-    // Phantom-drain MV refresh (hourly)
     let pool_ref = pool.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(tokio::time::Duration::from_secs(3600));
