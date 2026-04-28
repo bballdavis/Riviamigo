@@ -14,8 +14,9 @@ packages/
   types/        # Shared TypeScript types
   config/       # Shared TS, ESLint, Tailwind configs
 infra/
-  docker-compose.yml   # TimescaleDB, Redis, MinIO
-  migrations/          # sqlx migrations
+  docker-compose.yml   # TimescaleDB, Redis, Garage
+apps/
+  api/migrations/      # sqlx migrations
 ```
 
 ## Prerequisites
@@ -41,13 +42,35 @@ brew install pnpm
 pnpm install
 ```
 
-### 2. Start infrastructure
+### 2. Start development
+
+The dev script starts the full development stack — infrastructure (database, cache, S3) plus the API and Vite dev server. If `cargo` is available, the API runs locally; otherwise the script builds and runs the API container.
+
+On first boot, the API applies a single flat baseline migration that creates the application schema, the telemetry hypertable, and the derived `timeseries.*` views the routes expect. The bootstrap does not install Timescale continuous aggregate or compression jobs.
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d
+./scripts/dev.sh
 ```
 
-The API container automatically generates a RSA-2048 JWT keypair and age X25519 encryption key on first boot, storing them in the database. No manual secret generation needed.
+The dev script will output the URLs where services are running:
+- **Web**: http://localhost:5173 (React + Vite)
+- **API**: http://localhost:3001 (Rust + Axum)
+- **Database**: postgresql://localhost:5432
+- **Redis**: redis://localhost:6379
+- **S3**: http://localhost:3900
+
+To watch API logs in another terminal:
+```bash
+docker compose -f infra/docker-compose.yml logs -f api
+```
+
+To reset back to a clean local baseline, remove the Riviamigo containers, network, and named volumes for the tracked Compose project:
+
+```bash
+COMPOSE_PROJECT_NAME=riviamigo docker compose -f infra/docker-compose.yml down -v --remove-orphans
+```
+
+The API container automatically generates an RSA-2048 JWT keypair and age X25519 encryption key on first boot, storing them in the database. No manual secret generation needed.
 
 To use custom keys (e.g., for production or key rotation), pass them as environment variables:
 
@@ -64,25 +87,7 @@ cp .env.example .env
 docker compose -f infra/docker-compose.yml up -d --build
 ```
 
-### 3. Start services
-
-Open two terminals:
-
-**Terminal 1 — Watch API logs:**
-```bash
-docker compose -f infra/docker-compose.yml logs -f api
-```
-
-The API will auto-generate keys on first startup (takes ~10 seconds).
-
-**Terminal 2 — Start web dev server:**
-```bash
-pnpm dev
-```
-
-Open [http://localhost:5173](http://localhost:5173) when the dev server is ready.
-
-### 4. Connect your Rivian
+### 3. Connect your Rivian
 
 1. Create an account at `/login`
 2. Navigate to Settings → Add Vehicle
@@ -91,24 +96,34 @@ Open [http://localhost:5173](http://localhost:5173) when the dev server is ready
 
 ## Scripts
 
-**Use these commands in the repo root:**
+**Recommended — Use these shell scripts:**
+
+```bash
+# Development: Start full stack (infrastructure + Vite dev server)
+./scripts/dev.sh
+
+# Production: Build all packages for production (workspace artifacts, not Docker images)
+./scripts/build.sh
+
+# Production: Build + start API server (requires Docker infrastructure)
+./scripts/start.sh
+```
+
+**Or use pnpm directly:**
 
 ```bash
 # Development
-pnpm dev              # Start web dev server (requires docker-compose running)
+pnpm dev              # Start web dev server only (requires the API and infra to already be running)
 pnpm build            # Build all packages for production
 pnpm typecheck        # Run TypeScript checks
 pnpm lint             # Run ESLint
 pnpm test             # Run tests
-pnpm storybook        # Start component explorer
-
-# Or use the shell scripts:
-./scripts/dev.sh      # Same as pnpm dev
-./scripts/build.sh    # Same as pnpm build
-./scripts/start.sh    # Build + start API server (production mode)
+pnpm storybook        # Start component explorer (Storybook)
 ```
 
-**Docker infrastructure:**
+**Docker infrastructure (run independently):**
+
+Use this only if you want the infra containers without the web/dev server. For normal development, `./scripts/dev.sh` is the supported entrypoint.
 
 ```bash
 # Start all services (database, redis, S3, API)
@@ -203,7 +218,7 @@ All data endpoints require `Authorization: Bearer <token>` and `?vehicle_id=<uui
 **Infrastructure:**
 - Set `ALLOWED_ORIGINS` to your production domain
 - Run behind a reverse proxy (nginx/caddy) that terminates TLS
-- TimescaleDB compression kicks in after 30 days automatically
+- The local baseline migration intentionally skips Timescale background policies on first boot
 - For offline Rust builds: `cargo sqlx prepare` to embed query metadata
 
 ## License

@@ -28,6 +28,12 @@ pub struct JwtKeys {
     pub decoding: jsonwebtoken::DecodingKey,
 }
 
+impl std::fmt::Debug for JwtKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JwtKeys").finish_non_exhaustive()
+    }
+}
+
 impl JwtKeys {
     pub fn new(private_pem: &str, public_pem: &str) -> anyhow::Result<Self> {
         Ok(Self {

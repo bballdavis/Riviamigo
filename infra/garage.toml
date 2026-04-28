@@ -1,14 +1,12 @@
 metadata_dir = "/var/lib/garage/meta"
 data_dir = "/var/lib/garage/data"
 replication_factor = 1
-
-[rpc]
 rpc_bind_addr = "0.0.0.0:3901"
 rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [s3_api]
 s3_region = "garage"
-api_bind_addr = "0.0.0.0:3900"
+api_bind_addrs = ["0.0.0.0:3900"]
 
 [admin]
-api_bind_addr = "0.0.0.0:3903"
+api_bind_addrs = ["0.0.0.0:3903"]

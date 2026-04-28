@@ -1,4 +1,5 @@
 use anyhow::Context;
+use age::secrecy::ExposeSecret;
 use sqlx::PgPool;
 
 pub struct BootstrappedKeys {
@@ -31,9 +32,9 @@ pub async fn bootstrap_keys(
     // Try DB — each subquery returns NULL when the row doesn't exist.
     let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT
-            (SELECT value FROM system_config WHERE key = 'jwt_private_key'),
-            (SELECT value FROM system_config WHERE key = 'jwt_public_key'),
-            (SELECT value FROM system_config WHERE key = 'age_key')"
+            (SELECT value FROM riviamigo.system_config WHERE key = 'jwt_private_key'),
+            (SELECT value FROM riviamigo.system_config WHERE key = 'jwt_public_key'),
+            (SELECT value FROM riviamigo.system_config WHERE key = 'age_key')"
     )
     .fetch_one(pool)
     .await
@@ -58,7 +59,7 @@ pub async fn bootstrap_keys(
         ("age_key",         generated.age_key.as_str()),
     ] {
         sqlx::query(
-            "INSERT INTO system_config (key, value) VALUES ($1, $2)
+            "INSERT INTO riviamigo.system_config (key, value) VALUES ($1, $2)
              ON CONFLICT (key) DO NOTHING"
         )
         .bind(k)
@@ -91,7 +92,7 @@ pub(crate) fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
         .context("encode public key")?;
 
     let age_identity = age::x25519::Identity::generate();
-    let age_key = age_identity.to_string();
+    let age_key = age_identity.to_string().expose_secret().to_owned();
 
     Ok(BootstrappedKeys { jwt_private_pem, jwt_public_pem, age_key })
 }
