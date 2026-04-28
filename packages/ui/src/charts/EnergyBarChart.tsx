@@ -47,7 +47,7 @@ export function EnergyBarChart({
           width={44}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [formatKwh(v), 'Energy Added']} />}
+          content={<ChartTooltip formatter={(v) => [formatKwh(v ?? 0), 'Energy Added']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar

@@ -79,7 +79,7 @@ function ChargingContent() {
 
         <ChartSection title="Sessions">
           <DataTable
-            data={(data?.items ?? []) as ChargeSessionRow[]}
+            data={(data?.items ?? []) as unknown as ChargeSessionRow[]}
             columns={chargingColumns}
             loading={isLoading}
             onRowClick={handleRowClick}

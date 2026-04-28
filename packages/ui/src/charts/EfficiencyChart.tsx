@@ -56,7 +56,7 @@ export function EfficiencyChart({
           width={40}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [`${v.toFixed(0)} Wh/mi`, 'Avg']} />}
+          content={<ChartTooltip formatter={(v) => [`${(v ?? 0).toFixed(0)} Wh/mi`, 'Avg']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar
