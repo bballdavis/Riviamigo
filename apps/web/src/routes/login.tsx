@@ -73,8 +73,13 @@ export function LoginPage() {
         {/* Brand mark */}
         <div className="flex flex-col items-center mb-10">
           <div className="relative mb-5">
-            <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/25 grid place-items-center shadow-[0_0_40px_rgba(253,131,4,0.2)]">
-              <img src="/logo_color_lighter.svg" alt="Riviamigo logo" className="block h-10 w-10 object-contain" />
+            <div className="w-24 h-24 rounded-2xl bg-accent/10 border border-accent/25 grid place-items-center shadow-[0_0_40px_rgba(253,131,4,0.2)] overflow-hidden">
+              <img
+                src="/logo_color_lighter.svg"
+                alt="Riviamigo logo"
+                className="block h-20 w-20 object-contain"
+                style={{ transform: 'translateX(-22px)' }}
+              />
             </div>
             {/* Subtle ring */}
             <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-accent/10" />
@@ -82,7 +87,7 @@ export function LoginPage() {
           <img
             src={isDark ? '/text_white.svg' : '/text_black.svg'}
             alt="Riviamigo"
-            className="block h-7 w-auto max-w-[220px] object-contain"
+            className="block h-14 w-auto max-w-full object-contain"
           />
           <p className="mt-1.5 text-sm text-fg-tertiary">Your Rivian's data companion.</p>
         </div>

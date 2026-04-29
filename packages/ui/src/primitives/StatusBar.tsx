@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Wifi, WifiOff, Battery, BatteryCharging, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-export type VehicleOnlineState = 'online' | 'offline' | 'connecting';
+export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'error';
 
 export interface StatusBarProps {
   vehicleName?: string | undefined;
@@ -27,6 +27,8 @@ export function StatusBar({
     ? 'Online'
     : onlineState === 'connecting'
     ? 'Connecting...'
+    : onlineState === 'error'
+    ? 'Connection failed'
     : 'Offline';
 
   return (
@@ -46,6 +48,8 @@ export function StatusBar({
           <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />
         ) : onlineState === 'online' ? (
           <Wifi className="h-3.5 w-3.5 text-[#10B981]" />
+        ) : onlineState === 'error' ? (
+          <WifiOff className="h-3.5 w-3.5 text-[#F87171]" />
         ) : (
           <WifiOff className="h-3.5 w-3.5 text-fg-tertiary" />
         )}
@@ -57,6 +61,8 @@ export function StatusBar({
                 ? 'text-[#10B981]'
                 : onlineState === 'connecting'
                 ? 'text-accent'
+                : onlineState === 'error'
+                ? 'text-[#F87171]'
                 : 'text-fg-tertiary'
             )}
           >
