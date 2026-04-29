@@ -83,9 +83,25 @@ jobs:
   backend:
     name: Backend (fmt · clippy · test · coverage)
     runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.16.1-pg16
+        env:
+          POSTGRES_DB: riviamigo
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U riviamigo -d riviamigo"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo
 
     steps:
       - uses: actions/checkout@v4
