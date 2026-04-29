@@ -2,6 +2,7 @@
 import './widgets/index';
 
 export { DashboardRenderer } from './DashboardRenderer';
+export { DashboardContent } from './DashboardContent';
 export { WidgetHost } from './WidgetHost';
 export { registerWidget, getWidget, getAllWidgets, getWidgetIds } from './registry';
 export type { WidgetDef, WidgetCtx } from './registry';

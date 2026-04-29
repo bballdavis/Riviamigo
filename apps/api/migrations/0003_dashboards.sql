@@ -2,7 +2,7 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
 
 -- Dashboard configurations table
-CREATE TABLE dashboards (
+CREATE TABLE IF NOT EXISTS dashboards (
     id          UUID PRIMARY KEY,
     owner_id    UUID NULL REFERENCES users(id) ON DELETE CASCADE,
     slug        TEXT NOT NULL,
@@ -17,6 +17,6 @@ CREATE TABLE dashboards (
     UNIQUE NULLS NOT DISTINCT (owner_id, slug)
 );
 
-CREATE INDEX dashboards_owner_idx ON dashboards (owner_id);
-CREATE INDEX dashboards_slug_idx  ON dashboards (slug);
-CREATE INDEX dashboards_default_idx ON dashboards (is_default) WHERE is_default = TRUE;
+CREATE INDEX IF NOT EXISTS dashboards_owner_idx ON dashboards (owner_id);
+CREATE INDEX IF NOT EXISTS dashboards_slug_idx  ON dashboards (slug);
+CREATE INDEX IF NOT EXISTS dashboards_default_idx ON dashboards (is_default) WHERE is_default = TRUE;
