@@ -19,6 +19,22 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    const html = document.documentElement;
+    return html.classList.contains('dark') || !html.classList.contains('light');
+  });
+
+  React.useEffect(() => {
+    const html = document.documentElement;
+    const updateTheme = () => {
+      setIsDark(html.classList.contains('dark') || !html.classList.contains('light'));
+    };
+    updateTheme();
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(html, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -57,14 +73,18 @@ export function LoginPage() {
         {/* Brand mark */}
         <div className="flex flex-col items-center mb-10">
           <div className="relative mb-5">
-            <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center shadow-[0_0_40px_rgba(245,158,11,0.2)]">
-              <img src="/logo_color_lighter.svg" alt="Riviamigo logo" className="block h-[80%] w-auto mx-auto my-auto" />
+            <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/25 grid place-items-center shadow-[0_0_40px_rgba(253,131,4,0.2)]">
+              <img src="/logo_color_lighter.svg" alt="Riviamigo logo" className="block h-10 w-10 object-contain" />
             </div>
             {/* Subtle ring */}
             <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-accent/10" />
           </div>
-          <h1 className="text-2xl font-bold font-display text-fg tracking-tight">Riviamigo</h1>
-          <p className="mt-1.5 text-sm text-fg-tertiary">Your Rivian, deeply understood.</p>
+          <img
+            src={isDark ? '/text_white.svg' : '/text_black.svg'}
+            alt="Riviamigo"
+            className="block h-7 w-auto max-w-[220px] object-contain"
+          />
+          <p className="mt-1.5 text-sm text-fg-tertiary">Your Rivian's data companion.</p>
         </div>
 
         {/* Auth card */}

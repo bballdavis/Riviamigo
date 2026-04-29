@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | **Name** | Riviamigo |
-| **Tagline** | *Your Rivian, deeply understood.* |
+| **Tagline** | *Your Rivian's data companion* |
 | **Personality** | Precise, premium, technical — like a high-end automotive instrument cluster |
 | **Logo mark** | Bold **R** in `font-display` (Space Grotesk) at `text-accent` on a `bg-accent/10` rounded tile |
 

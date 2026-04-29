@@ -1,7 +1,7 @@
 export const colors = {
   accent: {
     50:  '#FFFBEB', 100: '#FEF3C7', 200: '#FDE68A', 300: '#FCD34D',
-    400: '#FBBF24', 500: '#F59E0B', 600: '#D97706', 700: '#B45309',
+    400: '#FDBA74', 500: '#FD8304', 600: '#EA580C', 700: '#C2410C',
     800: '#92400E', 900: '#78350F',
   },
   slate: {
@@ -11,11 +11,11 @@ export const colors = {
   },
   soc: {
     high: '#10B981',
-    mid:  '#F59E0B',
+    mid:  '#FD8304',
     low:  '#F87171',
   },
   charging: {
-    active:  '#F59E0B',
+    active:  '#FD8304',
     done:    '#10B981',
     limited: '#F87171',
     ac:      '#60A5FA',
@@ -23,7 +23,7 @@ export const colors = {
     dcfc:    '#C084FC',
   },
   dataViz: {
-    amber:   '#F59E0B',
+    amber:   '#FD8304',
     sky:     '#60A5FA',
     emerald: '#10B981',
     violet:  '#A78BFA',
@@ -50,7 +50,7 @@ export const colors = {
     default: 'var(--rm-border-default)',
     strong:  'var(--rm-border-strong)',
     accent:  'var(--rm-border-accent)',
-    focus:   '#F59E0B',
+    focus:   '#FD8304',
   },
 } as const;
 
