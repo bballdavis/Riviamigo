@@ -28,7 +28,7 @@ function EnergyChargedWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
   return (
     <StatCard
       label="Energy Charged"
-      value={formatKwh(stats?.total_kwh_charged ?? 0)}
+      value={formatKwh(stats?.total_energy_kwh ?? 0)}
       icon={<Zap className="h-4 w-4" />}
     />
   );
@@ -39,7 +39,7 @@ function AvgEfficiencyWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
   return (
     <StatCard
       label="Avg Efficiency"
-      value={stats?.lifetime_efficiency_wh_mi?.toFixed(0) ?? '—'}
+      value={stats?.avg_efficiency_wh_mi?.toFixed(0) ?? '—'}
       unit="Wh/mi"
       icon={<TrendingUp className="h-4 w-4" />}
     />

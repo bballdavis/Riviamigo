@@ -12,9 +12,15 @@ jwt_private.pem
 jwt_public.pem
 age_key.txt
 target/
+**/target-tests/
 apps/api/Cargo.lock
 apps/api/.sqlx/
 *.lock.tmp
+
+# Generated branding exports that should not be committed.
+assets/text_black.svg
+assets/text_black.xcf
+assets/text_white.xcf
 .DS_Store
 coverage/
 playwright-report/

@@ -18,12 +18,7 @@ function EfficiencyByModeWidget({ ctx }: { instance: WidgetInstance; ctx: Widget
   const { data, isLoading } = useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to);
   return (
     <EfficiencyChart
-      data={(data ?? []).map((d: { drive_mode: string; avg_wh_per_mi: number }) => ({
-        drive_mode: d.drive_mode,
-        avg_efficiency: d.avg_wh_per_mi,
-        p10_efficiency: 0,
-        p90_efficiency: 0,
-      }))}
+      data={data ?? []}
       loading={isLoading}
       height={300}
     />

@@ -39,9 +39,9 @@ describe('LoginPage', () => {
     expect(screen.getByText('Your Rivian, deeply understood.')).toBeInTheDocument();
   });
 
-  it('renders the R monogram', () => {
+  it('renders the brand logo mark', () => {
     render(<LoginPage />);
-    expect(screen.getByText('R')).toBeInTheDocument();
+    expect(screen.getByAltText('Riviamigo logo')).toBeInTheDocument();
   });
 
   it('renders email and password inputs', () => {
