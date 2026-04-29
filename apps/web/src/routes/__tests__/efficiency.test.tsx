@@ -16,7 +16,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1' }),
   useEfficiencySummary: () => ({
-    data: { avg_wh_per_mi: 320, p10_wh_per_mi: 260, p90_wh_per_mi: 400, total_miles: 1500 },
+    data: { avg: 320, p10: 260, p90: 400 },
   }),
   useEfficiencyByMode:  () => ({ data: [], isLoading: false }),
   useEfficiencyTrend:   () => ({ data: [], isLoading: false }),

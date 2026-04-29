@@ -126,6 +126,66 @@ describe('ConnectContent', () => {
       expect(screen.getByText('Vehicle added')).toBeInTheDocument();
     });
   });
+
+  it('shows an error when Rivian returns no vehicles', async () => {
+    apiMocks.connectRivian.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectContent />);
+
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
+    await user.type(screen.getByPlaceholderText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: /connect account/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Rivian sign-in succeeded, but no vehicles were returned for this account.')).toBeInTheDocument();
+      expect(apiMocks.addVehicle).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows the vehicle picker when multiple vehicles are returned', async () => {
+    apiMocks.connectRivian.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [
+        {
+          id: 'rivian-vehicle-1',
+          name: 'Launch Green',
+          vin: '7FCTGAAL0NN000001',
+          model: 'R1T',
+          model_year: 2022,
+        },
+        {
+          id: 'rivian-vehicle-2',
+          name: 'Forest R1S',
+          vin: '7PDSGABL0PN000002',
+          model: 'R1S',
+          model_year: 2023,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectContent />);
+
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
+    await user.type(screen.getByPlaceholderText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: /connect account/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Choose a vehicle')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /launch green/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /forest r1s/i })).toBeInTheDocument();
+    });
+  });
 });
 
 describe('ConnectOtpContent', () => {
@@ -164,6 +224,64 @@ describe('ConnectOtpContent', () => {
       });
       expect(apiMocks.setDefaultVehicleId).toHaveBeenCalledWith('local-vehicle-2');
       expect(screen.getByText('Vehicle added')).toBeInTheDocument();
+    });
+  });
+
+  it('shows an error when OTP succeeds without any vehicles', async () => {
+    apiMocks.connectRivianOtp.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectOtpContent />);
+
+    await user.type(screen.getByPlaceholderText('123456'), '654321');
+    await user.click(screen.getByRole('button', { name: /verify and connect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Rivian verification succeeded, but no vehicles were returned for this account.')).toBeInTheDocument();
+      expect(apiMocks.addVehicle).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows the vehicle picker when OTP returns multiple vehicles', async () => {
+    apiMocks.connectRivianOtp.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [
+        {
+          id: 'rivian-vehicle-1',
+          name: 'Launch Green',
+          vin: '7FCTGAAL0NN000001',
+          model: 'R1T',
+          model_year: 2022,
+        },
+        {
+          id: 'rivian-vehicle-2',
+          name: 'Forest R1S',
+          vin: '7PDSGABL0PN000002',
+          model: 'R1S',
+          model_year: 2023,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectOtpContent />);
+
+    await user.type(screen.getByPlaceholderText('123456'), '654321');
+    await user.click(screen.getByRole('button', { name: /verify and connect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Choose a vehicle')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /launch green/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /forest r1s/i })).toBeInTheDocument();
     });
   });
 });
