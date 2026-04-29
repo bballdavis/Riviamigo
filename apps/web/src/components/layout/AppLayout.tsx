@@ -13,10 +13,12 @@ interface AppLayoutProps {
 export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const navigate = useNavigate();
   const { accessToken, defaultVehicleId, logout } = useAuth();
-  const { status, connected } = useVehicleStatus(defaultVehicleId, accessToken);
+  const { status, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
 
   const onlineState = !defaultVehicleId
     ? 'offline' as const
+    : connectionState === 'failed'
+    ? 'error' as const
     : connected
     ? 'online' as const
     : 'connecting' as const;
