@@ -1,8 +1,9 @@
 import React from 'react';
-import { useNavigate, useRouter } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle } from '@riviamigo/ui/primitives';
 import { useAuth } from '@riviamigo/hooks';
 import { useVehicleStatus } from '@riviamigo/hooks';
+import { LogOut, Settings } from 'lucide-react';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -11,7 +12,7 @@ interface AppLayoutProps {
 
 export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const navigate = useNavigate();
-  const { accessToken, defaultVehicleId } = useAuth();
+  const { accessToken, defaultVehicleId, logout } = useAuth();
   const { status, connected } = useVehicleStatus(defaultVehicleId, accessToken);
 
   const onlineState = !defaultVehicleId
@@ -20,6 +21,11 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     ? 'online' as const
     : 'connecting' as const;
 
+  async function handleLogout() {
+    await logout();
+    navigate({ to: '/login' });
+  }
+
   return (
     <div className="min-h-screen bg-bg-page text-fg">
       <AmbientOrbs />
@@ -27,17 +33,45 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       <Sidebar
         activeKey={activeKey}
         onNavigate={(href) => navigate({ to: href })}
-        bottomSlot={
+        bottomSlot={({ collapsed }) => (
           <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => navigate({ to: '/settings' })}
+              title="Settings"
+              aria-label="Open settings"
+              className={
+                collapsed
+                  ? 'w-full flex items-center justify-center py-2 rounded-lg text-fg-secondary hover:text-fg hover:bg-bg-elevated transition-colors'
+                  : 'w-full flex items-center gap-2 px-2 py-2 rounded-lg text-fg-secondary hover:text-fg hover:bg-bg-elevated transition-colors'
+              }
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              {!collapsed && <span className="text-xs font-medium">Settings</span>}
+            </button>
+
             <StatusBar
               onlineState={onlineState}
               socPercent={status?.battery_level ?? undefined}
               isCharging={status?.charger_state === 'Charging'}
               rangeEstimateMi={status?.range_miles ?? undefined}
+              compact={collapsed}
             />
-            <ThemeToggle />
+
+            <div className={collapsed ? 'flex items-center justify-between' : 'flex items-center justify-between'}>
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sign out"
+                aria-label="Sign out"
+                className="flex items-center justify-center w-8 h-8 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+              <ThemeToggle />
+            </div>
           </div>
-        }
+        )}
       />
 
       {/* Main content: offset by sidebar width on lg+ */}

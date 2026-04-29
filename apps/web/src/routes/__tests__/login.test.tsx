@@ -29,14 +29,14 @@ beforeEach(() => {
 });
 
 describe('LoginPage', () => {
-  it('renders the Riviamigo brand name', () => {
+  it('renders the Riviamigo wordmark image', () => {
     render(<LoginPage />);
-    expect(screen.getByText('Riviamigo')).toBeInTheDocument();
+    expect(screen.getByAltText('Riviamigo')).toBeInTheDocument();
   });
 
   it('renders the tagline', () => {
     render(<LoginPage />);
-    expect(screen.getByText('Your Rivian, deeply understood.')).toBeInTheDocument();
+    expect(screen.getByText('Your Rivian\'s data companion.')).toBeInTheDocument();
   });
 
   it('renders the brand logo mark', () => {
