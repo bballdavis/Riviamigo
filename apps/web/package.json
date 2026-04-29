@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@riviamigo/dashboards": "workspace:*",
     "@riviamigo/hooks": "workspace:*",
     "@riviamigo/types": "workspace:*",
     "@riviamigo/ui": "workspace:*",

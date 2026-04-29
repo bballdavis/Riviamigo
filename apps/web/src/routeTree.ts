@@ -10,6 +10,8 @@ import { settingsRoute } from './routes/settings';
 import { connectRoute } from './routes/connect';
 import { connectOtpRoute } from './routes/connect.otp';
 import { loginRoute } from './routes/login';
+import { userDashboardRoute } from './routes/d.$slug';
+import { adminDashboardsRoute } from './routes/admin.dashboards';
 
 export const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -23,4 +25,6 @@ export const routeTree = rootRoute.addChildren([
   connectRoute,
   connectOtpRoute,
   loginRoute,
+  userDashboardRoute,
+  adminDashboardsRoute,
 ]);

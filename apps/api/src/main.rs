@@ -26,6 +26,9 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await?;
     tracing::info!("migrations applied");
 
+    routes::dashboards::seed_defaults(&pool).await?;
+    tracing::info!("dashboard defaults seeded");
+
     let active_keys = keys::bootstrap_keys(
         &pool,
         config.jwt_secret.clone(),

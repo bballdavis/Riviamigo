@@ -1,54 +1,61 @@
 /**
- * Smoke test — kept as a canary that catches stale compiled .js files
- * shadowing .tsx sources (which previously made BatteryContent disappear).
+ * Smoke test — verifies the DashboardPage renders without crashing.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { vi, it, expect } from 'vitest';
-
 vi.mock('@riviamigo/ui/primitives', () => ({
-  PageLayout: ({ children, title, actions }: any) => (
+  PageLayout: ({ children, title, actions }: { children: React.ReactNode; title: string; actions?: React.ReactNode }) => (
     <div data-testid="page-layout"><h1>{title}</h1>{actions}{children}</div>
   ),
-  StatCardGrid: ({ children }: any) => <div>{children}</div>,
-  StatCard: ({ label, value }: any) => <div><span>{label}</span><span>{value}</span></div>,
-  MetricTabs: ({ children, tabs, active, onChange }: any) => (
-    <div data-testid="metric-tabs">
-      {tabs.map((t: any) => <button key={t.key} onClick={() => onChange(t.key)}>{t.label}</button>)}
-      {children}
-    </div>
-  ),
   DateRangePicker: () => <div />,
-  StatCardSkeleton: () => <div />,
 }));
-vi.mock('@riviamigo/ui/charts', () => ({
-  SocAreaChart: () => <div data-testid="soc" />,
-  RangeAreaChart: () => <div />,
-  PhantomDrainChart: () => <div />,
-  DegradationChart: () => <div />,
-}));
+
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({ defaultVehicleId: 'v1' }),
-  useSocHistory: () => ({ data: [], isLoading: false }),
-  useRangeHistory: () => ({ data: [], isLoading: false }),
-  usePhantomDrain: () => ({ data: [], isLoading: false }),
-  useDegradation: () => ({ data: [], isLoading: false }),
+  useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
 }));
-vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: any) => <>{children}</> }));
-vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: any) => <>{children}</> }));
+
+vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/NoVehicleState', () => ({ NoVehicleState: () => <div>no vehicle</div> }));
+
 vi.mock('../../lib/dates', () => ({
   presetToRange: () => ({ from: new Date(), to: new Date() }),
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
   DEFAULT_PRESET: '30d',
 }));
-vi.mock('lucide-react', () => ({
-  Battery: () => <svg />, Activity: () => <svg />, Moon: () => <svg />, TrendingDown: () => <svg />,
+
+const mockConfig = {
+  schemaVersion: 1,
+  id: '00000000-0000-0000-0000-000000000002',
+  slug: 'battery',
+  name: 'Battery',
+  isDefault: true,
+  isLocked: true,
+  ownerId: null,
+  controls: { dateRange: true },
+  widgets: [],
+};
+
+vi.mock('@riviamigo/dashboards', () => ({
+  DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
+  useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
+  getDefaultBySlug: () => mockConfig,
+  downloadDashboardYaml: vi.fn(),
+  importDashboardYaml: vi.fn(),
 }));
 
-import { BatteryContent } from '../battery';
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>();
+  return { ...actual, useNavigate: () => vi.fn() };
+});
 
-it('BatteryContent renders without crashing', () => {
-  render(<BatteryContent />);
-  expect(screen.getByTestId('soc')).toBeInTheDocument();
-  expect(screen.getByTestId('metric-tabs')).toBeInTheDocument();
+import { DashboardPage } from '../../components/dashboard/DashboardPage';
+
+it('DashboardPage renders without crashing', () => {
+  render(<DashboardPage navKey="battery" slug="battery" title="Battery" />);
+  expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+  expect(screen.getByTestId('page-layout')).toBeInTheDocument();
 });
