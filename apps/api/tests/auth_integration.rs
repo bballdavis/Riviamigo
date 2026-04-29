@@ -28,6 +28,7 @@ fn docker() -> &'static Cli {
 
 struct TestApp {
     pub server: TestServer,
+    pub pool: PgPool,
     // Kept alive to prevent the container from stopping.
     _db: Container<'static, Postgres>,
 }
@@ -75,9 +76,48 @@ impl TestApp {
 
         TestApp {
             server,
+            pool,
             _db: postgres,
         }
     }
+}
+
+async fn register_and_login(app: &TestApp, email: &str) -> String {
+    let res: Value = app
+        .server
+        .post("/v1/auth/register")
+        .json(&json!({"email": email, "password": "hunter2hunter2"}))
+        .await
+        .json();
+
+    res["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_string()
+}
+
+async fn insert_vehicle(pool: &PgPool, user_id: uuid::Uuid, rivian_vehicle_id: &str, name: &str) -> uuid::Uuid {
+    sqlx::query_scalar!(
+        "INSERT INTO riviamigo.vehicles (user_id, rivian_vehicle_id, model, name) VALUES ($1, $2, $3, $4) RETURNING id",
+        user_id,
+        rivian_vehicle_id,
+        "R1T",
+        name,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("insert vehicle")
+}
+
+async fn set_default_vehicle(pool: &PgPool, user_id: uuid::Uuid, vehicle_id: uuid::Uuid) {
+    sqlx::query!(
+        "UPDATE riviamigo.users SET default_vehicle_id = $1 WHERE id = $2",
+        vehicle_id,
+        user_id,
+    )
+    .execute(pool)
+    .await
+    .expect("set default vehicle");
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
@@ -303,4 +343,157 @@ async fn error_responses_have_nested_error_field() {
     );
     assert!(body["error"]["code"].is_string());
     assert!(body["error"]["message"].is_string());
+}
+
+#[tokio::test]
+async fn vehicles_returns_empty_list_for_new_user() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "vehicles-empty@example.com").await;
+
+    let res = app
+        .server
+        .get("/v1/vehicles")
+        .add_header("Authorization", format!("Bearer {token}"))
+        .await;
+
+    assert_eq!(res.status_code(), 200);
+    let body: Value = res.json();
+    assert_eq!(body["vehicles"], json!([]));
+}
+
+#[tokio::test]
+async fn vehicles_only_returns_current_users_vehicles() {
+    let app = TestApp::new().await;
+    let owner_token = register_and_login(&app, "owner@example.com").await;
+    let owner_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "owner@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("owner id");
+    let other_id: uuid::Uuid = sqlx::query_scalar!(
+        "INSERT INTO riviamigo.users (email, password_hash) VALUES ($1, $2) RETURNING id",
+        "other@example.com",
+        "hash"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("other user");
+
+    insert_vehicle(&app.pool, owner_id, "owner-vehicle", "Owner Truck").await;
+    insert_vehicle(&app.pool, other_id, "other-vehicle", "Other Truck").await;
+
+    let res = app
+        .server
+        .get("/v1/vehicles")
+        .add_header("Authorization", format!("Bearer {owner_token}"))
+        .await;
+
+    assert_eq!(res.status_code(), 200);
+    let body: Value = res.json();
+    let vehicles = body["vehicles"].as_array().expect("vehicles array");
+    assert_eq!(vehicles.len(), 1);
+    assert_eq!(vehicles[0]["rivian_vehicle_id"], "owner-vehicle");
+    assert_eq!(vehicles[0]["display_name"], "Owner Truck");
+}
+
+#[tokio::test]
+async fn stats_summary_requires_vehicle_id() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "stats-missing@example.com").await;
+
+    let res = app
+        .server
+        .get("/v1/stats/summary")
+        .add_header("Authorization", format!("Bearer {token}"))
+        .await;
+
+    assert_eq!(res.status_code(), 422);
+    let body: Value = res.json();
+    assert_eq!(body["error"]["message"], "vehicle_id required");
+}
+
+#[tokio::test]
+async fn stats_summary_rejects_unowned_vehicle() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "stats-owner@example.com").await;
+    let outsider_id: uuid::Uuid = sqlx::query_scalar!(
+        "INSERT INTO riviamigo.users (email, password_hash) VALUES ($1, $2) RETURNING id",
+        "outsider@example.com",
+        "hash"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("outsider id");
+    let vehicle_id = insert_vehicle(&app.pool, outsider_id, "outsider-vehicle", "Outsider Truck").await;
+
+    let res = app
+        .server
+        .get(&format!("/v1/stats/summary?vehicle_id={vehicle_id}"))
+        .add_header("Authorization", format!("Bearer {token}"))
+        .await;
+
+    assert_eq!(res.status_code(), 404);
+}
+
+#[tokio::test]
+async fn stats_summary_returns_aggregated_trip_and_charge_values() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "stats-happy@example.com").await;
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "stats-happy@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+    let vehicle_id = insert_vehicle(&app.pool, user_id, "happy-vehicle", "Happy Truck").await;
+    set_default_vehicle(&app.pool, user_id, vehicle_id).await;
+
+    sqlx::query!(
+        "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at, distance_miles, duration_seconds, efficiency_wh_per_mile) VALUES ($1, now() - interval '2 day', now() - interval '2 day' + interval '1 hour', $2, $3, $4)",
+        vehicle_id,
+        10.0_f64,
+        3600_i32,
+        300.0_f64,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("trip one");
+    sqlx::query!(
+        "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at, distance_miles, duration_seconds, efficiency_wh_per_mile) VALUES ($1, now() - interval '1 day', now() - interval '1 day' + interval '30 minutes', $2, $3, $4)",
+        vehicle_id,
+        20.0_f64,
+        1800_i32,
+        450.0_f64,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("trip two");
+    sqlx::query!(
+        "INSERT INTO riviamigo.charge_sessions (vehicle_id, started_at, ended_at, kwh_added, duration_minutes, cost_usd) VALUES ($1, now() - interval '1 day', now(), $2, $3, $4)",
+        vehicle_id,
+        40.0_f64,
+        45_i32,
+        5.2_f64,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("charge session");
+
+    let res = app
+        .server
+        .get(&format!("/v1/stats/summary?vehicle_id={vehicle_id}"))
+        .add_header("Authorization", format!("Bearer {token}"))
+        .await;
+
+    assert_eq!(res.status_code(), 200);
+    let body: Value = res.json();
+    assert_eq!(body["total_miles"], json!(30.0));
+    assert_eq!(body["total_trips"], json!(2));
+    assert_eq!(body["total_kwh_charged"], json!(40.0));
+    assert_eq!(body["total_charging_sessions"], json!(1));
+    assert_eq!(body["lifetime_efficiency_wh_mi"], json!(400.0));
+    assert_eq!(body["estimated_total_cost_usd"], json!(5.2));
 }
