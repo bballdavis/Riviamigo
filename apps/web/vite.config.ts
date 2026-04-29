@@ -21,6 +21,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@riviamigo/dashboards': path.resolve(__dirname, '../../packages/dashboards/src/index.ts'),
+      '@riviamigo/config/typescript/react.json': path.resolve(__dirname, '../../packages/config/typescript/react.json'),
     },
   },
   server: {

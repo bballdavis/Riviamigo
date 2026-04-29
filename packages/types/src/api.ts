@@ -73,6 +73,13 @@ export interface EfficiencyByMode {
   trip_count: number;
 }
 
+export interface EfficiencySummary {
+  avg: number;
+  p10: number;
+  p90: number;
+  total_miles: number;
+}
+
 export interface ChargingSummary {
   total_energy_kwh: number;
   total_cost_usd: number;
