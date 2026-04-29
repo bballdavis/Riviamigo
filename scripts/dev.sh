@@ -159,6 +159,44 @@ wait_for_web_ready() {
   done
 }
 
+wait_for_port_free() {
+  local port="$1"
+  local timeout_seconds="${2:-10}"
+  local elapsed=0
+
+  while port_is_listening "$port"; do
+    if [[ $elapsed -ge $timeout_seconds ]]; then
+      return 1
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  return 0
+}
+
+port_is_listening() {
+  local port="$1"
+
+  if command -v lsof &> /dev/null; then
+    lsof -ti tcp:"$port" >/dev/null 2>&1
+    return $?
+  fi
+
+  if command -v powershell.exe &> /dev/null; then
+    powershell.exe -NoProfile -Command "if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >/dev/null 2>&1
+    return $?
+  fi
+
+  if command -v netstat &> /dev/null; then
+    netstat -ano -p tcp 2>/dev/null | awk -v port=":$port" '$0 ~ port && $6 == "LISTENING" { found = 1 } END { exit(found ? 0 : 1) }'
+    return $?
+  fi
+
+  return 1
+}
+
 kill_existing_web_server() {
   local port="5173"
 
@@ -172,7 +210,22 @@ kill_existing_web_server() {
         [[ -z "$pid" ]] && continue
         kill "$pid" 2>/dev/null || true
       done <<< "$pids"
-      sleep 1
+      wait_for_port_free "$port" 5 || true
+    fi
+    return 0
+  fi
+
+  if command -v powershell.exe &> /dev/null; then
+    local pids
+    pids="$(powershell.exe -NoProfile -Command "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique" 2>/dev/null || true)"
+
+    if [[ -n "$pids" ]]; then
+      echo "🧹 Stopping stale process(es) on port $port..."
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        taskkill /F /T /PID "$pid" >/dev/null 2>&1 || true
+      done <<< "$pids"
+      wait_for_port_free "$port" 5 || true
     fi
     return 0
   fi
@@ -185,15 +238,19 @@ kill_existing_web_server() {
       echo "🧹 Stopping stale process(es) on port $port..."
       while IFS= read -r pid; do
         [[ -z "$pid" ]] && continue
-        taskkill /F /PID "$pid" >/dev/null 2>&1 || true
+        taskkill /F /T /PID "$pid" >/dev/null 2>&1 || true
       done <<< "$pids"
-      sleep 1
+      wait_for_port_free "$port" 5 || true
     fi
   fi
 }
 
 kill_existing_api_server() {
   local port="3001"
+
+  if command -v taskkill &> /dev/null; then
+    taskkill /F /T /IM riviamigo-api.exe >/dev/null 2>&1 || true
+  fi
 
   if command -v lsof &> /dev/null; then
     local pids
@@ -205,7 +262,22 @@ kill_existing_api_server() {
         [[ -z "$pid" ]] && continue
         kill "$pid" 2>/dev/null || true
       done <<< "$pids"
-      sleep 1
+      wait_for_port_free "$port" 5 || true
+    fi
+    return 0
+  fi
+
+  if command -v powershell.exe &> /dev/null; then
+    local pids
+    pids="$(powershell.exe -NoProfile -Command "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique" 2>/dev/null || true)"
+
+    if [[ -n "$pids" ]]; then
+      echo "🧹 Stopping stale process(es) on port $port..."
+      while IFS= read -r pid; do
+        [[ -z "$pid" ]] && continue
+        taskkill /F /T /PID "$pid" >/dev/null 2>&1 || true
+      done <<< "$pids"
+      wait_for_port_free "$port" 5 || true
     fi
     return 0
   fi
@@ -218,9 +290,9 @@ kill_existing_api_server() {
       echo "🧹 Stopping stale process(es) on port $port..."
       while IFS= read -r pid; do
         [[ -z "$pid" ]] && continue
-        taskkill /F /PID "$pid" >/dev/null 2>&1 || true
+        taskkill /F /T /PID "$pid" >/dev/null 2>&1 || true
       done <<< "$pids"
-      sleep 1
+      wait_for_port_free "$port" 5 || true
     fi
   fi
 }

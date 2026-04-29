@@ -30,7 +30,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Forest R1S' }] }),
 }));
 
-vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <div data-testid="app-layout">{children}</div> }));
 vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../lib/dates', () => ({
   presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
@@ -50,6 +50,7 @@ describe('Dashboard page', () => {
   it('renders the vehicle subtitle and summary stat labels', () => {
     render(<DashboardContent />);
 
+    expect(screen.getByTestId('app-layout')).toBeInTheDocument();
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Forest R1S')).toBeInTheDocument();
     expect(screen.getByText('Total Miles')).toBeInTheDocument();
