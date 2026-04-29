@@ -7,7 +7,7 @@ import type { WidgetInstance, WidgetCtx } from '../../registry';
 
 function CurrentSocWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data } = useSocHistory(ctx.vehicleId, ctx.from, ctx.to);
-  const latest = data?.[data.length - 1]?.value;
+  const latest = data?.[data.length - 1]?.soc;
   return (
     <StatCard
       label="Current SoC"
@@ -20,7 +20,7 @@ function CurrentSocWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
 
 function EstRangeWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data } = useRangeHistory(ctx.vehicleId, ctx.from, ctx.to);
-  const latest = data?.[data.length - 1]?.value;
+  const latest = data?.[data.length - 1]?.range_mi;
   return (
     <StatCard
       label="Est. Range"

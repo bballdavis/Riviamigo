@@ -58,7 +58,7 @@ export function LoginPage() {
         <div className="flex flex-col items-center mb-10">
           <div className="relative mb-5">
             <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center shadow-[0_0_40px_rgba(245,158,11,0.2)]">
-              <span className="font-display font-bold text-3xl text-accent leading-none">R</span>
+              <img src="/logo_color_lighter.svg" alt="Riviamigo logo" className="block h-[80%] w-auto mx-auto my-auto" />
             </div>
             {/* Subtle ring */}
             <div className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-accent/10" />
