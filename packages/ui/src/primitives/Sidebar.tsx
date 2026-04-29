@@ -1,8 +1,8 @@
 import * as React from 'react';
 import {
   LayoutDashboard, Battery, Route, Zap,
-  TrendingUp, Settings, EllipsisVertical,
-  Menu, X,
+  TrendingUp, Settings,
+  Menu, X, MoreVertical,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -119,16 +119,15 @@ export function Sidebar({
                     src={isDark ? '/text_white.svg' : '/text_black.svg'}
                     alt="Riviamigo"
                     className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
-                    style={{ transform: 'translateY(23.7%)' }}
                   />
                 </div>
               )}
               <button
                 onClick={() => setCollapsed((c) => !c)}
-                className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center justify-center w-6 h-6 rounded-md text-accent hover:bg-bg-elevated transition-colors"
+                className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center justify-center w-12 h-6 rounded-md text-accent hover:bg-bg-elevated transition-colors"
                 aria-label="Collapse sidebar"
               >
-                <EllipsisVertical className="h-5 w-5" />
+                <MoreVertical className="h-5 w-5" />
               </button>
             </>
           )}

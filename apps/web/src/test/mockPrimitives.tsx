@@ -90,6 +90,10 @@ export const DateRangePicker = ({ onChange }: {
   value?: unknown; preset?: string; onChange?: (r: unknown, p?: string) => void;
 }) => <div data-testid="date-range-picker" />;
 
+export function presetToRange(_preset: string) {
+  return { from: new Date('2024-01-01T00:00:00Z'), to: new Date('2024-01-31T23:59:59Z') };
+}
+
 export const EmptyState = ({ title, description, action, icon }: {
   title: string; description?: string;
   action?: { label: string; onClick: () => void };
