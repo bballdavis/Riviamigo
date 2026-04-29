@@ -10,6 +10,7 @@ export interface StatusBarProps {
   socPercent?: number | undefined;
   isCharging?: boolean | undefined;
   rangeEstimateMi?: number | undefined;
+  compact?: boolean | undefined;
   className?: string | undefined;
 }
 
@@ -19,17 +20,28 @@ export function StatusBar({
   socPercent,
   isCharging,
   rangeEstimateMi,
+  compact = false,
   className,
 }: StatusBarProps) {
+  const statusLabel = onlineState === 'online'
+    ? 'Online'
+    : onlineState === 'connecting'
+    ? 'Connecting...'
+    : 'Offline';
+
   return (
     <div
       className={cn(
         'flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-elevated',
+        compact && 'justify-center px-2',
         className
       )}
     >
-      {/* Online indicator */}
-      <div className="flex items-center gap-1.5">
+      <div
+        className={cn('flex items-center gap-1.5', compact && 'gap-0')}
+        title={`Vehicle status: ${statusLabel}`}
+        aria-label={`Vehicle status: ${statusLabel}`}
+      >
         {onlineState === 'connecting' ? (
           <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />
         ) : onlineState === 'online' ? (
@@ -37,39 +49,41 @@ export function StatusBar({
         ) : (
           <WifiOff className="h-3.5 w-3.5 text-fg-tertiary" />
         )}
-        <span className={cn(
-          'text-xs font-medium',
-          onlineState === 'online' ? 'text-[#10B981]' :
-          onlineState === 'connecting' ? 'text-accent' :
-          'text-fg-tertiary'
-        )}>
-          {onlineState === 'online' ? 'Online' : onlineState === 'connecting' ? 'Connecting…' : 'Offline'}
-        </span>
+        {!compact && (
+          <span
+            className={cn(
+              'text-xs font-medium',
+              onlineState === 'online'
+                ? 'text-[#10B981]'
+                : onlineState === 'connecting'
+                ? 'text-accent'
+                : 'text-fg-tertiary'
+            )}
+          >
+            {statusLabel}
+          </span>
+        )}
       </div>
 
-      {vehicleName && (
+      {!compact && vehicleName && (
         <span className="text-xs text-fg-tertiary truncate max-w-[120px]">{vehicleName}</span>
       )}
 
-      {socPercent !== undefined && (
+      {!compact && socPercent !== undefined && (
         <div className="flex items-center gap-1 ml-auto">
           {isCharging ? (
             <BatteryCharging className="h-3.5 w-3.5 text-accent" />
           ) : (
-            <Battery className={cn(
-              'h-3.5 w-3.5',
-              socPercent > 50 ? 'text-[#10B981]' :
-              socPercent > 20 ? 'text-[#F59E0B]' :
-              'text-[#F87171]'
-            )} />
+            <Battery
+              className={cn(
+                'h-3.5 w-3.5',
+                socPercent > 50 ? 'text-[#10B981]' : socPercent > 20 ? 'text-[#F59E0B]' : 'text-[#F87171]'
+              )}
+            />
           )}
-          <span className="text-xs font-mono font-medium text-fg">
-            {Math.round(socPercent)}%
-          </span>
+          <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>
           {rangeEstimateMi !== undefined && (
-            <span className="text-xs text-fg-tertiary">
-              · {Math.round(rangeEstimateMi)} mi
-            </span>
+            <span className="text-xs text-fg-tertiary">- {Math.round(rangeEstimateMi)} mi</span>
           )}
         </div>
       )}

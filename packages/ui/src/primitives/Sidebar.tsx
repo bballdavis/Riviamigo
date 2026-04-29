@@ -1,7 +1,6 @@
 import * as React from 'react';
 import {
-  LayoutDashboard, Battery, Route, Zap,
-  TrendingUp, Settings,
+  LayoutDashboard, Battery, Route, Zap, TrendingUp,
   Menu, X, MoreVertical,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -19,7 +18,6 @@ const DEFAULT_NAV_ITEMS: NavItem[] = [
   { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <Route className="h-4 w-4" /> },
   { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <Zap className="h-4 w-4" /> },
   { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className="h-4 w-4" /> },
-  { key: 'settings',   label: 'Settings',   href: '/settings',  icon: <Settings className="h-4 w-4" /> },
 ];
 
 export interface SidebarProps {
@@ -27,7 +25,7 @@ export interface SidebarProps {
   onNavigate: (href: string) => void;
   items?: NavItem[];
   logo?: React.ReactNode;
-  bottomSlot?: React.ReactNode;
+  bottomSlot?: React.ReactNode | ((context: { collapsed: boolean }) => React.ReactNode);
   className?: string;
 }
 
@@ -119,6 +117,7 @@ export function Sidebar({
                     src={isDark ? '/text_white.svg' : '/text_black.svg'}
                     alt="Riviamigo"
                     className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
+                    style={{ transform: 'translateY(18%)' }}
                   />
                 </div>
               )}
@@ -167,7 +166,7 @@ export function Sidebar({
         {/* Bottom slot (e.g. vehicle status, theme toggle) */}
         {bottomSlot && (
           <div className="shrink-0 border-t border-border p-3">
-            {bottomSlot}
+            {typeof bottomSlot === 'function' ? bottomSlot({ collapsed }) : bottomSlot}
           </div>
         )}
       </aside>

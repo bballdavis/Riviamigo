@@ -23,13 +23,13 @@ beforeEach(() => {
     mockRegister.mockClear();
 });
 describe('LoginPage', () => {
-    it('renders the Riviamigo brand name', () => {
+    it('renders the Riviamigo wordmark image', () => {
         render(_jsx(LoginPage, {}));
-        expect(screen.getByText('Riviamigo')).toBeInTheDocument();
+        expect(screen.getByAltText('Riviamigo')).toBeInTheDocument();
     });
     it('renders the tagline', () => {
         render(_jsx(LoginPage, {}));
-        expect(screen.getByText('Your Rivian, deeply understood.')).toBeInTheDocument();
+        expect(screen.getByText('Your Rivian\'s data companion.')).toBeInTheDocument();
     });
     it('renders the brand logo mark', () => {
         render(_jsx(LoginPage, {}));
