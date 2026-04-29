@@ -15,6 +15,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@riviamigo/dashboards": "workspace:*",
     "@riviamigo/hooks": "workspace:*",
     "@riviamigo/types": "workspace:*",
     "@riviamigo/ui": "workspace:*",

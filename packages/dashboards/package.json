@@ -1,0 +1,27 @@
+{
+  "name": "@riviamigo/dashboards",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0"
+  },
+  "dependencies": {
+    "@riviamigo/hooks": "workspace:*",
+    "@riviamigo/ui": "workspace:*",
+    "@tanstack/react-router": "^1.51.0",
+    "lucide-react": "^0.390.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@riviamigo/config": "workspace:*",
+    "@types/react": "^18.3.3",
+    "typescript": "^6.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18"
+  }
+}
