@@ -1,20 +1,9 @@
 import React, { useState } from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import {
-  useAuth, useSummaryStats, useVehicles, useSocHistory, useEfficiencyTrend,
-} from '@riviamigo/hooks';
-import {
-  PageLayout, StatCardGrid, StatCard, MetricTabs,
-  StatCardSkeleton, EmptyState, DateRangePicker,
-} from '@riviamigo/ui/primitives';
-import { SocAreaChart, EfficiencyTrendChart } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
-import { NoVehicleState } from '../components/layout/NoVehicleState';
-import { formatMiles, formatKwh } from '@riviamigo/ui/lib/utils';
-import { presetToRange, rangeToIso, DEFAULT_PRESET, type PresetKey } from '../lib/dates';
-import { Battery, TrendingUp } from 'lucide-react';
+import { DashboardContent } from '@riviamigo/dashboards';
 
 export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
