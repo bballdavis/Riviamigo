@@ -81,7 +81,6 @@ export function TripDetailContent() {
           {tab === 'map' && (
             <TripMapChart
               track={(track ?? []).map((p) => ({ lat: p.lat, lng: p.lng }))}
-              loading={trackLoading}
               height={360}
             />
           )}

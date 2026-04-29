@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { createRoute, useNavigate } from '@tanstack/react-router';
+import { createRoute } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import {
   useAuth, useSummaryStats, useVehicles, useSocHistory, useEfficiencyTrend,
@@ -37,7 +37,6 @@ function DashboardPage() {
 
 function DashboardContent() {
   const { defaultVehicleId } = useAuth();
-  const navigate = useNavigate();
   const [tab, setTab] = useState('soc');
 
   const [preset, setPreset] = useState<PresetKey>(DEFAULT_PRESET);
@@ -75,10 +74,10 @@ function DashboardContent() {
                 <>
                   <StatCard label="Total Miles"     value={formatMiles(stats?.total_miles ?? 0)} accent />
                   <StatCard label="Total Trips"     value={stats?.total_trips ?? 0} />
-                  <StatCard label="Energy Charged"  value={formatKwh(stats?.total_kwh_charged ?? 0)} />
+                  <StatCard label="Energy Charged"  value={formatKwh(stats?.total_energy_kwh ?? 0)} />
                   <StatCard
                     label="Avg Efficiency"
-                    value={stats?.lifetime_efficiency_wh_mi?.toFixed(0) ?? '—'}
+                    value={stats?.avg_efficiency_wh_mi?.toFixed(0) ?? '—'}
                     unit="Wh/mi"
                   />
                 </>
@@ -94,7 +93,7 @@ function DashboardContent() {
             >
               {tab === 'soc' && (
                 <SocAreaChart
-                  data={(socData ?? []).map((p) => ({ ts: p.ts, soc: p.value ?? 0 }))}
+                  data={socData ?? []}
                   loading={socLoading}
                   height={240}
                   showBrush

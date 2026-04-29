@@ -64,10 +64,10 @@ export function EfficiencyContent() {
         ) : (
           <>
         <StatCardGrid>
-          <StatCard label="Avg Efficiency" value={summary ? `${summary.avg_wh_per_mi.toFixed(0)}` : '—'} unit="Wh/mi" accent icon={<Gauge className="h-4 w-4" />} />
-          <StatCard label="Best 10%"        value={summary ? `${(summary.p10_wh_per_mi ?? 0).toFixed(0)}` : '—'} unit="Wh/mi" />
-          <StatCard label="Worst 10%"       value={summary ? `${(summary.p90_wh_per_mi ?? 0).toFixed(0)}` : '—'} unit="Wh/mi" />
-          <StatCard label="Total Miles"     value={summary ? `${(summary.total_miles ?? 0).toFixed(0)}` : '—'} unit="mi" />
+          <StatCard label="Avg Efficiency" value={summary ? `${summary.avg.toFixed(0)}` : '—'} unit="Wh/mi" accent icon={<Gauge className="h-4 w-4" />} />
+          <StatCard label="Best 10%"        value={summary ? `${summary.p10.toFixed(0)}` : '—'} unit="Wh/mi" />
+          <StatCard label="Worst 10%"       value={summary ? `${summary.p90.toFixed(0)}` : '—'} unit="Wh/mi" />
+          <StatCard label="Total Miles"     value="—" unit="mi" />
         </StatCardGrid>
 
         <MetricTabs
@@ -79,12 +79,7 @@ export function EfficiencyContent() {
         >
           {tab === 'by-mode' && (
             <EfficiencyChart
-              data={(byMode ?? []).map((d) => ({
-                drive_mode: d.drive_mode,
-                avg_efficiency: d.avg_wh_per_mi,
-                p10_efficiency: 0,
-                p90_efficiency: 0,
-              }))}
+              data={byMode ?? []}
               loading={byModeLoading}
               height={280}
             />

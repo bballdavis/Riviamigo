@@ -46,10 +46,10 @@ export function BatteryContent() {
   const { data: drainData, isLoading: drainLoading } = usePhantomDrain(defaultVehicleId, from, to);
   const { data: degradData,isLoading: degradLoading }= useDegradation(defaultVehicleId);
 
-  const latestSoc   = socData?.[socData.length - 1]?.value;
-  const latestRange = rangeData?.[rangeData.length - 1]?.value;
+  const latestSoc   = socData?.[socData.length - 1]?.soc;
+  const latestRange = rangeData?.[rangeData.length - 1]?.range_mi;
   const avgDrain    = drainData?.length
-    ? drainData.reduce((s, d) => s + (d.avg_drain_rate ?? 0), 0) / drainData.length
+    ? drainData.reduce((sum, point) => sum + (point.drain_pct ?? 0), 0) / drainData.length
     : undefined;
   const latestCapacity = degradData?.[degradData.length - 1]?.capacity_pct;
   const hasVehicle = !!defaultVehicleId;
@@ -90,18 +90,15 @@ export function BatteryContent() {
           subtitle={`${preset} history`}
         >
           {tab === 'soc' && (
-            <SocAreaChart data={(socData ?? []).map((p) => ({ ts: p.ts, soc: p.value ?? 0 }))}
+            <SocAreaChart data={socData ?? []}
               loading={socLoading} height={240} showBrush />
           )}
           {tab === 'range' && (
-            <RangeAreaChart data={(rangeData ?? []).map((p) => ({ ts: p.ts, range_mi: p.value ?? 0 }))}
-              loading={rangeLoading} height={240} showBrush />
+            <RangeAreaChart data={rangeData ?? []}
+              loading={rangeLoading} height={240} />
           )}
           {tab === 'phantom' && (
-            <PhantomDrainChart data={(drainData ?? []).map((p) => ({
-              date: p.day ?? '',
-              drain_pct: p.total_soc_lost ?? 0,
-            }))} loading={drainLoading} height={240} />
+            <PhantomDrainChart data={drainData ?? []} loading={drainLoading} height={240} />
           )}
           {tab === 'degradation' && (
             <DegradationChart data={degradData ?? []} loading={degradLoading} height={240} />
