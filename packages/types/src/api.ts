@@ -134,3 +134,49 @@ export interface AuthTokens {
   expires_in: number;
   default_vehicle_id: string | null;
 }
+
+export interface AuthMeResponse {
+  user_id: string;
+  email: string;
+  role: string;
+  default_vehicle_id: string | null;
+}
+
+export type ApiAccessLevel = 'view' | 'edit' | 'admin';
+
+export interface ApiKeyRecord {
+  id: string;
+  vehicle_id: string;
+  name: string;
+  access_level: ApiAccessLevel;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreateApiKeyBody {
+  vehicle_id: string;
+  name: string;
+  access_level: ApiAccessLevel;
+}
+
+export interface CreateApiKeyResult {
+  key: string;
+  record: ApiKeyRecord;
+}
+
+export interface ApiCatalog {
+  access_levels: Array<{
+    level: ApiAccessLevel;
+    description: string;
+    allows: string[];
+    restricts: string[];
+  }>;
+  endpoints: Array<{
+    method: string;
+    path: string;
+    minimum_access: ApiAccessLevel;
+    purpose: string;
+  }>;
+}

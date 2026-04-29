@@ -95,3 +95,21 @@ export const useAuth = create<AuthState>()(
     }
   )
 );
+
+api.onAuthChange((tokens) => {
+  if (!tokens) {
+    useAuth.setState({
+      accessToken: null,
+      userId: null,
+      defaultVehicleId: null,
+      isAuthenticated: false,
+    });
+    return;
+  }
+
+  useAuth.setState({
+    accessToken: tokens.access_token,
+    defaultVehicleId: tokens.default_vehicle_id ?? null,
+    isAuthenticated: true,
+  });
+});

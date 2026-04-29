@@ -63,6 +63,7 @@ describe('useVehicleStatus', () => {
     render(<Probe vehicleId="vehicle-123" accessToken="token-123" />);
 
     expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0]?.protocols).toEqual(['bearer', 'bearer.token-123']);
     expect(screen.getByTestId('state')).toHaveTextContent('connecting');
 
     await act(async () => {

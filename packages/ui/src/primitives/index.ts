@@ -22,6 +22,9 @@ export type { EmptyStateProps } from './EmptyState';
 export { ThemeToggle } from './ThemeToggle';
 export type { ThemeToggleProps } from './ThemeToggle';
 
+export { Tooltip } from './Tooltip';
+export type { TooltipProps } from './Tooltip';
+
 export { DateRangePicker, presetToRange } from './DateRangePicker';
 export type { DateRange, DateRangePickerProps, PresetKey } from './DateRangePicker';
 

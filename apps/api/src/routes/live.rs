@@ -29,17 +29,12 @@ struct LiveParams {
     vehicle_id: Option<Uuid>,
 }
 
-async fn live_handler(
-    State(state): State<AppState>,
-    Query(p): Query<LiveParams>,
-    headers: axum::http::HeaderMap,
-    ws: WebSocketUpgrade,
-) -> Result<impl IntoResponse, AppError> {
-    let vid = p
-        .vehicle_id
-        .ok_or(AppError::Validation("vehicle_id required".into()))?;
-
-    // Extract JWT from Sec-WebSocket-Protocol: bearer.<token>
+/// Extract and validate a JWT from the `Sec-WebSocket-Protocol: bearer.<token>` header.
+/// Returns the decoded claims on success.
+pub(crate) fn extract_jwt_from_headers(
+    headers: &axum::http::HeaderMap,
+    jwt_keys: &crate::middleware::auth::JwtKeys,
+) -> Result<Claims, AppError> {
     let proto_header = headers
         .get("sec-websocket-protocol")
         .and_then(|v| v.to_str().ok())
@@ -54,9 +49,22 @@ async fn live_handler(
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_issuer(&["riviamigo"]);
 
-    let claims = decode::<Claims>(token, &state.jwt_keys.decoding, &validation)
-        .map_err(|_| AppError::Unauthorized)?
-        .claims;
+    decode::<Claims>(token, &jwt_keys.decoding, &validation)
+        .map_err(|_| AppError::Unauthorized)
+        .map(|d| d.claims)
+}
+
+async fn live_handler(
+    State(state): State<AppState>,
+    Query(p): Query<LiveParams>,
+    headers: axum::http::HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+
+    let claims = extract_jwt_from_headers(&headers, &state.jwt_keys)?;
 
     require_vehicle_owned(&state.pool, claims.sub, vid).await?;
 
@@ -64,6 +72,91 @@ async fn live_handler(
     Ok(ws
         .protocols(["bearer"])
         .on_upgrade(move |socket| handle_socket(socket, vid, redis)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+    use uuid::Uuid;
+
+    use crate::{
+        keys::generate_keys,
+        middleware::auth::{issue_access_token, JwtKeys},
+    };
+
+    fn make_keys() -> JwtKeys {
+        let k = generate_keys().expect("key generation");
+        JwtKeys::new(&k.jwt_private_pem, &k.jwt_public_pem).expect("JwtKeys::new")
+    }
+
+    fn headers_with_proto(proto: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "sec-websocket-protocol",
+            proto.parse().expect("header value"),
+        );
+        h
+    }
+
+    #[test]
+    fn missing_proto_header_is_unauthorized() {
+        let keys = make_keys();
+        let result = extract_jwt_from_headers(&HeaderMap::new(), &keys);
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[test]
+    fn proto_without_bearer_prefix_is_unauthorized() {
+        let keys = make_keys();
+        let result = extract_jwt_from_headers(&headers_with_proto("graphql-ws"), &keys);
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[test]
+    fn malformed_jwt_is_unauthorized() {
+        let keys = make_keys();
+        let result = extract_jwt_from_headers(&headers_with_proto("bearer.notavalidtoken"), &keys);
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[test]
+    fn jwt_signed_by_different_key_is_unauthorized() {
+        let keys = make_keys();
+        let other_keys = make_keys();
+        let user_id = Uuid::new_v4();
+        // Sign with `other_keys`, verify with `keys` → should fail
+        let token = issue_access_token(user_id, None, &other_keys).expect("issue_access_token");
+        let result =
+            extract_jwt_from_headers(&headers_with_proto(&format!("bearer.{token}")), &keys);
+        assert!(matches!(result, Err(AppError::Unauthorized)));
+    }
+
+    #[test]
+    fn valid_jwt_returns_correct_claims() {
+        let keys = make_keys();
+        let user_id = Uuid::new_v4();
+        let vid = Uuid::new_v4();
+        let token = issue_access_token(user_id, Some(vid), &keys).expect("issue_access_token");
+        let claims =
+            extract_jwt_from_headers(&headers_with_proto(&format!("bearer.{token}")), &keys)
+                .expect("valid JWT should succeed");
+        assert_eq!(claims.sub, user_id);
+        assert_eq!(claims.iss, "riviamigo");
+        assert_eq!(claims.default_vehicle_id, Some(vid));
+    }
+
+    #[test]
+    fn bearer_with_surrounding_protocols_is_parsed() {
+        let keys = make_keys();
+        let user_id = Uuid::new_v4();
+        let token = issue_access_token(user_id, None, &keys).expect("issue_access_token");
+        // Browsers may send multiple subprotocols separated by commas
+        let proto = format!("graphql-ws, bearer.{token}, some-other");
+        let claims = extract_jwt_from_headers(&headers_with_proto(&proto), &keys)
+            .expect("should find bearer. among multiple protocols");
+        assert_eq!(claims.sub, user_id);
+    }
 }
 
 async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client) {
