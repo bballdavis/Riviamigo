@@ -305,7 +305,7 @@ async fn list_vehicles(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query!(
-        "SELECT id, rivian_vehicle_id, model, trim, name, battery_capacity_wh, \
+        "SELECT id, rivian_vehicle_id, model, trim, vin, color, name, battery_capacity_wh, \
                 home_latitude, home_longitude, created_at \
          FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at",
         auth.user_id
@@ -320,11 +320,11 @@ async fn list_vehicles(
                 "id":                    r.id,
                 "user_id":               auth.user_id,
                 "rivian_vehicle_id":     r.rivian_vehicle_id,
-                "vin":                   serde_json::Value::Null,
+                "vin":                   r.vin,
                 "model":                 r.model,
                 "year":                  serde_json::Value::Null,
                 "trim":                  r.trim,
-                "color":                 serde_json::Value::Null,
+                "color":                 r.color,
                 "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
                 "display_name":          r.name.as_deref().unwrap_or(&r.model),
                 "created_at":            r.created_at,

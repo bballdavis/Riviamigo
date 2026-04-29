@@ -3,7 +3,7 @@
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error as WsError, Message};
 use uuid::Uuid;
 
 use crate::ingestion::{parser, session_store::RivianTokenBundle};
@@ -72,12 +72,22 @@ async fn connect_and_subscribe(
     tx: &mpsc::Sender<TelemetryEvent>,
     shutdown: &mut tokio::sync::broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
-        .uri(WS_URL)
-        .header("Sec-WebSocket-Protocol", "graphql-transport-ws")
-        .body(())?;
+    let request = build_rivian_ws_request()?;
 
-    let (mut ws, _) = tokio_tungstenite::connect_async(request).await?;
+    let (mut ws, _) = match tokio_tungstenite::connect_async(request).await {
+        Ok(connection) => connection,
+        Err(WsError::Http(response)) => {
+            let status = response.status();
+            tracing::warn!(
+                vehicle_id = %vehicle_id,
+                rivian_vehicle_id = %rivian_veh_id,
+                http_status = status.as_u16(),
+                "Rivian WS handshake rejected"
+            );
+            anyhow::bail!("Rivian WS handshake rejected with HTTP {}", status);
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     // connection_init
     ws.send(Message::Text(
@@ -94,7 +104,7 @@ async fn connect_and_subscribe(
     ))
     .await?;
 
-    // Wait for connection_ack
+    // Wait for connection_ack; handle PING frames that may arrive before ack
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(t))) => {
@@ -103,7 +113,11 @@ async fn connect_and_subscribe(
                     break;
                 }
             }
-            _ => anyhow::bail!("Did not receive connection_ack"),
+            Some(Ok(Message::Ping(data))) => {
+                ws.send(Message::Pong(data)).await?;
+            }
+            Some(Ok(_)) => {}
+            _ => anyhow::bail!("connection closed before ack"),
         }
     }
 
@@ -140,5 +154,37 @@ async fn connect_and_subscribe(
                 }
             }
         }
+    }
+}
+
+fn build_rivian_ws_request(
+) -> anyhow::Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
+    let mut request = WS_URL.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
+    Ok(request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rivian_ws_request_includes_required_handshake_headers() {
+        let request = build_rivian_ws_request().expect("request");
+        let headers = request.headers();
+
+        assert_eq!(
+            headers
+                .get("Sec-WebSocket-Protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("graphql-transport-ws")
+        );
+        assert!(headers.contains_key("Host"));
+        assert!(headers.contains_key("Connection"));
+        assert!(headers.contains_key("Upgrade"));
+        assert!(headers.contains_key("Sec-WebSocket-Version"));
+        assert!(headers.contains_key("Sec-WebSocket-Key"));
     }
 }

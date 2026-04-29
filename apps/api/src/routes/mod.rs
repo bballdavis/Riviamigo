@@ -16,6 +16,7 @@ use tower_http::{
 
 use crate::middleware::auth::AppState;
 
+pub mod api_keys;
 pub mod auth;
 pub mod battery;
 pub mod charging;
@@ -51,6 +52,7 @@ pub fn build_router(state: AppState) -> Router {
 
     let protected = Router::new()
         .merge(auth::protected_router())
+        .merge(api_keys::router())
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())

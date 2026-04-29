@@ -32,6 +32,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
   const backoffRef = useRef(1000);
   const reconnectAttemptsRef = useRef(0);
+  const connectionKeyRef = useRef<string | null>(null);
   const shouldReconnectRef = useRef(true);
   const { setStatus, setConnected } = useLiveStatusStore();
   const [connectionState, setConnectionState] = useState<VehicleConnectionState>('idle');
@@ -40,8 +41,17 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     shouldReconnectRef.current = false;
     clearTimeout(reconnectRef.current);
     reconnectRef.current = undefined;
-    wsRef.current?.close();
-    wsRef.current = null;
+    if (wsRef.current) {
+      const ws = wsRef.current;
+      // Null out handlers before close so stale async onclose events can't
+      // fire after shouldReconnectRef has been reset by a subsequent connect()
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      wsRef.current = null;
+      ws.close();
+    }
   }, []);
 
   const connect = useCallback(() => {
@@ -54,7 +64,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     shouldReconnectRef.current = true;
     const ws = new WebSocket(
       `${BASE_WS}/v1/vehicles/live?vehicle_id=${vehicleId}`,
-      [`bearer.${accessToken}`]
+      ['bearer', `bearer.${accessToken}`]
     );
     wsRef.current = ws;
     setConnectionState('connecting');
@@ -98,11 +108,18 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   }, [vehicleId, accessToken, setStatus, setConnected]);
 
   useEffect(() => {
+    const connectionKey = vehicleId && accessToken ? `${vehicleId}:${accessToken}` : null;
+    if (connectionKeyRef.current !== connectionKey) {
+      connectionKeyRef.current = connectionKey;
+      reconnectAttemptsRef.current = 0;
+      backoffRef.current = 1000;
+    }
+
     connect();
     return () => {
       cleanupSocket();
     };
-  }, [connect, cleanupSocket]);
+  }, [vehicleId, accessToken, connect, cleanupSocket]);
 
   const status = useLiveStatusStore((s) => (vehicleId ? s.status[vehicleId] : null));
   const connected = useLiveStatusStore((s) => (vehicleId ? s.connected[vehicleId] ?? false : false));

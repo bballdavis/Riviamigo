@@ -1,12 +1,12 @@
 use axum::{
     extract::FromRequestParts,
-    http::{header::AUTHORIZATION, request::Parts},
+    http::{header::AUTHORIZATION, request::Parts, Method},
 };
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::errors::AppError;
+use crate::{errors::AppError, routes::api_keys::hash_api_key};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -21,6 +21,7 @@ pub struct Claims {
 pub struct AuthUser {
     pub user_id: Uuid,
     pub default_vehicle_id: Option<Uuid>,
+    pub api_access_level: Option<String>,
 }
 
 pub struct JwtKeys {
@@ -55,10 +56,13 @@ pub struct AppState {
 }
 
 #[async_trait::async_trait]
-impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
+impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let auth_header = parts
             .headers
             .get(AUTHORIZATION)
@@ -68,6 +72,11 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
         let token = auth_header
             .strip_prefix("Bearer ")
             .ok_or(AppError::Unauthorized)?;
+
+        if token.starts_with("rmigo_") {
+            return authenticate_api_key(parts.method.clone(), parts.uri.path(), state, token)
+                .await;
+        }
 
         // Retrieve JWT public key from extensions (set by middleware)
         let decoding_key = parts
@@ -85,8 +94,58 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
         Ok(AuthUser {
             user_id: claims.sub,
             default_vehicle_id: claims.default_vehicle_id,
+            api_access_level: None,
         })
     }
+}
+
+async fn authenticate_api_key(
+    method: Method,
+    path: &str,
+    state: &AppState,
+    token: &str,
+) -> Result<AuthUser, AppError> {
+    let hash = hash_api_key(token);
+    let row = sqlx::query!(
+        r#"
+        SELECT v.user_id, k.vehicle_id, k.access_level
+        FROM riviamigo.api_keys k
+        JOIN riviamigo.vehicles v ON v.id = k.vehicle_id
+        WHERE k.key_hash = $1
+          AND k.revoked_at IS NULL
+          AND (k.expires_at IS NULL OR k.expires_at > now())
+        "#,
+        hash.as_slice()
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+
+    match row.access_level.as_str() {
+        "view" if method != Method::GET => return Err(AppError::Forbidden),
+        "edit" if is_admin_path(path) => return Err(AppError::Forbidden),
+        "view" if is_admin_path(path) => return Err(AppError::Forbidden),
+        "admin" => {}
+        "edit" | "view" => {}
+        _ => return Err(AppError::Forbidden),
+    }
+
+    sqlx::query!(
+        "UPDATE riviamigo.api_keys SET last_used_at = now(), updated_at = now() WHERE key_hash = $1",
+        hash.as_slice()
+    )
+    .execute(&state.pool)
+    .await?;
+
+    Ok(AuthUser {
+        user_id: row.user_id,
+        default_vehicle_id: Some(row.vehicle_id),
+        api_access_level: Some(row.access_level),
+    })
+}
+
+fn is_admin_path(path: &str) -> bool {
+    path.contains("/admin/")
 }
 
 pub fn issue_access_token(

@@ -1,6 +1,7 @@
 {
   "extends": "@riviamigo/config/typescript/react.json",
   "compilerOptions": {
+    "noEmit": true,
     "types": ["vitest/globals", "@testing-library/jest-dom"],
     "paths": {
       "@/*": ["./src/*"]

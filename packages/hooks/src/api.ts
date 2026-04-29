@@ -6,7 +6,8 @@
 import type {
   Vehicle, VehicleStatus, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
-  AuthTokens, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
+  AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
+  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -19,11 +20,28 @@ interface ApiFailureDetail {
   path: string;
 }
 
+type AuthChangeHandler = (tokens: AuthTokens | null) => void;
+
 class ApiClient {
   private accessToken: string | null = null;
+  private authChangeHandler: AuthChangeHandler | null = null;
 
   setToken(token: string | null) {
     this.accessToken = token;
+  }
+
+  onAuthChange(handler: AuthChangeHandler) {
+    this.authChangeHandler = handler;
+  }
+
+  private applyTokens(tokens: AuthTokens) {
+    this.setToken(tokens.access_token);
+    this.authChangeHandler?.(tokens);
+  }
+
+  private clearTokens() {
+    this.setToken(null);
+    this.authChangeHandler?.(null);
   }
 
   private headers(): HeadersInit {
@@ -59,10 +77,10 @@ class ApiClient {
       if (res.status === 401 && retryOnUnauthorized && path !== '/v1/auth/refresh') {
         try {
           const tokens = await this.request<AuthTokens>('POST', '/v1/auth/refresh', undefined, undefined, false, false);
-          this.setToken(tokens.access_token);
+          this.applyTokens(tokens);
           return this.request<T>(method, path, body, params, false);
         } catch {
-          this.setToken(null);
+          this.clearTokens();
           const detail = {
             status: res.status,
             code: 'AUTH_EXPIRED',
@@ -110,7 +128,7 @@ class ApiClient {
     return this.request('POST', '/v1/auth/refresh');
   }
 
-  async me(): Promise<{ id: string; email: string }> {
+  async me(): Promise<AuthMeResponse> {
     return this.request('GET', '/v1/auth/me');
   }
 
@@ -135,6 +153,24 @@ class ApiClient {
 
   async connectRivianOtp(challengeId: string, otp: string): Promise<ConnectResult> {
     return this.request('POST', '/v1/vehicles/connect/otp', { challenge_id: challengeId, otp_code: otp });
+  }
+
+  // API access
+
+  async listApiKeys(): Promise<ApiKeyRecord[]> {
+    return this.request('GET', '/v1/api-keys');
+  }
+
+  async createApiKey(body: CreateApiKeyBody): Promise<CreateApiKeyResult> {
+    return this.request('POST', '/v1/api-keys', body);
+  }
+
+  async revokeApiKey(id: string): Promise<void> {
+    return this.request('DELETE', `/v1/api-keys/${id}`);
+  }
+
+  async getApiCatalog(): Promise<ApiCatalog> {
+    return this.request('GET', '/v1/api/catalog');
   }
 
   // ── Battery ───────────────────────────────────────────────────────────────
