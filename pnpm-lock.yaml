@@ -17,6 +17,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@riviamigo/dashboards':
+        specifier: workspace:*
+        version: link:../../packages/dashboards
       '@riviamigo/hooks':
         specifier: workspace:*
         version: link:../../packages/hooks
@@ -120,6 +123,34 @@ importers:
       typescript:
         specifier: ^5.4.5
         version: 5.9.3
+
+  packages/dashboards:
+    dependencies:
+      '@riviamigo/hooks':
+        specifier: workspace:*
+        version: link:../hooks
+      '@riviamigo/ui':
+        specifier: workspace:*
+        version: link:../ui
+      '@tanstack/react-router':
+        specifier: ^1.51.0
+        version: 1.168.25(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      lucide-react:
+        specifier: ^0.390.0
+        version: 0.390.0(react@18.3.1)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+    devDependencies:
+      '@riviamigo/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/react':
+        specifier: ^18.3.3
+        version: 18.3.28
+      typescript:
+        specifier: ^6.0.0
+        version: 6.0.3
 
   packages/hooks:
     dependencies:
