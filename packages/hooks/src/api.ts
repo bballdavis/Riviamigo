@@ -5,8 +5,8 @@
 
 import type {
   Vehicle, VehicleStatus, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
-  StatsSummary, EfficiencyByMode, ChargingSummary, PaginatedResponse,
-  AuthTokens, ConnectResult, ApiError,
+  StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
+  AuthTokens, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -75,8 +75,8 @@ class ApiClient {
         }
       }
 
-      const body = await res.json().catch(() => null);
-      const err: ApiError = body?.error ?? { code: 'unknown', message: res.statusText };
+      const responseBody = await res.json().catch(() => null);
+      const err: ApiError = responseBody?.error ?? { code: 'unknown', message: res.statusText };
       const detail = {
         status: res.status,
         code: err.code,
@@ -123,6 +123,10 @@ class ApiClient {
 
   async vehicleStatus(vehicleId: string): Promise<VehicleStatus> {
     return this.request('GET', '/v1/vehicles/status', undefined, { vehicle_id: vehicleId });
+  }
+
+  async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {
+    return this.request('POST', '/v1/vehicles', body);
   }
 
   async connectRivian(email: string, password: string): Promise<ConnectResult> {
@@ -214,15 +218,37 @@ class ApiClient {
   // ── Efficiency ────────────────────────────────────────────────────────────
 
   async getEfficiencySummary(vehicleId: string, from: string, to: string) {
-    return this.request<{ avg: number; p10: number; p90: number }>(
-      'GET', '/v1/efficiency/summary', undefined, { vehicle_id: vehicleId, from, to }
-    );
+    const summary = await this.request<{
+      avg_wh_per_mi: number;
+      p10_wh_per_mi: number;
+      p90_wh_per_mi: number;
+      total_miles: number;
+    }>('GET', '/v1/efficiency/summary', undefined, { vehicle_id: vehicleId, from, to });
+
+    return {
+      avg: summary.avg_wh_per_mi,
+      p10: summary.p10_wh_per_mi,
+      p90: summary.p90_wh_per_mi,
+      total_miles: summary.total_miles,
+    } satisfies EfficiencySummary;
   }
 
   async getEfficiencyByMode(vehicleId: string, from: string, to: string) {
-    return this.request<EfficiencyByMode[]>('GET', '/v1/efficiency/by-mode', undefined, {
+    const rows = await this.request<Array<{
+      drive_mode: string;
+      avg_wh_per_mi: number;
+      trip_count: number;
+    }>>('GET', '/v1/efficiency/by-mode', undefined, {
       vehicle_id: vehicleId, from, to,
     });
+
+    return rows.map((row) => ({
+      drive_mode: row.drive_mode,
+      avg_efficiency: row.avg_wh_per_mi,
+      p10_efficiency: 0,
+      p90_efficiency: 0,
+      trip_count: row.trip_count,
+    })) satisfies EfficiencyByMode[];
   }
 
   async getEfficiencyTrend(vehicleId: string, from: string, to: string) {
@@ -240,7 +266,23 @@ class ApiClient {
   // ── Stats ─────────────────────────────────────────────────────────────────
 
   async getStats(vehicleId: string) {
-    return this.request<StatsSummary>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
+    const stats = await this.request<{
+      total_miles: number;
+      total_trips: number;
+      total_kwh_charged: number;
+      lifetime_efficiency_wh_mi: number | null;
+      total_charging_sessions: number;
+      estimated_total_cost_usd: number | null;
+    }>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
+
+    return {
+      total_miles: stats.total_miles,
+      total_trips: stats.total_trips,
+      total_energy_kwh: stats.total_kwh_charged,
+      avg_efficiency_wh_mi: stats.lifetime_efficiency_wh_mi,
+      total_charge_sessions: stats.total_charging_sessions,
+      total_cost_usd: stats.estimated_total_cost_usd,
+    } satisfies StatsSummary;
   }
 
   private reportFailure(detail: ApiFailureDetail) {
