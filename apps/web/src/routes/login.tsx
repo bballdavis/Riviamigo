@@ -78,7 +78,7 @@ export function LoginPage() {
                 src="/logo_color_lighter.svg"
                 alt="Riviamigo logo"
                 className="block h-20 w-20 object-contain"
-                style={{ transform: 'translateX(-22px)' }}
+                style={{ transform: 'translateX(-6px)' }}
               />
             </div>
             {/* Subtle ring */}

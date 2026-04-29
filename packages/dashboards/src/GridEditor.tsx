@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
-import GridLayout from 'react-grid-layout';
+import GridLayout, { useContainerWidth } from 'react-grid-layout';
 import type { LayoutItem } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { v4 as uuidv4 } from 'uuid';
-import { X, GripVertical, Plus, AlignHorizontalDistributeCenter } from 'lucide-react';
+import { X, GripVertical, Plus, AlignHorizontalDistributeCenter, RotateCcw, Search } from 'lucide-react';
 import { getAllWidgets, getWidget } from './registry';
 import { WidgetHost } from './WidgetHost';
 import type { DashboardConfig, WidgetInstance } from './schema';
@@ -44,7 +44,7 @@ function applyLayout(widgets: WidgetInstance[], layout: readonly LayoutItem[]): 
 function fillHorizontal(widgets: WidgetInstance[], selectedIds: Set<string>): WidgetInstance[] {
   const selected = widgets.filter((w) => selectedIds.has(w.id));
   const rows = new Set(selected.map((w) => w.layout.y));
-  if (rows.size !== 1) return widgets; // multi-row selection — no-op
+  if (rows.size !== 1) return widgets;
 
   const count = selected.length;
   const per = Math.floor(COLS / count);
@@ -64,9 +64,12 @@ function fillHorizontal(widgets: WidgetInstance[], selectedIds: Set<string>): Wi
 }
 
 export default function GridEditor({ config, ctx, onConfigChange }: GridEditorProps) {
-  const [widgets, setWidgets] = useState<WidgetInstance[]>(config.widgets);
+  const configWidgets = Array.isArray(config.widgets) ? config.widgets : [];
+  const [widgets, setWidgets] = useState<WidgetInstance[]>(configWidgets);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState(false);
+  const [search, setSearch] = useState('');
+  const { width, containerRef, mounted } = useContainerWidth();
 
   const update = useCallback(
     (next: WidgetInstance[]) => {
@@ -120,117 +123,151 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
     update(fillHorizontal(widgets, selected));
   }
 
-  function handleSave() {
-    onConfigChange?.({ ...config, widgets });
-    setDirty(false);
-  }
-
   function handleReset() {
-    setWidgets(config.widgets);
+    setWidgets(configWidgets);
     setSelected(new Set());
     setDirty(false);
+    onConfigChange?.({ ...config, widgets: configWidgets });
   }
 
   const allWidgets = getAllWidgets();
+  const filteredWidgets = search.trim()
+    ? allWidgets.filter(
+        (d) =>
+          d.title.toLowerCase().includes(search.toLowerCase()) ||
+          d.category.toLowerCase().includes(search.toLowerCase()),
+      )
+    : allWidgets;
+
   const multiRowSelection =
     selected.size >= 2 &&
     new Set(widgets.filter((w) => selected.has(w.id)).map((w) => w.layout.y)).size > 1;
 
   return (
-    <div className="flex gap-4">
-      {/* Canvas */}
-      <div className="flex-1 min-w-0">
-        {/* Toolbar */}
-        <div className="flex items-center gap-2 mb-3">
-          <button
-            onClick={handleFillHorizontal}
-            disabled={selected.size < 2 || multiRowSelection}
-            title={multiRowSelection ? 'Select widgets on the same row' : 'Fill horizontal'}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors disabled:cursor-not-allowed"
-          >
-            <AlignHorizontalDistributeCenter className="h-3.5 w-3.5" />
-            Fill Horizontal
-          </button>
-          <span className="text-xs text-fg-tertiary">
-            {selected.size > 0
-              ? `${selected.size} selected`
-              : 'Click to select · Shift+click for multi'}
-          </span>
-          <div className="ml-auto flex gap-2">
+    <>
+      {/* Fix resize handle z-index and placeholder colour */}
+      <style>{`
+        .rgl-editor .react-grid-placeholder {
+          background: #6366f1 !important;
+          opacity: 0.2;
+          border-radius: 8px;
+        }
+        .rgl-editor .react-resizable-handle {
+          z-index: 20;
+        }
+        .rgl-editor .react-resizable-handle::after {
+          border-color: rgba(99,102,241,0.7);
+        }
+      `}</style>
+
+      <div className="rgl-editor flex gap-4">
+        {/* Canvas */}
+        <div className="flex-1 min-w-0">
+          {/* Toolbar */}
+          <div className="flex items-center gap-2 mb-3">
+            <button
+              onClick={handleFillHorizontal}
+              disabled={selected.size < 2 || multiRowSelection}
+              title={multiRowSelection ? 'Select widgets on the same row' : 'Fill horizontal'}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors disabled:cursor-not-allowed"
+            >
+              <AlignHorizontalDistributeCenter className="h-3.5 w-3.5" />
+              Fill Row
+            </button>
+            <span className="text-xs text-fg-tertiary">
+              Drag to move · resize from corner · hover for controls
+            </span>
             <button
               onClick={handleReset}
               disabled={!dirty}
-              className="text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors"
+              title="Reset to saved layout"
+              className="ml-auto p-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors text-fg-tertiary hover:text-fg"
             >
-              Reset
+              <RotateCcw className="h-3.5 w-3.5" />
             </button>
-            <button
-              onClick={handleSave}
-              disabled={!dirty}
-              className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white disabled:opacity-40 hover:bg-accent/90 transition-colors"
-            >
-              Save
-            </button>
+          </div>
+
+          <div ref={containerRef as React.Ref<HTMLDivElement>} className="w-full">
+            {mounted && (
+              <GridLayout
+                layout={layoutFromConfig(widgets)}
+                width={width}
+                gridConfig={{ cols: COLS, rowHeight: ROW_HEIGHT, margin: [16, 16] as readonly [number, number], containerPadding: [0, 0] as readonly [number, number], maxRows: Infinity }}
+                dragConfig={{ enabled: true, bounded: false, handle: '.drag-handle', threshold: 3 }}
+                onLayoutChange={handleLayoutChange}
+                className="bg-bg-elevated/30 rounded-xl border border-dashed border-border"
+              >
+                {widgets.map((w) => (
+                  <div
+                    key={w.id}
+                    onClick={(e) => toggleSelect(w.id, e)}
+                    className={`group relative rounded-lg border transition-colors cursor-pointer ${
+                      selected.has(w.id) ? 'border-accent ring-1 ring-accent/30' : 'border-border'
+                    } bg-bg`}
+                  >
+                    {/* Delete — top-left, hover-only */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeWidget(w.id); }}
+                      title="Remove widget"
+                      className="absolute top-1.5 left-1.5 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition text-fg-tertiary hover:text-red-400 hover:bg-black/20"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+
+                    {/* Drag handle — top-right, hover-only */}
+                    <div
+                      className="drag-handle absolute top-1.5 right-1.5 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition cursor-grab text-fg-tertiary hover:text-fg hover:bg-black/20"
+                    >
+                      <GripVertical className="h-4 w-4" />
+                    </div>
+
+                    <div className="p-2 pt-7 h-full overflow-hidden">
+                      <WidgetHost instance={w} ctx={ctx} />
+                    </div>
+                  </div>
+                ))}
+              </GridLayout>
+            )}
           </div>
         </div>
 
-        <GridLayout
-          layout={layoutFromConfig(widgets)}
-          width={1200}
-          gridConfig={{ cols: COLS, rowHeight: ROW_HEIGHT, margin: [16, 16] as readonly [number, number], containerPadding: null, maxRows: Infinity }}
-          dragConfig={{ enabled: true, bounded: false, handle: '.drag-handle', threshold: 3 }}
-          onLayoutChange={handleLayoutChange}
-          className="bg-bg-elevated/30 rounded-xl border border-dashed border-border"
-        >
-          {widgets.map((w) => (
-            <div
-              key={w.id}
-              onClick={(e) => toggleSelect(w.id, e)}
-              className={`relative rounded-lg border transition-colors cursor-pointer ${
-                selected.has(w.id) ? 'border-accent ring-1 ring-accent/30' : 'border-border'
-              } bg-bg overflow-hidden`}
-            >
-              {/* Drag handle */}
-              <div className="drag-handle absolute top-1.5 left-1.5 z-10 cursor-grab text-fg-tertiary hover:text-fg transition-colors">
-                <GripVertical className="h-3.5 w-3.5" />
-              </div>
-              {/* Remove */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeWidget(w.id);
-                }}
-                className="absolute top-1.5 right-1.5 z-10 text-fg-tertiary hover:text-fg transition-colors"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-              <div className="p-2 h-full">
-                <WidgetHost instance={w} ctx={ctx} />
-              </div>
-            </div>
-          ))}
-        </GridLayout>
-      </div>
+        {/* Widget Palette — sticky, scrollable */}
+        <aside className="w-56 shrink-0 sticky top-4 flex flex-col gap-2" style={{ maxHeight: 'calc(100vh - 10rem)' }}>
+          <p className="text-xs font-medium text-fg-tertiary uppercase tracking-wider shrink-0">
+            Add Widget
+          </p>
 
-      {/* Widget Palette */}
-      <aside className="w-56 shrink-0">
-        <p className="text-xs font-medium text-fg-tertiary uppercase tracking-wider mb-2">
-          Add Widget
-        </p>
-        <div className="flex flex-col gap-1">
-          {allWidgets.map((def) => (
-            <button
-              key={def.id}
-              onClick={() => addWidget(def.id)}
-              className="flex items-center gap-2 text-left text-xs px-3 py-2 rounded-lg border border-border hover:bg-bg-elevated transition-colors"
-            >
-              <Plus className="h-3 w-3 shrink-0 text-fg-tertiary" />
-              <span className="truncate">{def.title}</span>
-              <span className="ml-auto shrink-0 text-fg-tertiary capitalize">{def.category}</span>
-            </button>
-          ))}
-        </div>
-      </aside>
-    </div>
+          {/* Search */}
+          <div className="relative shrink-0">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg-tertiary pointer-events-none" />
+            <input
+              type="search"
+              placeholder="Search…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full text-xs pl-7 pr-3 py-1.5 rounded-lg border border-border bg-bg focus:outline-none focus:ring-1 focus:ring-accent/50 placeholder:text-fg-tertiary"
+            />
+          </div>
+
+          {/* Scrollable list */}
+          <div className="flex flex-col gap-1 overflow-y-auto min-h-0">
+            {filteredWidgets.map((def) => (
+              <button
+                key={def.id}
+                onClick={() => addWidget(def.id)}
+                className="flex items-center gap-2 text-left text-xs px-3 py-2 rounded-lg border border-border hover:bg-bg-elevated transition-colors"
+              >
+                <Plus className="h-3 w-3 shrink-0 text-fg-tertiary" />
+                <span className="truncate">{def.title}</span>
+                <span className="ml-auto shrink-0 text-fg-tertiary capitalize">{def.category}</span>
+              </button>
+            ))}
+            {filteredWidgets.length === 0 && (
+              <p className="text-xs text-fg-tertiary px-3 py-2">No widgets found</p>
+            )}
+          </div>
+        </aside>
+      </div>
+    </>
   );
 }

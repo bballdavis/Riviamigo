@@ -56,12 +56,24 @@ async fn register(
 
     let hash = argon2_hash(&body.password)?;
     let email = body.email.to_lowercase();
+    let mut tx = state.pool.begin().await?;
+    sqlx::query!("LOCK TABLE riviamigo.users IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+
+    let user_count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM riviamigo.users")
+        .fetch_one(&mut *tx)
+        .await?
+        .unwrap_or(0);
+    let role = if user_count == 0 { "admin" } else { "user" };
+
     let user_id: Uuid = sqlx::query_scalar!(
-        "INSERT INTO riviamigo.users (email, password_hash) VALUES ($1, $2) RETURNING id",
+        "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id",
         email.trim(),
         hash,
+        role,
     )
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(ref db) if db.constraint() == Some("users_email_key") => {
@@ -75,8 +87,10 @@ async fn register(
         "INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
         user_id
     )
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await;
+
+    tx.commit().await?;
 
     // auto-login: issue tokens so the client is immediately authenticated
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
@@ -192,7 +206,7 @@ async fn logout(
 
 async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoResponse, AppError> {
     let row = sqlx::query!(
-        "SELECT email, default_vehicle_id FROM riviamigo.users WHERE id = $1",
+        "SELECT email, default_vehicle_id, role FROM riviamigo.users WHERE id = $1",
         auth.user_id
     )
     .fetch_optional(&state.pool)
@@ -202,6 +216,7 @@ async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoRe
     Ok(Json(serde_json::json!({
         "user_id":            auth.user_id,
         "email":              row.email,
+        "role":               row.role,
         "default_vehicle_id": row.default_vehicle_id
     })))
 }
