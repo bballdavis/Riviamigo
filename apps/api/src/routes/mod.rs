@@ -49,6 +49,7 @@ pub fn build_router(state: AppState) -> Router {
     let decoding_key = state.jwt_keys.decoding.clone();
 
     let protected = Router::new()
+        .merge(auth::protected_router())
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())
