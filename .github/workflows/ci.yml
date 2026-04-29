@@ -13,42 +13,9 @@ env:
   RUST_TOOLCHAIN: stable
 
 jobs:
-  # ── Rust ────────────────────────────────────────────────────────────────────
-  rust:
-    name: Rust (clippy · test · audit)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/api
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache cargo registry
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/api
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Test
-        run: cargo test --all
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
-      - name: Audit dependencies
-        run: cargo audit
-
-  # ── Frontend ─────────────────────────────────────────────────────────────────
+  # ── Frontend ────────────────────────────────────────────────────────────────
   frontend:
-    name: Frontend (typecheck · lint · storybook)
+    name: Frontend (lint · typecheck · unit coverage · storybook · e2e)
     runs-on: ubuntu-latest
 
     steps:
@@ -68,11 +35,138 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Playwright browsers
+        run: pnpm --filter @riviamigo/web exec playwright install --with-deps chromium
+
       - name: Typecheck
         run: pnpm turbo typecheck
 
       - name: Lint
         run: pnpm turbo lint
 
+      - name: Unit tests with coverage
+        run: pnpm --filter @riviamigo/web test:coverage
+
       - name: Build Storybook
         run: pnpm turbo build-storybook
+
+      - name: E2E
+        run: pnpm turbo test:e2e
+
+      - name: Upload frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: apps/web/coverage
+          if-no-files-found: warn
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: warn
+
+      - name: Upload Storybook build
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storybook-static
+          path: packages/ui/storybook-static
+          if-no-files-found: warn
+
+  # ── Backend ─────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend (fmt · clippy · test · coverage)
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.16.1-pg16
+        env:
+          POSTGRES_DB: riviamigo
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U riviamigo -d riviamigo"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/api
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Coverage
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+
+      - name: Upload backend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: apps/api/lcov.info
+          if-no-files-found: warn
+
+  # ── Security ────────────────────────────────────────────────────────────────
+  security:
+    name: Security (dependency audit · secret scan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit
+        working-directory: apps/api
+        run: cargo audit
+
+      - name: pnpm audit
+        run: pnpm audit --prod
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2

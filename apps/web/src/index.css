@@ -75,3 +75,24 @@
   outline: 2px solid var(--rm-accent);
   outline-offset: 2px;
 }
+
+@keyframes rm-drive-across {
+  0% {
+    transform: translateX(-3rem);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(calc(min(24rem, 100vw - 4rem)));
+    opacity: 0;
+  }
+}
+
+.rm-drive-across {
+  animation: rm-drive-across 2.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}

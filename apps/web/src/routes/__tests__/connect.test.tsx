@@ -23,6 +23,8 @@ const routerMocks = vi.hoisted(() => ({
 const apiMocks = vi.hoisted(() => ({
   connectRivian: vi.fn(),
   connectRivianOtp: vi.fn(),
+  addVehicle: vi.fn(),
+  setDefaultVehicleId: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -38,7 +40,10 @@ vi.mock('@riviamigo/hooks', () => ({
   api: {
     connectRivian: apiMocks.connectRivian,
     connectRivianOtp: apiMocks.connectRivianOtp,
+    addVehicle: apiMocks.addVehicle,
   },
+  useAuth: (selector: (state: { setDefaultVehicleId: (vehicleId: string) => void }) => unknown) =>
+    selector({ setDefaultVehicleId: apiMocks.setDefaultVehicleId }),
 }));
 
 import { ConnectContent } from '../connect';
@@ -48,6 +53,8 @@ beforeEach(() => {
   routerMocks.navigate.mockClear();
   apiMocks.connectRivian.mockClear();
   apiMocks.connectRivianOtp.mockClear();
+  apiMocks.addVehicle.mockClear();
+  apiMocks.setDefaultVehicleId.mockClear();
   routerMocks.search = { challenge_id: 'challenge-123', email: 'driver@example.com' };
 });
 
@@ -67,6 +74,7 @@ describe('ConnectContent', () => {
       requires_otp: true,
       challenge_id: 'challenge-456',
       vehicle_id: null,
+      vehicles: [],
     });
 
     const user = userEvent.setup();
@@ -84,12 +92,48 @@ describe('ConnectContent', () => {
     });
   });
 
-  it('routes connected accounts home when MFA is not required', async () => {
+  it('adds the returned vehicle and shows success when MFA is not required', async () => {
     apiMocks.connectRivian.mockResolvedValue({
       status: 'connected',
       requires_otp: false,
       challenge_id: null,
       vehicle_id: null,
+      vehicles: [{
+        id: 'rivian-vehicle-1',
+        name: 'Launch Green',
+        vin: '7FCTGAAL0NN000001',
+        model: 'R1T',
+        model_year: 2022,
+      }],
+    });
+    apiMocks.addVehicle.mockResolvedValue({ vehicle_id: 'local-vehicle-1' });
+
+    const user = userEvent.setup();
+    render(<ConnectContent />);
+
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
+    await user.type(screen.getByPlaceholderText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: /connect account/i }));
+
+    await waitFor(() => {
+      expect(apiMocks.addVehicle).toHaveBeenCalledWith({
+        rivian_vehicle_id: 'rivian-vehicle-1',
+        name: 'Launch Green',
+        model: 'R1T',
+        vin: '7FCTGAAL0NN000001',
+      });
+      expect(apiMocks.setDefaultVehicleId).toHaveBeenCalledWith('local-vehicle-1');
+      expect(screen.getByText('Vehicle added')).toBeInTheDocument();
+    });
+  });
+
+  it('shows an error when Rivian returns no vehicles', async () => {
+    apiMocks.connectRivian.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [],
     });
 
     const user = userEvent.setup();
@@ -99,18 +143,67 @@ describe('ConnectContent', () => {
     await user.type(screen.getByPlaceholderText('Password'), 'secret123');
     await user.click(screen.getByRole('button', { name: /connect account/i }));
 
-    await waitFor(() => expect(routerMocks.navigate).toHaveBeenCalledWith({ to: '/' }));
+    await waitFor(() => {
+      expect(screen.getByText('Rivian sign-in succeeded, but no vehicles were returned for this account.')).toBeInTheDocument();
+      expect(apiMocks.addVehicle).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows the vehicle picker when multiple vehicles are returned', async () => {
+    apiMocks.connectRivian.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [
+        {
+          id: 'rivian-vehicle-1',
+          name: 'Launch Green',
+          vin: '7FCTGAAL0NN000001',
+          model: 'R1T',
+          model_year: 2022,
+        },
+        {
+          id: 'rivian-vehicle-2',
+          name: 'Forest R1S',
+          vin: '7PDSGABL0PN000002',
+          model: 'R1S',
+          model_year: 2023,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectContent />);
+
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
+    await user.type(screen.getByPlaceholderText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: /connect account/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Choose a vehicle')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /launch green/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /forest r1s/i })).toBeInTheDocument();
+    });
   });
 });
 
 describe('ConnectOtpContent', () => {
-  it('submits the OTP challenge and returns home', async () => {
+  it('submits the OTP challenge, persists the vehicle, and shows success', async () => {
     apiMocks.connectRivianOtp.mockResolvedValue({
       status: 'connected',
       requires_otp: false,
       challenge_id: null,
       vehicle_id: null,
+      vehicles: [{
+        id: 'rivian-vehicle-2',
+        name: 'Forest R1S',
+        vin: '7PDSGABL0PN000002',
+        model: 'R1S',
+        model_year: 2023,
+      }],
     });
+    apiMocks.addVehicle.mockResolvedValue({ vehicle_id: 'local-vehicle-2' });
 
     const user = userEvent.setup();
     render(<ConnectOtpContent />);
@@ -123,7 +216,72 @@ describe('ConnectOtpContent', () => {
 
     await waitFor(() => {
       expect(apiMocks.connectRivianOtp).toHaveBeenCalledWith('challenge-123', '654321');
-      expect(routerMocks.navigate).toHaveBeenCalledWith({ to: '/' });
+      expect(apiMocks.addVehicle).toHaveBeenCalledWith({
+        rivian_vehicle_id: 'rivian-vehicle-2',
+        name: 'Forest R1S',
+        model: 'R1S',
+        vin: '7PDSGABL0PN000002',
+      });
+      expect(apiMocks.setDefaultVehicleId).toHaveBeenCalledWith('local-vehicle-2');
+      expect(screen.getByText('Vehicle added')).toBeInTheDocument();
+    });
+  });
+
+  it('shows an error when OTP succeeds without any vehicles', async () => {
+    apiMocks.connectRivianOtp.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectOtpContent />);
+
+    await user.type(screen.getByPlaceholderText('123456'), '654321');
+    await user.click(screen.getByRole('button', { name: /verify and connect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Rivian verification succeeded, but no vehicles were returned for this account.')).toBeInTheDocument();
+      expect(apiMocks.addVehicle).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows the vehicle picker when OTP returns multiple vehicles', async () => {
+    apiMocks.connectRivianOtp.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [
+        {
+          id: 'rivian-vehicle-1',
+          name: 'Launch Green',
+          vin: '7FCTGAAL0NN000001',
+          model: 'R1T',
+          model_year: 2022,
+        },
+        {
+          id: 'rivian-vehicle-2',
+          name: 'Forest R1S',
+          vin: '7PDSGABL0PN000002',
+          model: 'R1S',
+          model_year: 2023,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<ConnectOtpContent />);
+
+    await user.type(screen.getByPlaceholderText('123456'), '654321');
+    await user.click(screen.getByRole('button', { name: /verify and connect/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Choose a vehicle')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /launch green/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /forest r1s/i })).toBeInTheDocument();
     });
   });
 });

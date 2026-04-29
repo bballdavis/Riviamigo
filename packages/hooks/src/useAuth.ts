@@ -13,6 +13,7 @@ interface AuthState {
   logout: () => Promise<void>;
   refresh: () => Promise<boolean>;
   setTokens: (accessToken: string, defaultVehicleId: string | null) => void;
+  setDefaultVehicleId: (vehicleId: string) => void;
   clearSession: () => void;
 }
 
@@ -27,6 +28,10 @@ export const useAuth = create<AuthState>()(
       setTokens: (accessToken, defaultVehicleId) => {
         api.setToken(accessToken);
         set({ accessToken, defaultVehicleId, isAuthenticated: true });
+      },
+
+      setDefaultVehicleId: (vehicleId) => {
+        set({ defaultVehicleId: vehicleId });
       },
 
       clearSession: () => {

@@ -73,6 +73,13 @@ export interface EfficiencyByMode {
   trip_count: number;
 }
 
+export interface EfficiencySummary {
+  avg: number;
+  p10: number;
+  p90: number;
+  total_miles: number;
+}
+
 export interface ChargingSummary {
   total_energy_kwh: number;
   total_cost_usd: number;
@@ -92,11 +99,34 @@ export interface ApiError {
   message: string;
 }
 
+export interface ConnectedRivianVehicle {
+  id: string;
+  name: string | null;
+  vin: string | null;
+  model: string | null;
+  model_year: number | null;
+}
+
 export interface ConnectResult {
   status: 'connected' | 'otp_required';
   requires_otp: boolean;
   challenge_id: string | null;
   vehicle_id: string | null;
+  vehicles: ConnectedRivianVehicle[];
+}
+
+export interface AddVehicleBody {
+  rivian_vehicle_id: string;
+  name?: string | null;
+  home_lat?: number | null;
+  home_lng?: number | null;
+  model?: string | null;
+  trim?: string | null;
+  vin?: string | null;
+}
+
+export interface AddVehicleResult {
+  vehicle_id: string;
 }
 
 export interface AuthTokens {

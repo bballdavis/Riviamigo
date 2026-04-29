@@ -19,7 +19,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
-        .route("/auth/me", axum::routing::get(me))
+}
+
+pub fn protected_router() -> Router<AppState> {
+    Router::new().route("/auth/me", axum::routing::get(me))
 }
 
 #[derive(Deserialize)]

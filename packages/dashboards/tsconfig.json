@@ -1,5 +1,5 @@
 {
-  "extends": "@riviamigo/config/typescript/react.json",
+  "extends": "../config/typescript/react.json",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",

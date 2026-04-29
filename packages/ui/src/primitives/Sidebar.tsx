@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   LayoutDashboard, Battery, Route, Zap,
-  TrendingUp, Settings, ChevronLeft, ChevronRight,
+  TrendingUp, Settings, EllipsisVertical,
   Menu, X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -41,6 +41,23 @@ export function Sidebar({
 }: SidebarProps) {
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [isDark, setIsDark] = React.useState(() => {
+    if (typeof window === 'undefined') return true;
+    const html = document.documentElement;
+    return html.classList.contains('dark') || !html.classList.contains('light');
+  });
+
+  React.useEffect(() => {
+    const html = document.documentElement;
+    const updateTheme = () => {
+      setIsDark(html.classList.contains('dark') || !html.classList.contains('light'));
+    };
+
+    updateTheme();
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(html, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <>
@@ -78,27 +95,47 @@ export function Sidebar({
         {/* Logo / brand */}
         <div className={cn(
           'flex items-center h-14 px-4 border-b border-border shrink-0',
-          collapsed ? 'justify-center' : 'justify-between'
+          collapsed ? 'justify-center' : 'justify-start relative'
         )}>
-          {logo ?? (
-            <span className={cn('font-display font-semibold text-fg', collapsed && 'hidden')}>
-              Riviamigo
-            </span>
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={() => setCollapsed(false)}
+              className="h-full w-full flex items-center justify-center"
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+            >
+              <img
+                src="/logo_color_lighter.svg"
+                alt="Riviamigo logo"
+                className="h-[80%] w-auto"
+              />
+            </button>
+          ) : (
+            <>
+              {logo ?? (
+                <div className="flex h-full min-w-0 items-center justify-start pl-1 overflow-hidden">
+                  <img
+                    src={isDark ? '/text_white.svg' : '/text_black.svg'}
+                    alt="Riviamigo"
+                    className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
+                    style={{ transform: 'translateY(23.7%)' }}
+                  />
+                </div>
+              )}
+              <button
+                onClick={() => setCollapsed((c) => !c)}
+                className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center justify-center w-6 h-6 rounded-md text-accent hover:bg-bg-elevated transition-colors"
+                aria-label="Collapse sidebar"
+              >
+                <EllipsisVertical className="h-5 w-5" />
+              </button>
+            </>
           )}
-          {collapsed && (
-            <span className="font-display font-bold text-accent text-lg">R</span>
-          )}
-          <button
-            onClick={() => setCollapsed((c) => !c)}
-            className="hidden lg:flex items-center justify-center w-6 h-6 rounded-md text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
-          </button>
         </div>
 
         {/* Nav items */}
-        <nav className="flex-1 py-3 overflow-y-auto">
+        <nav className={cn('flex-1 py-3 overflow-y-auto', collapsed && 'flex flex-col items-center')}>
           {items.map((item) => {
             const isActive = item.key === activeKey;
             return (
@@ -112,7 +149,7 @@ export function Sidebar({
                 className={cn(
                   'w-full flex items-center gap-3 px-3 py-2 mx-2 rounded-lg text-sm font-medium',
                   'transition-all duration-150',
-                  collapsed ? 'justify-center w-auto' : 'w-[calc(100%-16px)]',
+                  collapsed ? 'justify-center w-10 mx-auto' : 'w-[calc(100%-16px)]',
                   isActive
                     ? 'bg-accent-muted text-accent'
                     : 'text-fg-secondary hover:text-fg hover:bg-bg-elevated'
