@@ -148,6 +148,18 @@ function parsePids(output) {
   ];
 }
 
+function apiEnv() {
+  return {
+    DATABASE_URL: 'postgresql://riviamigo:devpassword@localhost:5432/riviamigo?options=-c%20search_path%3Driviamigo,timeseries,public',
+    REDIS_URL: 'redis://localhost:6379',
+    S3_ENDPOINT: 'http://localhost:3900',
+    S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
+    S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
+    PORT: String(ports.api),
+    ALLOWED_ORIGINS: `http://localhost:${ports.web}`,
+  };
+}
+
 async function killPid(pid) {
   if (isWindows) {
     await capture('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: false });
@@ -289,10 +301,14 @@ async function applyMigrationIfMissing(sentinelSql, migrationFile, migrationName
   }
 
   log(`Applying ${migrationName}...`);
+  const migrationSql = Buffer.concat([
+    Buffer.from('SET search_path TO riviamigo, timeseries, public;\n'),
+    readFileSync(migrationFile),
+  ]);
   await runWithInput(
     'docker',
     ['compose', '-f', composeFile, 'exec', '-T', 'timescaledb', 'psql', '-U', 'riviamigo', '-d', 'riviamigo', '-v', 'ON_ERROR_STOP=1', '-f', '-'],
-    readFileSync(migrationFile),
+    migrationSql,
   );
 }
 
@@ -308,6 +324,11 @@ async function ensureSchema() {
     resolve(apiDir, 'migrations/0002_metrics_expansion.sql'),
     '0002_metrics_expansion.sql',
   );
+  await applyMigrationIfMissing(
+    "to_regclass('riviamigo.dashboards')",
+    resolve(apiDir, 'migrations/0003_dashboards.sql'),
+    '0003_dashboards.sql',
+  );
   log('');
 }
 
@@ -315,21 +336,13 @@ async function startApi() {
   await ensurePortFree(ports.api, 'API');
 
   log('Building API...');
-  await run('cargo', ['build'], { cwd: apiDir });
+  await run('cargo', ['build'], { cwd: apiDir, env: apiEnv() });
 
   log('Starting API...');
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
   const api = spawnProcess(apiBin, [], {
     cwd: apiDir,
-    env: {
-      DATABASE_URL: 'postgresql://riviamigo:devpassword@localhost:5432/riviamigo',
-      REDIS_URL: 'redis://localhost:6379',
-      S3_ENDPOINT: 'http://localhost:3900',
-      S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
-      S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
-      PORT: String(ports.api),
-      ALLOWED_ORIGINS: `http://localhost:${ports.web}`,
-    },
+    env: apiEnv(),
   });
 
   await waitForHttp(urls.apiHealth, api, 'API');
