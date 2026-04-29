@@ -19,6 +19,7 @@ use crate::middleware::auth::AppState;
 pub mod auth;
 pub mod battery;
 pub mod charging;
+pub mod dashboards;
 pub mod efficiency;
 pub mod grafana;
 pub mod live;
@@ -56,6 +57,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(efficiency::router())
         .merge(stats::router())
         .merge(live::router())
+        .merge(dashboards::router())
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();
