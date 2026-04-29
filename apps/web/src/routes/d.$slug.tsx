@@ -102,7 +102,7 @@ function UserDashboardPage() {
         title={activeConfig?.name ?? slug}
         actions={
           <div className="flex items-center gap-2">
-            {activeConfig?.controls.dateRange && !isEditMode && (
+            {activeConfig?.controls?.dateRange && !isEditMode && (
               <DateRangePicker
                 value={range}
                 preset={preset}

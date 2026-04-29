@@ -116,7 +116,7 @@ export function Sidebar({
                   <img
                     src={isDark ? '/text_white.svg' : '/text_black.svg'}
                     alt="Riviamigo"
-                    className="block h-[62%] w-auto max-w-[calc(100%-2.25rem)] object-contain"
+                    className="block h-[20%] w-auto max-w-[calc(200%-2.25rem)] object-contain"
                     style={{ transform: 'translateY(18%)' }}
                   />
                 </div>

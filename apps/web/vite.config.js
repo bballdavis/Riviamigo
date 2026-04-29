@@ -20,6 +20,8 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': path.resolve(__dirname, './src'),
+            '@riviamigo/dashboards': path.resolve(__dirname, '../../packages/dashboards/src/index.ts'),
+            '@riviamigo/config/typescript/react.json': path.resolve(__dirname, '../../packages/config/typescript/react.json'),
         },
     },
     server: {
@@ -28,6 +30,7 @@ export default defineConfig({
             '/v1': {
                 target: process.env.VITE_API_URL ?? 'http://localhost:3001',
                 changeOrigin: true,
+                ws: true,
             },
         },
     },

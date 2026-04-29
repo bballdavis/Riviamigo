@@ -122,7 +122,7 @@ class ApiClient {
   }
 
   async vehicleStatus(vehicleId: string): Promise<VehicleStatus> {
-    return this.request('GET', '/v1/vehicles/status', undefined, { vehicle_id: vehicleId });
+    return this.request('GET', `/v1/vehicles/${vehicleId}/status`);
   }
 
   async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {
@@ -273,7 +273,7 @@ class ApiClient {
       lifetime_efficiency_wh_mi: number | null;
       total_charging_sessions: number;
       estimated_total_cost_usd: number | null;
-    }>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
+    }>('GET', '/v1/stats/summary', undefined, { vehicle_id: vehicleId });
 
     return {
       total_miles: stats.total_miles,

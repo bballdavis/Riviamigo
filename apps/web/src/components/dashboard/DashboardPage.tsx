@@ -85,7 +85,7 @@ function DashboardPageContent({ navKey, slug, title }: DashboardPageProps) {
         title={title ?? config?.name ?? slug}
         actions={
           <div className="flex items-center gap-2">
-            {config?.controls.dateRange && (
+            {config?.controls?.dateRange && (
               <DateRangePicker
                 value={range}
                 preset={preset}
