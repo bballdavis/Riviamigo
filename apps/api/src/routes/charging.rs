@@ -15,6 +15,8 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/charging", get(list_sessions))
+        .route("/charging/:id", get(get_session))
         .route("/charging/sessions", get(list_sessions))
         .route("/charging/sessions/:id", get(get_session))
         .route("/charging/summary", get(get_summary))
@@ -27,6 +29,8 @@ struct SessionListParams {
     to: Option<DateTime<Utc>>,
     limit: Option<i64>,
     offset: Option<i64>,
+    page: Option<i64>,
+    per_page: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -64,8 +68,9 @@ async fn list_sessions(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
     let to = p.to.unwrap_or_else(Utc::now);
-    let limit = p.limit.unwrap_or(50).min(200);
-    let offset = p.offset.unwrap_or(0);
+    let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
+    let page = p.page.unwrap_or(1).max(1);
+    let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
 
     // Compute cost per session using user's electricity rate
     let rate = crate::db::users::get_electricity_rate(&state.pool, auth.user_id).await?;
@@ -93,9 +98,15 @@ async fn list_sessions(
         vid, from, to
     ).fetch_one(&state.pool).await?.unwrap_or(0);
 
-    Ok(Json(
-        serde_json::json!({"data": rows, "total": total, "limit": limit, "offset": offset}),
-    ))
+    Ok(Json(serde_json::json!({
+        "data": rows,
+        "items": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "page": (offset / limit) + 1,
+        "per_page": limit
+    })))
 }
 
 async fn get_session(
@@ -211,6 +222,7 @@ async fn get_summary(
     let total_kwh = agg.total_kwh.unwrap_or(0.0);
     Ok(Json(serde_json::json!({
         "total_kwh":       total_kwh,
+        "total_energy_kwh": total_kwh,
         "total_cost_usd":  total_kwh * rate,
         "session_count":   agg.session_count,
         "home_kwh":        agg.home_kwh,
@@ -223,6 +235,7 @@ async fn get_summary(
         "weekly": weekly.iter().map(|r| serde_json::json!({
             "week_start": r.week_start,
             "kwh":        r.kwh,
+            "energy_kwh": r.kwh,
             "sessions":   r.sessions,
         })).collect::<Vec<_>>(),
     })))

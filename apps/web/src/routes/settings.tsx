@@ -20,11 +20,12 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'api' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'api' | 'raw' | 'appearance' | 'account';
 
 const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
   { id: 'api', label: 'API Access', icon: KeyRound },
+  { id: 'raw', label: 'Raw Data', icon: Database },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
 ];
@@ -38,6 +39,10 @@ const accessLevels: Array<{
   { value: 'edit', label: 'Edit', copy: 'Read access plus owned dashboard/configuration writes.' },
   { value: 'admin', label: 'Admin', copy: 'Admin routes. Creation requires an admin user.' },
 ];
+
+function formatRawNumber(value: number | null | undefined, unit = '') {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : '-';
+}
 
 function SettingsPage() {
   return <AuthGuard><SettingsContent /></AuthGuard>;
@@ -57,6 +62,7 @@ export function SettingsContent() {
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
   const [apiAccessLevel, setApiAccessLevel] = React.useState<ApiAccessLevel>('view');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
+  const [rawVehicleId, setRawVehicleId] = React.useState('');
   const isAdmin = me.data?.role === 'admin';
 
   const apiKeys = useQuery({
@@ -75,7 +81,16 @@ export function SettingsContent() {
     if (!apiKeyVehicleId && vehicles?.[0]?.id) {
       setApiKeyVehicleId(vehicles[0].id);
     }
-  }, [apiKeyVehicleId, vehicles]);
+    if (!rawVehicleId && vehicles?.[0]?.id) {
+      setRawVehicleId(vehicles[0].id);
+    }
+  }, [apiKeyVehicleId, rawVehicleId, vehicles]);
+
+  const rawTelemetry = useQuery({
+    queryKey: ['raw-telemetry', rawVehicleId],
+    queryFn: () => api.getRawTelemetry(rawVehicleId, 25),
+    enabled: activeSection === 'raw' && !!rawVehicleId,
+  });
 
   React.useEffect(() => {
     if (!isAdmin && apiAccessLevel === 'admin') {
@@ -343,6 +358,99 @@ export function SettingsContent() {
                     <div className="mt-4 flex items-center gap-2 rounded-lg bg-bg-elevated/50 p-3 text-xs text-fg-tertiary">
                       <Database className="h-4 w-4 shrink-0" />
                       <span>Use <span className="font-mono text-fg">GET /v1/api/catalog</span> for the user catalog and <span className="font-mono text-fg">GET /v1/admin/api/catalog</span> for admin routes.</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {activeSection === 'raw' && (
+              <div className="flex flex-col gap-5">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Raw Data Viewer</CardTitle>
+                    <Button variant="secondary" size="sm" loading={rawTelemetry.isFetching} onClick={() => rawTelemetry.refetch()}>
+                      Refresh
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="grid gap-4">
+                    <label className="grid max-w-sm gap-1">
+                      <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle</span>
+                      <select
+                        value={rawVehicleId}
+                        onChange={(event) => setRawVehicleId(event.target.value)}
+                        className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                      >
+                        {vehicles?.map((v) => (
+                          <option key={v.id} value={v.id}>{v.display_name}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="grid gap-3 md:grid-cols-4">
+                      {[
+                        ['Samples', rawTelemetry.data?.coverage.sample_count],
+                        ['Odometer', rawTelemetry.data?.coverage.odometer_samples],
+                        ['Battery', rawTelemetry.data?.coverage.battery_samples],
+                        ['Power', rawTelemetry.data?.coverage.power_samples],
+                        ['Range', rawTelemetry.data?.coverage.range_samples],
+                        ['Outside Temp', rawTelemetry.data?.coverage.outside_temp_samples],
+                        ['Regen', rawTelemetry.data?.coverage.regen_samples],
+                        ['Tire Pressure', rawTelemetry.data?.coverage.tire_pressure_samples],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
+                          <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
+                          <p className="mt-1 text-lg font-semibold text-fg">{value ?? 0}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-xs text-fg-tertiary">
+                      <p>
+                        First event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.first_event_at ?? 'none'}</span>
+                      </p>
+                      <p className="mt-1">
+                        Latest event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.last_event_at ?? 'none'}</span>
+                      </p>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-lg border border-border">
+                      <table className="w-full min-w-[64rem] text-left text-xs">
+                        <thead className="bg-bg-elevated text-fg-tertiary">
+                          <tr>
+                            {['Time', 'Odometer', 'SOC', 'Range', 'Power', 'Regen', 'State', 'Charger', 'Temp', 'Tires'].map((heading) => (
+                              <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {rawTelemetry.data?.samples.map((sample) => (
+                            <tr key={sample.ts}>
+                              <td className="px-3 py-2 font-mono text-fg">{new Date(sample.ts).toLocaleString()}</td>
+                              <td className="px-3 py-2">{formatRawNumber(sample.odometer_miles, ' mi')}</td>
+                              <td className="px-3 py-2">{formatRawNumber(sample.battery_level, '%')}</td>
+                              <td className="px-3 py-2">{formatRawNumber(sample.distance_to_empty_mi, ' mi')}</td>
+                              <td className="px-3 py-2">{formatRawNumber(sample.power_kw, ' kW')}</td>
+                              <td className="px-3 py-2">{formatRawNumber(sample.regen_power_kw, ' kW')}</td>
+                              <td className="px-3 py-2">{sample.power_state ?? '-'}</td>
+                              <td className="px-3 py-2">{sample.charger_state ?? '-'}</td>
+                              <td className="px-3 py-2">{formatRawNumber(sample.outside_temp_c, ' C')}</td>
+                              <td className="px-3 py-2">
+                                {[sample.tire_fl_psi, sample.tire_fr_psi, sample.tire_rl_psi, sample.tire_rr_psi]
+                                  .map((psi) => formatRawNumber(psi))
+                                  .join(' / ')}
+                              </td>
+                            </tr>
+                          ))}
+                          {(rawTelemetry.data?.samples.length ?? 0) === 0 && (
+                            <tr>
+                              <td colSpan={10} className="px-3 py-6 text-center text-fg-tertiary">
+                                No telemetry samples stored yet.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </CardContent>
                 </Card>

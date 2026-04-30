@@ -7,7 +7,7 @@ import type {
   Vehicle, VehicleStatus, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
-  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog,
+  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -202,9 +202,11 @@ class ApiClient {
   // ── Trips ─────────────────────────────────────────────────────────────────
 
   async listTrips(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
-    return this.request<PaginatedResponse<Trip>>('GET', '/v1/trips', undefined, {
-      vehicle_id: vehicleId, from, to, page, per_page: perPage,
+    const offset = (page - 1) * perPage;
+    const response = await this.request<PaginatedResponse<Trip> & { data?: Trip[]; limit?: number; offset?: number }>('GET', '/v1/trips', undefined, {
+      vehicle_id: vehicleId, from, to, page, per_page: perPage, limit: perPage, offset,
     });
+    return normalizePaginated(response, page, perPage);
   }
 
   async getTrip(tripId: string, vehicleId: string) {
@@ -230,9 +232,11 @@ class ApiClient {
   // ── Charging ──────────────────────────────────────────────────────────────
 
   async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
-    return this.request<PaginatedResponse<ChargeSession>>('GET', '/v1/charging', undefined, {
-      vehicle_id: vehicleId, from, to, page, per_page: perPage,
+    const offset = (page - 1) * perPage;
+    const response = await this.request<PaginatedResponse<ChargeSession> & { data?: ChargeSession[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
+      vehicle_id: vehicleId, from, to, page, per_page: perPage, limit: perPage, offset,
     });
+    return normalizePaginated(response, page, perPage);
   }
 
   async getChargeSession(sessionId: string, vehicleId: string) {
@@ -246,9 +250,25 @@ class ApiClient {
   }
 
   async getChargingSummary(vehicleId: string, from: string, to: string) {
-    return this.request<ChargingSummary>('GET', '/v1/charging/summary', undefined, {
+    const summary = await this.request<{
+      total_energy_kwh?: number;
+      total_kwh?: number;
+      total_cost_usd?: number;
+      session_count?: number;
+      weekly?: Array<{ week_start: string; kwh?: number; energy_kwh?: number; sessions: number }>;
+    }>('GET', '/v1/charging/summary', undefined, {
       vehicle_id: vehicleId, from, to,
     });
+    return {
+      total_energy_kwh: summary.total_energy_kwh ?? summary.total_kwh ?? 0,
+      total_cost_usd: summary.total_cost_usd ?? 0,
+      session_count: summary.session_count ?? 0,
+      weekly: (summary.weekly ?? []).map((week) => ({
+        week_start: week.week_start,
+        energy_kwh: week.energy_kwh ?? week.kwh ?? 0,
+        sessions: week.sessions,
+      })),
+    } satisfies ChargingSummary;
   }
 
   // ── Efficiency ────────────────────────────────────────────────────────────
@@ -321,6 +341,10 @@ class ApiClient {
     } satisfies StatsSummary;
   }
 
+  async getRawTelemetry(vehicleId: string, limit = 25) {
+    return this.request<RawTelemetryResponse>('GET', `/v1/vehicles/${vehicleId}/raw-data`, undefined, { limit });
+  }
+
   private reportFailure(detail: ApiFailureDetail) {
     const message = formatApiError(detail);
     console.warn('[Riviamigo API] request failed', {
@@ -349,6 +373,21 @@ class ApiClient {
 }
 
 export const api = new ApiClient();
+
+function normalizePaginated<T>(
+  response: PaginatedResponse<T> & { data?: T[]; limit?: number; offset?: number },
+  requestedPage: number,
+  requestedPerPage: number,
+): PaginatedResponse<T> {
+  const perPage = response.per_page ?? response.limit ?? requestedPerPage;
+  const page = response.page ?? (response.offset !== undefined ? Math.floor(response.offset / perPage) + 1 : requestedPage);
+  return {
+    items: response.items ?? response.data ?? [],
+    total: response.total ?? 0,
+    page,
+    per_page: perPage,
+  };
+}
 
 function formatApiError(detail: ApiFailureDetail) {
   return `${detail.status} ${detail.code}: ${truncate(detail.message, 160)}`;

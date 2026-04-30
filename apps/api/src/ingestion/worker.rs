@@ -24,7 +24,7 @@ pub async fn run_vehicle_worker(
     pool: PgPool,
     redis: redis::Client,
     age_key: String,
-    config: Config,
+    _config: Config,
     shutdown: broadcast::Receiver<()>,
 ) {
     tracing::info!(vehicle_id = %vehicle_id, "worker starting");
@@ -86,7 +86,7 @@ pub async fn run_vehicle_worker(
         }
     };
 
-    let mut ws_shutdown = shutdown.resubscribe();
+    let ws_shutdown = shutdown.resubscribe();
     let ev_tx_ws = ev_tx.clone();
     let tokens_clone = tokens.clone();
     let riv_id_clone = rivian_vehicle_id.clone();
@@ -147,9 +147,11 @@ async fn write_telemetry(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()
            (ts, vehicle_id, latitude, longitude, altitude_m, speed_mph,
             battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
             power_state, charger_state, charger_status, time_to_end_of_charge_min,
-            drive_mode, gear_status, cabin_temp_c, driver_temp_c,
-            odometer_miles, hv_thermal_event, twelve_volt_health, is_online)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)"#,
+            drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c, hvac_active,
+            power_kw, regen_power_kw, heading_deg, odometer_miles,
+            tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+            hv_thermal_event, twelve_volt_health, is_online)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)"#,
         e.ts, e.vehicle_id,
         e.latitude, e.longitude, e.altitude_m, e.speed_mph,
         e.battery_level, e.battery_capacity_wh, e.distance_to_empty_mi, e.battery_limit,
@@ -157,8 +159,10 @@ async fn write_telemetry(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()
         e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()),
         e.charger_status, e.time_to_end_of_charge_min,
         e.drive_mode.as_ref().map(|d| format!("{d:?}").to_lowercase()),
-        e.gear_status, e.cabin_temp_c, e.driver_temp_c,
-        e.odometer_miles, e.hv_thermal_event, e.twelve_volt_health,
+        e.gear_status, e.cabin_temp_c, e.driver_temp_c, e.outside_temp_c, e.hvac_active,
+        e.power_kw, e.regen_power_kw, e.heading_deg, e.odometer_miles,
+        e.tire_fl_psi, e.tire_fr_psi, e.tire_rl_psi, e.tire_rr_psi,
+        e.hv_thermal_event, e.twelve_volt_health,
         e.is_online
     )
     .execute(pool)
@@ -176,6 +180,10 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
             "power_state":        e.power_state.as_ref().map(|p| format!("{p:?}").to_lowercase()),
             "charger_state":      e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()),
             "speed_mph":          e.speed_mph,
+            "odometer_miles":     e.odometer_miles,
+            "outside_temp_c":     e.outside_temp_c,
+            "power_kw":           e.power_kw,
+            "regen_power_kw":     e.regen_power_kw,
             "location":           e.latitude.zip(e.longitude).map(|(lat,lng)| serde_json::json!({"lat":lat,"lng":lng})),
             "is_online":          e.is_online.unwrap_or(true)
         }

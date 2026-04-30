@@ -16,10 +16,19 @@ PowerShell:
 
 ```powershell
 $apiKey = "rmigo_REPLACE_ME"
-$baseUrl = "http://localhost:3000"
+$baseUrl = "http://localhost:3001"
 Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
   -Uri "$baseUrl/v1/api/catalog"
 ```
+
+For local development, store the real key in `.env.local`:
+
+```dotenv
+VITE_RIVIAMIGO_DEV_API_KEY=rmigo_REPLACE_ME
+VITE_RIVIAMIGO_API_BASE_URL=http://localhost:3001
+```
+
+`.env.local` is gitignored; keep committed docs and `.env.example` placeholders only.
 
 Admin catalog:
 
@@ -60,3 +69,26 @@ Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
 ```
 
 If these return empty arrays while `/v1/vehicles/{id}/status` reports online, inspect the ingestion logs and Timescale rows next.
+
+## Run the live endpoint contract test
+
+The opt-in Vitest contract test uses `VITE_RIVIAMIGO_DEV_API_KEY` and exercises the same endpoints the dashboard needs.
+
+```powershell
+pnpm --filter @riviamigo/web test -- src/test/liveApi.contract.test.ts
+```
+
+The test verifies `GET /v1/vehicles`, `GET /v1/vehicles/{id}/status`, `GET /v1/stats/summary`, `GET /v1/charging`, `GET /v1/efficiency/summary`, and `GET /v1/vehicles/{id}/raw-data`.
+
+If the key is not present, the test suite skips the live contract instead of failing.
+
+## Inspect raw stored telemetry
+
+Use this when dashboard cards are empty and we need to distinguish "Rivian did not send the field" from "we parsed it but did not store it" or "we stored it but the aggregate endpoint missed it".
+
+```powershell
+Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
+  -Uri "$baseUrl/v1/vehicles/$vehicleId/raw-data?limit=25"
+```
+
+The Settings page also has a Raw Data tab with field coverage counts and the latest samples.

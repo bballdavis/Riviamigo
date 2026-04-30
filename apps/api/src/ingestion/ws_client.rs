@@ -12,7 +12,7 @@ use crate::models::telemetry::TelemetryEvent;
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 
 const VEHICLE_STATE_SUBSCRIPTION: &str = r#"
-subscription VehicleState($vehicleID: ID!) {
+subscription vehicleState($vehicleID: String!) {
   vehicleState(id: $vehicleID) {
     cloudConnection { isOnline lastSync }
     powerState         { timeStamp value }
@@ -26,6 +26,7 @@ subscription VehicleState($vehicleID: ID!) {
     gnssLocation       { timeStamp latitude longitude }
     gnssSpeed          { timeStamp value }
     gnssAltitude       { timeStamp value }
+    gnssBearing        { timeStamp value }
     driveMode          { timeStamp value }
     gearStatus         { timeStamp value }
     vehicleMileage     { timeStamp value }
@@ -112,6 +113,11 @@ async fn connect_and_subscribe(
                 if v.get("type").and_then(|x| x.as_str()) == Some("connection_ack") {
                     break;
                 }
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    message = %truncate_ws_message(&t),
+                    "Rivian WS message before ack"
+                );
             }
             Some(Ok(Message::Ping(data))) => {
                 ws.send(Message::Pong(data)).await?;
@@ -126,6 +132,7 @@ async fn connect_and_subscribe(
         "id": "1",
         "type": "subscribe",
         "payload": {
+            "operationName": "vehicleState",
             "query": VEHICLE_STATE_SUBSCRIPTION,
             "variables": { "vehicleID": rivian_veh_id }
         }
@@ -140,14 +147,27 @@ async fn connect_and_subscribe(
                     Some(Ok(Message::Text(text))) => {
                         match parser::parse_ws_message(&text, *vehicle_id) {
                             Ok(Some(event)) => { let _ = tx.send(event).await; }
-                            Ok(None) => {}
+                            Ok(None) => tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                message = %truncate_ws_message(&text),
+                                "Rivian WS non-data message"
+                            ),
                             Err(e) => tracing::warn!(err = %e, "parse error"),
                         }
                     }
                     Some(Ok(Message::Ping(data))) => {
                         ws.send(Message::Pong(data)).await?;
                     }
-                    Some(Ok(Message::Close(_))) | None => {
+                    Some(Ok(Message::Close(frame))) => {
+                        tracing::warn!(
+                            vehicle_id = %vehicle_id,
+                            close_code = frame.as_ref().map(|f| f.code.to_string()),
+                            close_reason = frame.as_ref().map(|f| f.reason.to_string()),
+                            "Rivian WS close frame"
+                        );
+                        anyhow::bail!("WS closed");
+                    }
+                    None => {
                         anyhow::bail!("WS closed");
                     }
                     _ => {}
@@ -164,6 +184,14 @@ fn build_rivian_ws_request(
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
     Ok(request)
+}
+
+fn truncate_ws_message(value: &str) -> String {
+    const MAX_LEN: usize = 500;
+    if value.len() <= MAX_LEN {
+        return value.to_string();
+    }
+    format!("{}...", &value[..MAX_LEN])
 }
 
 #[cfg(test)]
