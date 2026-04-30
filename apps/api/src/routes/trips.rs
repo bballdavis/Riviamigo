@@ -20,6 +20,8 @@ pub fn router() -> Router<AppState> {
         .route("/trips/:id/track", get(get_track))
         .route("/trips/:id/speed", get(get_speed_profile))
         .route("/trips/:id/elevation", get(get_elevation_profile))
+    .route("/trips/:id/power", get(get_power_profile))
+    .route("/vehicles/:vehicle_id/drives/:id/power", get(get_power_profile_path))
 }
 
 #[derive(Deserialize)]
@@ -260,5 +262,71 @@ async fn get_elevation_profile(
     Ok(Json(serde_json::json!(points
         .iter()
         .map(|r| serde_json::json!({"ts":r.ts,"value":r.value}))
+        .collect::<Vec<_>>())))
+}
+
+async fn get_power_profile(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(p): Query<VehicleParam>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    power_profile_response(&state, auth.user_id, vid, id).await
+}
+
+async fn get_power_profile_path(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    power_profile_response(&state, auth.user_id, vehicle_id, id).await
+}
+
+async fn power_profile_response(
+    state: &AppState,
+    user_id: Uuid,
+    vehicle_id: Uuid,
+    trip_id: Uuid,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+
+    let trip = sqlx::query!(
+        "SELECT started_at, ended_at FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
+        trip_id,
+        vehicle_id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let points = sqlx::query!(
+        r#"SELECT time_bucket('10 seconds'::interval, ts) AS "ts!",
+                  avg(power_kw) AS power_kw,
+                  avg(regen_power_kw) AS regen_power_kw,
+                  avg(speed_mph) AS speed_mph,
+                  avg(battery_level) AS battery_level
+           FROM timeseries.telemetry
+           WHERE vehicle_id=$1 AND trip_id=$2 AND ts>=$3 AND ts<=$4
+           GROUP BY 1 ORDER BY 1"#,
+        vehicle_id,
+        trip_id,
+        trip.started_at,
+        trip.ended_at
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!(points
+        .iter()
+        .map(|r| serde_json::json!({
+            "ts": r.ts,
+            "power_kw": r.power_kw,
+            "regen_power_kw": r.regen_power_kw,
+            "speed_mph": r.speed_mph,
+            "battery_level": r.battery_level,
+        }))
         .collect::<Vec<_>>())))
 }
