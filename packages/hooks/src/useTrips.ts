@@ -7,6 +7,7 @@ export function useTrips(vehicleId: string | null, from: string, to: string, pag
     queryFn: () => api.listTrips(vehicleId!, from, to, page),
     enabled: !!vehicleId,
     staleTime: 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -16,6 +17,7 @@ export function useTrip(tripId: string | null, vehicleId: string | null) {
     queryFn: () => api.getTrip(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -25,6 +27,7 @@ export function useTripTrack(tripId: string | null, vehicleId: string | null) {
     queryFn: () => api.getTripTrack(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -34,6 +37,7 @@ export function useSpeedProfile(tripId: string | null, vehicleId: string | null)
     queryFn: () => api.getSpeedProfile(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -43,5 +47,6 @@ export function useElevationProfile(tripId: string | null, vehicleId: string | n
     queryFn: () => api.getElevationProfile(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
