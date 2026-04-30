@@ -395,7 +395,7 @@ async fn vehicle_status(
         "worker_health": row.as_ref().and_then(|r| r.worker_health.as_deref()),
         "battery_level": latest.battery_level,
         "range_miles": latest.distance_to_empty_mi,
-        "battery_capacity_kwh": latest.battery_capacity_wh.map(|w| w / 1000.0),
+        "battery_capacity_kwh": latest.battery_capacity_wh.map(|w| if w > 1000.0 { w / 1000.0 } else { w }),
         "battery_limit": latest.battery_limit,
         "power_state": latest.power_state.as_deref(),
         "charger_state": latest.charger_state.as_deref(),
