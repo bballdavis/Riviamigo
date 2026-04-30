@@ -45,7 +45,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         speed_mph: extract_f64(state, "/gnssSpeed/value").map(ms_to_mph),
 
         battery_level: extract_f64(state, "/batteryLevel/value"),
-        battery_capacity_wh: extract_f64(state, "/batteryCapacity/value"),
+        battery_capacity_wh: extract_f64(state, "/batteryCapacity/value").map(kwh_to_wh),
         distance_to_empty_mi: extract_f64(state, "/distanceToEmpty/value"),
         battery_limit: extract_f64(state, "/batteryLimit/value"),
 
@@ -131,6 +131,10 @@ fn ms_to_mph(ms: f64) -> f64 {
 
 fn meters_to_miles(meters: f64) -> f64 {
     meters / 1609.344
+}
+
+fn kwh_to_wh(kwh: f64) -> f64 {
+    kwh * 1000.0
 }
 
 #[cfg(test)]
@@ -248,6 +252,20 @@ mod tests {
 
         let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
         assert_eq!(ev.odometer_miles, Some(10.0));
+    }
+
+    #[test]
+    fn parses_battery_capacity_as_wh() {
+        let msg = serde_json::json!({
+            "type": "next",
+            "payload": { "data": { "vehicleState": {
+                "batteryCapacity": { "timeStamp": "2024-01-15T10:30:00Z", "value": 111.2 }
+            }}}
+        })
+        .to_string();
+
+        let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
+        assert_eq!(ev.battery_capacity_wh, Some(111_200.0));
     }
 
     #[test]
