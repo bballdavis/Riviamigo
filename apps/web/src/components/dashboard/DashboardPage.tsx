@@ -374,7 +374,7 @@ function VehicleArtFrame({
   const frameStyle = {
     height: `${frameHeight}px`,
     width: `${frameWidth}px`,
-    transform: 'translateX(-10%)',
+    transform: 'translateX(-5%)',
     '--vehicle-frame-height': `${frameHeight}px`,
     '--vehicle-frame-width': `${frameWidth}px`,
   } as React.CSSProperties;
