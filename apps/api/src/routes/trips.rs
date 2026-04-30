@@ -29,6 +29,8 @@ struct TripListParams {
     to: Option<DateTime<Utc>>,
     limit: Option<i64>,
     offset: Option<i64>,
+    page: Option<i64>,
+    per_page: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -76,8 +78,9 @@ async fn list_trips(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
     let to = p.to.unwrap_or_else(Utc::now);
-    let limit = p.limit.unwrap_or(50).min(200);
-    let offset = p.offset.unwrap_or(0);
+    let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
+    let page = p.page.unwrap_or(1).max(1);
+    let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
 
     let rows = sqlx::query_as!(
         TripRow,
@@ -101,9 +104,15 @@ async fn list_trips(
         vid, from, to
     ).fetch_one(&state.pool).await?.unwrap_or(0);
 
-    Ok(Json(
-        serde_json::json!({"data": rows, "total": total, "limit": limit, "offset": offset}),
-    ))
+    Ok(Json(serde_json::json!({
+        "data": rows,
+        "items": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "page": (offset / limit) + 1,
+        "per_page": limit
+    })))
 }
 
 async fn get_trip(

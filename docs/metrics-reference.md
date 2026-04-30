@@ -131,7 +131,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 
 | Metric | Unit | Source | Notes |
 |--------|------|--------|-------|
-| Total lifetime miles | mi | Cumulative | |
+| Total lifetime miles | mi | Live odometer | Dashboard should use latest `odometer_miles` first, with trip-distance sum only as a fallback. |
 | Total lifetime trips | count | Cumulative | |
 | Total lifetime energy used | kWh | Cumulative | |
 | Total lifetime charge sessions | count | Cumulative | |
@@ -171,6 +171,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 - `GET /v1/efficiency/trend` — rolling 7/30-day Wh/mi
 - `GET /v1/stats/lifetime` — lifetime cumulative stats
 - `GET /v1/trips/:id/elevation` — altitude profile for a trip
+- `GET /v1/vehicles/:id/raw-data` — raw telemetry coverage and recent samples for acquisition debugging
 
 ### New chart components needed
 - `DegradationChart` — capacity % over odometer or time

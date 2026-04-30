@@ -76,8 +76,8 @@ async fn get_summary(
     Ok(Json(serde_json::json!({
         "avg_wh_per_mi":  row.avg_wh_per_mi,
         "total_miles":    row.total_miles,
-        "p10_wh_per_mi":  row.p10,
-        "p90_wh_per_mi":  row.p90,
+        "p10_wh_per_mi":  row.p10.unwrap_or(0.0),
+        "p90_wh_per_mi":  row.p90.unwrap_or(0.0),
     })))
 }
 
