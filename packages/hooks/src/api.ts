@@ -8,6 +8,7 @@ import type {
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
+  Place, PlaceSearchSuggestion, UpsertPlaceBody,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -171,6 +172,27 @@ class ApiClient {
 
   async revokeApiKey(id: string): Promise<void> {
     return this.request('DELETE', `/v1/api-keys/${id}`);
+  }
+
+  async listPlaces(): Promise<Place[]> {
+    const response = await this.request<{ places: Place[] }>('GET', '/v1/places');
+    return response.places ?? [];
+  }
+
+  async searchPlaceAddresses(query: string, limit = 5): Promise<PlaceSearchSuggestion[]> {
+    return this.request('GET', '/v1/places/search', undefined, { q: query, limit });
+  }
+
+  async createPlace(body: UpsertPlaceBody): Promise<Place> {
+    return this.request('POST', '/v1/places', body);
+  }
+
+  async updatePlace(id: string, body: UpsertPlaceBody): Promise<Place> {
+    return this.request('PUT', `/v1/places/${id}`, body);
+  }
+
+  async deletePlace(id: string): Promise<void> {
+    return this.request('DELETE', `/v1/places/${id}`);
   }
 
   async getApiCatalog(): Promise<ApiCatalog> {

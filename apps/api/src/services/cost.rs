@@ -69,6 +69,7 @@ async fn fetch_profile(pool: &PgPool, id: Uuid) -> Result<Option<CostProfile>> {
     let row = sqlx::query_as!(
         CostProfile,
         r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
+                  timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles WHERE id = $1"#,
         id

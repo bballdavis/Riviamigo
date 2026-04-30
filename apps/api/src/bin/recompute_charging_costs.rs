@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
 
 async fn recompute_charging_costs(pool: &PgPool) -> Result<()> {
     let sessions = sqlx::query!(
-        r#"SELECT id, vehicle_id, geofence_id, cost_profile_id, duration_minutes,
+        r#"SELECT id, vehicle_id, geofence_id, cost_profile_id, started_at, ended_at, duration_minutes,
                   energy_added_wh, energy_used_wh
            FROM riviamigo.charge_sessions"#
     )
@@ -35,6 +35,8 @@ async fn recompute_charging_costs(pool: &PgPool) -> Result<()> {
                 session.energy_added_wh.map(|wh| wh / 1000.0),
                 session.energy_used_wh.map(|wh| wh / 1000.0),
                 session.duration_minutes.unwrap_or(0),
+                session.started_at,
+                session.ended_at,
             )
         });
 
