@@ -20,6 +20,30 @@ export interface Vehicle {
   battery_capacity_kwh: number | null;
   display_name: string;
   created_at: string;
+  images?: VehicleImages | null;
+}
+
+export interface VehicleImages {
+  all: VehicleImage[];
+  side?: VehicleImagePair | null;
+  overhead?: VehicleImagePair | null;
+  front?: VehicleImagePair | null;
+  rear?: VehicleImagePair | null;
+}
+
+export interface VehicleImagePair {
+  dark?: string | null;
+  light?: string | null;
+}
+
+export interface VehicleImage {
+  placement: string;
+  design: string | null;
+  size: string | null;
+  resolution: string | null;
+  url: string;
+  overlays?: unknown;
+  metadata?: unknown;
 }
 
 export interface VehicleStatus {
@@ -45,6 +69,33 @@ export interface VehicleStatus {
   odometer_miles?: number | null;
   hv_thermal_event?: string | null;
   twelve_volt_health?: string | null;
+  tire_fl_psi?: number | null;
+  tire_fr_psi?: number | null;
+  tire_rl_psi?: number | null;
+  tire_rr_psi?: number | null;
+  tire_min_psi?: number | null;
+  tire_fl_status?: string | null;
+  tire_fr_status?: string | null;
+  tire_rl_status?: string | null;
+  tire_rr_status?: string | null;
+  door_front_left_locked?: boolean | null;
+  door_front_right_locked?: boolean | null;
+  door_rear_left_locked?: boolean | null;
+  door_rear_right_locked?: boolean | null;
+  door_front_left_closed?: boolean | null;
+  door_front_right_closed?: boolean | null;
+  door_rear_left_closed?: boolean | null;
+  door_rear_right_closed?: boolean | null;
+  closure_frunk_locked?: boolean | null;
+  closure_frunk_closed?: boolean | null;
+  closure_liftgate_locked?: boolean | null;
+  closure_liftgate_closed?: boolean | null;
+  closure_tailgate_locked?: boolean | null;
+  closure_tailgate_closed?: boolean | null;
+  ota_current_version?: string | null;
+  ota_available_version?: string | null;
+  ota_status?: string | null;
+  ota_current_status?: string | null;
   doors_locked?: boolean | null;
   open_closures?: string[] | null;
   tire_pressure_status?: string | null;

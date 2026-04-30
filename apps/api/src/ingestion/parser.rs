@@ -69,10 +69,38 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
 
         odometer_miles: extract_f64(state, "/vehicleMileage/value").map(meters_to_miles),
 
-        tire_fl_psi: extract_f64(state, "/tirePressureFrontLeft/value"),
-        tire_fr_psi: extract_f64(state, "/tirePressureFrontRight/value"),
-        tire_rl_psi: extract_f64(state, "/tirePressureRearLeft/value"),
-        tire_rr_psi: extract_f64(state, "/tirePressureRearRight/value"),
+        tire_fl_psi: extract_f64(state, "/tirePressureFrontLeft/value").map(bar_to_psi),
+        tire_fr_psi: extract_f64(state, "/tirePressureFrontRight/value").map(bar_to_psi),
+        tire_rl_psi: extract_f64(state, "/tirePressureRearLeft/value").map(bar_to_psi),
+        tire_rr_psi: extract_f64(state, "/tirePressureRearRight/value").map(bar_to_psi),
+        tire_fl_status: extract_str(state, "/tirePressureStatusFrontLeft/value").map(String::from),
+        tire_fr_status: extract_str(state, "/tirePressureStatusFrontRight/value").map(String::from),
+        tire_rl_status: extract_str(state, "/tirePressureStatusRearLeft/value").map(String::from),
+        tire_rr_status: extract_str(state, "/tirePressureStatusRearRight/value").map(String::from),
+
+        door_front_left_locked: extract_locked(state, "/doorFrontLeftLocked/value"),
+        door_front_right_locked: extract_locked(state, "/doorFrontRightLocked/value"),
+        door_rear_left_locked: extract_locked(state, "/doorRearLeftLocked/value"),
+        door_rear_right_locked: extract_locked(state, "/doorRearRightLocked/value"),
+        door_front_left_closed: extract_closed(state, "/doorFrontLeftClosed/value"),
+        door_front_right_closed: extract_closed(state, "/doorFrontRightClosed/value"),
+        door_rear_left_closed: extract_closed(state, "/doorRearLeftClosed/value"),
+        door_rear_right_closed: extract_closed(state, "/doorRearRightClosed/value"),
+        closure_frunk_locked: extract_locked(state, "/closureFrunkLocked/value"),
+        closure_frunk_closed: extract_closed(state, "/closureFrunkClosed/value"),
+        closure_liftgate_locked: extract_locked(state, "/closureLiftgateLocked/value"),
+        closure_liftgate_closed: extract_closed(state, "/closureLiftgateClosed/value"),
+        closure_tailgate_locked: extract_locked(state, "/closureTailgateLocked/value"),
+        closure_tailgate_closed: extract_closed(state, "/closureTailgateClosed/value"),
+
+        ota_current_version: extract_str(state, "/otaCurrentVersion/value")
+            .or_else(|| extract_str(state, "/otaCurrentVersionGitHash/value"))
+            .map(String::from),
+        ota_available_version: extract_str(state, "/otaAvailableVersion/value")
+            .or_else(|| extract_str(state, "/otaAvailableVersionGitHash/value"))
+            .map(String::from),
+        ota_status: extract_str(state, "/otaStatus/value").map(String::from),
+        ota_current_status: extract_str(state, "/otaCurrentStatus/value").map(String::from),
 
         hv_thermal_event: extract_str(state, "/batteryHvThermalEvent/value").map(String::from),
         twelve_volt_health: extract_str(state, "/twelveVoltBatteryHealth/value").map(String::from),
@@ -94,6 +122,30 @@ fn extract_bool(v: &Value, ptr: &str) -> Option<bool> {
 
 fn extract_str<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {
     v.pointer(ptr)?.as_str()
+}
+
+fn extract_locked(v: &Value, ptr: &str) -> Option<bool> {
+    match v.pointer(ptr)? {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => match value.to_lowercase().as_str() {
+            "locked" | "true" => Some(true),
+            "unlocked" | "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn extract_closed(v: &Value, ptr: &str) -> Option<bool> {
+    match v.pointer(ptr)? {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => match value.to_lowercase().as_str() {
+            "closed" | "true" => Some(true),
+            "open" | "opened" | "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn extract_latest_timestamp(state: &Value) -> Option<DateTime<Utc>> {
@@ -135,6 +187,10 @@ fn meters_to_miles(meters: f64) -> f64 {
 
 fn kwh_to_wh(kwh: f64) -> f64 {
     kwh * 1000.0
+}
+
+fn bar_to_psi(bar: f64) -> f64 {
+    bar * 14.503_773_8
 }
 
 #[cfg(test)]
@@ -207,10 +263,16 @@ mod tests {
                 "vehiclePowerOutput": { "timeStamp": "2024-01-15T10:30:00Z", "value": 22.1 },
                 "regenerativeBrakingPower": { "timeStamp": "2024-01-15T10:30:00Z", "value": -8.4 },
                 "gnssHeading": { "timeStamp": "2024-01-15T10:30:00Z", "value": 182.0 },
-                "tirePressureFrontLeft": { "timeStamp": "2024-01-15T10:30:00Z", "value": 48.1 },
-                "tirePressureFrontRight": { "timeStamp": "2024-01-15T10:30:00Z", "value": 47.9 },
-                "tirePressureRearLeft": { "timeStamp": "2024-01-15T10:30:00Z", "value": 49.0 },
-                "tirePressureRearRight": { "timeStamp": "2024-01-15T10:30:00Z", "value": 48.8 }
+                "tirePressureFrontLeft": { "timeStamp": "2024-01-15T10:30:00Z", "value": 2.96 },
+                "tirePressureFrontRight": { "timeStamp": "2024-01-15T10:30:00Z", "value": 2.95 },
+                "tirePressureRearLeft": { "timeStamp": "2024-01-15T10:30:00Z", "value": 3.02 },
+                "tirePressureRearRight": { "timeStamp": "2024-01-15T10:30:00Z", "value": 3.01 },
+                "tirePressureStatusFrontLeft": { "timeStamp": "2024-01-15T10:30:00Z", "value": "OK" },
+                "doorFrontLeftLocked": { "timeStamp": "2024-01-15T10:30:00Z", "value": "locked" },
+                "doorFrontLeftClosed": { "timeStamp": "2024-01-15T10:30:00Z", "value": "closed" },
+                "closureFrunkClosed": { "timeStamp": "2024-01-15T10:30:00Z", "value": "open" },
+                "otaStatus": { "timeStamp": "2024-01-15T10:30:00Z", "value": "up_to_date" },
+                "otaCurrentVersion": { "timeStamp": "2024-01-15T10:30:00Z", "value": "2024.11.02" }
             }}}
         }).to_string();
 
@@ -220,10 +282,16 @@ mod tests {
         assert_eq!(ev.power_kw, Some(22.1));
         assert_eq!(ev.regen_power_kw, Some(-8.4));
         assert_eq!(ev.heading_deg, Some(182.0));
-        assert_eq!(ev.tire_fl_psi, Some(48.1));
-        assert_eq!(ev.tire_fr_psi, Some(47.9));
-        assert_eq!(ev.tire_rl_psi, Some(49.0));
-        assert_eq!(ev.tire_rr_psi, Some(48.8));
+        assert_eq!(ev.tire_fl_psi.map(|v| (v * 10.0).round() / 10.0), Some(42.9));
+        assert_eq!(ev.tire_fr_psi.map(|v| (v * 10.0).round() / 10.0), Some(42.8));
+        assert_eq!(ev.tire_rl_psi.map(|v| (v * 10.0).round() / 10.0), Some(43.8));
+        assert_eq!(ev.tire_rr_psi.map(|v| (v * 10.0).round() / 10.0), Some(43.7));
+        assert_eq!(ev.tire_fl_status.as_deref(), Some("OK"));
+        assert_eq!(ev.door_front_left_locked, Some(true));
+        assert_eq!(ev.door_front_left_closed, Some(true));
+        assert_eq!(ev.closure_frunk_closed, Some(false));
+        assert_eq!(ev.ota_status.as_deref(), Some("up_to_date"));
+        assert_eq!(ev.ota_current_version.as_deref(), Some("2024.11.02"));
     }
 
     #[test]

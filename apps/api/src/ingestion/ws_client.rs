@@ -30,6 +30,32 @@ subscription vehicleState($vehicleID: String!) {
     driveMode          { timeStamp value }
     gearStatus         { timeStamp value }
     vehicleMileage     { timeStamp value }
+    tirePressureStatusFrontLeft  { timeStamp value }
+    tirePressureStatusFrontRight { timeStamp value }
+    tirePressureStatusRearLeft   { timeStamp value }
+    tirePressureStatusRearRight  { timeStamp value }
+    tirePressureFrontLeft        { timeStamp value }
+    tirePressureFrontRight       { timeStamp value }
+    tirePressureRearLeft         { timeStamp value }
+    tirePressureRearRight        { timeStamp value }
+    doorFrontLeftLocked  { timeStamp value }
+    doorFrontRightLocked { timeStamp value }
+    doorRearLeftLocked   { timeStamp value }
+    doorRearRightLocked  { timeStamp value }
+    doorFrontLeftClosed  { timeStamp value }
+    doorFrontRightClosed { timeStamp value }
+    doorRearLeftClosed   { timeStamp value }
+    doorRearRightClosed  { timeStamp value }
+    closureFrunkLocked    { timeStamp value }
+    closureFrunkClosed    { timeStamp value }
+    closureLiftgateLocked { timeStamp value }
+    closureLiftgateClosed { timeStamp value }
+    closureTailgateLocked { timeStamp value }
+    closureTailgateClosed { timeStamp value }
+    otaAvailableVersion { timeStamp value }
+    otaCurrentVersion   { timeStamp value }
+    otaStatus           { timeStamp value }
+    otaCurrentStatus    { timeStamp value }
     cabinClimateInteriorTemperature { timeStamp value }
     cabinClimateDriverTemperature   { timeStamp value }
     batteryHvThermalEvent           { timeStamp value }

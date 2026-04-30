@@ -209,6 +209,25 @@ export interface RawTelemetrySample {
   tire_fr_psi: number | null;
   tire_rl_psi: number | null;
   tire_rr_psi: number | null;
+  tire_fl_status: string | null;
+  tire_fr_status: string | null;
+  tire_rl_status: string | null;
+  tire_rr_status: string | null;
+  door_front_left_locked: boolean | null;
+  door_front_right_locked: boolean | null;
+  door_rear_left_locked: boolean | null;
+  door_rear_right_locked: boolean | null;
+  door_front_left_closed: boolean | null;
+  door_front_right_closed: boolean | null;
+  door_rear_left_closed: boolean | null;
+  door_rear_right_closed: boolean | null;
+  closure_frunk_closed: boolean | null;
+  closure_liftgate_closed: boolean | null;
+  closure_tailgate_closed: boolean | null;
+  ota_current_version: string | null;
+  ota_available_version: string | null;
+  ota_status: string | null;
+  ota_current_status: string | null;
   hv_thermal_event: string | null;
   twelve_volt_health: string | null;
   is_online: boolean | null;
@@ -227,6 +246,8 @@ export interface RawTelemetryResponse {
     power_samples: number;
     regen_samples: number;
     tire_pressure_samples: number;
+    lock_samples: number;
+    software_samples: number;
   };
   samples: RawTelemetrySample[];
 }

@@ -42,6 +42,21 @@ pub struct RivianVehicleSummary {
     pub model_year: Option<i32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RivianVehicleImage {
+    pub order_id: Option<String>,
+    pub vehicle_id: Option<String>,
+    pub url: String,
+    pub extension: Option<String>,
+    pub resolution: Option<String>,
+    pub size: Option<String>,
+    pub design: Option<String>,
+    pub placement: Option<String>,
+    pub overlays: serde_json::Value,
+    pub source: String,
+    pub vehicle_version: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginResponse {
     data: Option<LoginData>,
@@ -118,6 +133,34 @@ struct UserVehicle {
 struct UserVehicleDetails {
     model_year: Option<i32>,
     model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleImagesResponse {
+    data: Option<VehicleImagesData>,
+    errors: Option<Vec<GqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleImagesData {
+    get_vehicle_order_mobile_images: Option<Vec<VehicleMobileImage>>,
+    get_vehicle_mobile_images: Option<Vec<VehicleMobileImage>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleMobileImage {
+    order_id: Option<String>,
+    vehicle_id: Option<String>,
+    url: String,
+    extension: Option<String>,
+    resolution: Option<String>,
+    size: Option<String>,
+    design: Option<String>,
+    placement: Option<String>,
+    overlays: Option<serde_json::Value>,
 }
 
 struct CsrfSession {
@@ -323,6 +366,137 @@ pub async fn rivian_user_vehicles(
     Ok(vehicles)
 }
 
+pub async fn rivian_vehicle_images(
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<Vec<RivianVehicleImage>, RivianAuthError> {
+    let query = r#"
+      query getVehicleImages($extension: String, $resolution: String, $versionForVehicle: String, $versionForPreOrder: String) {
+        getVehicleOrderMobileImages(resolution: $resolution, extension: $extension, version: $versionForPreOrder) {
+          ...image
+        }
+        getVehicleMobileImages(resolution: $resolution, extension: $extension, version: $versionForVehicle) {
+          ...image
+        }
+      }
+
+      fragment image on VehicleMobileImage {
+          orderId
+          vehicleId
+          url
+          extension
+          resolution
+          size
+          design
+          placement
+          overlays {
+            url
+            overlay
+            zIndex
+          }
+      }
+    "#;
+
+    let mut images = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut app_session_token = tokens.app_session_token.clone();
+    let mut refreshed_app_session = false;
+    // Matches home-assistant-rivian: cel art uses version 3, photo art uses version 2.
+    for (style, version) in [("photo", "2"), ("cel", "3")] {
+        let mut attempt = 0;
+        let status = loop {
+            let body = serde_json::json!({
+            "operationName": "getVehicleImages",
+            "query": query,
+            "variables": {
+                "extension": serde_json::Value::Null,
+                "resolution": "@3x",
+                "versionForVehicle": version,
+                "versionForPreOrder": version
+            }
+        });
+
+            let req = client
+                .post(gateway_url())
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+                .header("dc-cid", format!("m-android-{}", Uuid::new_v4()))
+                .header("A-Sess", &app_session_token)
+                .header("U-Sess", &tokens.user_session_token)
+                .json(&body);
+
+            let status = req
+                .send()
+                .await?
+                .error_for_status()
+                .map_err(|e| {
+                    if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
+                        RivianAuthError::InvalidCredentials
+                    } else {
+                        RivianAuthError::Network(e)
+                    }
+                })?
+                .json::<VehicleImagesResponse>()
+                .await?;
+
+            if status.errors.as_ref().is_some_and(|errors| has_unauthenticated_error(errors))
+                && !refreshed_app_session
+                && attempt == 0
+            {
+                let session = create_csrf_session(client).await?;
+                app_session_token = session.app_session_token;
+                refreshed_app_session = true;
+                attempt += 1;
+                continue;
+            }
+
+            break status;
+        };
+
+        if let Some(errors) = status.errors {
+            if !errors.is_empty() {
+                tracing::warn!(
+                    image_style = style,
+                    vehicle_version = version,
+                    error = %format_gql_error(&errors),
+                    "rivian.vehicle_images.graphql_error"
+                );
+                continue;
+            }
+        }
+
+        if let Some(data) = status.data {
+            let order = data.get_vehicle_order_mobile_images.unwrap_or_default();
+            let vehicle = data.get_vehicle_mobile_images.unwrap_or_default();
+            for (source, entries) in [("order", order), ("vehicle", vehicle)] {
+                for image in entries {
+                    if !seen.insert(image.url.clone()) {
+                        continue;
+                    }
+                    images.push(RivianVehicleImage {
+                        order_id: image.order_id,
+                        vehicle_id: image.vehicle_id,
+                        url: image.url,
+                        extension: image.extension,
+                        resolution: image.resolution,
+                        size: image.size,
+                        design: image.design,
+                        placement: image.placement,
+                        overlays: image.overlays.unwrap_or_else(|| serde_json::json!([])),
+                        source: format!("{source}:{style}"),
+                        vehicle_version: version.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    tracing::info!(image_count = images.len(), "rivian.vehicle_images.fetched");
+    Ok(images)
+}
+
 async fn create_csrf_session(client: &reqwest::Client) -> Result<CsrfSession, RivianAuthError> {
     let query = r#"
       mutation CreateCSRFToken {
@@ -424,6 +598,16 @@ fn map_otp_errors(errors: Vec<GqlError>) -> RivianAuthError {
         }
     }
     RivianAuthError::UnexpectedResponse(format_gql_error(&errors))
+}
+
+fn has_unauthenticated_error(errors: &[GqlError]) -> bool {
+    errors.iter().any(|error| {
+        error
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.code.as_deref())
+            == Some("UNAUTHENTICATED")
+    })
 }
 
 fn format_gql_error(errors: &[GqlError]) -> String {

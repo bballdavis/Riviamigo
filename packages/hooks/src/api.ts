@@ -4,7 +4,7 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
+  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
@@ -141,6 +141,10 @@ class ApiClient {
 
   async vehicleStatus(vehicleId: string): Promise<VehicleStatus> {
     return this.request('GET', `/v1/vehicles/${vehicleId}/status`);
+  }
+
+  async vehicleImages(vehicleId: string): Promise<VehicleImages> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/images`);
   }
 
   async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {
