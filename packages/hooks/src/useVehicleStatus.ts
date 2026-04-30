@@ -7,7 +7,7 @@ import { api } from './api';
 interface LiveStatusStore {
   status: Record<string, VehicleStatus>;
   connected: Record<string, boolean>;
-  setStatus: (vehicleId: string, status: VehicleStatus) => void;
+  setStatus: (vehicleId: string, status: Partial<VehicleStatus>) => void;
   setConnected: (vehicleId: string, connected: boolean) => void;
 }
 
@@ -17,7 +17,12 @@ export const useLiveStatusStore = create<LiveStatusStore>((set) => ({
   status: {},
   connected: {},
   setStatus: (vehicleId, status) =>
-    set((s) => ({ status: { ...s.status, [vehicleId]: status } })),
+    set((s) => ({
+      status: {
+        ...s.status,
+        [vehicleId]: { ...s.status[vehicleId], ...status } as VehicleStatus,
+      },
+    })),
   setConnected: (vehicleId, connected) =>
     set((s) => ({ connected: { ...s.connected, [vehicleId]: connected } })),
 }));

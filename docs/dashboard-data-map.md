@@ -9,6 +9,9 @@ Sources:
 - Rivian vehicle image reference: https://rivian-api.kaedenb.org/app/vehicle-info/vehicle-images/
 - TeslaMate car summary reference: https://deepwiki.com/teslamate-org/teslamate/4.3-car-summary-display
 - Unofficial Rivian Home Assistant integration: https://github.com/bretterer/home-assistant-rivian
+- Home Assistant Rivian entity definitions: `.codex_tmp/home-assistant-rivian/custom_components/rivian/const.py`
+- Home Assistant Rivian image coordinator: `.codex_tmp/home-assistant-rivian/custom_components/rivian/coordinator.py`
+- Rivian Python client image query: `.codex_tmp/rivian_python_client_2_0_0/rivian/rivian.py`
 
 ## Dashboard inventory
 
@@ -32,16 +35,31 @@ TeslaMate-style dashboards generally cover these data families:
 | Charging | plugged/charging state, charge status, time remaining, sessions, rate | `chargerState`, `chargerStatus`, `timeToEndOfCharge`, live charge endpoints | Basic status captured; session aggregation needs more real data. |
 | Drive efficiency | trip distance, Wh/mi, drive mode, elevation, temperature | `driveMode`, telemetry deltas, `cabinClimateInteriorTemperature`, trip points | Trip-based; currently sparse. |
 | Climate | cabin temp, driver setpoint, preconditioning, pet mode, defrost, seat heat/vent | climate and seat fields in `vehicleState` | Cabin/driver temp captured; advanced climate fields not yet stored. |
-| Closures and locks | doors, windows, frunk/liftgate/tailgate, locked/unlocked | door/window/closure fields in `vehicleState` | Documented Rivian fields; not stored yet. |
-| Tires and maintenance | TPMS status, 12V health, brake/wiper warnings | `tirePressureStatus*`, `twelveVoltBatteryHealth`, `brakeFluidLow`, `wiperFluidState` | 12V captured; tire status not stored yet. |
-| Software | current version, available version, install status/progress | `otaCurrentVersion*`, `otaAvailableVersion*`, `otaStatus`, `otaInstallProgress` | Documented Rivian fields; not stored yet. |
-| Media/images | configured vehicle images, wheel image, light/dark variants | `getVehicleImages`, wheel image URL endpoint | Not integrated; should call/cache by config metadata, not scrape blindly. |
+| Closures and locks | doors, windows, frunk/liftgate/tailgate, side bins, tonneau, locked/unlocked | HASS `LOCK_STATE_ENTITIES`, `DOOR_STATE_ENTITIES`, `CLOSURE_STATE_ENTITIES` | Door/frunk/liftgate/tailgate basics stored; side bins, tonneau, and windows are next parity gaps. |
+| Tires and maintenance | TPMS pressure, TPMS status/validity, 12V health, brake/wiper warnings | `tirePressure*` values are BAR in HASS, plus `tirePressureStatus*` and `tirePressureStatusValid*` | Numeric tire pressure converted to PSI on ingest; status stored; validity still a gap. |
+| Software | current version, available version, install status/progress/readiness | `otaCurrentVersion*`, `otaAvailableVersion*`, `otaStatus`, `otaInstallProgress`, `otaInstallReady` | Core versions/status stored; week/year/number/progress/readiness are next parity gaps. |
+| Media/images | configured vehicle images, style variants | HASS `VehicleImageCoordinator`; cel style uses vehicle version `3`, photo style uses version `2`, `resolution="@3x"` | Cached on add/backfill through the same GraphQL shape; UI consumes side/overhead/front/rear normalized placements. |
+
+## Home Assistant reference map
+
+The HASS integration is the current executable reference for entity parity.
+
+| Area | HASS fields / behavior | Riviamigo path |
+| --- | --- | --- |
+| Tire pressure | `tirePressureFrontLeft`, `tirePressureFrontRight`, `tirePressureRearLeft`, `tirePressureRearRight`; HASS declares unit as BAR. | Convert BAR -> PSI in `apps/api/src/ingestion/parser.rs` before storing in `timeseries.telemetry.tire_*_psi`. |
+| Tire status | `tirePressureStatusFrontLeft`, `tirePressureStatusFrontRight`, `tirePressureStatusRearLeft`, `tirePressureStatusRearRight`; validity fields are `tirePressureStatusValid*`. | Status stored in `timeseries.telemetry.tire_*_status`; validity fields still need schema/parser coverage. |
+| Charging connected | HASS treats `chargerStatus == "chrgr_sts_not_connected"` as unplugged and `chargerState in ["charging_active", "charging_connecting"]` as charging. | UI maps `chrgr_sts_not_connected` to "Not charging" and avoids showing raw `unknown`. |
+| Drive mode | HASS maps `everyday` -> All-Purpose, `distance` -> Conserve, off-road variants to display labels. | UI uses the same display map before falling back to gear. |
+| Locks | Aggregate locked state is true only when none of HASS `LOCK_STATE_ENTITIES` are `unlocked`. | Door lock booleans stored now; add side bin, tonneau, frunk/liftgate/tailgate aggregate parity next. |
+| Closures | Aggregate closure state checks doors plus frunk/liftgate/side bins/tailgate/tonneau for `open`. | Door/frunk/liftgate/tailgate closure booleans stored now; windows/side bins/tonneau next. |
+| Software | HASS update entity compares current/available versions and treats `0.0.0` available as current; `otaStatus` `Idle` is not a user-facing drive/charging state. | UI maps no available version or equal version to "Up to date"; raw OTA fields remain in status/raw data. |
+| Images | HASS calls `getVehicleMobileImages` through `get_vehicle_images(extension="png", resolution="@3x", vehicle_version="3")` for cel and version `2` for photo; image entities use `size == "large"`. | Riviamigo now requests both style versions, caches image rows, and normalizes placement/design for UI lookup. |
 
 ## Next acquisition batches
 
-1. Closures and locks: add door/window/frunk/liftgate/tailgate closed and locked fields, then show real lock/open chips.
-2. OTA/software: add current/available version and install status fields, then show "up to date" only when data confirms it.
-3. Tire status: store Rivian TPMS status/valid fields first; only add numeric PSI if the API exposes confirmed numeric pressure fields.
+1. Closures and locks: add side-bin, tonneau, and window fields from HASS `LOCK_STATE_ENTITIES` / `CLOSURE_STATE_ENTITIES`.
+2. OTA/software: add week/year/number/git-hash/progress/readiness fields from HASS update entity.
+3. Tire status: add `tirePressureStatusValid*` fields; numeric pressures are confirmed BAR and should remain stored as converted PSI.
 4. Climate depth: preconditioning, pet mode, defrost, steering wheel heat, and seat heat/vent.
 5. Vehicle imagery: persist vehicle image URLs from `getVehicleImages` using vehicle version/config metadata; use generic model art until exact assets are known.
 
