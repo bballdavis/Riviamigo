@@ -6,6 +6,7 @@ export function useVehicles() {
     queryKey: ['vehicles'],
     queryFn: () => api.listVehicles(),
     staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 

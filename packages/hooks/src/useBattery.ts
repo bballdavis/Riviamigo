@@ -7,6 +7,7 @@ export function useSocHistory(vehicleId: string | null, from: string, to: string
     queryFn: () => api.getSoc(vehicleId!, from, to),
     enabled: !!vehicleId,
     staleTime: 2 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -16,6 +17,7 @@ export function useRangeHistory(vehicleId: string | null, from: string, to: stri
     queryFn: () => api.getRange(vehicleId!, from, to),
     enabled: !!vehicleId,
     staleTime: 2 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -25,6 +27,7 @@ export function usePhantomDrain(vehicleId: string | null, from: string, to: stri
     queryFn: () => api.getPhantomDrain(vehicleId!, from, to),
     enabled: !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -34,5 +37,6 @@ export function useDegradation(vehicleId: string | null) {
     queryFn: () => api.getDegradation(vehicleId!),
     enabled: !!vehicleId,
     staleTime: 60 * 60 * 1000,
+    placeholderData: (previous) => previous,
   });
 }

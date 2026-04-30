@@ -27,12 +27,10 @@ export const useLiveStatusStore = create<LiveStatusStore>((set) => ({
     set((s) => ({ connected: { ...s.connected, [vehicleId]: connected } })),
 }));
 
-const BASE_WS =
-  typeof window !== 'undefined'
-    ? window.location.origin.replace(/^http/, 'ws')
-    : 'ws://localhost:3001';
+const BASE_WS = getWebSocketBaseUrl();
 
 const MAX_RECONNECT_ATTEMPTS = 5;
+const MAX_RECONNECT_DELAY_MS = 60_000;
 
 export function useVehicleStatus(vehicleId: string | null, accessToken: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -68,6 +66,15 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       return;
     }
 
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.CONNECTING || wsRef.current.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
+
+    clearTimeout(reconnectRef.current);
+    reconnectRef.current = undefined;
     shouldReconnectRef.current = true;
     const ws = new WebSocket(
       `${BASE_WS}/v1/vehicles/live?vehicle_id=${vehicleId}`,
@@ -108,14 +115,9 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       }
 
       reconnectAttemptsRef.current += 1;
-      if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
-        setConnectionState('failed');
-        return;
-      }
-
-      setConnectionState('connecting');
+      setConnectionState(reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS ? 'failed' : 'connecting');
       reconnectRef.current = setTimeout(() => {
-        backoffRef.current = Math.min(backoffRef.current * 2, 60_000);
+        backoffRef.current = Math.min(backoffRef.current * 2, MAX_RECONNECT_DELAY_MS);
         connect();
       }, backoffRef.current);
     };
@@ -132,7 +134,26 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     }
 
     connect();
+
+    const handleWake = () => {
+      if (!shouldReconnectRef.current || !vehicleId || !accessToken || wsRef.current) return;
+      backoffRef.current = 1000;
+      reconnectAttemptsRef.current = 0;
+      connect();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') handleWake();
+    };
+
+    window.addEventListener('online', handleWake);
+    window.addEventListener('focus', handleWake);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      window.removeEventListener('online', handleWake);
+      window.removeEventListener('focus', handleWake);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       cleanupSocket();
     };
   }, [vehicleId, accessToken, connect, cleanupSocket]);
@@ -145,15 +166,33 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
 
 export function useCurrentVehicleStatus(vehicleId: string | null) {
   const liveStatus = useLiveStatusStore((s) => (vehicleId ? s.status[vehicleId] : null));
+  const setStatus = useLiveStatusStore((s) => s.setStatus);
 
   const query = useQuery({
     queryKey: ['vehicles', 'status', vehicleId],
     queryFn: () => api.vehicleStatus(vehicleId!),
-    enabled: !!vehicleId && !liveStatus,
+    enabled: !!vehicleId,
     staleTime: 30 * 1000,
-    refetchInterval: liveStatus ? false : 60 * 1000,
+    refetchInterval: 60 * 1000,
     initialData: liveStatus ?? undefined,
+    placeholderData: (previous) => previous,
   });
 
-  return liveStatus ? { ...query, data: liveStatus } : query;
+  useEffect(() => {
+    if (vehicleId && query.data) {
+      setStatus(vehicleId, query.data);
+    }
+  }, [vehicleId, query.data, setStatus]);
+
+  return { ...query, data: liveStatus ?? query.data ?? null };
+}
+
+function getWebSocketBaseUrl() {
+  if (typeof window === 'undefined') return 'ws://localhost:3001';
+
+  const env = import.meta as { env?: { VITE_WS_URL?: string; VITE_API_URL?: string } };
+  const configured = env.env?.VITE_WS_URL ?? env.env?.VITE_API_URL;
+  if (configured) return configured.replace(/^http/, 'ws').replace(/\/$/, '');
+
+  return window.location.origin.replace(/^http/, 'ws');
 }

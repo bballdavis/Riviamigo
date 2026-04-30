@@ -81,7 +81,7 @@ describe('useVehicleStatus', () => {
   });
 
   afterEach(() => {
-    vi.runAllTimers();
+    vi.clearAllTimers();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -132,7 +132,12 @@ describe('useVehicleStatus', () => {
       );
     });
     const status = useLiveStatusStore.getState().status['vid-1'];
-    expect(status).toMatchObject({ type: 'status', data: { battery_level: 80 } });
+    expect(status).toMatchObject({
+      vehicle_id: 'vid-1',
+      is_online: true,
+      last_updated: '2026-01-01T00:00:00Z',
+      battery_level: 80,
+    });
   });
 
   it('silently ignores non-JSON messages', () => {
@@ -193,7 +198,7 @@ describe('useVehicleStatus', () => {
     }
   });
 
-  it('sets connectionState to "failed" after MAX_RECONNECT_ATTEMPTS (5)', async () => {
+  it('sets connectionState to "failed" after MAX_RECONNECT_ATTEMPTS (5) but keeps retrying', async () => {
     const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
     // 5 reconnects exhaust the limit; 6th close sets "failed"
     for (let i = 0; i <= 5; i++) {
@@ -203,6 +208,9 @@ describe('useVehicleStatus', () => {
       }
     }
     expect(result.current.connectionState).toBe('failed');
+
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(MockWS.instances).toHaveLength(7);
   });
 
   it('resets reconnect counter and backoff on successful open', async () => {
