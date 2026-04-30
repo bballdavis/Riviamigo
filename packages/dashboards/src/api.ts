@@ -80,6 +80,7 @@ export function useDashboards() {
       return records.map(normalizeDashboardConfig);
     },
     enabled: !!accessToken,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -89,6 +90,7 @@ export function useDashboardBySlug(slug: string | null) {
     queryKey: ['dashboards', 'slug', slug],
     queryFn: async () => normalizeDashboardConfig(await apiFetch(`${BASE}/by-slug/${slug}`, accessToken)),
     enabled: !!accessToken && !!slug,
+    placeholderData: (previous) => previous,
   });
 }
 
