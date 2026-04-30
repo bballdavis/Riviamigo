@@ -1,6 +1,6 @@
 export { api } from './api';
 export { useAuth } from './useAuth';
-export { useVehicleStatus, useLiveStatusStore } from './useVehicleStatus';
+export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
 export { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation } from './useBattery';
 export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile } from './useTrips';
 export { useChargeSessions, useChargeSession, useChargeCurve, useChargingSummary } from './useCharging';
