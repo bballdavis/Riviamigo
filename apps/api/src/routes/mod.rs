@@ -31,6 +31,7 @@ pub mod idle_drain;
 pub mod live;
 pub mod locations;
 pub mod overview;
+pub mod places;
 pub mod state_timeline;
 pub mod stats;
 pub mod trips;
@@ -71,6 +72,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(dashboards::router())
         .merge(cost_profiles::router())
         .merge(geofences::router())
+        .merge(places::router())
         .merge(overview::router())
         .merge(state_timeline::router())
         .merge(health::router())

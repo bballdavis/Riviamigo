@@ -19,6 +19,11 @@ vi.mock('@riviamigo/hooks', () => ({
     me: vi.fn().mockResolvedValue({ role: 'user' }),
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({ endpoints: [] }),
+    listPlaces: vi.fn().mockResolvedValue([]),
+    searchPlaceAddresses: vi.fn().mockResolvedValue([]),
+    createPlace: vi.fn(),
+    updatePlace: vi.fn(),
+    deletePlace: vi.fn(),
     getRawTelemetry: vi.fn().mockResolvedValue({
       vehicle_id: 'v1',
       coverage: {
@@ -53,7 +58,9 @@ vi.mock('lucide-react', () => ({
   Database: () => <svg data-testid="icon-database" />,
   KeyRound: () => <svg data-testid="icon-key" />,
   LogOut: () => <svg data-testid="icon-logout" />,
+  MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus:   () => <svg data-testid="icon-plus" />,
+  Pencil: () => <svg data-testid="icon-pencil" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
   Trash2: () => <svg data-testid="icon-trash" />,
 }));
@@ -108,6 +115,13 @@ describe('Settings page', () => {
     expect(screen.getByText('Theme')).toBeInTheDocument();
   });
 
+  it('renders the Places section', () => {
+    renderSettings();
+    fireEvent.click(screen.getByText('Places'));
+    expect(screen.getAllByText('Places').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
+  });
+
   it('renders the theme toggle button', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
@@ -121,10 +135,9 @@ describe('Settings page', () => {
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
 
-  it('shows Active badge for each connected vehicle', () => {
+  it('shows active vehicle state for the connected vehicle', () => {
     renderSettings();
-    expect(screen.getByTestId('badge')).toBeInTheDocument();
-    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('Active vehicle')).toBeInTheDocument();
   });
 
   it('calls logout and navigates on Sign Out click', async () => {

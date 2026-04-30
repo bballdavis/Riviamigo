@@ -87,6 +87,71 @@ export interface ChargingSummary {
   weekly: Array<{ week_start: string; energy_kwh: number; sessions: number }>;
 }
 
+export interface TouPeriod {
+  label: string;
+  start_minute: number;
+  end_minute: number;
+  rate: number;
+}
+
+export interface PlaceAddress {
+  id?: string | null;
+  display_name: string;
+  osm_id: number | null;
+  latitude: number;
+  longitude: number;
+  road: string | null;
+  city: string | null;
+  state: string | null;
+  postcode: string | null;
+  country: string | null;
+  raw: Record<string, unknown> | null;
+}
+
+export interface PlaceChargingProfile {
+  id: string;
+  name: string;
+  billing_type: 'flat' | 'tou' | 'per_kwh' | 'per_minute' | 'free';
+  rate: number;
+  session_fee: number;
+  currency: string;
+  timezone: string | null;
+  tou_periods: TouPeriod[];
+}
+
+export interface Place {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_m: number;
+  is_home: boolean;
+  is_work: boolean;
+  address: PlaceAddress | null;
+  charging: PlaceChargingProfile | null;
+}
+
+export interface PlaceSearchSuggestion extends PlaceAddress {}
+
+export interface PlaceChargingInput {
+  name?: string | null;
+  billing_type: 'flat' | 'tou';
+  rate: number;
+  session_fee?: number | null;
+  currency?: string | null;
+  timezone?: string | null;
+  tou_periods?: TouPeriod[] | null;
+}
+
+export interface UpsertPlaceBody {
+  name: string;
+  radius_m?: number | null;
+  is_home?: boolean;
+  is_work?: boolean;
+  address: PlaceAddress;
+  charging?: PlaceChargingInput | null;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
