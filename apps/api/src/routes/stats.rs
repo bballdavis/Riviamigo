@@ -44,6 +44,16 @@ async fn get_summary(
     .fetch_one(&state.pool)
     .await?;
 
+    let latest_odometer: Option<f64> = sqlx::query_scalar!(
+        "SELECT odometer_miles FROM timeseries.telemetry \
+         WHERE vehicle_id=$1 AND odometer_miles IS NOT NULL \
+         ORDER BY ts DESC LIMIT 1",
+        vid
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+
     let charging = sqlx::query!(
         "SELECT COALESCE(SUM(kwh_added),0) AS total_kwh, COUNT(*) AS sessions
          FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
@@ -54,7 +64,7 @@ async fn get_summary(
 
     let total_kwh = charging.total_kwh.unwrap_or(0.0);
     Ok(Json(serde_json::json!({
-        "total_miles":                trips.total_miles,
+        "total_miles":                latest_odometer.or(trips.total_miles).unwrap_or(0.0),
         "total_trips":                trips.total_trips,
         "total_kwh_charged":          total_kwh,
         "lifetime_efficiency_wh_mi":  trips.lifetime_efficiency,

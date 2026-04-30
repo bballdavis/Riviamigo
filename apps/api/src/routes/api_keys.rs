@@ -254,6 +254,12 @@ fn catalog(include_admin: bool) -> ApiCatalogResponse {
         },
         ApiEndpointDoc {
             method: "GET",
+            path: "/v1/vehicles/{id}/raw-data",
+            minimum_access: "view",
+            purpose: "Inspect raw telemetry samples and field coverage for dashboard debugging.",
+        },
+        ApiEndpointDoc {
+            method: "GET",
             path: "/v1/battery/soc",
             minimum_access: "view",
             purpose: "Read state-of-charge time series.",

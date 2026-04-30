@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     routing::{get, post},
     Json, Router,
 };
@@ -19,6 +19,12 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id/status", get(vehicle_status))
+        .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
+}
+
+#[derive(Deserialize)]
+struct RawDataParams {
+    limit: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -355,5 +361,103 @@ async fn vehicle_status(
         "is_online":    row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
         "last_event_at":row.as_ref().and_then(|r| r.last_event_at),
         "worker_health":row.as_ref().and_then(|r| r.worker_health.as_deref()),
+    })))
+}
+
+async fn raw_vehicle_data(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Query(params): Query<RawDataParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let limit = params.limit.unwrap_or(25).clamp(1, 100);
+
+    let samples = sqlx::query!(
+        r#"
+        SELECT ts, latitude, longitude, altitude_m, speed_mph,
+               battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+               power_state, charger_state, charger_status, time_to_end_of_charge_min,
+               drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
+               hvac_active, power_kw, regen_power_kw, heading_deg, odometer_miles,
+               tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+               hv_thermal_event, twelve_volt_health, is_online
+        FROM timeseries.telemetry
+        WHERE vehicle_id = $1
+        ORDER BY ts DESC
+        LIMIT $2
+        "#,
+        vid,
+        limit
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let coverage = sqlx::query!(
+        r#"
+        SELECT min(ts) AS first_event_at,
+               max(ts) AS last_event_at,
+               count(*) AS sample_count,
+               count(odometer_miles) AS odometer_samples,
+               count(battery_level) AS battery_samples,
+               count(distance_to_empty_mi) AS range_samples,
+               count(outside_temp_c) AS outside_temp_samples,
+               count(power_kw) AS power_samples,
+               count(regen_power_kw) AS regen_samples,
+               count(tire_fl_psi) AS tire_pressure_samples
+        FROM timeseries.telemetry
+        WHERE vehicle_id = $1
+        "#,
+        vid
+    )
+    .fetch_one(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "vehicle_id": vid,
+        "coverage": {
+            "first_event_at": coverage.first_event_at,
+            "last_event_at": coverage.last_event_at,
+            "sample_count": coverage.sample_count.unwrap_or(0),
+            "odometer_samples": coverage.odometer_samples.unwrap_or(0),
+            "battery_samples": coverage.battery_samples.unwrap_or(0),
+            "range_samples": coverage.range_samples.unwrap_or(0),
+            "outside_temp_samples": coverage.outside_temp_samples.unwrap_or(0),
+            "power_samples": coverage.power_samples.unwrap_or(0),
+            "regen_samples": coverage.regen_samples.unwrap_or(0),
+            "tire_pressure_samples": coverage.tire_pressure_samples.unwrap_or(0)
+        },
+        "samples": samples.into_iter().map(|r| serde_json::json!({
+            "ts": r.ts,
+            "latitude": r.latitude,
+            "longitude": r.longitude,
+            "altitude_m": r.altitude_m,
+            "speed_mph": r.speed_mph,
+            "battery_level": r.battery_level,
+            "battery_capacity_wh": r.battery_capacity_wh,
+            "distance_to_empty_mi": r.distance_to_empty_mi,
+            "battery_limit": r.battery_limit,
+            "power_state": r.power_state,
+            "charger_state": r.charger_state,
+            "charger_status": r.charger_status,
+            "time_to_end_of_charge_min": r.time_to_end_of_charge_min,
+            "drive_mode": r.drive_mode,
+            "gear_status": r.gear_status,
+            "cabin_temp_c": r.cabin_temp_c,
+            "driver_temp_c": r.driver_temp_c,
+            "outside_temp_c": r.outside_temp_c,
+            "hvac_active": r.hvac_active,
+            "power_kw": r.power_kw,
+            "regen_power_kw": r.regen_power_kw,
+            "heading_deg": r.heading_deg,
+            "odometer_miles": r.odometer_miles,
+            "tire_fl_psi": r.tire_fl_psi,
+            "tire_fr_psi": r.tire_fr_psi,
+            "tire_rl_psi": r.tire_rl_psi,
+            "tire_rr_psi": r.tire_rr_psi,
+            "hv_thermal_event": r.hv_thermal_event,
+            "twelve_volt_health": r.twelve_volt_health,
+            "is_online": r.is_online
+        })).collect::<Vec<_>>()
     })))
 }

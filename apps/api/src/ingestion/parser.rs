@@ -64,9 +64,10 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         power_kw: extract_f64(state, "/vehiclePowerOutput/value"),
         regen_power_kw: extract_f64(state, "/regenerativeBrakingPower/value"),
 
-        heading_deg: extract_f64(state, "/gnssHeading/value"),
+        heading_deg: extract_f64(state, "/gnssBearing/value")
+            .or_else(|| extract_f64(state, "/gnssHeading/value")),
 
-        odometer_miles: extract_f64(state, "/vehicleMileage/value"),
+        odometer_miles: extract_f64(state, "/vehicleMileage/value").map(meters_to_miles),
 
         tire_fl_psi: extract_f64(state, "/tirePressureFrontLeft/value"),
         tire_fr_psi: extract_f64(state, "/tirePressureFrontRight/value"),
@@ -126,6 +127,10 @@ fn collect_timestamps(v: &Value, latest: &mut Option<DateTime<Utc>>) {
 
 fn ms_to_mph(ms: f64) -> f64 {
     ms * 2.236_94
+}
+
+fn meters_to_miles(meters: f64) -> f64 {
+    meters / 1609.344
 }
 
 #[cfg(test)]
@@ -215,6 +220,34 @@ mod tests {
         assert_eq!(ev.tire_fr_psi, Some(47.9));
         assert_eq!(ev.tire_rl_psi, Some(49.0));
         assert_eq!(ev.tire_rr_psi, Some(48.8));
+    }
+
+    #[test]
+    fn parses_rivian_bearing_as_heading() {
+        let msg = serde_json::json!({
+            "type": "next",
+            "payload": { "data": { "vehicleState": {
+                "gnssBearing": { "timeStamp": "2024-01-15T10:30:00Z", "value": 91.0 }
+            }}}
+        })
+        .to_string();
+
+        let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
+        assert_eq!(ev.heading_deg, Some(91.0));
+    }
+
+    #[test]
+    fn parses_vehicle_mileage_as_miles() {
+        let msg = serde_json::json!({
+            "type": "next",
+            "payload": { "data": { "vehicleState": {
+                "vehicleMileage": { "timeStamp": "2024-01-15T10:30:00Z", "value": 16093.44 }
+            }}}
+        })
+        .to_string();
+
+        let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
+        assert_eq!(ev.odometer_miles, Some(10.0));
     }
 
     #[test]

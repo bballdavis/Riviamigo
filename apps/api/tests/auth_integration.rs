@@ -33,12 +33,15 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
-        let base_db_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into());
+        let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
+        });
         let admin_db_url = replace_database_name(&base_db_url, "postgres");
         let db_name = format!("riviamigo_test_{}", Uuid::new_v4().simple());
 
-        let admin = PgPool::connect(&admin_db_url).await.expect("admin db connect");
+        let admin = PgPool::connect(&admin_db_url)
+            .await
+            .expect("admin db connect");
         admin
             .execute(format!("CREATE DATABASE \"{db_name}\"").as_str())
             .await
@@ -54,9 +57,8 @@ impl TestApp {
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
             .expect("bootstrap keys");
-        let jwt_keys = Arc::new(
-            JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"),
-        );
+        let jwt_keys =
+            Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"));
 
         let state = AppState {
             pool: pool.clone(),
@@ -229,7 +231,13 @@ async fn register_duplicate_email_returns_validation_error() {
     let payload = json!({"email": "carol@example.com", "password": "hunter2hunter2"});
 
     let first = app
-        .request(Method::POST, "/v1/auth/register", Some(payload.clone()), None, None)
+        .request(
+            Method::POST,
+            "/v1/auth/register",
+            Some(payload.clone()),
+            None,
+            None,
+        )
         .await;
     assert_eq!(first.status, StatusCode::CREATED);
 
@@ -281,7 +289,13 @@ async fn login_success_returns_access_token() {
     let creds = json!({"email": "eve@example.com", "password": "securepassword"});
 
     let reg = app
-        .request(Method::POST, "/v1/auth/register", Some(creds.clone()), None, None)
+        .request(
+            Method::POST,
+            "/v1/auth/register",
+            Some(creds.clone()),
+            None,
+            None,
+        )
         .await;
     assert_eq!(reg.status, StatusCode::CREATED);
 
@@ -303,7 +317,7 @@ async fn login_wrong_password_returns_401() {
         None,
         None,
     )
-        .await;
+    .await;
 
     let res = app
         .request(
@@ -344,7 +358,7 @@ async fn login_email_is_case_insensitive() {
         None,
         None,
     )
-        .await;
+    .await;
 
     let res = app
         .request(
@@ -377,7 +391,9 @@ async fn me_returns_user_info_with_valid_token() {
 #[tokio::test]
 async fn me_returns_401_without_token() {
     let app = TestApp::new().await;
-    let res = app.request(Method::GET, "/v1/auth/me", None, None, None).await;
+    let res = app
+        .request(Method::GET, "/v1/auth/me", None, None, None)
+        .await;
     assert_eq!(res.status, StatusCode::UNAUTHORIZED);
 }
 
@@ -529,7 +545,8 @@ async fn stats_summary_rejects_unowned_vehicle() {
     .fetch_one(&app.pool)
     .await
     .expect("outsider id");
-    let vehicle_id = insert_vehicle(&app.pool, outsider_id, "outsider-vehicle", "Outsider Truck").await;
+    let vehicle_id =
+        insert_vehicle(&app.pool, outsider_id, "outsider-vehicle", "Outsider Truck").await;
 
     let res = app
         .request(

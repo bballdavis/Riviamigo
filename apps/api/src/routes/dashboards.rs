@@ -46,12 +46,12 @@ pub struct UpdateDashboard {
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/dashboards",                    get(list).post(create))
-        .route("/dashboards/by-slug/:slug",      get(by_slug))
-        .route("/dashboards/:id",                get(fetch).put(update).delete(remove))
-        .route("/dashboards/:id/clone",          post(clone_dashboard))
-        .route("/admin/dashboards/:id",          put(admin_update))
-        .route("/admin/dashboards/:id/lock",     post(admin_set_lock))
+        .route("/dashboards", get(list).post(create))
+        .route("/dashboards/by-slug/:slug", get(by_slug))
+        .route("/dashboards/:id", get(fetch).put(update).delete(remove))
+        .route("/dashboards/:id/clone", post(clone_dashboard))
+        .route("/admin/dashboards/:id", put(admin_update))
+        .route("/admin/dashboards/:id/lock", post(admin_set_lock))
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -352,12 +352,9 @@ fn check_write_access(d: &Dashboard, user_id: Uuid, is_admin: bool) -> Result<()
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role: Option<String> = sqlx::query_scalar!(
-        "SELECT role FROM users WHERE id = $1",
-        user_id
-    )
-    .fetch_optional(&state.pool)
-    .await?;
+    let role: Option<String> = sqlx::query_scalar!("SELECT role FROM users WHERE id = $1", user_id)
+        .fetch_optional(&state.pool)
+        .await?;
 
     match role.as_deref() {
         Some("admin") => Ok(()),
@@ -366,7 +363,11 @@ async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> 
 }
 
 fn validate_slug(slug: &str) -> Result<(), AppError> {
-    if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit()) {
+    if slug.is_empty()
+        || !slug
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
+    {
         return Err(AppError::Validation(
             "Slug must be lowercase letters, digits, and hyphens only".into(),
         ));
@@ -380,11 +381,26 @@ fn validate_slug(slug: &str) -> Result<(), AppError> {
 /// Defaults are embedded JSON files; call this once from main.rs after pool is ready.
 pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let defaults: &[(&str, &str)] = &[
-        ("00000000-0000-0000-0000-000000000001", include_str!("../../dashboards/dashboard.json")),
-        ("00000000-0000-0000-0000-000000000002", include_str!("../../dashboards/battery.json")),
-        ("00000000-0000-0000-0000-000000000003", include_str!("../../dashboards/efficiency.json")),
-        ("00000000-0000-0000-0000-000000000004", include_str!("../../dashboards/charging.json")),
-        ("00000000-0000-0000-0000-000000000005", include_str!("../../dashboards/trips.json")),
+        (
+            "00000000-0000-0000-0000-000000000001",
+            include_str!("../../dashboards/dashboard.json"),
+        ),
+        (
+            "00000000-0000-0000-0000-000000000002",
+            include_str!("../../dashboards/battery.json"),
+        ),
+        (
+            "00000000-0000-0000-0000-000000000003",
+            include_str!("../../dashboards/efficiency.json"),
+        ),
+        (
+            "00000000-0000-0000-0000-000000000004",
+            include_str!("../../dashboards/charging.json"),
+        ),
+        (
+            "00000000-0000-0000-0000-000000000005",
+            include_str!("../../dashboards/trips.json"),
+        ),
     ];
 
     for (id_str, json_str) in defaults {
