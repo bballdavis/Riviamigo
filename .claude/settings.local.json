@@ -3,7 +3,9 @@
     "allow": [
       "Bash(cargo test *)",
       "Bash(SQLX_OFFLINE=true cargo test routes::live::tests)",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
