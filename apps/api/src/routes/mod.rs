@@ -20,10 +20,18 @@ pub mod api_keys;
 pub mod auth;
 pub mod battery;
 pub mod charging;
+pub mod cost_profiles;
 pub mod dashboards;
+pub mod data_quality;
 pub mod efficiency;
+pub mod geofences;
 pub mod grafana;
+pub mod health;
+pub mod idle_drain;
 pub mod live;
+pub mod locations;
+pub mod overview;
+pub mod state_timeline;
 pub mod stats;
 pub mod trips;
 pub mod vehicles;
@@ -61,6 +69,14 @@ pub fn build_router(state: AppState) -> Router {
         .merge(stats::router())
         .merge(live::router())
         .merge(dashboards::router())
+        .merge(cost_profiles::router())
+        .merge(geofences::router())
+        .merge(overview::router())
+        .merge(state_timeline::router())
+        .merge(health::router())
+        .merge(idle_drain::router())
+        .merge(locations::router())
+        .merge(data_quality::router())
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();

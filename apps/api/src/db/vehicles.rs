@@ -48,3 +48,17 @@ pub async fn get_vehicle_battery_capacity(
     .flatten();
     Ok(cap)
 }
+
+pub async fn get_vehicle_owner_id(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let owner_id = sqlx::query_scalar!(
+        "SELECT user_id FROM riviamigo.vehicles WHERE id = $1",
+        vehicle_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(owner_id)
+}

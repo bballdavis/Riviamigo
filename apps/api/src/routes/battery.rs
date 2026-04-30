@@ -3,7 +3,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -121,7 +121,7 @@ async fn get_capacity(
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct PhantomDrainPoint {
-    pub day: Option<DateTime<Utc>>,
+    pub day: Option<NaiveDate>,
     pub total_soc_lost: Option<f64>,
     pub avg_drain_rate: Option<f64>,
     pub hours_parked: Option<f64>,
@@ -174,11 +174,13 @@ async fn get_phantom_drain(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
     let to = p.to.unwrap_or_else(Utc::now);
+    let from_day = from.date_naive();
+    let to_day = to.date_naive();
 
     let points = sqlx::query_as!(PhantomDrainPoint,
-        "SELECT day, total_soc_lost::float8 AS total_soc_lost, avg_drain_rate::float8 AS avg_drain_rate, total_hours_parked::float8 AS hours_parked \
+        "SELECT day, soc_lost_pct_total::float8 AS total_soc_lost, avg_drain_pct_per_hour::float8 AS avg_drain_rate, hours_idle::float8 AS hours_parked \
          FROM timeseries.phantom_drain_daily \
          WHERE vehicle_id=$1 AND day>=$2 AND day<=$3 ORDER BY day",
-        vid, from, to).fetch_all(&state.pool).await?;
+        vid, from_day, to_day).fetch_all(&state.pool).await?;
     Ok(Json(points))
 }

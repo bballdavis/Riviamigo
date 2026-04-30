@@ -8,16 +8,28 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
+    db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ChargeDetectorState, ChargeEvent},
         session_store::{decrypt_tokens, RivianTokenBundle},
-        trip_detector::{compute_distance_miles, TripDetectorState, TripEvent},
+        trip_detector::{compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent},
         ws_client,
     },
-    models::telemetry::TelemetryEvent,
+    models::{
+        cost_profile::compute_cost,
+        state_period::VehicleState,
+        telemetry::TelemetryEvent,
+    },
+    services::{cost::resolve_profile, geofences::match_geofence},
 };
 
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
+
+struct MatchedLocation {
+    geofence_id: Option<Uuid>,
+    address_id: Option<Uuid>,
+    is_home: Option<bool>,
+}
 
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
@@ -111,9 +123,19 @@ pub async fn run_vehicle_worker(
         }
     };
 
+    // State period tracking
+    let mut last_vehicle_state: Option<VehicleState> = None;
+    let mut state_period_start: Option<chrono::DateTime<Utc>> = None;
+    // Software version tracking
+    let mut last_software_version: Option<String> = None;
+    let mut sw_version_start: Option<chrono::DateTime<Utc>> = None;
+
     while let Some(event) = ev_rx.recv().await {
-        // Write to timeseries
-        let _ = write_telemetry(&pool, &event).await;
+        let trip_id = trip_det.active_trip_id();
+        let session_id = charge_det.active_session_id();
+
+        // Write to timeseries (with trip_id / charge_session_id stamps)
+        let _ = write_telemetry(&pool, &event, trip_id, session_id).await;
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
@@ -123,10 +145,41 @@ pub async fn run_vehicle_worker(
         // Update runtime state
         upsert_online(&pool, vehicle_id, event.is_online.unwrap_or(true), event.ts).await;
 
-        // Trip detection
+        // ── State period tracking ────────────────────────────────────────────
+        let current_state = infer_vehicle_state(&event);
+        if Some(&current_state) != last_vehicle_state.as_ref() {
+            // Close previous period
+            if let (Some(prev_state), Some(started)) = (last_vehicle_state.take(), state_period_start.take()) {
+                let _ = close_state_period(&pool, vehicle_id, &prev_state, started, event.ts).await;
+            }
+            // Open new period
+            let _ = open_state_period(&pool, vehicle_id, &current_state, event.ts).await;
+            state_period_start = Some(event.ts);
+            last_vehicle_state = Some(current_state);
+        }
+
+        // ── Software version tracking ────────────────────────────────────────
+        if let Some(ver) = &event.ota_current_version {
+            if Some(ver) != last_software_version.as_ref() {
+                // Close previous version record
+                if let (Some(prev_ver), Some(_started)) = (last_software_version.take(), sw_version_start.take()) {
+                    let _ = close_software_version(&pool, vehicle_id, &prev_ver, event.ts).await;
+                }
+                // Open new version record
+                let _ = open_software_version(&pool, vehicle_id, ver, event.ts).await;
+                sw_version_start = Some(event.ts);
+                last_software_version = Some(ver.clone());
+            }
+        }
+
+        // ── Trip detection ───────────────────────────────────────────────────
         match trip_det.process(&event) {
             TripEvent::TripEnded { trip } => {
-                let distance = compute_distance_miles(&trip.points);
+                let distance = compute_distance_odometer_or_gps(
+                    trip.start_odometer_mi,
+                    trip.end_odometer_mi,
+                    &trip.points,
+                );
                 if distance >= MIN_TRIP_DISTANCE_MILES {
                     let _ = persist_trip(&pool, &trip, distance).await;
                 }
@@ -134,14 +187,19 @@ pub async fn run_vehicle_worker(
             _ => {}
         }
 
-        // Charge detection
+        // ── Charge detection ─────────────────────────────────────────────────
         if let ChargeEvent::SessionEnded(session) = charge_det.process(&event) {
             let _ = persist_charge_session(&pool, &session).await;
         }
     }
 }
 
-async fn write_telemetry(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()> {
+async fn write_telemetry(
+    pool: &PgPool,
+    e: &TelemetryEvent,
+    trip_id: Option<Uuid>,
+    charge_session_id: Option<Uuid>,
+) -> anyhow::Result<()> {
     sqlx::query!(
         r#"INSERT INTO timeseries.telemetry
            (ts, vehicle_id, latitude, longitude, altitude_m, speed_mph,
@@ -156,8 +214,10 @@ async fn write_telemetry(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()
             closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
             closure_tailgate_locked, closure_tailgate_closed,
             ota_current_version, ota_available_version, ota_status, ota_current_status,
-            hv_thermal_event, twelve_volt_health, is_online)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53)"#,
+            hv_thermal_event, twelve_volt_health, is_online,
+            trip_id, charge_session_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)
+           ON CONFLICT (vehicle_id, ts) DO NOTHING"#,
         e.ts, e.vehicle_id,
         e.latitude, e.longitude, e.altitude_m, e.speed_mph,
         e.battery_level, e.battery_capacity_wh, e.distance_to_empty_mi, e.battery_limit,
@@ -175,7 +235,9 @@ async fn write_telemetry(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()
         e.closure_tailgate_locked, e.closure_tailgate_closed,
         e.ota_current_version, e.ota_available_version, e.ota_status, e.ota_current_status,
         e.hv_thermal_event, e.twelve_volt_health,
-        e.is_online
+        e.is_online,
+        trip_id,
+        charge_session_id
     )
     .execute(pool)
     .await?;
@@ -236,26 +298,59 @@ async fn persist_trip(
     distance: f64,
 ) -> anyhow::Result<()> {
     let duration = (trip.ended_at - trip.started_at).num_seconds() as i32;
-    let max_speed = trip
-        .points
-        .iter()
-        .map(|p| p.speed_mph)
-        .fold(0.0_f64, f64::max);
-    let efficiency = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
-        (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
-            Some(((s0 - s1) / 100.0) * cap / distance)
+    let max_speed = trip.points.iter().map(|p| p.speed_mph).fold(0.0_f64, f64::max);
+    let avg_speed = if duration > 0 { Some(distance / (duration as f64 / 3600.0)) } else { None };
+
+    // Energy ensemble
+    let (energy_wh, energy_strategy, efficiency_wh_per_mi) = match compute_trip_energy(
+        trip.soc_start, trip.soc_end, trip.battery_capacity_wh,
+        trip.range_start_mi, trip.range_end_mi, distance, None,
+    ) {
+        Some((wh, strat)) => {
+            let eff = if distance > 0.0 { Some(wh / distance) } else { None };
+            (Some(wh), Some(strat.to_string()), eff)
         }
-        _ => None,
+        None => {
+            // Fallback: use SOC-based efficiency
+            let eff = match (trip.soc_start, trip.soc_end, trip.battery_capacity_wh) {
+                (Some(s0), Some(s1), Some(cap)) if distance > 0.0 && s0 > s1 => {
+                    Some(((s0 - s1) / 100.0) * cap / distance)
+                }
+                _ => None,
+            };
+            (None, None, eff)
+        }
     };
+
     let start = trip.points.first();
     let end = trip.points.last();
+    let owner_id = get_vehicle_owner_id(pool, trip.vehicle_id).await?;
+    let start_match = match (owner_id, start) {
+        (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
+        _ => MatchedLocation::none(),
+    };
+    let end_match = match (owner_id, end) {
+        (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
+        _ => MatchedLocation::none(),
+    };
 
     sqlx::query!(
         r#"INSERT INTO riviamigo.trips
-           (vehicle_id, started_at, ended_at, start_lat, start_lng, end_lat, end_lng,
-            distance_miles, duration_seconds, soc_start, soc_end,
-            efficiency_wh_per_mile, max_speed_mph, drive_mode)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+           (id, vehicle_id, started_at, ended_at,
+            start_lat, start_lng, end_lat, end_lng,
+            distance_miles, duration_seconds,
+            soc_start, soc_end,
+            efficiency_wh_per_mile, max_speed_mph, avg_speed_mph, drive_mode,
+            start_odometer_mi, end_odometer_mi,
+            start_position_ts, end_position_ts,
+            start_geofence_id, end_geofence_id,
+            start_address_id, end_address_id,
+            range_start_mi, range_end_mi,
+            power_max_kw, power_min_kw,
+            elevation_gain_m, elevation_loss_m,
+            inside_temp_avg_c, regen_wh, energy_wh, energy_strategy)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)"#,
+        trip.trip_id,
         trip.vehicle_id,
         trip.started_at,
         trip.ended_at,
@@ -267,9 +362,28 @@ async fn persist_trip(
         duration,
         trip.soc_start,
         trip.soc_end,
-        efficiency,
+        efficiency_wh_per_mi,
         max_speed,
-        trip.dominant_drive_mode
+        avg_speed,
+        trip.dominant_drive_mode.as_deref(),
+        trip.start_odometer_mi,
+        trip.end_odometer_mi,
+        start.map(|p| p.ts),
+        end.map(|p| p.ts),
+        start_match.geofence_id,
+        end_match.geofence_id,
+        start_match.address_id,
+        end_match.address_id,
+        trip.range_start_mi,
+        trip.range_end_mi,
+        trip.power_max_kw,
+        trip.power_min_kw,
+        trip.elevation_gain_m,
+        trip.elevation_loss_m,
+        trip.inside_temp_avg_c,
+        trip.regen_wh,
+        energy_wh,
+        energy_strategy.as_deref()
     )
     .execute(pool)
     .await?;
@@ -281,24 +395,197 @@ async fn persist_charge_session(
     session: &crate::ingestion::charge_detector::CompletedChargeSession,
 ) -> anyhow::Result<()> {
     let duration_minutes = ((session.ended_at - session.started_at).num_seconds() / 60) as i32;
+    let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
+    let location_match = match (owner_id, session.location_lat, session.location_lng) {
+        (Some(user_id), Some(lat), Some(lon)) => match_point(pool, user_id, lat, lon).await?,
+        _ => MatchedLocation::none(),
+    };
+    let profile = resolve_profile(pool, None, location_match.geofence_id, session.vehicle_id).await?;
+    let energy_added_kwh = session.energy_added_wh.map(|wh| wh / 1000.0);
+    let energy_used_kwh = session.energy_used_wh.map(|wh| wh / 1000.0);
+    let cost_usd = profile
+        .as_ref()
+        .and_then(|p| compute_cost(p, energy_added_kwh, energy_used_kwh, duration_minutes));
+    let cost_profile_id = profile.as_ref().map(|p| p.id);
+    let cost_method = if cost_profile_id.is_some() {
+        Some("profile")
+    } else {
+        Some("unknown")
+    };
+
     sqlx::query!(
         r#"INSERT INTO riviamigo.charge_sessions
-           (vehicle_id, started_at, ended_at, location_lat, location_lng,
-            soc_start, soc_end, charge_limit, duration_minutes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
+           (id, vehicle_id, started_at, ended_at,
+            location_lat, location_lng,
+            is_home,
+            soc_start, soc_end, charge_limit, duration_minutes,
+            kwh_added, max_charge_rate_kw, cost_usd,
+            energy_added_wh, energy_used_wh,
+            avg_charge_rate_kw, peak_voltage,
+            geofence_id, address_id, cost_profile_id, cost_method,
+            charger_type)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)"#,
+        session.session_id,
         session.vehicle_id,
         session.started_at,
         session.ended_at,
         session.location_lat,
         session.location_lng,
+        location_match.is_home,
         session.soc_start,
         session.soc_end,
         session.charge_limit,
-        duration_minutes
+        duration_minutes,
+        energy_added_kwh,
+        session.peak_charge_kw,
+        cost_usd,
+        session.energy_added_wh,
+        session.energy_used_wh,
+        session.avg_charge_rate_kw,
+        session.peak_charge_kw,    // peak_voltage column stores peak power for now
+        location_match.geofence_id,
+        location_match.address_id,
+        cost_profile_id,
+        cost_method,
+        session.charger_type.as_deref()
     )
     .execute(pool)
     .await?;
     Ok(())
+}
+
+impl MatchedLocation {
+    fn none() -> Self {
+        Self {
+            geofence_id: None,
+            address_id: None,
+            is_home: None,
+        }
+    }
+}
+
+async fn match_point(
+    pool: &PgPool,
+    user_id: Uuid,
+    lat: f64,
+    lon: f64,
+) -> anyhow::Result<MatchedLocation> {
+    let matched = match_geofence(pool, user_id, lat, lon).await?;
+
+    Ok(match matched {
+        Some(geofence) => MatchedLocation {
+            geofence_id: Some(geofence.id),
+            address_id: geofence.address_id,
+            is_home: Some(geofence.is_home),
+        },
+        None => MatchedLocation::none(),
+    })
+}
+
+/// Infer a coarse VehicleState from the latest telemetry event.
+fn infer_vehicle_state(e: &TelemetryEvent) -> VehicleState {
+    use crate::models::telemetry::{ChargerState, PowerState};
+    match &e.charger_state {
+        Some(ChargerState::Charging) => return VehicleState::Charging,
+        _ => {}
+    }
+    if e.ota_status.as_deref() == Some("installing")
+        || e.ota_current_status.as_deref() == Some("installing")
+    {
+        return VehicleState::Updating;
+    }
+    match &e.power_state {
+        Some(PowerState::Drive | PowerState::Go) => VehicleState::Drive,
+        Some(PowerState::Sleep) => VehicleState::Sleep,
+        Some(PowerState::Charging) => VehicleState::Charging,
+        Some(PowerState::Ready) => {
+            if e.is_online == Some(false) {
+                VehicleState::Offline
+            } else {
+                VehicleState::Ready
+            }
+        }
+        _ => {
+            if e.is_online == Some(false) {
+                VehicleState::Offline
+            } else {
+                VehicleState::Unknown
+            }
+        }
+    }
+}
+
+async fn open_state_period(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    state: &VehicleState,
+    started_at: chrono::DateTime<Utc>,
+) {
+    let _ = sqlx::query!(
+        r#"INSERT INTO riviamigo.vehicle_state_periods (vehicle_id, state, started_at)
+           VALUES ($1, $2, $3)"#,
+        vehicle_id,
+        state.to_string(),
+        started_at
+    )
+    .execute(pool)
+    .await;
+}
+
+async fn close_state_period(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    state: &VehicleState,
+    started_at: chrono::DateTime<Utc>,
+    ended_at: chrono::DateTime<Utc>,
+) {
+    let _ = sqlx::query!(
+        r#"UPDATE riviamigo.vehicle_state_periods
+           SET ended_at = $1
+           WHERE vehicle_id = $2 AND state = $3 AND started_at = $4 AND ended_at IS NULL"#,
+        ended_at,
+        vehicle_id,
+        state.to_string(),
+        started_at
+    )
+    .execute(pool)
+    .await;
+}
+
+async fn open_software_version(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    version: &str,
+    installed_at: chrono::DateTime<Utc>,
+) {
+    let _ = sqlx::query!(
+        r#"INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING"#,
+        vehicle_id,
+        version,
+        installed_at
+    )
+    .execute(pool)
+    .await;
+}
+
+async fn close_software_version(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    version: &str,
+    observed_until: chrono::DateTime<Utc>,
+) {
+    let _ = sqlx::query!(
+        r#"UPDATE riviamigo.software_versions
+           SET observed_until = $1
+           WHERE vehicle_id = $2 AND version = $3 AND observed_until IS NULL"#,
+        observed_until,
+        vehicle_id,
+        version
+    )
+    .execute(pool)
+    .await;
 }
 
 async fn upsert_health(pool: &PgPool, vehicle_id: Uuid, online: bool, health: &str, msg: &str) {
