@@ -8,6 +8,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
+  useCurrentVehicleStatus: () => ({ data: null }),
 }));
 
 vi.mock('../../components/layout/AppLayout',  () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));

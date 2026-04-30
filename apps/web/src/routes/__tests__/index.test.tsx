@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
@@ -14,6 +14,22 @@ vi.mock('@riviamigo/ui/charts', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+  useCurrentVehicleStatus: () => ({
+    data: {
+      vehicle_id: 'vehicle-1',
+      battery_level: 79,
+      range_miles: 210,
+      power_state: 'go',
+      charger_state: null,
+      speed_mph: 0,
+      latitude: null,
+      longitude: null,
+      altitude_m: 12,
+      drive_mode: 'all_purpose',
+      is_online: true,
+      last_updated: '2024-01-01T00:00:00Z',
+    },
+  }),
   useSummaryStats: () => ({
     data: {
       total_miles: 1234,
@@ -28,6 +44,33 @@ vi.mock('@riviamigo/hooks', () => ({
   useSocHistory: () => ({ data: [{ ts: '2024-01-01T00:00:00Z', soc: 79 }], isLoading: false }),
   useEfficiencyTrend: () => ({ data: [{ day: '2024-01-01', day_avg_wh_mi: 320, rolling_7d_wh_mi: 315 }], isLoading: false }),
   useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Forest R1S' }] }),
+}));
+
+const mockConfig = {
+  schemaVersion: 1,
+  id: '00000000-0000-0000-0000-000000000001',
+  slug: 'dashboard',
+  name: 'Dashboard',
+  isDefault: true,
+  isLocked: true,
+  ownerId: null,
+  controls: { dateRange: true },
+  widgets: [],
+};
+
+vi.mock('@riviamigo/dashboards', () => ({
+  DashboardRenderer: () => (
+    <div>
+      <div>Total Miles</div>
+      <div>Total Trips</div>
+      <div>Energy Charged</div>
+      <div>Avg Efficiency</div>
+      <div data-testid="soc-chart" />
+    </div>
+  ),
+  useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  getDefaultBySlug: () => mockConfig,
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <div data-testid="app-layout">{children}</div> }));
@@ -52,22 +95,18 @@ describe('Dashboard page', () => {
 
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Forest R1S')).toBeInTheDocument();
+    expect(screen.getByText('Current vehicle state')).toBeInTheDocument();
+    expect(screen.getByText('SoC')).toBeInTheDocument();
+    expect(screen.getByText('79%')).toBeInTheDocument();
     expect(screen.getByText('Total Miles')).toBeInTheDocument();
     expect(screen.getByText('Total Trips')).toBeInTheDocument();
     expect(screen.getByText('Energy Charged')).toBeInTheDocument();
     expect(screen.getByText('Avg Efficiency')).toBeInTheDocument();
   });
 
-  it('shows the SoC chart by default and switches to efficiency trend', () => {
+  it('shows the dashboard renderer', () => {
     render(<DashboardContent />);
 
     expect(screen.getByTestId('soc-chart')).toBeInTheDocument();
-    expect(screen.queryByTestId('efficiency-chart')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Efficiency Trend' }));
-
-    expect(screen.getByTestId('efficiency-chart')).toBeInTheDocument();
-    expect(screen.queryByTestId('soc-chart')).not.toBeInTheDocument();
   });
 });

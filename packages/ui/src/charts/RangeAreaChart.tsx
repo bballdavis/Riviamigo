@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   ResponsiveContainer, AreaChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip,
+  XAxis, YAxis, CartesianGrid, Tooltip, Brush,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
@@ -18,17 +18,19 @@ export interface RangeAreaChartProps {
   data: RangeDataPoint[];
   loading?: boolean;
   height?: number;
+  showBrush?: boolean;
 }
 
 export function RangeAreaChart({
   data,
   loading = false,
   height = 200,
+  showBrush = false,
 }: RangeAreaChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
+    <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>
       <AreaChart data={data} margin={CHART_MARGINS.withYAxis}>
         <defs>
           <linearGradient id="rangeGradient" x1="0" y1="0" x2="0" y2="1">
@@ -66,6 +68,14 @@ export function RangeAreaChart({
           activeDot={{ r: 4, strokeWidth: 2, stroke: '#0A0A0F' }}
           isAnimationActive={false}
         />
+        {showBrush && (
+          <Brush
+            dataKey="ts"
+            height={28}
+            stroke={CHART_COLORS.muted}
+            tickFormatter={(v: string) => format(parseISO(v), 'M/d')}
+          />
+        )}
       </AreaChart>
     </ResponsiveContainer>
   );

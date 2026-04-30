@@ -16,8 +16,8 @@ export const CHART_COLORS = {
 } as const;
 
 export const CHART_MARGINS = {
-  default: { top: 8, right: 16, left: 0, bottom: 0 },
-  withYAxis: { top: 8, right: 16, left: -16, bottom: 0 },
+  default: { top: 12, right: 24, left: 8, bottom: 8 },
+  withYAxis: { top: 12, right: 24, left: 8, bottom: 8 },
 } as const;
 
 export const CHART_FONT = {

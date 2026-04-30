@@ -1,6 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { VehicleStatus } from '@riviamigo/types';
+import { api } from './api';
 
 interface LiveStatusStore {
   status: Record<string, VehicleStatus>;
@@ -78,7 +80,16 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
 
     ws.onmessage = (evt) => {
       try {
-        const data = JSON.parse(evt.data as string) as VehicleStatus;
+        const message = JSON.parse(evt.data as string) as VehicleStatus | { type?: string; ts?: string; data?: Partial<VehicleStatus> };
+        const data = 'data' in message && message.data
+          ? {
+              vehicle_id: vehicleId,
+              is_online: true,
+              last_updated: message.ts ?? new Date().toISOString(),
+              ...message.data,
+              range_miles: message.data.range_miles ?? (message.data as { distance_to_empty_mi?: number | null }).distance_to_empty_mi,
+            } as VehicleStatus
+          : message as VehicleStatus;
         setStatus(vehicleId, data);
       } catch {}
     };
@@ -125,4 +136,19 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   const connected = useLiveStatusStore((s) => (vehicleId ? s.connected[vehicleId] ?? false : false));
 
   return { status: status ?? null, connected, connectionState };
+}
+
+export function useCurrentVehicleStatus(vehicleId: string | null) {
+  const liveStatus = useLiveStatusStore((s) => (vehicleId ? s.status[vehicleId] : null));
+
+  const query = useQuery({
+    queryKey: ['vehicles', 'status', vehicleId],
+    queryFn: () => api.vehicleStatus(vehicleId!),
+    enabled: !!vehicleId && !liveStatus,
+    staleTime: 30 * 1000,
+    refetchInterval: liveStatus ? false : 60 * 1000,
+    initialData: liveStatus ?? undefined,
+  });
+
+  return liveStatus ? { ...query, data: liveStatus } : query;
 }
