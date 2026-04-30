@@ -55,7 +55,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
             <StatusBar
               onlineState={onlineState}
               socPercent={status?.battery_level ?? undefined}
-              isCharging={status?.charger_state === 'Charging'}
+              isCharging={status?.charger_state?.toLowerCase().includes('charging') ?? false}
               rangeEstimateMi={status?.range_miles ?? undefined}
               compact={collapsed}
             />

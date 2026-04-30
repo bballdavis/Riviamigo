@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   ResponsiveContainer, AreaChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
+  XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Brush,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
@@ -21,6 +21,7 @@ export interface DegradationChartProps {
   ratedKwh?: number;
   loading?: boolean;
   height?: number;
+  showBrush?: boolean;
 }
 
 export function DegradationChart({
@@ -28,6 +29,7 @@ export function DegradationChart({
   ratedKwh,
   loading = false,
   height = 220,
+  showBrush = false,
 }: DegradationChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
 
@@ -37,7 +39,7 @@ export function DegradationChart({
     : CHART_COLORS.danger;
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
+    <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>
       <AreaChart data={data} margin={CHART_MARGINS.withYAxis}>
         <defs>
           <linearGradient id="degradGradient" x1="0" y1="0" x2="0" y2="1">
@@ -90,6 +92,14 @@ export function DegradationChart({
           activeDot={{ r: 5, strokeWidth: 2, stroke: colors.slate[950] }}
           isAnimationActive={false}
         />
+        {showBrush && (
+          <Brush
+            dataKey="ts"
+            height={28}
+            stroke={CHART_COLORS.muted}
+            tickFormatter={(v: string) => format(parseISO(v), 'MMM yyyy')}
+          />
+        )}
       </AreaChart>
     </ResponsiveContainer>
   );

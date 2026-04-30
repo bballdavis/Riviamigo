@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   ResponsiveContainer, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip,
+  XAxis, YAxis, CartesianGrid, Tooltip, Brush,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
@@ -18,17 +18,19 @@ export interface EnergyBarChartProps {
   data: EnergyBarPoint[];
   loading?: boolean;
   height?: number;
+  showBrush?: boolean;
 }
 
 export function EnergyBarChart({
   data,
   loading = false,
   height = 200,
+  showBrush = false,
 }: EnergyBarChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
+    <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>
       <BarChart data={data} margin={CHART_MARGINS.withYAxis}>
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
         <XAxis
@@ -57,6 +59,14 @@ export function EnergyBarChart({
           radius={[4, 4, 0, 0]}
           isAnimationActive={false}
         />
+        {showBrush && (
+          <Brush
+            dataKey="ts"
+            height={28}
+            stroke={CHART_COLORS.muted}
+            tickFormatter={(v: string) => format(parseISO(v), 'M/d')}
+          />
+        )}
       </BarChart>
     </ResponsiveContainer>
   );

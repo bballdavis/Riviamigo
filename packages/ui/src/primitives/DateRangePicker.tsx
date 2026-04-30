@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
-import { format, subDays, subMonths, startOfDay, endOfDay } from 'date-fns';
+import { format, parseISO, subDays, subMonths, startOfDay, endOfDay } from 'date-fns';
 import { cn } from '../lib/utils';
 
 export interface DateRange {
@@ -31,7 +31,7 @@ export function presetToRange(preset: PresetKey): DateRange {
 
 export interface DateRangePickerProps {
   value: DateRange;
-  preset?: PresetKey;
+  preset?: PresetKey | undefined;
   onChange: (range: DateRange, preset?: PresetKey) => void;
   className?: string;
 }
@@ -43,6 +43,8 @@ export function DateRangePicker({
   className,
 }: DateRangePickerProps) {
   const [open, setOpen] = React.useState(false);
+  const [customFrom, setCustomFrom] = React.useState(toDateInputValue(value.from));
+  const [customTo, setCustomTo] = React.useState(toDateInputValue(value.to));
   const ref = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -54,6 +56,11 @@ export function DateRangePicker({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  React.useEffect(() => {
+    setCustomFrom(toDateInputValue(value.from));
+    setCustomTo(toDateInputValue(value.to));
+  }, [value.from, value.to]);
 
   const displayLabel = preset
     ? PRESETS.find((p) => p.key === preset)?.label
@@ -75,7 +82,7 @@ export function DateRangePicker({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 min-w-[160px]">
+        <div className="absolute right-0 top-full mt-1 z-50 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 min-w-[240px]">
           {PRESETS.map((p) => (
             <button
               key={p.key}
@@ -93,8 +100,49 @@ export function DateRangePicker({
               {p.label}
             </button>
           ))}
+          <div className="mt-1 border-t border-border px-3 py-3">
+            <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+              <Calendar className="h-3.5 w-3.5" />
+              Custom range
+            </div>
+            <label className="block text-xs text-fg-tertiary">
+              From
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="mt-1 h-8 w-full rounded-lg border border-border bg-bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
+              />
+            </label>
+            <label className="mt-2 block text-xs text-fg-tertiary">
+              To
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="mt-1 h-8 w-full rounded-lg border border-border bg-bg-surface px-2 text-sm text-fg outline-none focus:border-accent"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                const from = startOfDay(parseISO(customFrom));
+                const to = endOfDay(parseISO(customTo));
+                if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return;
+                onChange(from <= to ? { from, to } : { from: to, to: from });
+                setOpen(false);
+              }}
+              className="mt-3 h-8 w-full rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90"
+            >
+              Apply custom range
+            </button>
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+function toDateInputValue(date: Date) {
+  return format(date, 'yyyy-MM-dd');
 }

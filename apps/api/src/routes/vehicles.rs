@@ -356,11 +356,68 @@ async fn vehicle_status(
     .fetch_optional(&state.pool)
     .await?;
 
+    let latest = sqlx::query!(
+        r#"
+        SELECT
+          (SELECT ts FROM timeseries.telemetry WHERE vehicle_id = $1 ORDER BY ts DESC LIMIT 1) AS ts,
+          (SELECT latitude FROM timeseries.telemetry WHERE vehicle_id = $1 AND latitude IS NOT NULL ORDER BY ts DESC LIMIT 1) AS latitude,
+          (SELECT longitude FROM timeseries.telemetry WHERE vehicle_id = $1 AND longitude IS NOT NULL ORDER BY ts DESC LIMIT 1) AS longitude,
+          (SELECT altitude_m FROM timeseries.telemetry WHERE vehicle_id = $1 AND altitude_m IS NOT NULL ORDER BY ts DESC LIMIT 1) AS altitude_m,
+          (SELECT speed_mph FROM timeseries.telemetry WHERE vehicle_id = $1 AND speed_mph IS NOT NULL ORDER BY ts DESC LIMIT 1) AS speed_mph,
+          (SELECT battery_level FROM timeseries.telemetry WHERE vehicle_id = $1 AND battery_level IS NOT NULL ORDER BY ts DESC LIMIT 1) AS battery_level,
+          (SELECT battery_capacity_wh FROM timeseries.telemetry WHERE vehicle_id = $1 AND battery_capacity_wh IS NOT NULL ORDER BY ts DESC LIMIT 1) AS battery_capacity_wh,
+          (SELECT distance_to_empty_mi FROM timeseries.telemetry WHERE vehicle_id = $1 AND distance_to_empty_mi IS NOT NULL ORDER BY ts DESC LIMIT 1) AS distance_to_empty_mi,
+          (SELECT battery_limit FROM timeseries.telemetry WHERE vehicle_id = $1 AND battery_limit IS NOT NULL ORDER BY ts DESC LIMIT 1) AS battery_limit,
+          (SELECT power_state FROM timeseries.telemetry WHERE vehicle_id = $1 AND power_state IS NOT NULL ORDER BY ts DESC LIMIT 1) AS power_state,
+          (SELECT charger_state FROM timeseries.telemetry WHERE vehicle_id = $1 AND charger_state IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charger_state,
+          (SELECT charger_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND charger_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charger_status,
+          (SELECT time_to_end_of_charge_min FROM timeseries.telemetry WHERE vehicle_id = $1 AND time_to_end_of_charge_min IS NOT NULL ORDER BY ts DESC LIMIT 1) AS time_to_end_of_charge_min,
+          (SELECT drive_mode FROM timeseries.telemetry WHERE vehicle_id = $1 AND drive_mode IS NOT NULL ORDER BY ts DESC LIMIT 1) AS drive_mode,
+          (SELECT gear_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND gear_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS gear_status,
+          (SELECT cabin_temp_c FROM timeseries.telemetry WHERE vehicle_id = $1 AND cabin_temp_c IS NOT NULL ORDER BY ts DESC LIMIT 1) AS cabin_temp_c,
+          (SELECT driver_temp_c FROM timeseries.telemetry WHERE vehicle_id = $1 AND driver_temp_c IS NOT NULL ORDER BY ts DESC LIMIT 1) AS driver_temp_c,
+          (SELECT outside_temp_c FROM timeseries.telemetry WHERE vehicle_id = $1 AND outside_temp_c IS NOT NULL ORDER BY ts DESC LIMIT 1) AS outside_temp_c,
+          (SELECT heading_deg FROM timeseries.telemetry WHERE vehicle_id = $1 AND heading_deg IS NOT NULL ORDER BY ts DESC LIMIT 1) AS heading_deg,
+          (SELECT odometer_miles FROM timeseries.telemetry WHERE vehicle_id = $1 AND odometer_miles IS NOT NULL ORDER BY ts DESC LIMIT 1) AS odometer_miles,
+          (SELECT hv_thermal_event FROM timeseries.telemetry WHERE vehicle_id = $1 AND hv_thermal_event IS NOT NULL ORDER BY ts DESC LIMIT 1) AS hv_thermal_event,
+          (SELECT twelve_volt_health FROM timeseries.telemetry WHERE vehicle_id = $1 AND twelve_volt_health IS NOT NULL ORDER BY ts DESC LIMIT 1) AS twelve_volt_health
+        "#,
+        vid
+    )
+    .fetch_one(&state.pool)
+    .await?;
+
     Ok(Json(serde_json::json!({
-        "vehicle_id":   vid,
-        "is_online":    row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
-        "last_event_at":row.as_ref().and_then(|r| r.last_event_at),
-        "worker_health":row.as_ref().and_then(|r| r.worker_health.as_deref()),
+        "vehicle_id": vid,
+        "is_online": row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
+        "last_event_at": row.as_ref().and_then(|r| r.last_event_at),
+        "last_updated": latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
+        "worker_health": row.as_ref().and_then(|r| r.worker_health.as_deref()),
+        "battery_level": latest.battery_level,
+        "range_miles": latest.distance_to_empty_mi,
+        "battery_capacity_kwh": latest.battery_capacity_wh.map(|w| w / 1000.0),
+        "battery_limit": latest.battery_limit,
+        "power_state": latest.power_state.as_deref(),
+        "charger_state": latest.charger_state.as_deref(),
+        "charger_status": latest.charger_status.as_deref(),
+        "time_to_end_of_charge_min": latest.time_to_end_of_charge_min,
+        "speed_mph": latest.speed_mph,
+        "altitude_m": latest.altitude_m,
+        "latitude": latest.latitude,
+        "longitude": latest.longitude,
+        "drive_mode": latest.drive_mode.as_deref(),
+        "gear_status": latest.gear_status.as_deref(),
+        "cabin_temp_c": latest.cabin_temp_c,
+        "driver_temp_c": latest.driver_temp_c,
+        "outside_temp_c": latest.outside_temp_c,
+        "heading_deg": latest.heading_deg,
+        "odometer_miles": latest.odometer_miles,
+        "hv_thermal_event": latest.hv_thermal_event.as_deref(),
+        "twelve_volt_health": latest.twelve_volt_health.as_deref(),
+        "doors_locked": serde_json::Value::Null,
+        "open_closures": serde_json::Value::Null,
+        "tire_pressure_status": serde_json::Value::Null,
+        "software_update_status": serde_json::Value::Null,
     })))
 }
 

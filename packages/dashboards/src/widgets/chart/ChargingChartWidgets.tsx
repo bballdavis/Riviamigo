@@ -10,7 +10,7 @@ function EnergyBarWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) 
     ts: s.started_at,
     energy_added_kwh: s.energy_added_kwh ?? 0,
   }));
-  return <EnergyBarChart data={energyData} loading={isLoading} height={300} />;
+  return <EnergyBarChart data={energyData} loading={isLoading} height={260} showBrush />;
 }
 
 registerWidget({

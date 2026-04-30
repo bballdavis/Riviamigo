@@ -4,13 +4,15 @@ import { SocAreaChart, RangeAreaChart, PhantomDrainChart, DegradationChart } fro
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 
+const BRUSHED_CHART_HEIGHT = 260;
+
 function SocChartWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data, isLoading } = useSocHistory(ctx.vehicleId, ctx.from, ctx.to);
   return (
     <SocAreaChart
       data={(data ?? []).map((p: { ts: string; value?: number | null }) => ({ ts: p.ts, soc: p.value ?? 0 }))}
       loading={isLoading}
-      height={300}
+      height={BRUSHED_CHART_HEIGHT}
       showBrush
     />
   );
@@ -22,7 +24,8 @@ function RangeChartWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
     <RangeAreaChart
       data={(data ?? []).map((p: { ts: string; value?: number | null }) => ({ ts: p.ts, range_mi: p.value ?? 0 }))}
       loading={isLoading}
-      height={300}
+      height={BRUSHED_CHART_HEIGHT}
+      showBrush
     />
   );
 }
@@ -33,14 +36,15 @@ function PhantomDrainChartWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
     <PhantomDrainChart
       data={(data ?? []).map((p: { date: string; drain_pct: number }) => ({ date: p.date, drain_pct: p.drain_pct }))}
       loading={isLoading}
-      height={300}
+      height={BRUSHED_CHART_HEIGHT}
+      showBrush
     />
   );
 }
 
 function DegradationChartWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data, isLoading } = useDegradation(ctx.vehicleId);
-  return <DegradationChart data={data ?? []} loading={isLoading} height={300} />;
+  return <DegradationChart data={data ?? []} loading={isLoading} height={BRUSHED_CHART_HEIGHT} showBrush />;
 }
 
 registerWidget({

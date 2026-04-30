@@ -6,7 +6,7 @@ import type { WidgetInstance, WidgetCtx } from '../../registry';
 
 function EfficiencyTrendWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data, isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
-  return <EfficiencyTrendChart data={data ?? []} loading={isLoading} height={300} showBrush />;
+  return <EfficiencyTrendChart data={data ?? []} loading={isLoading} height={260} showBrush />;
 }
 
 function EfficiencyVsTempWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {

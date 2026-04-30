@@ -1,17 +1,17 @@
 import React from 'react';
 import { Battery, Activity, Moon, TrendingDown } from 'lucide-react';
-import { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation } from '@riviamigo/hooks';
+import { useCurrentVehicleStatus, usePhantomDrain, useDegradation } from '@riviamigo/hooks';
 import { StatCard } from '@riviamigo/ui/primitives';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 
 function CurrentSocWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
-  const { data } = useSocHistory(ctx.vehicleId, ctx.from, ctx.to);
-  const latest = data?.[data.length - 1]?.soc;
+  const { data } = useCurrentVehicleStatus(ctx.vehicleId);
+  const latest = data?.battery_level;
   return (
     <StatCard
       label="Current SoC"
-      value={latest !== undefined ? `${Math.round(latest)}%` : '—'}
+      value={latest !== undefined && latest !== null ? `${Math.round(latest)}%` : '-'}
       accent
       icon={<Battery className="h-4 w-4" />}
     />
@@ -19,12 +19,12 @@ function CurrentSocWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
 }
 
 function EstRangeWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
-  const { data } = useRangeHistory(ctx.vehicleId, ctx.from, ctx.to);
-  const latest = data?.[data.length - 1]?.range_mi;
+  const { data } = useCurrentVehicleStatus(ctx.vehicleId);
+  const latest = data?.range_miles;
   return (
     <StatCard
       label="Est. Range"
-      value={latest !== undefined ? `${Math.round(latest)} mi` : '—'}
+      value={latest !== undefined && latest !== null ? `${Math.round(latest)} mi` : '-'}
       icon={<Activity className="h-4 w-4" />}
     />
   );
@@ -38,7 +38,7 @@ function PhantomDrainAvgWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   return (
     <StatCard
       label="Phantom Drain"
-      value={avg !== undefined ? `${avg.toFixed(1)}%` : '—'}
+      value={avg !== undefined ? `${avg.toFixed(1)}%` : '-'}
       unit="/ hr avg"
       icon={<Moon className="h-4 w-4" />}
     />
@@ -48,10 +48,21 @@ function PhantomDrainAvgWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
 function CapacityHealthWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data } = useDegradation(ctx.vehicleId);
   const latest = data?.[data.length - 1]?.capacity_pct;
+  const { data: status } = useCurrentVehicleStatus(ctx.vehicleId);
+  const capacity = status?.battery_capacity_kwh;
+  const hasCapacity = capacity !== undefined && capacity !== null;
+
+  const fallbackUnit = latest !== undefined && latest !== null
+    ? undefined
+    : hasCapacity
+    ? 'kWh usable'
+    : undefined;
+
   return (
     <StatCard
       label="Capacity Health"
-      value={latest !== undefined ? `${latest.toFixed(1)}%` : '—'}
+      value={latest !== undefined && latest !== null ? `${latest.toFixed(1)}%` : hasCapacity ? `${capacity.toFixed(1)}` : '-'}
+      {...(fallbackUnit ? { unit: fallbackUnit } : {})}
       icon={<TrendingDown className="h-4 w-4" />}
     />
   );
