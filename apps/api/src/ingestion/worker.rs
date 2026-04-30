@@ -405,7 +405,7 @@ async fn persist_charge_session(
     let energy_used_kwh = session.energy_used_wh.map(|wh| wh / 1000.0);
     let cost_usd = profile
         .as_ref()
-        .and_then(|p| compute_cost(p, energy_added_kwh, energy_used_kwh, duration_minutes));
+        .and_then(|p| compute_cost(p, energy_added_kwh, energy_used_kwh, duration_minutes, session.started_at, Some(session.ended_at)));
     let cost_profile_id = profile.as_ref().map(|p| p.id);
     let cost_method = if cost_profile_id.is_some() {
         Some("profile")

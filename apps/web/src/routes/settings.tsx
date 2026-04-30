@@ -10,8 +10,9 @@ import {
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, Plus, ShieldCheck, Trash2,
+  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Plus, ShieldCheck, Trash2,
 } from 'lucide-react';
 
 export const settingsRoute = createRoute({
@@ -20,10 +21,11 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'api' | 'raw' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'places' | 'api' | 'raw' | 'appearance' | 'account';
 
 const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
+  { id: 'places', label: 'Places', icon: MapPin },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'raw', label: 'Raw Data', icon: Database },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
@@ -402,6 +404,8 @@ export function SettingsContent() {
                 </Card>
               </div>
             )}
+
+            {activeSection === 'places' && <PlacesSection />}
 
             {activeSection === 'raw' && (
               <div className="flex flex-col gap-5">

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
-    models::cost_profile::CostProfile,
+    models::cost_profile::{CostProfile, TouPeriod, validate_tou_periods},
 };
 
 pub fn router() -> Router<AppState> {
@@ -35,6 +35,8 @@ struct CreateProfileBody {
     rate: f64,
     session_fee: Option<f64>,
     currency: Option<String>,
+    timezone: Option<String>,
+    tou_periods: Option<serde_json::Value>,
     effective_from: Option<chrono::NaiveDate>,
     effective_to: Option<chrono::NaiveDate>,
 }
@@ -45,6 +47,9 @@ struct UpdateProfileBody {
     billing_type: Option<String>,
     rate: Option<f64>,
     session_fee: Option<f64>,
+    currency: Option<String>,
+    timezone: Option<String>,
+    tou_periods: Option<serde_json::Value>,
     effective_from: Option<chrono::NaiveDate>,
     effective_to: Option<chrono::NaiveDate>,
 }
@@ -63,6 +68,7 @@ async fn list_profiles(
     let rows = sqlx::query_as!(
         CostProfile,
         r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
+              timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
            WHERE user_id = $1
@@ -84,6 +90,7 @@ async fn get_profile(
     let row = sqlx::query_as!(
         CostProfile,
         r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
+              timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
            WHERE id = $1 AND user_id = $2"#,
@@ -103,14 +110,22 @@ async fn create_profile(
     State(state): State<AppState>,
     Json(body): Json<CreateProfileBody>,
 ) -> Result<Json<CostProfile>, AppError> {
-    validate_billing_type(&body.billing_type)?;
+    let tou_periods = normalize_tou_periods(body.tou_periods.clone())?;
+    validate_profile_details(
+        &body.billing_type,
+        body.rate,
+        body.timezone.as_deref(),
+        &tou_periods,
+    )?;
+
     let row = sqlx::query_as!(
         CostProfile,
         r#"INSERT INTO riviamigo.cost_profiles
            (user_id, name, billing_type, rate, session_fee, currency,
-            effective_from, effective_to)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            timezone, tou_periods, effective_from, effective_to)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
+                     timezone, tou_periods,
                      effective_from, effective_to, created_at"#,
         auth.user_id,
         body.name,
@@ -118,6 +133,8 @@ async fn create_profile(
         body.rate,
         body.session_fee.unwrap_or(0.0),
         body.currency.as_deref().unwrap_or("USD"),
+        body.timezone,
+        tou_periods,
         body.effective_from,
         body.effective_to
     )
@@ -134,30 +151,57 @@ async fn update_profile(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateProfileBody>,
 ) -> Result<Json<CostProfile>, AppError> {
-    if let Some(bt) = &body.billing_type {
-        validate_billing_type(bt)?;
-    }
+    let current = sqlx::query_as!(
+        CostProfile,
+        r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
+                  timezone, tou_periods,
+                  effective_from, effective_to, created_at
+           FROM riviamigo.cost_profiles
+           WHERE id = $1 AND user_id = $2"#,
+        id,
+        auth.user_id
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(AppError::from)?
+    .ok_or(AppError::NotFound)?;
+
+    let billing_type = body.billing_type.clone().unwrap_or_else(|| current.billing_type.clone());
+    let rate = body.rate.unwrap_or(current.rate);
+    let session_fee = body.session_fee.unwrap_or(current.session_fee);
+    let currency = body.currency.clone().unwrap_or_else(|| current.currency.clone());
+    let timezone = body.timezone.clone().or_else(|| current.timezone.clone());
+    let tou_periods = normalize_tou_periods(body.tou_periods.clone().or_else(|| Some(current.tou_periods.clone())))?;
+
+    validate_profile_details(&billing_type, rate, timezone.as_deref(), &tou_periods)?;
 
     let row = sqlx::query_as!(
         CostProfile,
         r#"UPDATE riviamigo.cost_profiles SET
-           name           = COALESCE($3, name),
-           billing_type   = COALESCE($4, billing_type),
-           rate           = COALESCE($5, rate),
-           session_fee    = COALESCE($6, session_fee),
-           effective_from = COALESCE($7, effective_from),
-           effective_to   = COALESCE($8, effective_to)
+           name           = $3,
+           billing_type   = $4,
+           rate           = $5,
+           session_fee    = $6,
+           currency       = $7,
+           timezone       = $8,
+           tou_periods    = $9,
+           effective_from = $10,
+           effective_to   = $11
            WHERE id = $1 AND user_id = $2
            RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
+                     timezone, tou_periods,
                      effective_from, effective_to, created_at"#,
         id,
         auth.user_id,
-        body.name,
-        body.billing_type,
-        body.rate,
-        body.session_fee,
-        body.effective_from,
-        body.effective_to
+        body.name.unwrap_or(current.name),
+        billing_type,
+        rate,
+        session_fee,
+        currency,
+        timezone,
+        tou_periods,
+        body.effective_from.or(current.effective_from),
+        body.effective_to.or(current.effective_to)
     )
     .fetch_optional(&state.pool)
     .await
@@ -192,9 +236,39 @@ async fn delete_profile(
 
 fn validate_billing_type(bt: &str) -> Result<(), AppError> {
     match bt {
-        "per_kwh" | "per_minute" | "free" | "flat" => Ok(()),
+        "per_kwh" | "per_minute" | "free" | "flat" | "tou" => Ok(()),
         _ => Err(AppError::Validation(
-            "billing_type must be one of: per_kwh, per_minute, free, flat".to_string(),
+            "billing_type must be one of: per_kwh, per_minute, free, flat, tou".to_string(),
         )),
     }
+}
+
+fn normalize_tou_periods(value: Option<serde_json::Value>) -> Result<serde_json::Value, AppError> {
+    match value {
+        Some(value) => Ok(value),
+        None => Ok(serde_json::json!([])),
+    }
+}
+
+fn validate_profile_details(
+    billing_type: &str,
+    rate: f64,
+    timezone: Option<&str>,
+    tou_periods: &serde_json::Value,
+) -> Result<(), AppError> {
+    validate_billing_type(billing_type)?;
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(AppError::Validation("rate must be a non-negative number".into()));
+    }
+
+    if billing_type == "tou" {
+        if timezone.map(str::trim).filter(|value| !value.is_empty()).is_none() {
+            return Err(AppError::Validation("timezone is required for TOU profiles".into()));
+        }
+        let periods: Vec<TouPeriod> = serde_json::from_value(tou_periods.clone())
+            .map_err(|_| AppError::Validation("tou_periods must be a JSON array of schedule periods".into()))?;
+        validate_tou_periods(&periods).map_err(AppError::Validation)?;
+    }
+
+    Ok(())
 }

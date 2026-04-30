@@ -1,3 +1,4 @@
+-- no-transaction
 -- ── odometer_daily — TimescaleDB continuous aggregate ────────────────────────
 -- Tracks the daily maximum odometer reading per vehicle and the miles driven
 -- each day (max - min).  Refreshed every hour, covering data from the past
@@ -16,7 +17,8 @@ SELECT
   max(odometer_miles) - min(odometer_miles)        AS miles_driven
 FROM timeseries.telemetry
 WHERE odometer_miles IS NOT NULL
-GROUP BY vehicle_id, time_bucket('1 day', ts);
+GROUP BY vehicle_id, time_bucket('1 day', ts)
+WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy(
   'timeseries.odometer_daily',
