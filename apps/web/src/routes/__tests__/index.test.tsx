@@ -95,7 +95,7 @@ describe('Dashboard page', () => {
 
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Current vehicle state')).toBeInTheDocument();
+    expect(screen.getByText('Vehicle overview')).toBeInTheDocument();
     expect(screen.getByText('SoC')).toBeInTheDocument();
     expect(screen.getByText('79%')).toBeInTheDocument();
     expect(screen.getByText('Total Miles')).toBeInTheDocument();

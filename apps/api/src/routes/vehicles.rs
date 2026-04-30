@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id/status", get(vehicle_status))
+        .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
 }
 
@@ -293,6 +294,8 @@ async fn add_vehicle(
     .execute(&state.pool)
     .await?;
 
+    cache_vehicle_images(&state.pool, vehicle_id, &tokens).await;
+
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
     info!(
         user_id = %auth.user_id,
@@ -319,10 +322,24 @@ async fn list_vehicles(
     .fetch_all(&state.pool)
     .await?;
 
-    let vehicles: Vec<_> = rows
-        .iter()
-        .map(|r| {
-            serde_json::json!({
+    let mut vehicles = Vec::with_capacity(rows.len());
+    for r in rows {
+        let images = fetch_vehicle_images_json(&state.pool, r.id)
+            .await
+            .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
+        if images
+            .get("all")
+            .and_then(|all| all.as_array())
+            .is_some_and(|all| all.is_empty())
+        {
+            let pool = state.pool.clone();
+            let age_key = state.age_key.clone();
+            let vehicle_id = r.id;
+            tokio::spawn(async move {
+                ensure_vehicle_images_cached(&pool, vehicle_id, &age_key).await;
+            });
+        }
+        vehicles.push(serde_json::json!({
                 "id":                    r.id,
                 "user_id":               auth.user_id,
                 "rivian_vehicle_id":     r.rivian_vehicle_id,
@@ -334,9 +351,9 @@ async fn list_vehicles(
                 "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
                 "display_name":          r.name.as_deref().unwrap_or(&r.model),
                 "created_at":            r.created_at,
-            })
-        })
-        .collect();
+                "images":                images,
+            }));
+    }
 
     Ok(Json(serde_json::json!({"vehicles": vehicles})))
 }
@@ -379,6 +396,32 @@ async fn vehicle_status(
           (SELECT outside_temp_c FROM timeseries.telemetry WHERE vehicle_id = $1 AND outside_temp_c IS NOT NULL ORDER BY ts DESC LIMIT 1) AS outside_temp_c,
           (SELECT heading_deg FROM timeseries.telemetry WHERE vehicle_id = $1 AND heading_deg IS NOT NULL ORDER BY ts DESC LIMIT 1) AS heading_deg,
           (SELECT odometer_miles FROM timeseries.telemetry WHERE vehicle_id = $1 AND odometer_miles IS NOT NULL ORDER BY ts DESC LIMIT 1) AS odometer_miles,
+          (SELECT tire_fl_psi FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_fl_psi IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_fl_psi,
+          (SELECT tire_fr_psi FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_fr_psi IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_fr_psi,
+          (SELECT tire_rl_psi FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_rl_psi IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_rl_psi,
+          (SELECT tire_rr_psi FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_rr_psi IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_rr_psi,
+          (SELECT tire_fl_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_fl_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_fl_status,
+          (SELECT tire_fr_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_fr_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_fr_status,
+          (SELECT tire_rl_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_rl_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_rl_status,
+          (SELECT tire_rr_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND tire_rr_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tire_rr_status,
+          (SELECT door_front_left_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_front_left_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_front_left_locked,
+          (SELECT door_front_right_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_front_right_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_front_right_locked,
+          (SELECT door_rear_left_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_rear_left_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_rear_left_locked,
+          (SELECT door_rear_right_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_rear_right_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_rear_right_locked,
+          (SELECT door_front_left_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_front_left_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_front_left_closed,
+          (SELECT door_front_right_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_front_right_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_front_right_closed,
+          (SELECT door_rear_left_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_rear_left_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_rear_left_closed,
+          (SELECT door_rear_right_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND door_rear_right_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS door_rear_right_closed,
+          (SELECT closure_frunk_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND closure_frunk_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS closure_frunk_locked,
+          (SELECT closure_frunk_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND closure_frunk_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS closure_frunk_closed,
+          (SELECT closure_liftgate_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND closure_liftgate_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS closure_liftgate_locked,
+          (SELECT closure_liftgate_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND closure_liftgate_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS closure_liftgate_closed,
+          (SELECT closure_tailgate_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND closure_tailgate_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS closure_tailgate_locked,
+          (SELECT closure_tailgate_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND closure_tailgate_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS closure_tailgate_closed,
+          (SELECT ota_current_version FROM timeseries.telemetry WHERE vehicle_id = $1 AND ota_current_version IS NOT NULL ORDER BY ts DESC LIMIT 1) AS ota_current_version,
+          (SELECT ota_available_version FROM timeseries.telemetry WHERE vehicle_id = $1 AND ota_available_version IS NOT NULL ORDER BY ts DESC LIMIT 1) AS ota_available_version,
+          (SELECT ota_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND ota_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS ota_status,
+          (SELECT ota_current_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND ota_current_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS ota_current_status,
           (SELECT hv_thermal_event FROM timeseries.telemetry WHERE vehicle_id = $1 AND hv_thermal_event IS NOT NULL ORDER BY ts DESC LIMIT 1) AS hv_thermal_event,
           (SELECT twelve_volt_health FROM timeseries.telemetry WHERE vehicle_id = $1 AND twelve_volt_health IS NOT NULL ORDER BY ts DESC LIMIT 1) AS twelve_volt_health
         "#,
@@ -386,6 +429,63 @@ async fn vehicle_status(
     )
     .fetch_one(&state.pool)
     .await?;
+
+    let tire_values = [
+        latest.tire_fl_psi,
+        latest.tire_fr_psi,
+        latest.tire_rl_psi,
+        latest.tire_rr_psi,
+    ];
+    let tire_min_psi = tire_values
+        .into_iter()
+        .flatten()
+        .filter(|v| v.is_finite())
+        .min_by(|a, b| a.total_cmp(b));
+    let tire_statuses = [
+        latest.tire_fl_status.as_deref(),
+        latest.tire_fr_status.as_deref(),
+        latest.tire_rl_status.as_deref(),
+        latest.tire_rr_status.as_deref(),
+    ];
+    let tire_pressure_status = tire_statuses
+        .into_iter()
+        .flatten()
+        .find(|status| !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown"))
+        .or_else(|| {
+            [
+                latest.tire_fl_status.as_deref(),
+                latest.tire_fr_status.as_deref(),
+                latest.tire_rl_status.as_deref(),
+                latest.tire_rr_status.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .next()
+        });
+    let lock_values = [
+        latest.door_front_left_locked,
+        latest.door_front_right_locked,
+        latest.door_rear_left_locked,
+        latest.door_rear_right_locked,
+    ];
+    let doors_locked = if lock_values.iter().all(|value| value.is_some()) {
+        Some(lock_values.into_iter().all(|value| value.unwrap_or(false)))
+    } else {
+        None
+    };
+    let open_closures = open_closures_json(&[
+        ("Front left door", latest.door_front_left_closed),
+        ("Front right door", latest.door_front_right_closed),
+        ("Rear left door", latest.door_rear_left_closed),
+        ("Rear right door", latest.door_rear_right_closed),
+        ("Frunk", latest.closure_frunk_closed),
+        ("Liftgate", latest.closure_liftgate_closed),
+        ("Tailgate", latest.closure_tailgate_closed),
+    ]);
+    let software_update_status = latest
+        .ota_status
+        .as_deref()
+        .or(latest.ota_current_status.as_deref());
 
     Ok(Json(serde_json::json!({
         "vehicle_id": vid,
@@ -412,13 +512,265 @@ async fn vehicle_status(
         "outside_temp_c": latest.outside_temp_c,
         "heading_deg": latest.heading_deg,
         "odometer_miles": latest.odometer_miles,
+        "tire_fl_psi": latest.tire_fl_psi,
+        "tire_fr_psi": latest.tire_fr_psi,
+        "tire_rl_psi": latest.tire_rl_psi,
+        "tire_rr_psi": latest.tire_rr_psi,
+        "tire_min_psi": tire_min_psi,
+        "tire_fl_status": latest.tire_fl_status.as_deref(),
+        "tire_fr_status": latest.tire_fr_status.as_deref(),
+        "tire_rl_status": latest.tire_rl_status.as_deref(),
+        "tire_rr_status": latest.tire_rr_status.as_deref(),
+        "door_front_left_locked": latest.door_front_left_locked,
+        "door_front_right_locked": latest.door_front_right_locked,
+        "door_rear_left_locked": latest.door_rear_left_locked,
+        "door_rear_right_locked": latest.door_rear_right_locked,
+        "door_front_left_closed": latest.door_front_left_closed,
+        "door_front_right_closed": latest.door_front_right_closed,
+        "door_rear_left_closed": latest.door_rear_left_closed,
+        "door_rear_right_closed": latest.door_rear_right_closed,
+        "closure_frunk_locked": latest.closure_frunk_locked,
+        "closure_frunk_closed": latest.closure_frunk_closed,
+        "closure_liftgate_locked": latest.closure_liftgate_locked,
+        "closure_liftgate_closed": latest.closure_liftgate_closed,
+        "closure_tailgate_locked": latest.closure_tailgate_locked,
+        "closure_tailgate_closed": latest.closure_tailgate_closed,
+        "ota_current_version": latest.ota_current_version.as_deref(),
+        "ota_available_version": latest.ota_available_version.as_deref(),
+        "ota_status": latest.ota_status.as_deref(),
+        "ota_current_status": latest.ota_current_status.as_deref(),
         "hv_thermal_event": latest.hv_thermal_event.as_deref(),
         "twelve_volt_health": latest.twelve_volt_health.as_deref(),
-        "doors_locked": serde_json::Value::Null,
-        "open_closures": serde_json::Value::Null,
-        "tire_pressure_status": serde_json::Value::Null,
-        "software_update_status": serde_json::Value::Null,
+        "doors_locked": doors_locked,
+        "open_closures": open_closures,
+        "tire_pressure_status": tire_pressure_status,
+        "software_update_status": software_update_status,
     })))
+}
+
+async fn vehicle_images(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    Ok(Json(fetch_vehicle_images_json(&state.pool, vid).await?))
+}
+
+async fn cache_vehicle_images(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    tokens: &crate::ingestion::session_store::RivianTokenBundle,
+) {
+    let client = reqwest::Client::new();
+    match crate::ingestion::rivian_auth::rivian_vehicle_images(&client, tokens).await {
+        Ok(images) => {
+            let image_count = images.len();
+            for image in images {
+                let _ = sqlx::query!(
+                    r#"
+                    INSERT INTO riviamigo.vehicle_images
+                      (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    ON CONFLICT (vehicle_id, url) DO UPDATE
+                    SET placement = EXCLUDED.placement,
+                        design = EXCLUDED.design,
+                        size = EXCLUDED.size,
+                        resolution = EXCLUDED.resolution,
+                        overlays = EXCLUDED.overlays,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = now()
+                    "#,
+                    vehicle_id,
+                    image.placement.as_deref().unwrap_or("unknown"),
+                    image.design,
+                    image.size,
+                    image.resolution,
+                    image.url,
+                    image.overlays,
+                    serde_json::json!({
+                        "source": image.source,
+                        "vehicle_version": image.vehicle_version,
+                        "rivian_vehicle_id": image.vehicle_id,
+                        "rivian_order_id": image.order_id,
+                        "extension": image.extension
+                    })
+                )
+                .execute(pool)
+                .await;
+            }
+            info!(vehicle_id = %vehicle_id, image_count, "vehicle.images.cached");
+        }
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.add.image_cache_failed");
+        }
+    }
+}
+
+async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age_key: &str) {
+    let existing = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
+        vehicle_id
+    )
+    .fetch_one(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(0);
+
+    if existing > 0 {
+        return;
+    }
+
+    let identity = match age_key.parse::<age::x25519::Identity>() {
+        Ok(identity) => identity,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_bad_age_key");
+            return;
+        }
+    };
+
+    let encrypted_tokens = match sqlx::query_scalar!(
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
+        vehicle_id
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(tokens)) => tokens,
+        Ok(None) => return,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_credentials_failed");
+            return;
+        }
+    };
+
+    match crate::ingestion::session_store::decrypt_tokens(&encrypted_tokens, &identity) {
+        Ok(tokens) => cache_vehicle_images(pool, vehicle_id, &tokens).await,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_decrypt_failed");
+        }
+    }
+}
+
+async fn fetch_vehicle_images_json(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+) -> Result<serde_json::Value, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT placement, design, size, resolution, url, overlays, metadata
+        FROM riviamigo.vehicle_images
+        WHERE vehicle_id = $1
+        ORDER BY
+          CASE WHEN size = 'large' THEN 0 ELSE 1 END,
+          placement,
+          design NULLS LAST,
+          created_at
+        "#,
+        vehicle_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let all: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "placement": row.placement,
+                "design": row.design,
+                "size": row.size,
+                "resolution": row.resolution,
+                "url": row.url,
+                "overlays": row.overlays,
+                "metadata": row.metadata,
+            })
+        })
+        .collect();
+
+    let best = |placement: &str, design: &str| {
+        rows.iter()
+            .find(|row| {
+                normalize_image_placement(&row.placement) == placement
+                    && normalize_image_design(row.design.as_deref()) == design
+            })
+            .or_else(|| {
+                rows.iter()
+                    .find(|row| normalize_image_placement(&row.placement) == placement)
+            })
+            .map(|row| row.url.clone())
+    };
+
+    Ok(serde_json::json!({
+        "all": all,
+        "side": {
+            "dark": best("side", "dark"),
+            "light": best("side", "light")
+        },
+        "overhead": {
+            "dark": best("overhead", "dark"),
+            "light": best("overhead", "light")
+        },
+        "front": {
+            "dark": best("front", "dark"),
+            "light": best("front", "light")
+        },
+        "rear": {
+            "dark": best("rear", "dark"),
+            "light": best("rear", "light")
+        }
+    }))
+}
+
+fn normalize_image_placement(value: &str) -> &'static str {
+    let normalized = value.to_lowercase();
+    if normalized.contains("side") {
+        "side"
+    } else if normalized.contains("overhead")
+        || normalized.contains("top")
+        || normalized.contains("bird")
+    {
+        "overhead"
+    } else if normalized.contains("front") {
+        "front"
+    } else if normalized.contains("rear") || normalized.contains("back") {
+        "rear"
+    } else {
+        "unknown"
+    }
+}
+
+fn normalize_image_design(value: Option<&str>) -> &'static str {
+    let Some(value) = value else {
+        return "unknown";
+    };
+    let normalized = value.to_lowercase();
+    if normalized.contains("dark") {
+        "dark"
+    } else if normalized.contains("light") {
+        "light"
+    } else {
+        "unknown"
+    }
+}
+
+fn open_closures_json(closures: &[(&str, Option<bool>)]) -> serde_json::Value {
+    let any_known = closures.iter().any(|(_, value)| value.is_some());
+    if !any_known {
+        return serde_json::Value::Null;
+    }
+    serde_json::Value::Array(
+        closures
+            .iter()
+            .filter_map(|(label, value)| {
+                if matches!(value, Some(false)) {
+                    Some(serde_json::Value::String((*label).to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    )
 }
 
 async fn raw_vehicle_data(
@@ -438,6 +790,11 @@ async fn raw_vehicle_data(
                drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
                hvac_active, power_kw, regen_power_kw, heading_deg, odometer_miles,
                tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+               tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+               door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+               door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+               closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
+               ota_current_version, ota_available_version, ota_status, ota_current_status,
                hv_thermal_event, twelve_volt_health, is_online
         FROM timeseries.telemetry
         WHERE vehicle_id = $1
@@ -461,7 +818,9 @@ async fn raw_vehicle_data(
                count(outside_temp_c) AS outside_temp_samples,
                count(power_kw) AS power_samples,
                count(regen_power_kw) AS regen_samples,
-               count(tire_fl_psi) AS tire_pressure_samples
+               greatest(count(tire_fl_psi), count(tire_fl_status)) AS tire_pressure_samples,
+               count(door_front_left_locked) AS lock_samples,
+               count(ota_status) AS software_samples
         FROM timeseries.telemetry
         WHERE vehicle_id = $1
         "#,
@@ -482,7 +841,9 @@ async fn raw_vehicle_data(
             "outside_temp_samples": coverage.outside_temp_samples.unwrap_or(0),
             "power_samples": coverage.power_samples.unwrap_or(0),
             "regen_samples": coverage.regen_samples.unwrap_or(0),
-            "tire_pressure_samples": coverage.tire_pressure_samples.unwrap_or(0)
+            "tire_pressure_samples": coverage.tire_pressure_samples.unwrap_or(0),
+            "lock_samples": coverage.lock_samples.unwrap_or(0),
+            "software_samples": coverage.software_samples.unwrap_or(0)
         },
         "samples": samples.into_iter().map(|r| serde_json::json!({
             "ts": r.ts,
@@ -512,6 +873,25 @@ async fn raw_vehicle_data(
             "tire_fr_psi": r.tire_fr_psi,
             "tire_rl_psi": r.tire_rl_psi,
             "tire_rr_psi": r.tire_rr_psi,
+            "tire_fl_status": r.tire_fl_status,
+            "tire_fr_status": r.tire_fr_status,
+            "tire_rl_status": r.tire_rl_status,
+            "tire_rr_status": r.tire_rr_status,
+            "door_front_left_locked": r.door_front_left_locked,
+            "door_front_right_locked": r.door_front_right_locked,
+            "door_rear_left_locked": r.door_rear_left_locked,
+            "door_rear_right_locked": r.door_rear_right_locked,
+            "door_front_left_closed": r.door_front_left_closed,
+            "door_front_right_closed": r.door_front_right_closed,
+            "door_rear_left_closed": r.door_rear_left_closed,
+            "door_rear_right_closed": r.door_rear_right_closed,
+            "closure_frunk_closed": r.closure_frunk_closed,
+            "closure_liftgate_closed": r.closure_liftgate_closed,
+            "closure_tailgate_closed": r.closure_tailgate_closed,
+            "ota_current_version": r.ota_current_version,
+            "ota_available_version": r.ota_available_version,
+            "ota_status": r.ota_status,
+            "ota_current_status": r.ota_current_status,
             "hv_thermal_event": r.hv_thermal_event,
             "twelve_volt_health": r.twelve_volt_health,
             "is_online": r.is_online

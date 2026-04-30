@@ -3,7 +3,7 @@ import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
 import { api, useAuth, useVehicles } from '@riviamigo/hooks';
-import type { ApiAccessLevel } from '@riviamigo/types';
+import type { ApiAccessLevel, VehicleImages } from '@riviamigo/types';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
   Button, Badge, ThemeToggle, Tooltip,
@@ -44,12 +44,37 @@ function formatRawNumber(value: number | null | undefined, unit = '') {
   return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : '-';
 }
 
+function ThemeVehicleImage({
+  images,
+  placement,
+  className,
+  fallback,
+}: {
+  images?: VehicleImages | null | undefined;
+  placement: 'side' | 'overhead' | 'front' | 'rear';
+  className?: string;
+  fallback: React.ReactNode;
+}) {
+  const pair = images?.[placement];
+  const light = pair?.light ?? pair?.dark ?? images?.all?.find((image) => image.placement === placement)?.url;
+  const dark = pair?.dark ?? pair?.light ?? light;
+
+  if (!light && !dark) return <>{fallback}</>;
+
+  return (
+    <>
+      {light && <img src={light} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />}
+      {dark && <img src={dark} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />}
+    </>
+  );
+}
+
 function SettingsPage() {
   return <AuthGuard><SettingsContent /></AuthGuard>;
 }
 
 export function SettingsContent() {
-  const { logout } = useAuth();
+  const { logout, defaultVehicleId } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
@@ -166,11 +191,24 @@ export function SettingsContent() {
                     <p className="text-sm text-fg-tertiary">No vehicles connected yet.</p>
                   )}
                   <div className="divide-y divide-border">
-                    {vehicles?.map((v) => (
+                    {vehicles?.map((v) => {
+                      const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
+                      return (
                       <div key={v.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                         <div className="flex min-w-0 items-center gap-3">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-bg-elevated">
-                            <Car className="h-4 w-4 text-fg-secondary" />
+                          <div
+                            className={[
+                              'flex h-12 w-24 items-center justify-center rounded-xl border bg-bg-elevated/70 p-1 transition-shadow',
+                              isActive ? 'border-accent/60 shadow-[0_0_24px_rgba(56,189,248,0.22)]' : 'border-border',
+                            ].join(' ')}
+                            aria-label={isActive ? 'Active vehicle' : 'Vehicle'}
+                          >
+                            <ThemeVehicleImage
+                              images={v.images}
+                              placement="side"
+                              className="h-full max-h-10 w-full object-contain"
+                              fallback={<Car className="h-5 w-5 text-fg-secondary" />}
+                            />
                           </div>
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium text-fg">{v.display_name}</p>
@@ -182,10 +220,11 @@ export function SettingsContent() {
                         <div className="grid gap-1 text-xs text-fg-tertiary sm:justify-items-end">
                           <span>VIN: <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span></span>
                           <span>Rivian ID: <span className="font-mono text-fg">{v.rivian_vehicle_id}</span></span>
-                          <Badge variant="success" dot>Active</Badge>
+                          <span className={isActive ? 'text-accent' : 'text-fg-tertiary'}>{isActive ? 'Active vehicle' : 'Connected'}</span>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -397,6 +436,8 @@ export function SettingsContent() {
                         ['Outside Temp', rawTelemetry.data?.coverage.outside_temp_samples],
                         ['Regen', rawTelemetry.data?.coverage.regen_samples],
                         ['Tire Pressure', rawTelemetry.data?.coverage.tire_pressure_samples],
+                        ['Locks', rawTelemetry.data?.coverage.lock_samples],
+                        ['Software', rawTelemetry.data?.coverage.software_samples],
                       ].map(([label, value]) => (
                         <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
                           <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
