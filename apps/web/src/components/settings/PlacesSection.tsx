@@ -4,9 +4,10 @@ import { api } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { HelpCircle, Home, Pencil, Plus, Zap, Trash2 } from 'lucide-react';
 
 type PlanType = 'flat' | 'tou';
+type PlaceType = 'home' | 'work' | 'poi';
 
 interface ScheduleDraft {
   label: string;
@@ -18,8 +19,7 @@ interface ScheduleDraft {
 interface PlaceDraft {
   name: string;
   radius_m: string;
-  is_home: boolean;
-  is_work: boolean;
+  placeType: PlaceType;
   chargingEnabled: boolean;
   planType: PlanType;
   flatRate: string;
@@ -38,8 +38,7 @@ function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
   return {
     name: '',
     radius_m: unitSystem === 'metric' ? '75' : '250',
-    is_home: false,
-    is_work: false,
+    placeType: 'poi',
     chargingEnabled: false,
     planType: 'flat',
     flatRate: '0.13',
@@ -49,18 +48,57 @@ function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
   };
 }
 
-function formatRadius(meters: number, unitSystem: UnitSystem) {
-  return unitSystem === 'metric'
-    ? `${Math.round(meters)} m`
-    : `${Math.round(meters * METERS_TO_FEET)} ft`;
-}
-
 function radiusDraftToMeters(value: number, unitSystem: UnitSystem) {
   return unitSystem === 'metric' ? value : value / METERS_TO_FEET;
 }
 
 function radiusInputLabel(unitSystem: UnitSystem) {
   return unitSystem === 'metric' ? 'Radius (m)' : 'Radius (ft)';
+}
+
+function buildNextSchedule(schedule: ScheduleDraft[]) {
+  if (schedule.length === 0) {
+    return normalizeScheduleEdges([{ label: 'Period 1', start: '00:00', end: '24:00', rate: '0' }]);
+  }
+
+  const nextSchedule = [...schedule];
+  const lastIndex = nextSchedule.length - 1;
+  const lastPeriod = nextSchedule[lastIndex];
+  const startMinute = parseTimeToMinute(lastPeriod.start, false);
+  const endMinute = parseTimeToMinute(lastPeriod.end, true);
+
+  if (startMinute !== null && endMinute !== null && endMinute - startMinute >= 120) {
+    const splitMinute = Math.max(startMinute + 60, Math.min(endMinute - 60, Math.ceil((startMinute + endMinute) / 120) * 60));
+    nextSchedule[lastIndex] = { ...lastPeriod, end: minutesToTime(splitMinute) };
+    nextSchedule.push({
+      label: `Period ${nextSchedule.length + 1}`,
+      start: minutesToTime(splitMinute),
+      end: minutesToTime(endMinute),
+      rate: lastPeriod.rate || '0',
+    });
+    return normalizeScheduleEdges(nextSchedule);
+  }
+
+  const fallbackStart = lastPeriod.end === '24:00' ? '23:00' : lastPeriod.end;
+  nextSchedule.push({
+    label: `Period ${nextSchedule.length + 1}`,
+    start: fallbackStart,
+    end: '24:00',
+    rate: lastPeriod.rate || '0',
+  });
+  return normalizeScheduleEdges(nextSchedule);
+}
+
+function normalizeScheduleEdges(schedule: ScheduleDraft[]) {
+  if (schedule.length === 0) {
+    return [{ label: 'All day', start: '00:00', end: '24:00', rate: '0' }];
+  }
+
+  return schedule.map((period, index) => ({
+    ...period,
+    start: index === 0 ? '00:00' : period.start,
+    end: index === schedule.length - 1 ? '24:00' : period.end,
+  }));
 }
 
 export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
@@ -131,13 +169,20 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   }, [draft.chargingEnabled, draft.planType, draft.schedule]);
 
   const addressChangedFromSelection = Boolean(selectedAddress && addressQuery.trim() !== selectedAddress.display_name);
+  const chargeRateValid = () => {
+    if (!draft.chargingEnabled) return true;
+    if (draft.planType === 'flat') {
+      return Number.isFinite(Number(draft.flatRate));
+    }
+    return !scheduleValidation;
+  };
+
   const canSave = selectedAddress
     && draft.name.trim().length > 0
     && Number.isFinite(Number(draft.radius_m))
     && Number(draft.radius_m) > 0
     && !addressChangedFromSelection
-    && (!draft.chargingEnabled || draft.flatRate.trim().length > 0)
-    && (!draft.chargingEnabled || draft.planType !== 'tou' || !scheduleValidation);
+    && chargeRateValid();
 
   const placeSuggestions = deferredAddressQuery.length >= 3 && (!selectedAddress || addressChangedFromSelection)
     ? (addressSearch.data ?? [])
@@ -145,6 +190,20 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
 
   function updateDraft<K extends keyof PlaceDraft>(key: K, value: PlaceDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateSchedulePeriod(index: number, updates: Partial<ScheduleDraft>, syncNextStart = false) {
+    setDraft((current) => {
+      const schedule = current.schedule.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, ...updates } : item
+      ));
+
+      if (syncNextStart && index < schedule.length - 1 && updates.end) {
+        schedule[index + 1] = { ...schedule[index + 1], start: updates.end };
+      }
+
+      return { ...current, schedule: normalizeScheduleEdges(schedule) };
+    });
   }
 
   function resetEditor() {
@@ -158,24 +217,24 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     setEditingPlaceId(place.id);
     setSelectedAddress(place.address);
     setAddressQuery(place.address?.display_name ?? '');
+    const placeType = place.is_home ? 'home' : place.is_work ? 'work' : 'poi';
     setDraft({
       name: place.name,
       radius_m: String(Math.round(unitSystem === 'metric' ? place.radius_m : place.radius_m * METERS_TO_FEET)),
-      is_home: place.is_home,
-      is_work: place.is_work,
+      placeType,
       chargingEnabled: !!place.charging,
       planType: place.charging?.billing_type === 'tou' ? 'tou' : 'flat',
       flatRate: String(place.charging?.rate ?? 0.13),
       sessionFee: String(place.charging?.session_fee ?? 0),
       timezone: place.charging?.timezone ?? browserTimezone,
-      schedule: place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
+      schedule: normalizeScheduleEdges(place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
         ? place.charging.tou_periods.map((period) => ({
             label: period.label,
             start: minutesToTime(period.start_minute),
             end: minutesToTime(period.end_minute),
             rate: String(period.rate),
           }))
-        : [{ label: 'All day', start: '00:00', end: '24:00', rate: String(place.charging?.rate ?? 0.13) }],
+        : [{ label: 'All day', start: '00:00', end: '24:00', rate: String(place.charging?.rate ?? 0.13) }]),
     });
   }
 
@@ -195,8 +254,8 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     await savePlace.mutateAsync({
       name: draft.name.trim(),
       radius_m: radiusDraftToMeters(Number(draft.radius_m || '0'), unitSystem),
-      is_home: draft.is_home,
-      is_work: draft.is_work,
+      is_home: draft.placeType === 'home',
+      is_work: draft.placeType === 'work',
       address: selectedAddress,
       charging,
     });
@@ -211,21 +270,20 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
             {editingPlaceId ? 'New Place' : 'Reset'}
           </Button>
         </CardHeader>
-        <CardContent>
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-            <div className="grid gap-4">
+        <CardContent className="min-w-0">
+          <div className="grid min-w-0 gap-4">
               <label className="grid gap-1">
                 <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Place Name</span>
                 <input
                   value={draft.name}
                   onChange={(event) => updateDraft('name', event.target.value)}
                   placeholder="Home garage"
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                  className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                 />
               </label>
 
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_8rem]">
-                <label className="grid gap-1">
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,8.5rem)]">
+                <label className="grid min-w-0 gap-1">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Address Search</span>
                   <input
                     value={addressQuery}
@@ -236,16 +294,16 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                       }
                     }}
                     placeholder="Start typing an address"
-                    className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                    className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                   />
                 </label>
-                <label className="grid gap-1">
+                <label className="grid gap-1 sm:min-w-0">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{radiusInputLabel(unitSystem)}</span>
                   <input
                     value={draft.radius_m}
                     onChange={(event) => updateDraft('radius_m', event.target.value)}
                     inputMode="numeric"
-                    className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                    className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                   />
                 </label>
               </div>
@@ -278,78 +336,139 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-3 text-sm text-fg">
-                <label className="inline-flex items-center gap-2">
-                  <input type="checkbox" checked={draft.is_home} onChange={(event) => updateDraft('is_home', event.target.checked)} />
-                  <span>Mark as home</span>
+              <div className="grid gap-3">
+                <label className="grid gap-1">
+                  <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Place Type</span>
+                  <select
+                    value={draft.placeType}
+                    onChange={(event) => updateDraft('placeType', event.target.value as PlaceType)}
+                    className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                  >
+                    <option value="poi">Point of Interest</option>
+                    <option value="home">Home</option>
+                    <option value="work">Work</option>
+                  </select>
                 </label>
-                <label className="inline-flex items-center gap-2">
-                  <input type="checkbox" checked={draft.is_work} onChange={(event) => updateDraft('is_work', event.target.checked)} />
-                  <span>Mark as work</span>
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input type="checkbox" checked={draft.chargingEnabled} onChange={(event) => updateDraft('chargingEnabled', event.target.checked)} />
-                  <span>Attach charging pricing</span>
-                </label>
+
+                <button
+                  type="button"
+                  aria-pressed={draft.chargingEnabled}
+                  onClick={() => updateDraft('chargingEnabled', !draft.chargingEnabled)}
+                  className={`flex items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors ${draft.chargingEnabled
+                    ? 'border-accent bg-accent/12 text-fg'
+                    : 'border-border bg-bg-elevated/50 text-fg hover:border-border-strong'}`}
+                >
+                  <div>
+                    <div className="text-sm font-medium">Charging Rates</div>
+                    <div className="text-xs text-fg-tertiary">Turn on pricing for this place</div>
+                  </div>
+                  <span
+                    className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${draft.chargingEnabled ? 'bg-accent' : 'bg-bg-elevated border border-border'}`}
+                  >
+                    <span
+                      className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${draft.chargingEnabled ? 'translate-x-5' : 'translate-x-0.5'}`}
+                    />
+                  </span>
+                </button>
               </div>
 
               {draft.chargingEnabled && (
                 <div className="grid gap-4 rounded-xl border border-border bg-bg-elevated/40 p-4">
                   <div>
-                    <div className="text-sm font-medium text-fg">Charging Cost Setup</div>
+                    <div className="flex items-center gap-2 text-sm font-medium text-fg">
+                      <Plus className="h-4 w-4" />
+                      Charging Rates
+                    </div>
                     <p className="mt-1 text-xs text-fg-tertiary">
-                      Flat pricing charges one fixed amount per session. TOU pricing requires contiguous periods that cover the full day in the selected timezone.
+                      Flat pricing charges one fixed amount per session. Time-of-Use (TOU) pricing requires contiguous periods that cover the full day in the selected timezone.
                     </p>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-[12rem_10rem_10rem]">
-                    <label className="grid gap-1">
+                  <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
+                    <label className="grid gap-1 sm:min-w-0">
                       <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Pricing Type</span>
                       <select
                         value={draft.planType}
                         onChange={(event) => updateDraft('planType', event.target.value as PlanType)}
-                        className="h-9 rounded-lg border border-border bg-bg px-3 text-sm text-fg outline-none focus:border-accent"
+                        className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                       >
                         <option value="flat">Flat</option>
-                        <option value="tou">TOU</option>
+                        <option value="tou">Time-of-Use</option>
                       </select>
                     </label>
-                    <label className="grid gap-1">
-                      <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Rate</span>
-                      <input
-                        value={draft.flatRate}
-                        onChange={(event) => updateDraft('flatRate', event.target.value)}
-                        inputMode="decimal"
-                        className="h-9 rounded-lg border border-border bg-bg px-3 text-sm text-fg outline-none focus:border-accent"
-                      />
-                    </label>
-                    <label className="grid gap-1">
-                      <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Session Fee</span>
+                    {draft.planType === 'flat' && (
+                      <label className="grid gap-1 sm:min-w-0">
+                          <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Rate ($/kWh)</span>
+                          <input
+                            value={draft.flatRate}
+                            onChange={(event) => updateDraft('flatRate', event.target.value)}
+                            inputMode="decimal"
+                            placeholder="0.13"
+                            className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                          />
+                        </label>
+                    )}
+                  </div>
+
+                  {draft.planType === 'flat' && (
+                    <label className="grid gap-1 sm:max-w-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Session Fee</span>
+                        <div className="group relative">
+                          <HelpCircle className="h-3.5 w-3.5 cursor-help text-fg-tertiary" />
+                          <div className="absolute bottom-full right-0 z-10 mb-2 hidden whitespace-nowrap rounded-lg border border-border bg-bg-elevated px-2 py-1 text-xs text-fg group-hover:block">
+                            One-time charge per charging session
+                          </div>
+                        </div>
+                      </div>
                       <input
                         value={draft.sessionFee}
                         onChange={(event) => updateDraft('sessionFee', event.target.value)}
                         inputMode="decimal"
-                        className="h-9 rounded-lg border border-border bg-bg px-3 text-sm text-fg outline-none focus:border-accent"
+                        placeholder="0.00"
+                        className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                       />
                     </label>
-                  </div>
+                  )}
 
                   {draft.planType === 'tou' && (
-                    <div className="grid gap-3">
-                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                        <label className="grid gap-1">
+                    <div className="grid gap-4">
+                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)]">
+                        <label className="grid gap-1 min-w-0">
                           <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Timezone</span>
                           <input
                             value={draft.timezone}
                             onChange={(event) => updateDraft('timezone', event.target.value)}
-                            className="h-9 rounded-lg border border-border bg-bg px-3 text-sm text-fg outline-none focus:border-accent"
+                            className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                           />
                         </label>
+                        <label className="grid gap-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Session Fee</span>
+                            <div className="group relative">
+                              <HelpCircle className="h-3.5 w-3.5 cursor-help text-fg-tertiary" />
+                              <div className="absolute bottom-full right-0 z-10 mb-2 hidden whitespace-nowrap rounded-lg border border-border bg-bg-elevated px-2 py-1 text-xs text-fg group-hover:block">
+                                One-time charge per charging session
+                              </div>
+                            </div>
+                          </div>
+                          <input
+                            value={draft.sessionFee}
+                            onChange={(event) => updateDraft('sessionFee', event.target.value)}
+                            inputMode="decimal"
+                            placeholder="0.00"
+                            className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                          />
+                        </label>
+                      </div>
+
+                      <div>
                         <Button
                           variant="secondary"
-                          size="sm"
+                          size="md"
+                          className="h-9"
                           iconLeft={<Plus className="h-3.5 w-3.5" />}
-                          onClick={() => updateDraft('schedule', [...draft.schedule, { label: `Period ${draft.schedule.length + 1}`, start: '00:00', end: '24:00', rate: draft.flatRate || '0.13' }])}
+                          onClick={() => updateDraft('schedule', buildNextSchedule(draft.schedule))}
                         >
                           Add Period
                         </Button>
@@ -357,53 +476,49 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
 
                       <div className="grid gap-2">
                         {draft.schedule.map((period, index) => (
-                          <div key={`${index}-${period.label}`} className="grid gap-2 rounded-lg border border-border bg-bg p-3 md:grid-cols-[minmax(0,1fr)_6.5rem_6.5rem_6.5rem_auto]">
+                          <div key={`period-${index}`} className="grid min-w-0 gap-2 rounded-lg border border-border bg-bg p-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_6.5rem_6.5rem_6.5rem_7rem]">
                             <input
                               value={period.label}
-                              onChange={(event) => setDraft((current) => ({
-                                ...current,
-                                schedule: current.schedule.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item),
-                              }))}
+                              onChange={(event) => updateSchedulePeriod(index, { label: event.target.value })}
                               placeholder="Peak"
-                              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                              className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent xl:col-auto"
                             />
                             <input
                               value={period.start}
-                              onChange={(event) => setDraft((current) => ({
-                                ...current,
-                                schedule: current.schedule.map((item, itemIndex) => itemIndex === index ? { ...item, start: event.target.value } : item),
-                              }))}
+                              onChange={(event) => updateSchedulePeriod(index, { start: event.target.value })}
                               placeholder="00:00"
-                              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                              disabled={index === 0}
+                              className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-70"
                             />
                             <input
-                              value={period.end}
-                              onChange={(event) => setDraft((current) => ({
-                                ...current,
-                                schedule: current.schedule.map((item, itemIndex) => itemIndex === index ? { ...item, end: event.target.value } : item),
-                              }))}
+                              value={index === draft.schedule.length - 1 ? '00:00' : period.end}
+                              onChange={(event) => updateSchedulePeriod(index, { end: event.target.value }, true)}
                               placeholder="24:00"
-                              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                              disabled={index === draft.schedule.length - 1}
+                              className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-70"
                             />
                             <input
                               value={period.rate}
-                              onChange={(event) => setDraft((current) => ({
-                                ...current,
-                                schedule: current.schedule.map((item, itemIndex) => itemIndex === index ? { ...item, rate: event.target.value } : item),
-                              }))}
+                              onChange={(event) => updateSchedulePeriod(index, { rate: event.target.value })}
                               inputMode="decimal"
-                              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                              placeholder="0.13"
+                              className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                             />
                             <Button
                               variant="danger"
-                              size="sm"
+                              size="md"
+                              className="h-9"
                               iconLeft={<Trash2 className="h-3.5 w-3.5" />}
-                              onClick={() => updateDraft('schedule', draft.schedule.filter((_, itemIndex) => itemIndex !== index))}
+                              onClick={() => updateDraft('schedule', normalizeScheduleEdges(draft.schedule.filter((_, itemIndex) => itemIndex !== index)))}
                             >
                               Remove
                             </Button>
                           </div>
                         ))}
+                      </div>
+
+                      <div className="text-xs text-fg-tertiary">
+                        The first period always starts at 00:00, and the final period always ends at midnight so the full day stays covered.
                       </div>
 
                       {scheduleValidation && (
@@ -430,57 +545,54 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   <Button variant="secondary" size="sm" onClick={resetEditor}>Cancel</Button>
                 )}
               </div>
-            </div>
+          </div>
+        </CardContent>
+      </Card>
 
-            <div className="rounded-xl border border-border bg-bg-elevated/30 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium text-fg">Saved Places</div>
-                  <div className="text-xs text-fg-tertiary">Addresses, geofence radius, and charging plans live together here.</div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Saved Places</CardTitle>
+          <Badge variant="default">{places.data?.length ?? 0}</Badge>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-2">
+            {(places.data ?? []).map((place) => (
+              <div key={place.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/30 p-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-fg">{place.name}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    {place.is_home && (
+                      <Badge variant="success" className="inline-flex items-center gap-1 text-xs">
+                        <Home className="h-3 w-3" />
+                        Home
+                      </Badge>
+                    )}
+                    {place.is_work && <Badge variant="default" className="text-xs">Work</Badge>}
+                    {!place.is_home && !place.is_work && <Badge variant="secondary" className="text-xs">POI</Badge>}
+                    {place.charging && (
+                      <Badge variant="default" className="inline-flex items-center gap-1 text-xs">
+                        <Zap className="h-3 w-3" />
+                        Charging Rates
+                      </Badge>
+                    )}
+                  </div>
                 </div>
-                <Badge variant="default">{places.data?.length ?? 0}</Badge>
+                <div className="flex gap-2 sm:justify-end">
+                  <Button variant="secondary" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} onClick={() => startEditing(place)}>
+                    Edit
+                  </Button>
+                  <Button variant="danger" size="sm" iconLeft={<Trash2 className="h-3.5 w-3.5" />} loading={deletePlace.isPending} onClick={() => deletePlace.mutate(place.id)}>
+                    Delete
+                  </Button>
+                </div>
               </div>
+            ))}
 
-              <div className="grid gap-3">
-                {(places.data ?? []).map((place) => (
-                  <div key={place.id} className="rounded-lg border border-border bg-bg p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-fg">{place.name}</div>
-                        <div className="mt-1 text-xs text-fg-tertiary">{place.address?.display_name ?? 'Address pending'}</div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="secondary" size="sm" iconLeft={<Pencil className="h-3.5 w-3.5" />} onClick={() => startEditing(place)}>
-                          Edit
-                        </Button>
-                        <Button variant="danger" size="sm" iconLeft={<Trash2 className="h-3.5 w-3.5" />} loading={deletePlace.isPending} onClick={() => deletePlace.mutate(place.id)}>
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-fg-tertiary">
-                      <Badge variant="default">{formatRadius(place.radius_m, unitSystem)} radius</Badge>
-                      {place.is_home && <Badge variant="success">Home</Badge>}
-                      {place.is_work && <Badge variant="default">Work</Badge>}
-                      {place.charging && (
-                        <Badge variant="default">
-                          {place.charging.billing_type === 'tou'
-                            ? `TOU ${place.charging.timezone ?? 'UTC'}`
-                            : `Flat ${place.charging.currency} ${place.charging.rate.toFixed(2)}`}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                ))}
-
-                {(places.data?.length ?? 0) === 0 && (
-                  <div className="rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">
-                    No saved places yet. Add home, work, or favorite chargers here.
-                  </div>
-                )}
+            {(places.data?.length ?? 0) === 0 && (
+              <div className="rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">
+                No saved places yet. Add home, work, or favorite chargers here.
               </div>
-            </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -565,14 +677,14 @@ function validateScheduleDraft(schedule: ScheduleDraft[]) {
   }
 
   if (expectedStart !== 24 * 60) {
-    return 'TOU periods must cover the entire day through 24:00.';
+    return 'TOU periods must cover the entire day through midnight.';
   }
 
   return null;
 }
 
 function parseTimeToMinute(value: string, allow24Hour: boolean) {
-  const match = /^(\d{2}):(\d{2})$/.exec(value.trim());
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) {
     return null;
   }

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api, useTrips } from '@riviamigo/hooks';
-import { DataTable, tripColumns, type TripRow } from '@riviamigo/ui/tables';
+import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { TripMapChart, type TripMapRoute } from '@riviamigo/ui/charts';
 import { formatEfficiency, formatKwh, formatMiles } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
@@ -12,9 +13,18 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page);
+  const placesQuery = useQuery({
+    queryKey: ['places'],
+    queryFn: () => api.listPlaces(),
+    staleTime: 5 * 60 * 1000,
+  });
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
   const trips = (data?.items ?? []) as unknown as TripRow[];
   const selectedIdSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
+  const columns = React.useMemo(
+    () => createTripColumns(placesQuery.data ?? []),
+    [placesQuery.data]
+  );
 
   const trackQueries = useQueries({
     queries: trips.map((trip) => ({
@@ -85,7 +95,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
 
       <DataTable
         data={trips}
-        columns={tripColumns}
+        columns={columns}
         loading={isLoading}
         onRowClick={handleRowClick}
         getRowIsSelected={(row) => selectedIdSet.has(row.original.id)}
