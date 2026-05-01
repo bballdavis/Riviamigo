@@ -7,6 +7,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { colors } from '../tokens/colors';
+import { formatEfficiency, getUnitSystem } from '../lib/utils';
 
 export interface EfficiencyVsTempPoint {
   temp_c_low: number;
@@ -22,7 +23,9 @@ export interface EfficiencyVsTempChartProps {
   unit?: 'c' | 'f';
 }
 
-function toF(c: number) { return Math.round(c * 9 / 5 + 32); }
+function toF(c: number) {
+  return Math.round(c * 9 / 5 + 32);
+}
 
 function barColor(efficiency: number): string {
   if (efficiency < 300) return colors.soc.high;
@@ -37,12 +40,13 @@ export function EfficiencyVsTempChart({
   unit = 'f',
 }: EfficiencyVsTempChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  const efficiencyUnit = getUnitSystem() === 'metric' ? 'Wh/km' : 'Wh/mi';
 
   const chartData = data.map((d) => ({
     ...d,
     label: unit === 'f'
-      ? `${toF(d.temp_c_low)}°`
-      : `${d.temp_c_low}°`,
+      ? `${toF(d.temp_c_low)} F`
+      : `${d.temp_c_low} C`,
     efficiency: d.avg_efficiency_wh_mi,
   }));
 
@@ -55,20 +59,20 @@ export function EfficiencyVsTempChart({
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
-          label={{ value: unit === 'f' ? '°F' : '°C', position: 'insideBottomRight', offset: 0, style: TICK_STYLE }}
+          label={{ value: unit === 'f' ? 'F' : 'C', position: 'insideBottomRight', offset: 0, style: TICK_STYLE }}
         />
         <YAxis
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
           tickFormatter={(v: number) => `${v}`}
-          unit=" Wh"
+          unit={` ${efficiencyUnit}`}
           width={52}
         />
         <Tooltip
           content={<ChartTooltip
             formatter={(v, _) => [
-              v !== undefined ? `${v.toFixed(0)} Wh/mi` : '—',
+              v !== undefined ? formatEfficiency(v) : '-',
               'Avg efficiency',
             ]}
           />}

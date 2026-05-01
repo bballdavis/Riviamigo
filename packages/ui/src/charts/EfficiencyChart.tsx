@@ -6,10 +6,11 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
+import { formatEfficiency, getUnitSystem } from '../lib/utils';
 
 export interface EfficiencyByModePoint {
   drive_mode: string;
-  avg_efficiency: number;   // Wh/mi
+  avg_efficiency: number; // Wh/mi
   p10_efficiency: number;
   p90_efficiency: number;
 }
@@ -21,8 +22,10 @@ export interface EfficiencyChartProps {
 }
 
 const MODE_LABELS: Record<string, string> = {
-  sport: 'Sport', everyday: 'Everyday',
-  conserve: 'Conserve', off_road_auto: 'Off-Road Auto',
+  sport: 'Sport',
+  everyday: 'Everyday',
+  conserve: 'Conserve',
+  off_road_auto: 'Off-Road Auto',
 };
 
 export function EfficiencyChart({
@@ -31,6 +34,7 @@ export function EfficiencyChart({
   height = 200,
 }: EfficiencyChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  const efficiencyUnit = getUnitSystem() === 'metric' ? 'Wh/km' : 'Wh/mi';
 
   const chartData = data.map((d) => ({
     ...d,
@@ -52,11 +56,12 @@ export function EfficiencyChart({
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(v: number) => `${v}Wh`}
+          tickFormatter={(v: number) => `${v}`}
+          unit={` ${efficiencyUnit}`}
           width={40}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [`${(v ?? 0).toFixed(0)} Wh/mi`, 'Avg']} />}
+          content={<ChartTooltip formatter={(v) => [formatEfficiency(v ?? 0), 'Avg']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar

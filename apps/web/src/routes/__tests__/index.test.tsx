@@ -83,6 +83,7 @@ vi.mock('../../lib/dates', () => ({
 vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatMiles: (v: number) => `${v} mi`,
   formatKwh: (v: number) => `${v} kWh`,
+  formatEfficiency: (v: number) => `${v} Wh/mi`,
 }));
 
 import { indexRoute } from '../index';

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Wifi, WifiOff, Battery, BatteryCharging, Loader2 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, formatMiles } from '../lib/utils';
 
 export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'error';
 
@@ -89,7 +89,7 @@ export function StatusBar({
           )}
           <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>
           {rangeEstimateMi !== undefined && (
-            <span className="text-xs text-fg-tertiary">- {Math.round(rangeEstimateMi)} mi</span>
+            <span className="text-xs text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>
           )}
         </div>
       )}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { vi, describe, it, expect } from 'vitest';
 
@@ -20,7 +20,20 @@ vi.mock('@riviamigo/hooks', () => ({
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({ endpoints: [] }),
     listPlaces: vi.fn().mockResolvedValue([]),
-    searchPlaceAddresses: vi.fn().mockResolvedValue([]),
+    searchPlaceAddresses: vi.fn().mockResolvedValue([
+      {
+        display_name: '123 Main St, Denver, CO',
+        osm_id: 123,
+        latitude: 39.7392,
+        longitude: -104.9903,
+        road: 'Main St',
+        city: 'Denver',
+        state: 'CO',
+        postcode: '80202',
+        country: 'United States',
+        raw: null,
+      },
+    ]),
     createPlace: vi.fn(),
     updatePlace: vi.fn(),
     deletePlace: vi.fn(),
@@ -61,6 +74,7 @@ vi.mock('lucide-react', () => ({
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus:   () => <svg data-testid="icon-plus" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
+  Ruler: () => <svg data-testid="icon-ruler" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
   Trash2: () => <svg data-testid="icon-trash" />,
 }));
@@ -120,6 +134,17 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Places'));
     expect(screen.getAllByText('Places').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows address suggestions while typing a place search', async () => {
+    renderSettings();
+    fireEvent.click(screen.getByText('Places'));
+
+    fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('123 Main St, Denver, CO')).toBeInTheDocument();
+    });
   });
 
   it('renders the theme toggle button', () => {

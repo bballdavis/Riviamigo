@@ -7,6 +7,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+use std::time::Duration;
+use tracing::warn;
 
 use crate::{
     errors::AppError,
@@ -137,8 +139,12 @@ async fn search_places(
         return Ok(Json(Vec::new()));
     }
 
-    let client = reqwest::Client::new();
-    let response = client
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| AppError::Internal(anyhow!("address search client build failed: {error}")))?;
+
+    let response = match client
         .get("https://nominatim.openstreetmap.org/search")
         .header(reqwest::header::USER_AGENT, "Riviamigo/0.1 places search")
         .query(&[
@@ -149,14 +155,29 @@ async fn search_places(
         ])
         .send()
         .await
-        .map_err(|error| AppError::Internal(anyhow!("address search request failed: {error}")))?
-        .error_for_status()
-        .map_err(|error| AppError::Internal(anyhow!("address search failed: {error}")))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(error = %error, query = %query, "places.address_search_request_failed");
+            return Ok(Json(Vec::new()));
+        }
+    };
 
-    let rows: Vec<Value> = response
-        .json()
-        .await
-        .map_err(|error| AppError::Internal(anyhow!("address search payload decode failed: {error}")))?;
+    let response = match response.error_for_status() {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(error = %error, query = %query, "places.address_search_http_error");
+            return Ok(Json(Vec::new()));
+        }
+    };
+
+    let rows: Vec<Value> = match response.json().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(error = %error, query = %query, "places.address_search_decode_failed");
+            return Ok(Json(Vec::new()));
+        }
+    };
 
     let suggestions = rows
         .into_iter()
