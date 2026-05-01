@@ -229,14 +229,19 @@ class ApiClient {
 
   async listTrips(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
     const offset = (page - 1) * perPage;
-    const response = await this.request<PaginatedResponse<Trip> & { data?: Trip[]; limit?: number; offset?: number }>('GET', '/v1/trips', undefined, {
+    const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/trips', undefined, {
       vehicle_id: vehicleId, from, to, page, per_page: perPage, limit: perPage, offset,
     });
-    return normalizePaginated(response, page, perPage);
+    const normalized = normalizePaginated(response, page, perPage);
+    return {
+      ...normalized,
+      items: normalized.items.map(normalizeTrip),
+    } satisfies PaginatedResponse<Trip>;
   }
 
   async getTrip(tripId: string, vehicleId: string) {
-    return this.request<Trip>('GET', `/v1/trips/${tripId}`, undefined, { vehicle_id: vehicleId });
+    const trip = await this.request<unknown>('GET', `/v1/trips/${tripId}`, undefined, { vehicle_id: vehicleId });
+    return normalizeTrip(trip);
   }
 
   async getTripTrack(tripId: string, vehicleId: string) {
@@ -244,9 +249,15 @@ class ApiClient {
   }
 
   async getSpeedProfile(tripId: string, vehicleId: string) {
-    return this.request<{ elapsed_s: number; speed_mph: number }[]>(
+    const rows = await this.request<Array<{ elapsed_s?: number; speed_mph?: number; ts?: string; value?: number | null }>>(
       'GET', `/v1/trips/${tripId}/speed`, undefined, { vehicle_id: vehicleId }
     );
+    return rows
+      .map((row, index) => ({
+        elapsed_s: finiteNumber(row.elapsed_s) ?? index * 60,
+        speed_mph: finiteNumber(row.speed_mph) ?? finiteNumber(row.value) ?? 0,
+      }))
+      .filter((row) => Number.isFinite(row.elapsed_s) && Number.isFinite(row.speed_mph));
   }
 
   async getElevationProfile(tripId: string, vehicleId: string) {
@@ -259,20 +270,29 @@ class ApiClient {
 
   async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
     const offset = (page - 1) * perPage;
-    const response = await this.request<PaginatedResponse<ChargeSession> & { data?: ChargeSession[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
+    const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
       vehicle_id: vehicleId, from, to, page, per_page: perPage, limit: perPage, offset,
     });
-    return normalizePaginated(response, page, perPage);
+    const normalized = normalizePaginated(response, page, perPage);
+    return {
+      ...normalized,
+      items: normalized.items.map(normalizeChargeSession),
+    } satisfies PaginatedResponse<ChargeSession>;
   }
 
   async getChargeSession(sessionId: string, vehicleId: string) {
-    return this.request<ChargeSession>('GET', `/v1/charging/${sessionId}`, undefined, { vehicle_id: vehicleId });
+    const response = await this.request<unknown>('GET', `/v1/charging/${sessionId}`, undefined, { vehicle_id: vehicleId });
+    return normalizeChargeSession(isRecord(response) && 'session' in response ? response.session : response);
   }
 
   async getChargeCurve(sessionId: string, vehicleId: string) {
-    return this.request<ChargeCurvePoint[]>(
+    const rows = await this.request<Array<Record<string, unknown>>>(
       'GET', `/v1/charging/${sessionId}/curve`, undefined, { vehicle_id: vehicleId }
     );
+    return rows.map((row) => ({
+      soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
+      power_kw: finiteNumber(row.power_kw) ?? finiteNumber(row.charge_rate_kw) ?? 0,
+    })) satisfies ChargeCurvePoint[];
   }
 
   async getChargingSummary(vehicleId: string, from: string, to: string) {
@@ -413,6 +433,65 @@ function normalizePaginated<T>(
     page,
     per_page: perPage,
   };
+}
+
+function normalizeTrip(raw: unknown): Trip {
+  const row = isRecord(raw) ? raw : {};
+  const distance = finiteNumber(row.distance_mi) ?? finiteNumber(row.distance_miles) ?? 0;
+  const durationMin = finiteNumber(row.duration_min)
+    ?? (finiteNumber(row.duration_seconds) !== undefined ? finiteNumber(row.duration_seconds)! / 60 : 0);
+  const efficiency = finiteNumber(row.efficiency_wh_mi) ?? finiteNumber(row.efficiency_wh_per_mile);
+  const energy = finiteNumber(row.energy_used_kwh)
+    ?? (finiteNumber(row.energy_wh) !== undefined ? finiteNumber(row.energy_wh)! / 1000 : undefined)
+    ?? (efficiency !== undefined && distance > 0 ? efficiency * distance / 1000 : undefined);
+
+  return {
+    id: String(row.id ?? ''),
+    vehicle_id: String(row.vehicle_id ?? ''),
+    started_at: String(row.started_at ?? ''),
+    ended_at: row.ended_at == null ? null : String(row.ended_at),
+    distance_mi: distance,
+    duration_min: durationMin,
+    energy_used_kwh: energy ?? null,
+    efficiency_wh_mi: efficiency ?? null,
+    max_speed_mph: finiteNumber(row.max_speed_mph) ?? null,
+    drive_mode: typeof row.drive_mode === 'string' ? row.drive_mode as Trip['drive_mode'] : null,
+    soc_start: finiteNumber(row.soc_start) ?? null,
+    soc_end: finiteNumber(row.soc_end) ?? null,
+  };
+}
+
+function normalizeChargeSession(raw: unknown): ChargeSession {
+  const row = isRecord(raw) ? raw : {};
+  return {
+    id: String(row.id ?? ''),
+    vehicle_id: String(row.vehicle_id ?? ''),
+    started_at: String(row.started_at ?? ''),
+    ended_at: row.ended_at == null ? null : String(row.ended_at),
+    location_name: typeof row.location_name === 'string' ? row.location_name : (row.is_home === true ? 'Home' : null),
+    charger_type: typeof row.charger_type === 'string' ? row.charger_type as ChargeSession['charger_type'] : null,
+    energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? finiteNumber(row.kwh_added) ?? (
+      finiteNumber(row.energy_added_wh) !== undefined ? finiteNumber(row.energy_added_wh)! / 1000 : null
+    ),
+    soc_start: finiteNumber(row.soc_start) ?? null,
+    soc_end: finiteNumber(row.soc_end) ?? null,
+    peak_power_kw: finiteNumber(row.peak_power_kw) ?? finiteNumber(row.max_charge_rate_kw) ?? finiteNumber(row.avg_charge_rate_kw) ?? null,
+    cost_usd: finiteNumber(row.cost_usd) ?? null,
+    duration_min: finiteNumber(row.duration_min) ?? finiteNumber(row.duration_minutes) ?? null,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 function formatApiError(detail: ApiFailureDetail) {

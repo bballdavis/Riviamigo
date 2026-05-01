@@ -16,15 +16,15 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/charging", get(list_sessions))
-        .route("/charging/:id", get(get_session))
-        .route("/charging/sessions", get(list_sessions))
-        .route("/charging/sessions/:id", get(get_session))
-    .route("/charging/sessions/:id/curve", get(get_session_curve))
         .route("/charging/summary", get(get_summary))
-    .route("/vehicles/:vehicle_id/charging-sessions", get(list_sessions_path))
-    .route("/vehicles/:vehicle_id/charging-sessions/:id", get(get_session_path))
-    .route("/vehicles/:vehicle_id/charging-sessions/:id/curve", get(get_session_curve_path))
-    .route("/vehicles/:vehicle_id/costs", get(get_summary_path))
+        .route("/charging/sessions", get(list_sessions))
+        .route("/charging/sessions/:id/curve", get(get_session_curve))
+        .route("/charging/sessions/:id", get(get_session))
+        .route("/charging/:id", get(get_session))
+        .route("/vehicles/:vehicle_id/charging-sessions", get(list_sessions_path))
+        .route("/vehicles/:vehicle_id/charging-sessions/:id/curve", get(get_session_curve_path))
+        .route("/vehicles/:vehicle_id/charging-sessions/:id", get(get_session_path))
+        .route("/vehicles/:vehicle_id/costs", get(get_summary_path))
 }
 
 #[derive(Deserialize)]
