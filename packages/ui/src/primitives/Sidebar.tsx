@@ -13,7 +13,7 @@ export interface NavItem {
 }
 
 const DEFAULT_NAV_ITEMS: NavItem[] = [
-  { key: 'dashboard',  label: 'Dashboard',  href: '/',          icon: <LayoutDashboard className="h-4 w-4" /> },
+  { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <LayoutDashboard className="h-4 w-4" /> },
   { key: 'battery',    label: 'Battery',    href: '/battery',   icon: <Battery className="h-4 w-4" /> },
   { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <Route className="h-4 w-4" /> },
   { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <Zap className="h-4 w-4" /> },

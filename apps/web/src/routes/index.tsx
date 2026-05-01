@@ -5,5 +5,5 @@ import { OverviewDashboardPage } from '../components/dashboard/OverviewDashboard
 export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: () => <OverviewDashboardPage navKey="dashboard" slug="dashboard" title="Dashboard" />,
+  component: () => <OverviewDashboardPage navKey="dashboard" slug="dashboard" title="Overview" />,
 });

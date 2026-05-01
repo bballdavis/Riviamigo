@@ -458,6 +458,18 @@ function normalizeTrip(raw: unknown): Trip {
     drive_mode: typeof row.drive_mode === 'string' ? row.drive_mode as Trip['drive_mode'] : null,
     soc_start: finiteNumber(row.soc_start) ?? null,
     soc_end: finiteNumber(row.soc_end) ?? null,
+    start_lat: finiteNumber(row.start_lat) ?? null,
+    start_lng: finiteNumber(row.start_lng) ?? null,
+    end_lat: finiteNumber(row.end_lat) ?? null,
+    end_lng: finiteNumber(row.end_lng) ?? null,
+    start_address: typeof row.start_address === 'string' ? row.start_address : null,
+    end_address: typeof row.end_address === 'string' ? row.end_address : null,
+    start_place: typeof row.start_place === 'string'
+      ? row.start_place
+      : (typeof row.start_place_name === 'string' ? row.start_place_name : null),
+    end_place: typeof row.end_place === 'string'
+      ? row.end_place
+      : (typeof row.end_place_name === 'string' ? row.end_place_name : null),
   };
 }
 

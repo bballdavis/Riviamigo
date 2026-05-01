@@ -28,6 +28,14 @@ export interface Trip {
   drive_mode: DriveMode | null;
   soc_start: number | null;
   soc_end: number | null;
+  start_lat?: number | null;
+  start_lng?: number | null;
+  end_lat?: number | null;
+  end_lng?: number | null;
+  start_address?: string | null;
+  end_address?: string | null;
+  start_place?: string | null;
+  end_place?: string | null;
 }
 
 export interface TrackPoint {
