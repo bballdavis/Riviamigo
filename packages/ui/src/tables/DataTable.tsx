@@ -20,6 +20,7 @@ export interface DataTableProps<TData> {
   loading?: boolean;
   loadingRows?: number;
   onRowClick?: (row: Row<TData>) => void;
+  getRowIsSelected?: (row: Row<TData>) => boolean;
   emptyTitle?: string;
   emptyDescription?: string;
   className?: string;
@@ -31,6 +32,7 @@ export function DataTable<TData>({
   loading = false,
   loadingRows = 8,
   onRowClick,
+  getRowIsSelected,
   emptyTitle = 'No data',
   emptyDescription,
   className,
@@ -106,22 +108,28 @@ export function DataTable<TData>({
               </td>
             </tr>
           ) : (
-            table.getRowModel().rows.map((row) => (
-              <tr
-                key={row.id}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={cn(
-                  'border-b border-border/50 transition-colors',
-                  onRowClick && 'cursor-pointer hover:bg-bg-elevated'
-                )}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="py-3 px-3 text-fg-secondary">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))
+            table.getRowModel().rows.map((row) => {
+              const isSelected = getRowIsSelected?.(row) ?? false;
+
+              return (
+                <tr
+                  key={row.id}
+                  data-state={isSelected ? 'selected' : undefined}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  className={cn(
+                    'border-b border-border/50 transition-colors',
+                    onRowClick && 'cursor-pointer hover:bg-bg-elevated',
+                    isSelected && 'bg-accent/10 ring-1 ring-inset ring-accent/35 hover:bg-accent/15'
+                  )}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <td key={cell.id} className={cn('py-3 px-3 text-fg-secondary', isSelected && 'text-fg')}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>
