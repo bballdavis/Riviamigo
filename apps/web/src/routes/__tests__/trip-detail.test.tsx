@@ -53,6 +53,7 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatMiles: (v: number) => `${v} mi`,
   formatDuration: (v: number) => `${v} min`,
   formatKwh: (v: number) => `${v} kWh`,
+  formatEfficiency: (v: number) => `${v} Wh/mi`,
 }));
 
 import { TripDetailContent } from '../trips.$tripId';
