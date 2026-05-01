@@ -32,6 +32,67 @@ const BASE_WS = getWebSocketBaseUrl();
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MAX_RECONNECT_DELAY_MS = 60_000;
 
+// ---------------------------------------------------------------------------
+// WS debug logger — enable in the browser console:
+//   localStorage.setItem('rm-ws-debug', '1'); location.reload()
+//   localStorage.removeItem('rm-ws-debug');    location.reload()
+// ---------------------------------------------------------------------------
+
+function isWsDebug(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('rm-ws-debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function wsDebugLog(
+  vehicleId: string,
+  messageType: 'partial' | 'snapshot' | 'ignored',
+  raw: unknown,
+  patch: Partial<VehicleStatus> | null,
+): void {
+  if (!isWsDebug()) return;
+  const existing = useLiveStatusStore.getState().status[vehicleId];
+  const dropouts: string[] = [];
+  if (patch && existing) {
+    for (const [k, v] of Object.entries(patch)) {
+      const prev = (existing as Record<string, unknown>)[k];
+      if (prev !== null && prev !== undefined && (v === null || v === undefined)) {
+        dropouts.push(`${k}: ${JSON.stringify(prev)} → ${String(v)}`);
+      }
+    }
+  }
+  console.group(`[WS ${vehicleId}] ${messageType} @ ${new Date().toISOString()}`);
+  console.log('raw   :', raw);
+  console.log('patch :', patch);
+  if (dropouts.length > 0) console.warn('would-dropout:', dropouts);
+  console.groupEnd();
+}
+
+// ---------------------------------------------------------------------------
+// Strips null/undefined values from a partial WS update so they don't
+// overwrite previously-good sensor readings in the store. The WS server
+// sends explicit nulls for fields it doesn't have in a given message;
+// we treat "null in a partial update" as "not present in this message".
+// Full status snapshots (vehicle_id present) are NOT filtered — nulls in a
+// snapshot are intentional and mean the field is genuinely unknown.
+// ---------------------------------------------------------------------------
+
+function stripNullsFromPatch(
+  raw: Partial<VehicleStatus> & { distance_to_empty_mi?: number | null },
+): Partial<VehicleStatus> {
+  const patch: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v !== null && v !== undefined) patch[k] = v;
+  }
+  // range_miles alias from some server implementations
+  if (patch.range_miles === undefined && raw.distance_to_empty_mi != null) {
+    patch.range_miles = raw.distance_to_empty_mi;
+  }
+  return patch as Partial<VehicleStatus>;
+}
+
 export function useVehicleStatus(vehicleId: string | null, accessToken: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
@@ -92,18 +153,36 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
 
     ws.onmessage = (evt) => {
       try {
-        const message = JSON.parse(evt.data as string) as VehicleStatus | { type?: string; ts?: string; data?: Partial<VehicleStatus> };
-        const data = 'data' in message && message.data
-          ? {
-              vehicle_id: vehicleId,
-              is_online: true,
-              last_updated: message.ts ?? new Date().toISOString(),
-              ...message.data,
-              range_miles: message.data.range_miles ?? (message.data as { distance_to_empty_mi?: number | null }).distance_to_empty_mi,
-            } as VehicleStatus
-          : message as VehicleStatus;
-        setStatus(vehicleId, data);
-      } catch {}
+        const message = JSON.parse(evt.data as string) as
+          | VehicleStatus
+          | { type?: string; ts?: string; data?: Partial<VehicleStatus> };
+
+        if ('data' in message && message.data) {
+          // Partial update from the server. Strip null/undefined values so they
+          // don't overwrite previously-good sensor readings — the server sends
+          // explicit nulls for fields absent in this particular message batch.
+          const patch = stripNullsFromPatch(
+            message.data as Partial<VehicleStatus> & { distance_to_empty_mi?: number | null },
+          );
+          const data: VehicleStatus = {
+            vehicle_id: vehicleId,
+            is_online: true,
+            last_updated: message.ts ?? new Date().toISOString(),
+            ...patch,
+          } as VehicleStatus;
+          wsDebugLog(vehicleId, 'partial', message, data);
+          setStatus(vehicleId, data);
+        } else if ('vehicle_id' in message) {
+          // Full status snapshot — nulls here are intentional.
+          wsDebugLog(vehicleId, 'snapshot', message, message as VehicleStatus);
+          setStatus(vehicleId, message as VehicleStatus);
+        } else {
+          // Heartbeat / control frame — ignore.
+          wsDebugLog(vehicleId, 'ignored', message, null);
+        }
+      } catch (err) {
+        console.warn('[WS] message parse error', err);
+      }
     };
 
     ws.onclose = () => {
@@ -166,7 +245,6 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
 
 export function useCurrentVehicleStatus(vehicleId: string | null) {
   const liveStatus = useLiveStatusStore((s) => (vehicleId ? s.status[vehicleId] : null));
-  const setStatus = useLiveStatusStore((s) => s.setStatus);
 
   const query = useQuery({
     queryKey: ['vehicles', 'status', vehicleId],
@@ -174,15 +252,9 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
     enabled: !!vehicleId,
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
-    initialData: liveStatus ?? undefined,
+    refetchOnWindowFocus: false,
     placeholderData: (previous) => previous,
   });
-
-  useEffect(() => {
-    if (vehicleId && query.data) {
-      setStatus(vehicleId, query.data);
-    }
-  }, [vehicleId, query.data, setStatus]);
 
   return { ...query, data: liveStatus ?? query.data ?? null };
 }

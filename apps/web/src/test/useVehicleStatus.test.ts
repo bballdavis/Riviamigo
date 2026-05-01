@@ -1,6 +1,9 @@
+import React from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { useVehicleStatus, useLiveStatusStore } from '@riviamigo/hooks';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { VehicleStatus } from '@riviamigo/types';
+import { useVehicleStatus, useCurrentVehicleStatus, useLiveStatusStore } from '@riviamigo/hooks';
 
 // ---------------------------------------------------------------------------
 // Manual WebSocket mock — controls open/message/close from the test
@@ -140,13 +143,97 @@ describe('useVehicleStatus', () => {
     });
   });
 
-  it('silently ignores non-JSON messages', () => {
+  it('logs a warning and does not update state for non-JSON messages', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
     act(() => {
       wsAt(0)._open();
       wsAt(0)._message('not-json');
     });
     expect(result.current.status).toBeNull();
+    expect(warn).toHaveBeenCalledWith('[WS] message parse error', expect.any(SyntaxError));
+    warn.mockRestore();
+  });
+
+  // ---- null / partial message robustness ----
+
+  it('does not overwrite a good value when a later partial update sends null for that field', () => {
+    // Simulates the server alternating between two partial update streams,
+    // where each stream sends null for the fields it doesn't own.
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      // First message establishes battery_level and tire pressure.
+      wsAt(0)._message(
+        JSON.stringify({ type: 'telemetry', ts: '2026-01-01T00:00:00Z', data: { battery_level: 80, tire_fl_psi: 36.5 } })
+      );
+      // Second message is from a different field group; it sends null for battery_level
+      // because it doesn't know the value — should NOT overwrite the 80 we just stored.
+      wsAt(0)._message(
+        JSON.stringify({ type: 'telemetry', ts: '2026-01-01T00:00:01Z', data: { cabin_temp_c: 22.0, battery_level: null, tire_fl_psi: null } })
+      );
+    });
+    const status = useLiveStatusStore.getState().status['vid-1'];
+    expect(status?.battery_level).toBe(80);
+    expect(status?.tire_fl_psi).toBe(36.5);
+    expect(status?.cabin_temp_c).toBe(22.0);
+  });
+
+  it('accumulates fields from sequential partial updates without losing any', () => {
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 75, range_miles: 200 } }));
+      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:01Z', data: { speed_mph: 60 } }));
+      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:02Z', data: { cabin_temp_c: 21.5 } }));
+    });
+    const status = useLiveStatusStore.getState().status['vid-1'];
+    expect(status?.battery_level).toBe(75);
+    expect(status?.range_miles).toBe(200);
+    expect(status?.speed_mph).toBe(60);
+    expect(status?.cabin_temp_c).toBe(21.5);
+  });
+
+  it('applies a full status snapshot as-is, including null fields', () => {
+    // Full snapshots (with vehicle_id at the top level) are authoritative —
+    // nulls in them mean the field is genuinely unknown right now.
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      // Seed with good data from a partial update.
+      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 80, cabin_temp_c: 22.0 } }));
+      // Full snapshot with null cabin_temp_c — should overwrite.
+      wsAt(0)._message(JSON.stringify({ vehicle_id: 'vid-1', is_online: true, battery_level: 79, cabin_temp_c: null, last_updated: '2026-01-01T00:00:01Z' }));
+    });
+    const status = useLiveStatusStore.getState().status['vid-1'];
+    expect(status?.battery_level).toBe(79);
+    expect(status?.cabin_temp_c).toBeNull();
+  });
+
+  it('ignores heartbeat / control frames that have no data or vehicle_id', () => {
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      // Seed with known good status.
+      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 80 } }));
+      // Heartbeat — should not touch the store at all.
+      wsAt(0)._message(JSON.stringify({ type: 'ping' }));
+      wsAt(0)._message(JSON.stringify({ type: 'keepalive', ts: '2026-01-01T00:00:01Z' }));
+    });
+    const status = useLiveStatusStore.getState().status['vid-1'];
+    expect(status?.battery_level).toBe(80);
+  });
+
+  it('resolves range_miles from distance_to_empty_mi alias in partial updates', () => {
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      wsAt(0)._message(
+        JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 78, distance_to_empty_mi: 205 } })
+      );
+    });
+    const status = useLiveStatusStore.getState().status['vid-1'];
+    expect(status?.range_miles).toBe(205);
   });
 
   // ---- reconnect & backoff ----
@@ -282,6 +369,59 @@ describe('useVehicleStatus', () => {
     unmount();
     await act(async () => { vi.runAllTimers(); });
     expect(MockWS.instances).toHaveLength(1); // no reconnect happened
+  });
+});
+
+// ---------------------------------------------------------------------------
+// useCurrentVehicleStatus — data precedence & REST isolation
+// ---------------------------------------------------------------------------
+
+function makeWrapper() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  return ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client }, children);
+}
+
+function seedStore(vehicleId: string, partial: Partial<VehicleStatus>) {
+  useLiveStatusStore.getState().setStatus(vehicleId, partial);
+}
+
+describe('useCurrentVehicleStatus', () => {
+  beforeEach(() => {
+    useLiveStatusStore.setState({ status: {}, connected: {} });
+  });
+
+  it('returns liveStatus from the WS store when available', () => {
+    seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 88, last_updated: '2026-01-01T00:00:00Z' });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
+    expect(result.current.data?.battery_level).toBe(88);
+  });
+
+  it('does NOT write REST query data back into the Zustand store', async () => {
+    // Regression test for the root cause of sensor dropouts.
+    // Previously a useEffect called setStatus(vehicleId, apiData) on every
+    // React Query refetch, merging REST-snapshot nulls over live WS values.
+    // That effect is removed; the store should never be touched by REST.
+    seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 95, tire_fl_psi: 36.5, last_updated: '2026-01-01T00:00:00Z' });
+
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
+    await act(async () => {});
+
+    const storeAfter = useLiveStatusStore.getState().status['vid-1'];
+    expect(storeAfter?.battery_level).toBe(95);
+    expect(storeAfter?.tire_fl_psi).toBe(36.5);
+    expect(result.current.data?.battery_level).toBe(95);
+  });
+
+  it('prefers liveStatus over query.data when both are present', () => {
+    seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 77, last_updated: '2026-01-01T00:00:00Z' });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
+    expect(result.current.data?.battery_level).toBe(77);
+  });
+
+  it('returns null data when vehicleId is null', () => {
+    const { result } = renderHook(() => useCurrentVehicleStatus(null), { wrapper: makeWrapper() });
+    expect(result.current.data).toBeNull();
   });
 });
 
