@@ -7,7 +7,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { colors } from '../tokens/colors';
-import { formatEfficiency, getUnitSystem } from '../lib/utils';
+import { getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh } from '../lib/utils';
 
 export interface EfficiencyVsTempPoint {
   temp_c_low: number;
@@ -28,8 +28,8 @@ function toF(c: number) {
 }
 
 function barColor(efficiency: number): string {
-  if (efficiency < 300) return colors.soc.high;
-  if (efficiency < 380) return colors.soc.mid;
+  if (efficiency > 3.3) return colors.soc.high;
+  if (efficiency > 2.6) return colors.soc.mid;
   return colors.soc.low;
 }
 
@@ -40,14 +40,15 @@ export function EfficiencyVsTempChart({
   unit = 'f',
 }: EfficiencyVsTempChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
-  const efficiencyUnit = getUnitSystem() === 'metric' ? 'Wh/km' : 'Wh/mi';
+  const isMetric = getUnitSystem() === 'metric';
+  const efficiencyUnit = isMetric ? 'km/kWh' : 'mi/kWh';
 
   const chartData = data.map((d) => ({
     ...d,
     label: unit === 'f'
       ? `${toF(d.temp_c_low)} F`
       : `${d.temp_c_low} C`,
-    efficiency: d.avg_efficiency_wh_mi,
+    efficiency: isMetric ? whPerMileToKmPerKwh(d.avg_efficiency_wh_mi) : whPerMileToMiPerKwh(d.avg_efficiency_wh_mi),
   }));
 
   return (
@@ -72,7 +73,7 @@ export function EfficiencyVsTempChart({
         <Tooltip
           content={<ChartTooltip
             formatter={(v, _) => [
-              v !== undefined ? formatEfficiency(v) : '-',
+              typeof v === 'number' ? `${v.toFixed(1)} ${efficiencyUnit}` : '-',
               'Avg efficiency',
             ]}
           />}

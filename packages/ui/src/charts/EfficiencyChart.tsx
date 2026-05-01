@@ -6,7 +6,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { formatEfficiency, getUnitSystem } from '../lib/utils';
+import { getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh } from '../lib/utils';
 
 export interface EfficiencyByModePoint {
   drive_mode: string;
@@ -34,12 +34,17 @@ export function EfficiencyChart({
   height = 200,
 }: EfficiencyChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
-  const efficiencyUnit = getUnitSystem() === 'metric' ? 'Wh/km' : 'Wh/mi';
+  const isMetric = getUnitSystem() === 'metric';
+  const efficiencyUnit = isMetric ? 'km/kWh' : 'mi/kWh';
 
   const chartData = data.map((d) => ({
     ...d,
     label: MODE_LABELS[d.drive_mode] ?? d.drive_mode,
-    range: [d.p10_efficiency, d.p90_efficiency - d.p10_efficiency] as [number, number],
+    avg_display: convertEfficiency(d.avg_efficiency, isMetric),
+    range: [
+      convertEfficiency(d.p90_efficiency, isMetric) ?? 0,
+      Math.max(0, (convertEfficiency(d.p10_efficiency, isMetric) ?? 0) - (convertEfficiency(d.p90_efficiency, isMetric) ?? 0)),
+    ] as [number, number],
   }));
 
   return (
@@ -61,11 +66,11 @@ export function EfficiencyChart({
           width={40}
         />
         <Tooltip
-          content={<ChartTooltip formatter={(v) => [formatEfficiency(v ?? 0), 'Avg']} />}
+          content={<ChartTooltip formatter={(v) => [typeof v === 'number' ? `${v.toFixed(1)} ${efficiencyUnit}` : '-', 'Avg']} />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar
-          dataKey="avg_efficiency"
+          dataKey="avg_display"
           fill={CHART_COLORS.accent}
           fillOpacity={0.8}
           radius={[4, 4, 0, 0]}
@@ -82,4 +87,8 @@ export function EfficiencyChart({
       </BarChart>
     </ResponsiveContainer>
   );
+}
+
+function convertEfficiency(value: number | null | undefined, metric: boolean) {
+  return metric ? whPerMileToKmPerKwh(value) : whPerMileToMiPerKwh(value);
 }

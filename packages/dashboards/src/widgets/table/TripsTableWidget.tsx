@@ -1,25 +1,85 @@
 import React, { useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
-import { useTrips } from '@riviamigo/hooks';
+import { useQueries } from '@tanstack/react-query';
+import { api, useTrips } from '@riviamigo/hooks';
 import { DataTable, tripColumns, type TripRow } from '@riviamigo/ui/tables';
+import { TripMapChart, type TripMapRoute } from '@riviamigo/ui/charts';
+import { formatEfficiency, formatKwh, formatMiles } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import type { Row } from '@tanstack/react-table';
 
 function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
-  const navigate = useNavigate();
   const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page);
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const trips = (data?.items ?? []) as unknown as TripRow[];
+
+  const trackQueries = useQueries({
+    queries: trips.map((trip) => ({
+      queryKey: ['trips', 'track', trip.id, ctx.vehicleId],
+      queryFn: () => api.getTripTrack(trip.id, ctx.vehicleId!),
+      enabled: !!ctx.vehicleId,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+
+  const routes = trips
+    .map((trip, index) => {
+      const points = trackQueries[index]?.data ?? [];
+      return {
+        id: trip.id,
+        track: points
+          .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+          .map((point) => ({ lat: point.lat, lng: point.lng })),
+      } satisfies TripMapRoute;
+    })
+    .filter((route) => route.track.length > 1);
+
+  const summaryTrips = selectedIds.length
+    ? trips.filter((trip) => selectedIds.includes(trip.id))
+    : trips;
+  const summary = summarizeTrips(summaryTrips);
 
   function handleRowClick(row: Row<TripRow>) {
-    navigate({ to: '/trips/$tripId', params: { tripId: row.original.id } });
+    toggleTrip(row.original.id);
+  }
+
+  function toggleTrip(tripId: string) {
+    setSelectedIds((current) => (
+      current.includes(tripId)
+        ? current.filter((id) => id !== tripId)
+        : [...current, tripId]
+    ));
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Metric label={selectedIds.length ? 'Selected Trips' : 'Trips'} value={summary.count} />
+        <Metric label="Distance" value={formatMiles(summary.distanceMi)} />
+        <Metric label="Energy" value={summary.energyKwh === null ? '-' : formatKwh(summary.energyKwh)} />
+        <Metric label="Efficiency" value={summary.efficiencyWhMi === null ? '-' : formatEfficiency(summary.efficiencyWhMi)} />
+      </div>
+
+      <TripMapChart
+        track={[]}
+        routes={routes}
+        selectedRouteIds={selectedIds}
+        onRouteClick={toggleTrip}
+        height={360}
+        className="w-full rounded-lg overflow-hidden border border-border"
+      />
+
+      {selectedIds.length > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-fg-secondary">
+          <span>{selectedIds.length} route{selectedIds.length === 1 ? '' : 's'} selected. Click a selected route or row again to return it to the period view.</span>
+          <button className="font-medium text-accent hover:underline" onClick={() => setSelectedIds([])}>Show all</button>
+        </div>
+      )}
+
       <DataTable
-        data={(data?.items ?? []) as unknown as TripRow[]}
+        data={trips}
         columns={tripColumns}
         loading={isLoading}
         onRowClick={handleRowClick}
@@ -49,6 +109,30 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
       )}
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-fg-tertiary">{label}</div>
+      <div className="mt-1 font-mono text-sm font-semibold text-fg">{value}</div>
+    </div>
+  );
+}
+
+function summarizeTrips(trips: TripRow[]) {
+  const distanceMi = trips.reduce((sum, trip) => sum + safeNumber(trip.distance_mi), 0);
+  const energyKwh = trips.reduce((sum, trip) => sum + safeNumber(trip.energy_used_kwh), 0);
+  return {
+    count: trips.length,
+    distanceMi,
+    energyKwh: energyKwh > 0 ? energyKwh : null,
+    efficiencyWhMi: energyKwh > 0 && distanceMi > 0 ? (energyKwh * 1000) / distanceMi : null,
+  };
+}
+
+function safeNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 registerWidget({

@@ -8,6 +8,6 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d5000005-0000-0000-0000-000000000001", "widgetId": "table.trips", "layout": { "x": 0, "y": 0, "w": 12, "h": 6 } }
+    { "id": "d5000005-0000-0000-0000-000000000001", "widgetId": "table.trips", "layout": { "x": 0, "y": 0, "w": 12, "h": 10 } }
   ]
 }

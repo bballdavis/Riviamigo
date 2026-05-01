@@ -21,6 +21,7 @@ export interface Trip {
   started_at: string;
   ended_at: string | null;
   distance_mi: number;
+  duration_min: number;
   energy_used_kwh: number | null;
   efficiency_wh_mi: number | null;
   max_speed_mph: number | null;
@@ -45,6 +46,7 @@ export interface ChargeSession {
   location_name: string | null;
   charger_type: ChargerType | null;
   energy_added_kwh: number | null;
+  duration_min: number | null;
   soc_start: number | null;
   soc_end: number | null;
   peak_power_kw: number | null;

@@ -24,9 +24,9 @@ export const tripDetailRoute = createRoute({
 });
 
 const TABS = [
-  { key: 'map', label: 'Route Map', icon: <Map /> },
-  { key: 'speed', label: 'Speed', icon: <Gauge /> },
-  { key: 'elevation', label: 'Elevation', icon: <Mountain /> },
+  { key: 'map', label: 'Route Map', icon: <Map className="h-3.5 w-3.5" /> },
+  { key: 'speed', label: 'Speed', icon: <Gauge className="h-3.5 w-3.5" /> },
+  { key: 'elevation', label: 'Elevation', icon: <Mountain className="h-3.5 w-3.5" /> },
 ];
 
 function TripDetailPage() {
@@ -50,7 +50,8 @@ export function TripDetailContent() {
     : 'Trip Detail';
 
   const durationSec = (trip as unknown as { duration_seconds?: number })?.duration_seconds;
-  const durationMin = durationSec !== undefined ? Math.round(durationSec / 60) : undefined;
+  const durationMin = (trip as unknown as { duration_min?: number })?.duration_min
+    ?? (durationSec !== undefined ? Math.round(durationSec / 60) : undefined);
 
   return (
     <AppLayout activeKey="trips">
@@ -73,7 +74,7 @@ export function TripDetailContent() {
             <StatCardGrid>
               <StatCard label="Distance" value={trip ? formatMiles(trip.distance_mi) : '—'} accent />
               <StatCard label="Duration" value={durationMin !== undefined ? formatDuration(durationMin) : '—'} />
-              <StatCard label="Energy Used" value={trip ? formatKwh(trip.energy_used_kwh ?? 0) : '—'} />
+              <StatCard label="Energy Used" value={trip ? formatKwh(trip.energy_used_kwh) : '—'} />
               <StatCard
                 label="Efficiency"
                 value={trip?.efficiency_wh_mi !== null && trip?.efficiency_wh_mi !== undefined

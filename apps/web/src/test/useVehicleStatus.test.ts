@@ -391,10 +391,25 @@ describe('useCurrentVehicleStatus', () => {
     useLiveStatusStore.setState({ status: {}, connected: {} });
   });
 
-  it('returns liveStatus from the WS store when available', () => {
+  it('merges REST status with liveStatus and lets liveStatus win per field', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    queryClient.setQueryData(['vehicles', 'status', 'vid-1'], {
+      vehicle_id: 'vid-1',
+      is_online: true,
+      battery_level: 72,
+      battery_capacity_kwh: 135,
+      tire_fl_psi: 34.2,
+      last_updated: '2026-01-01T00:00:00Z',
+    } satisfies Partial<VehicleStatus>);
+    const queryWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
     seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 88, last_updated: '2026-01-01T00:00:00Z' });
-    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: queryWrapper });
+
     expect(result.current.data?.battery_level).toBe(88);
+    expect(result.current.data?.battery_capacity_kwh).toBe(135);
+    expect(result.current.data?.tire_fl_psi).toBe(34.2);
   });
 
   it('does NOT write REST query data back into the Zustand store', async () => {
@@ -413,7 +428,7 @@ describe('useCurrentVehicleStatus', () => {
     expect(result.current.data?.battery_level).toBe(95);
   });
 
-  it('prefers liveStatus over query.data when both are present', () => {
+  it('returns liveStatus alone when REST status has not loaded yet', () => {
     seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 77, last_updated: '2026-01-01T00:00:00Z' });
     const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
     expect(result.current.data?.battery_level).toBe(77);
@@ -424,4 +439,3 @@ describe('useCurrentVehicleStatus', () => {
     expect(result.current.data).toBeNull();
   });
 });
-

@@ -12,14 +12,12 @@ use crate::{
     ingestion::{
         charge_detector::{ChargeDetectorState, ChargeEvent},
         session_store::{decrypt_tokens, RivianTokenBundle},
-        trip_detector::{compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent},
+        trip_detector::{
+            compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
+        },
         ws_client,
     },
-    models::{
-        cost_profile::compute_cost,
-        state_period::VehicleState,
-        telemetry::TelemetryEvent,
-    },
+    models::{cost_profile::compute_cost, state_period::VehicleState, telemetry::TelemetryEvent},
     services::{cost::resolve_profile, geofences::match_geofence},
 };
 
@@ -149,7 +147,9 @@ pub async fn run_vehicle_worker(
         let current_state = infer_vehicle_state(&event);
         if Some(&current_state) != last_vehicle_state.as_ref() {
             // Close previous period
-            if let (Some(prev_state), Some(started)) = (last_vehicle_state.take(), state_period_start.take()) {
+            if let (Some(prev_state), Some(started)) =
+                (last_vehicle_state.take(), state_period_start.take())
+            {
                 let _ = close_state_period(&pool, vehicle_id, &prev_state, started, event.ts).await;
             }
             // Open new period
@@ -162,7 +162,9 @@ pub async fn run_vehicle_worker(
         if let Some(ver) = &event.ota_current_version {
             if Some(ver) != last_software_version.as_ref() {
                 // Close previous version record
-                if let (Some(prev_ver), Some(_started)) = (last_software_version.take(), sw_version_start.take()) {
+                if let (Some(prev_ver), Some(_started)) =
+                    (last_software_version.take(), sw_version_start.take())
+                {
                     let _ = close_software_version(&pool, vehicle_id, &prev_ver, event.ts).await;
                 }
                 // Open new version record
@@ -244,52 +246,209 @@ async fn write_telemetry(
     Ok(())
 }
 
+/// Build a sparse JSON snapshot for the frontend WebSocket clients.
+///
+/// Only fields present in this telemetry event are included — None fields are
+/// omitted entirely rather than serialised as `null`.  This prevents the
+/// frontend from receiving a null for a field it hasn't heard about yet and
+/// mistakenly overwriting a previously-good sensor reading with a blank value.
 fn build_snapshot(e: &TelemetryEvent) -> String {
-    serde_json::json!({
-        "type": "status",
-        "ts": e.ts,
-        "data": {
-            "battery_level":      e.battery_level,
-            "distance_to_empty_mi": e.distance_to_empty_mi,
-            "power_state":        e.power_state.as_ref().map(|p| format!("{p:?}").to_lowercase()),
-            "charger_state":      e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()),
-            "charger_status":     e.charger_status,
-            "time_to_end_of_charge_min": e.time_to_end_of_charge_min,
-            "speed_mph":          e.speed_mph,
-            "altitude_m":         e.altitude_m,
-            "heading_deg":        e.heading_deg,
-            "odometer_miles":     e.odometer_miles,
-            "drive_mode":         e.drive_mode.as_ref().map(|d| format!("{d:?}").to_lowercase()),
-            "gear_status":        e.gear_status,
-            "cabin_temp_c":       e.cabin_temp_c,
-            "driver_temp_c":      e.driver_temp_c,
-            "outside_temp_c":     e.outside_temp_c,
-            "power_kw":           e.power_kw,
-            "regen_power_kw":     e.regen_power_kw,
-            "tire_fl_psi":        e.tire_fl_psi,
-            "tire_fr_psi":        e.tire_fr_psi,
-            "tire_rl_psi":        e.tire_rl_psi,
-            "tire_rr_psi":        e.tire_rr_psi,
-            "tire_fl_status":     e.tire_fl_status,
-            "tire_fr_status":     e.tire_fr_status,
-            "tire_rl_status":     e.tire_rl_status,
-            "tire_rr_status":     e.tire_rr_status,
-            "door_front_left_locked": e.door_front_left_locked,
-            "door_front_right_locked": e.door_front_right_locked,
-            "door_rear_left_locked": e.door_rear_left_locked,
-            "door_rear_right_locked": e.door_rear_right_locked,
-            "door_front_left_closed": e.door_front_left_closed,
-            "door_front_right_closed": e.door_front_right_closed,
-            "door_rear_left_closed": e.door_rear_left_closed,
-            "door_rear_right_closed": e.door_rear_right_closed,
-            "closure_frunk_closed": e.closure_frunk_closed,
-            "closure_liftgate_closed": e.closure_liftgate_closed,
-            "closure_tailgate_closed": e.closure_tailgate_closed,
-            "software_update_status": e.ota_status.as_deref().or(e.ota_current_status.as_deref()),
-            "location":           e.latitude.zip(e.longitude).map(|(lat,lng)| serde_json::json!({"lat":lat,"lng":lng})),
-            "is_online":          e.is_online.unwrap_or(true)
+    use serde_json::{json, Map, Value};
+
+    let mut data: Map<String, Value> = Map::new();
+
+    // Helper macro: insert only when the Option is Some.
+    macro_rules! set_opt {
+        ($key:literal, $expr:expr) => {
+            if let Some(v) = $expr {
+                data.insert($key.into(), json!(v));
+            }
+        };
+    }
+
+    set_opt!("battery_level", e.battery_level);
+    set_opt!(
+        "battery_capacity_kwh",
+        e.battery_capacity_wh.map(|wh| wh / 1000.0)
+    );
+    set_opt!("distance_to_empty_mi", e.distance_to_empty_mi);
+    set_opt!("battery_limit", e.battery_limit);
+    set_opt!(
+        "power_state",
+        e.power_state
+            .as_ref()
+            .map(|p| format!("{p:?}").to_lowercase())
+    );
+    set_opt!(
+        "charger_state",
+        e.charger_state
+            .as_ref()
+            .map(|c| format!("{c:?}").to_lowercase())
+    );
+    set_opt!("charger_status", e.charger_status.as_deref());
+    set_opt!("time_to_end_of_charge_min", e.time_to_end_of_charge_min);
+    set_opt!("speed_mph", e.speed_mph);
+    set_opt!("altitude_m", e.altitude_m);
+    set_opt!("heading_deg", e.heading_deg);
+    set_opt!("odometer_miles", e.odometer_miles);
+    set_opt!(
+        "drive_mode",
+        e.drive_mode
+            .as_ref()
+            .map(|dm| format!("{dm:?}").to_lowercase())
+    );
+    set_opt!("gear_status", e.gear_status.as_deref());
+    set_opt!("cabin_temp_c", e.cabin_temp_c);
+    set_opt!("driver_temp_c", e.driver_temp_c);
+    set_opt!("outside_temp_c", e.outside_temp_c);
+    set_opt!("hvac_active", e.hvac_active);
+    set_opt!("power_kw", e.power_kw);
+    set_opt!("regen_power_kw", e.regen_power_kw);
+    set_opt!("tire_fl_psi", e.tire_fl_psi);
+    set_opt!("tire_fr_psi", e.tire_fr_psi);
+    set_opt!("tire_rl_psi", e.tire_rl_psi);
+    set_opt!("tire_rr_psi", e.tire_rr_psi);
+    set_opt!("tire_fl_status", e.tire_fl_status.as_deref());
+    set_opt!("tire_fr_status", e.tire_fr_status.as_deref());
+    set_opt!("tire_rl_status", e.tire_rl_status.as_deref());
+    set_opt!("tire_rr_status", e.tire_rr_status.as_deref());
+    set_opt!("door_front_left_locked", e.door_front_left_locked);
+    set_opt!("door_front_right_locked", e.door_front_right_locked);
+    set_opt!("door_rear_left_locked", e.door_rear_left_locked);
+    set_opt!("door_rear_right_locked", e.door_rear_right_locked);
+    set_opt!("door_front_left_closed", e.door_front_left_closed);
+    set_opt!("door_front_right_closed", e.door_front_right_closed);
+    set_opt!("door_rear_left_closed", e.door_rear_left_closed);
+    set_opt!("door_rear_right_closed", e.door_rear_right_closed);
+    set_opt!("closure_frunk_locked", e.closure_frunk_locked);
+    set_opt!("closure_frunk_closed", e.closure_frunk_closed);
+    set_opt!("closure_liftgate_locked", e.closure_liftgate_locked);
+    set_opt!("closure_liftgate_closed", e.closure_liftgate_closed);
+    set_opt!("closure_tailgate_locked", e.closure_tailgate_locked);
+    set_opt!("closure_tailgate_closed", e.closure_tailgate_closed);
+    set_opt!("ota_status", e.ota_status.as_deref());
+    set_opt!("ota_current_status", e.ota_current_status.as_deref());
+    set_opt!("ota_available_version", e.ota_available_version.as_deref());
+    set_opt!("ota_current_version", e.ota_current_version.as_deref());
+    set_opt!("hv_thermal_event", e.hv_thermal_event.as_deref());
+    set_opt!("twelve_volt_health", e.twelve_volt_health.as_deref());
+    // Derived convenience field for the frontend software-update display.
+    set_opt!(
+        "software_update_status",
+        e.ota_status.as_deref().or(e.ota_current_status.as_deref())
+    );
+
+    // Location composite — only when both coordinates are present.
+    if let Some((lat, lng)) = e.latitude.zip(e.longitude) {
+        data.insert("location".into(), json!({ "lat": lat, "lng": lng }));
+    }
+
+    // is_online is always emitted; it defaults to true when Rivian hasn't
+    // included a cloudConnection field in this particular event.
+    data.insert("is_online".into(), json!(e.is_online.unwrap_or(true)));
+
+    json!({ "type": "status", "ts": e.ts, "data": Value::Object(data) }).to_string()
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::build_snapshot;
+    use crate::models::telemetry::{ChargerState, TelemetryEvent};
+    use chrono::Utc;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    fn event_with_partial_fields() -> TelemetryEvent {
+        TelemetryEvent {
+            vehicle_id: Uuid::new_v4(),
+            ts: Utc::now(),
+            latitude: None,
+            longitude: None,
+            altitude_m: None,
+            speed_mph: None,
+            battery_level: Some(79.0),
+            battery_capacity_wh: Some(135_000.0),
+            distance_to_empty_mi: None,
+            battery_limit: Some(70.0),
+            power_state: None,
+            charger_state: Some(ChargerState::Disconnected),
+            charger_status: None,
+            time_to_end_of_charge_min: None,
+            drive_mode: None,
+            gear_status: None,
+            cabin_temp_c: None,
+            driver_temp_c: None,
+            outside_temp_c: None,
+            hvac_active: None,
+            power_kw: None,
+            regen_power_kw: None,
+            heading_deg: None,
+            odometer_miles: None,
+            tire_fl_psi: Some(36.5),
+            tire_fr_psi: None,
+            tire_rl_psi: None,
+            tire_rr_psi: None,
+            tire_fl_status: None,
+            tire_fr_status: None,
+            tire_rl_status: None,
+            tire_rr_status: None,
+            door_front_left_locked: None,
+            door_front_right_locked: None,
+            door_rear_left_locked: None,
+            door_rear_right_locked: None,
+            door_front_left_closed: None,
+            door_front_right_closed: None,
+            door_rear_left_closed: None,
+            door_rear_right_closed: None,
+            closure_frunk_locked: None,
+            closure_frunk_closed: None,
+            closure_liftgate_locked: None,
+            closure_liftgate_closed: None,
+            closure_tailgate_locked: None,
+            closure_tailgate_closed: None,
+            ota_current_version: None,
+            ota_available_version: None,
+            ota_status: None,
+            ota_current_status: None,
+            hv_thermal_event: None,
+            twelve_volt_health: None,
+            is_online: None,
         }
-    }).to_string()
+    }
+
+    #[test]
+    fn build_snapshot_omits_absent_partial_fields_instead_of_emitting_nulls() {
+        let payload: Value =
+            serde_json::from_str(&build_snapshot(&event_with_partial_fields())).unwrap();
+        let data = payload["data"].as_object().unwrap();
+
+        assert_eq!(data.get("battery_level").unwrap(), 79.0);
+        assert_eq!(data.get("battery_capacity_kwh").unwrap(), 135.0);
+        assert_eq!(data.get("battery_limit").unwrap(), 70.0);
+        assert_eq!(data.get("charger_state").unwrap(), "disconnected");
+        assert_eq!(data.get("tire_fl_psi").unwrap(), 36.5);
+        assert_eq!(data.get("is_online").unwrap(), true);
+        assert!(!data.contains_key("cabin_temp_c"));
+        assert!(!data.contains_key("tire_fr_psi"));
+        assert!(!data.contains_key("location"));
+    }
+
+    #[test]
+    fn build_snapshot_includes_location_only_when_both_coordinates_exist() {
+        let mut event = event_with_partial_fields();
+        event.latitude = Some(30.25);
+
+        let payload: Value = serde_json::from_str(&build_snapshot(&event)).unwrap();
+        assert!(!payload["data"]
+            .as_object()
+            .unwrap()
+            .contains_key("location"));
+
+        event.longitude = Some(-97.75);
+        let payload: Value = serde_json::from_str(&build_snapshot(&event)).unwrap();
+        assert_eq!(payload["data"]["location"]["lat"], 30.25);
+        assert_eq!(payload["data"]["location"]["lng"], -97.75);
+    }
 }
 
 async fn persist_trip(
@@ -298,16 +457,33 @@ async fn persist_trip(
     distance: f64,
 ) -> anyhow::Result<()> {
     let duration = (trip.ended_at - trip.started_at).num_seconds() as i32;
-    let max_speed = trip.points.iter().map(|p| p.speed_mph).fold(0.0_f64, f64::max);
-    let avg_speed = if duration > 0 { Some(distance / (duration as f64 / 3600.0)) } else { None };
+    let max_speed = trip
+        .points
+        .iter()
+        .map(|p| p.speed_mph)
+        .fold(0.0_f64, f64::max);
+    let avg_speed = if duration > 0 {
+        Some(distance / (duration as f64 / 3600.0))
+    } else {
+        None
+    };
 
     // Energy ensemble
     let (energy_wh, energy_strategy, efficiency_wh_per_mi) = match compute_trip_energy(
-        trip.soc_start, trip.soc_end, trip.battery_capacity_wh,
-        trip.range_start_mi, trip.range_end_mi, distance, None,
+        trip.soc_start,
+        trip.soc_end,
+        trip.battery_capacity_wh,
+        trip.range_start_mi,
+        trip.range_end_mi,
+        distance,
+        None,
     ) {
         Some((wh, strat)) => {
-            let eff = if distance > 0.0 { Some(wh / distance) } else { None };
+            let eff = if distance > 0.0 {
+                Some(wh / distance)
+            } else {
+                None
+            };
             (Some(wh), Some(strat.to_string()), eff)
         }
         None => {
@@ -400,12 +576,20 @@ async fn persist_charge_session(
         (Some(user_id), Some(lat), Some(lon)) => match_point(pool, user_id, lat, lon).await?,
         _ => MatchedLocation::none(),
     };
-    let profile = resolve_profile(pool, None, location_match.geofence_id, session.vehicle_id).await?;
+    let profile =
+        resolve_profile(pool, None, location_match.geofence_id, session.vehicle_id).await?;
     let energy_added_kwh = session.energy_added_wh.map(|wh| wh / 1000.0);
     let energy_used_kwh = session.energy_used_wh.map(|wh| wh / 1000.0);
-    let cost_usd = profile
-        .as_ref()
-        .and_then(|p| compute_cost(p, energy_added_kwh, energy_used_kwh, duration_minutes, session.started_at, Some(session.ended_at)));
+    let cost_usd = profile.as_ref().and_then(|p| {
+        compute_cost(
+            p,
+            energy_added_kwh,
+            energy_used_kwh,
+            duration_minutes,
+            session.started_at,
+            Some(session.ended_at),
+        )
+    });
     let cost_profile_id = profile.as_ref().map(|p| p.id);
     let cost_method = if cost_profile_id.is_some() {
         Some("profile")

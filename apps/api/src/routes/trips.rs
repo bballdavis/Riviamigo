@@ -212,9 +212,17 @@ async fn get_speed_profile(
     .ok_or(AppError::NotFound)?;
 
     let points = sqlx::query!(
-        "SELECT bucket AS ts, avg_speed_mph AS value FROM timeseries.telemetry_1min \
-         WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 ORDER BY bucket",
+        r#"SELECT EXTRACT(EPOCH FROM (time_bucket('10 seconds'::interval, ts) - $3))::float8 AS "elapsed_s!",
+                  avg(speed_mph) AS speed_mph
+           FROM timeseries.telemetry
+           WHERE vehicle_id=$1
+             AND ts>=$3 AND ts<=$4
+             AND ($2::uuid IS NULL OR trip_id=$2 OR trip_id IS NULL)
+             AND speed_mph IS NOT NULL
+           GROUP BY 1
+           ORDER BY 1"#,
         vid,
+        id,
         trip.started_at,
         trip.ended_at
     )
@@ -223,7 +231,7 @@ async fn get_speed_profile(
 
     Ok(Json(serde_json::json!(points
         .iter()
-        .map(|r| serde_json::json!({"ts":r.ts,"value":r.value}))
+        .map(|r| serde_json::json!({"elapsed_s": r.elapsed_s, "speed_mph": r.speed_mph.unwrap_or(0.0)}))
         .collect::<Vec<_>>())))
 }
 

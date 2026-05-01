@@ -181,6 +181,7 @@ fn resolve_local_datetime(tz: Tz, day: NaiveDate, minute_of_day: u16) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn profile(billing_type: &str, rate: f64, session_fee: f64) -> CostProfile {
         CostProfile {
