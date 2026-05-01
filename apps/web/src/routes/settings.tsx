@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
 import { api, useAuth, useVehicles } from '@riviamigo/hooks';
 import type { ApiAccessLevel, VehicleImages } from '@riviamigo/types';
+import { formatMiles, formatPressure, formatTemp, getUnitSystem, setUnitSystem as saveUnitSystem, type UnitSystem } from '@riviamigo/ui/lib/utils';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
   Button, Badge, ThemeToggle, Tooltip,
@@ -12,7 +13,7 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Plus, ShieldCheck, Trash2,
+  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Plus, Ruler, ShieldCheck, Trash2,
 } from 'lucide-react';
 
 export const settingsRoute = createRoute({
@@ -21,10 +22,11 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'places' | 'api' | 'raw' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'appearance' | 'account';
 
 const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
+  { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'raw', label: 'Raw Data', icon: Database },
@@ -90,6 +92,7 @@ export function SettingsContent() {
   const [apiAccessLevel, setApiAccessLevel] = React.useState<ApiAccessLevel>('view');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
   const [rawVehicleId, setRawVehicleId] = React.useState('');
+  const [unitSystem, setUnitSystemState] = React.useState<UnitSystem>(() => getUnitSystem());
   const isAdmin = me.data?.role === 'admin';
 
   const apiKeys = useQuery({
@@ -149,6 +152,11 @@ export function SettingsContent() {
 
   async function copyCreatedKey() {
     if (createdKey) await navigator.clipboard.writeText(createdKey);
+  }
+
+  function handleUnitSystemChange(next: UnitSystem) {
+    saveUnitSystem(next);
+    setUnitSystemState(next);
   }
 
   return (
@@ -405,7 +413,59 @@ export function SettingsContent() {
               </div>
             )}
 
-            {activeSection === 'places' && <PlacesSection />}
+            {activeSection === 'units' && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Units</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-4">
+                  <p className="text-sm text-fg-tertiary">
+                    Pick the measurement system used across range, speed, temperature, pressure, and place radius displays.
+                  </p>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {[
+                      {
+                        value: 'imperial' as const,
+                        title: 'Imperial',
+                        copy: 'Miles, mph, Fahrenheit, psi, and feet. This is the default.',
+                      },
+                      {
+                        value: 'metric' as const,
+                        title: 'Metric',
+                        copy: 'Kilometers, km/h, Celsius, kPa, and meters.',
+                      },
+                    ].map((option) => {
+                      const active = unitSystem === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => handleUnitSystemChange(option.value)}
+                          className={[
+                            'rounded-xl border p-4 text-left transition-colors',
+                            active
+                              ? 'border-accent bg-accent/10 shadow-sm'
+                              : 'border-border bg-bg-elevated/40 hover:border-accent/60 hover:bg-bg-elevated/70',
+                          ].join(' ')}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-fg">{option.title}</p>
+                              <p className="mt-1 text-xs text-fg-tertiary">{option.copy}</p>
+                            </div>
+                            <Badge variant={active ? 'success' : 'default'}>
+                              {active ? 'Selected' : 'Set'}
+                            </Badge>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {activeSection === 'places' && <PlacesSection unitSystem={unitSystem} />}
 
             {activeSection === 'raw' && (
               <div className="flex flex-col gap-5">
@@ -472,17 +532,17 @@ export function SettingsContent() {
                           {rawTelemetry.data?.samples.map((sample) => (
                             <tr key={sample.ts}>
                               <td className="px-3 py-2 font-mono text-fg">{new Date(sample.ts).toLocaleString()}</td>
-                              <td className="px-3 py-2">{formatRawNumber(sample.odometer_miles, ' mi')}</td>
+                              <td className="px-3 py-2">{sample.odometer_miles === null || sample.odometer_miles === undefined ? '-' : formatMiles(sample.odometer_miles)}</td>
                               <td className="px-3 py-2">{formatRawNumber(sample.battery_level, '%')}</td>
                               <td className="px-3 py-2">{formatRawNumber(sample.distance_to_empty_mi, ' mi')}</td>
                               <td className="px-3 py-2">{formatRawNumber(sample.power_kw, ' kW')}</td>
                               <td className="px-3 py-2">{formatRawNumber(sample.regen_power_kw, ' kW')}</td>
                               <td className="px-3 py-2">{sample.power_state ?? '-'}</td>
                               <td className="px-3 py-2">{sample.charger_state ?? '-'}</td>
-                              <td className="px-3 py-2">{formatRawNumber(sample.outside_temp_c, ' C')}</td>
+                              <td className="px-3 py-2">{sample.outside_temp_c === null || sample.outside_temp_c === undefined ? '-' : formatTemp(sample.outside_temp_c)}</td>
                               <td className="px-3 py-2">
                                 {[sample.tire_fl_psi, sample.tire_fr_psi, sample.tire_rl_psi, sample.tire_rr_psi]
-                                  .map((psi) => formatRawNumber(psi))
+                                  .map((psi) => psi === null || psi === undefined ? '-' : formatPressure(psi))
                                   .join(' / ')}
                               </td>
                             </tr>

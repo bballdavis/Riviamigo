@@ -9,6 +9,7 @@ import {
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
+import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
 import { AppLayout } from '../layout/AppLayout';
 import { AuthGuard } from '../layout/AuthGuard';
 import { NoVehicleState } from '../layout/NoVehicleState';
@@ -169,9 +170,9 @@ function CurrentVehicleStatePanel({ status, images }: { status: VehicleStatus | 
   };
   const stats = [
     { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" /> },
-    { label: 'Altitude', value: formatFeet(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" /> },
-    { label: 'Cabin', value: formatTemp(status?.cabin_temp_c), icon: <Thermometer className="h-3.5 w-3.5" /> },
-    { label: 'Speed', value: formatSpeed(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" /> },
+    { label: 'Altitude', value: formatAltitude(status?.altitude_m), icon: <MapPin className="h-3.5 w-3.5" /> },
+    { label: 'Cabin', value: formatTemperature(status?.cabin_temp_c), icon: <Thermometer className="h-3.5 w-3.5" /> },
+    { label: 'Speed', value: formatMph(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" /> },
     { label: 'Software', value: formatSoftware(status), icon: <Cpu className="h-3.5 w-3.5" /> },
   ];
 
@@ -219,7 +220,7 @@ function CurrentVehicleStatePanel({ status, images }: { status: VehicleStatus | 
               <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg">{formatPercent(status?.battery_level)}</p>
             </div>
             <div className="grid gap-2 text-xs">
-              <SocDatum label="Range" value={formatMiles(status?.range_miles)} />
+              <SocDatum label="Range" value={formatDistance(status?.range_miles)} />
               <SocDatum label="Limit" value={formatPercent(status?.battery_limit)} />
               <SocDatum
                 label="Charging"
@@ -426,28 +427,12 @@ function formatPercent(value: number | null | undefined) {
   return value === null || value === undefined ? '-' : `${Math.round(value)}%`;
 }
 
-function formatMiles(value: number | null | undefined) {
-  return value === null || value === undefined ? '-' : `${Math.round(value)} mi`;
-}
-
 function formatKwh(value: number | null | undefined) {
   return value === null || value === undefined ? '-' : `${Math.round(value)} kWh`;
 }
 
-function formatSpeed(value: number | null | undefined) {
-  return value === null || value === undefined ? '-' : `${Math.round(value)} mph`;
-}
-
-function formatFeet(value: number | null | undefined) {
-  return value === null || value === undefined ? '-' : `${Math.round(value * 3.28084).toLocaleString()} ft`;
-}
-
-function formatTemp(value: number | null | undefined) {
-  return value === null || value === undefined ? '-' : `${Math.round(value * 9 / 5 + 32)} F`;
-}
-
 function formatTire(psi: number | null | undefined, status?: string | null) {
-  if (psi !== null && psi !== undefined) return `${Math.round(psi)} psi`;
+  if (psi !== null && psi !== undefined) return formatPressure(psi);
   return status ? prettify(status) : '-';
 }
 

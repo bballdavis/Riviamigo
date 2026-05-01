@@ -7,6 +7,7 @@ import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
+import { formatEfficiency, getUnitSystem } from '../lib/utils';
 
 export interface EfficiencyTrendPoint {
   day: string;
@@ -28,6 +29,7 @@ export function EfficiencyTrendChart({
   showBrush = false,
 }: EfficiencyTrendChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  const efficiencyUnit = getUnitSystem() === 'metric' ? 'Wh/km' : 'Wh/mi';
 
   return (
     <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>
@@ -47,7 +49,7 @@ export function EfficiencyTrendChart({
           tickLine={false}
           axisLine={false}
           tickFormatter={(v: number) => `${v}`}
-          unit=" Wh"
+          unit={` ${efficiencyUnit}`}
           width={52}
         />
 
@@ -55,7 +57,7 @@ export function EfficiencyTrendChart({
           content={<ChartTooltip
             labelFormatter={(v: string) => format(parseISO(v), 'MMM d, yyyy')}
             formatter={(v, name) => [
-              v !== undefined ? `${v.toFixed(0)} Wh/mi` : '—',
+              v !== undefined ? formatEfficiency(v) : '-',
               name === 'day_avg_wh_mi' ? 'Day avg' : '7-day avg',
             ]}
             multiLine

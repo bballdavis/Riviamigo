@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle } from '@riviamigo/ui/primitives';
+import { getUnitSystem } from '@riviamigo/ui/lib/utils';
 import { useAuth } from '@riviamigo/hooks';
 import { useVehicleStatus } from '@riviamigo/hooks';
 import { LogOut, Settings } from 'lucide-react';
@@ -14,6 +15,17 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const navigate = useNavigate();
   const { accessToken, defaultVehicleId, logout } = useAuth();
   const { status, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
+  const [unitSystem, setUnitSystem] = React.useState(() => getUnitSystem());
+
+  React.useEffect(() => {
+    const handleUnitsChange = () => setUnitSystem(getUnitSystem());
+    window.addEventListener('rm-units-change', handleUnitsChange as EventListener);
+    window.addEventListener('storage', handleUnitsChange);
+    return () => {
+      window.removeEventListener('rm-units-change', handleUnitsChange as EventListener);
+      window.removeEventListener('storage', handleUnitsChange);
+    };
+  }, []);
 
   const onlineState = !defaultVehicleId
     ? 'offline' as const
@@ -29,7 +41,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   }
 
   return (
-    <div className="min-h-screen bg-bg-page text-fg">
+    <div className="min-h-screen bg-bg-page text-fg" data-unit-system={unitSystem}>
       <AmbientOrbs />
 
       <Sidebar

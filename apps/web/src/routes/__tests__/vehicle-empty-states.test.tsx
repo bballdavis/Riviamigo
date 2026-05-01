@@ -25,6 +25,7 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatCurrency: (v: number) => `$${v}`,
   formatPercent: (v: number) => `${v}%`,
   formatMiles: (v: number) => `${v} mi`,
+  formatEfficiency: (v: number) => `${v} Wh/mi`,
   cn: (...args: unknown[]) => args.filter(Boolean).join(' '),
 }));
 
@@ -43,6 +44,7 @@ vi.mock('@riviamigo/ui/tables', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: null, accessToken: null }),
+  useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [] }),
   useChargeSession: () => ({ data: undefined, isLoading: false }),
   useChargeCurve: () => ({ data: undefined, isLoading: false }),

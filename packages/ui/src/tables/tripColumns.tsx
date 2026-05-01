@@ -2,7 +2,7 @@ import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
 import { format, parseISO } from 'date-fns';
 import { Badge } from '../primitives/Badge';
-import { formatMiles, formatDuration, formatKwh } from '../lib/utils';
+import { formatMiles, formatDuration, formatKwh, formatEfficiency } from '../lib/utils';
 
 export interface TripRow {
   id: string;
@@ -64,9 +64,9 @@ export const tripColumns = [
     cell: (info) => {
       const v = info.getValue();
       return v !== null ? (
-        <span className="font-mono">{v.toFixed(0)} Wh/mi</span>
+        <span className="font-mono">{formatEfficiency(v)}</span>
       ) : (
-        <span className="text-fg-tertiary">—</span>
+        <span className="text-fg-tertiary">-</span>
       );
     },
   }),
@@ -75,7 +75,7 @@ export const tripColumns = [
     enableSorting: false,
     cell: (info) => {
       const mode = info.getValue();
-      if (!mode) return <span className="text-fg-tertiary">—</span>;
+      if (!mode) return <span className="text-fg-tertiary">-</span>;
       return (
         <Badge variant={MODE_VARIANT[mode] ?? 'default'} size="sm">
           {mode.replace(/_/g, ' ')}

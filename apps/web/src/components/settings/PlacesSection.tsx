@@ -2,6 +2,7 @@ import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
+import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 
@@ -31,26 +32,45 @@ const browserTimezone = typeof Intl !== 'undefined'
   ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   : 'UTC';
 
-const emptyDraft = (): PlaceDraft => ({
-  name: '',
-  radius_m: '75',
-  is_home: false,
-  is_work: false,
-  chargingEnabled: false,
-  planType: 'flat',
-  flatRate: '0.13',
-  sessionFee: '0',
-  timezone: browserTimezone,
-  schedule: [{ label: 'All day', start: '00:00', end: '24:00', rate: '0.13' }],
-});
+const METERS_TO_FEET = 3.28084;
 
-export function PlacesSection() {
+function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
+  return {
+    name: '',
+    radius_m: unitSystem === 'metric' ? '75' : '250',
+    is_home: false,
+    is_work: false,
+    chargingEnabled: false,
+    planType: 'flat',
+    flatRate: '0.13',
+    sessionFee: '0',
+    timezone: browserTimezone,
+    schedule: [{ label: 'All day', start: '00:00', end: '24:00', rate: '0.13' }],
+  };
+}
+
+function formatRadius(meters: number, unitSystem: UnitSystem) {
+  return unitSystem === 'metric'
+    ? `${Math.round(meters)} m`
+    : `${Math.round(meters * METERS_TO_FEET)} ft`;
+}
+
+function radiusDraftToMeters(value: number, unitSystem: UnitSystem) {
+  return unitSystem === 'metric' ? value : value / METERS_TO_FEET;
+}
+
+function radiusInputLabel(unitSystem: UnitSystem) {
+  return unitSystem === 'metric' ? 'Radius (m)' : 'Radius (ft)';
+}
+
+export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const queryClient = useQueryClient();
-  const [draft, setDraft] = React.useState<PlaceDraft>(() => emptyDraft());
+  const [draft, setDraft] = React.useState<PlaceDraft>(() => emptyDraft(unitSystem));
   const [editingPlaceId, setEditingPlaceId] = React.useState<string | null>(null);
   const [addressQuery, setAddressQuery] = React.useState('');
   const [selectedAddress, setSelectedAddress] = React.useState<PlaceAddress | null>(null);
   const deferredAddressQuery = React.useDeferredValue(addressQuery.trim());
+  const previousUnitSystem = React.useRef(unitSystem);
 
   const places = useQuery({
     queryKey: ['places'],
@@ -72,7 +92,7 @@ export function PlacesSection() {
     },
     onSuccess: () => {
       setEditingPlaceId(null);
-      setDraft(emptyDraft());
+      setDraft(emptyDraft(unitSystem));
       setSelectedAddress(null);
       setAddressQuery('');
       queryClient.invalidateQueries({ queryKey: ['places'] });
@@ -84,6 +104,25 @@ export function PlacesSection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['places'] }),
   });
 
+  React.useEffect(() => {
+    if (previousUnitSystem.current === unitSystem) return;
+
+    setDraft((current) => {
+      const currentRadius = Number(current.radius_m);
+      if (!Number.isFinite(currentRadius) || currentRadius <= 0) {
+        return current;
+      }
+
+      const meters = radiusDraftToMeters(currentRadius, previousUnitSystem.current);
+      return {
+        ...current,
+        radius_m: String(Math.round(unitSystem === 'metric' ? meters : meters * METERS_TO_FEET)),
+      };
+    });
+
+    previousUnitSystem.current = unitSystem;
+  }, [unitSystem]);
+
   const scheduleValidation = React.useMemo(() => {
     if (!draft.chargingEnabled || draft.planType !== 'tou') {
       return null;
@@ -91,14 +130,18 @@ export function PlacesSection() {
     return validateScheduleDraft(draft.schedule);
   }, [draft.chargingEnabled, draft.planType, draft.schedule]);
 
-  const addressChangedFromSelection = selectedAddress && addressQuery.trim() !== selectedAddress.display_name;
+  const addressChangedFromSelection = Boolean(selectedAddress && addressQuery.trim() !== selectedAddress.display_name);
   const canSave = selectedAddress
     && draft.name.trim().length > 0
+    && Number.isFinite(Number(draft.radius_m))
+    && Number(draft.radius_m) > 0
     && !addressChangedFromSelection
     && (!draft.chargingEnabled || draft.flatRate.trim().length > 0)
     && (!draft.chargingEnabled || draft.planType !== 'tou' || !scheduleValidation);
 
-  const placeSuggestions = addressChangedFromSelection ? (addressSearch.data ?? []) : [];
+  const placeSuggestions = deferredAddressQuery.length >= 3 && (!selectedAddress || addressChangedFromSelection)
+    ? (addressSearch.data ?? [])
+    : [];
 
   function updateDraft<K extends keyof PlaceDraft>(key: K, value: PlaceDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -106,7 +149,7 @@ export function PlacesSection() {
 
   function resetEditor() {
     setEditingPlaceId(null);
-    setDraft(emptyDraft());
+    setDraft(emptyDraft(unitSystem));
     setSelectedAddress(null);
     setAddressQuery('');
   }
@@ -117,7 +160,7 @@ export function PlacesSection() {
     setAddressQuery(place.address?.display_name ?? '');
     setDraft({
       name: place.name,
-      radius_m: String(place.radius_m ?? 75),
+      radius_m: String(Math.round(unitSystem === 'metric' ? place.radius_m : place.radius_m * METERS_TO_FEET)),
       is_home: place.is_home,
       is_work: place.is_work,
       chargingEnabled: !!place.charging,
@@ -151,7 +194,7 @@ export function PlacesSection() {
 
     await savePlace.mutateAsync({
       name: draft.name.trim(),
-      radius_m: Number(draft.radius_m || '75'),
+      radius_m: radiusDraftToMeters(Number(draft.radius_m || '0'), unitSystem),
       is_home: draft.is_home,
       is_work: draft.is_work,
       address: selectedAddress,
@@ -197,7 +240,7 @@ export function PlacesSection() {
                   />
                 </label>
                 <label className="grid gap-1">
-                  <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Radius (m)</span>
+                  <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{radiusInputLabel(unitSystem)}</span>
                   <input
                     value={draft.radius_m}
                     onChange={(event) => updateDraft('radius_m', event.target.value)}
@@ -417,7 +460,7 @@ export function PlacesSection() {
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2 text-xs text-fg-tertiary">
-                      <Badge variant="default">{Math.round(place.radius_m)} m radius</Badge>
+                      <Badge variant="default">{formatRadius(place.radius_m, unitSystem)} radius</Badge>
                       {place.is_home && <Badge variant="success">Home</Badge>}
                       {place.is_work && <Badge variant="default">Work</Badge>}
                       {place.charging && (

@@ -1,7 +1,7 @@
 //! CRUD routes for user-defined geofences.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     routing::get,
     Json, Router,
 };
@@ -21,13 +21,6 @@ pub fn router() -> Router<AppState> {
             "/geofences/:id",
             get(get_geofence).put(update_geofence).delete(delete_geofence),
         )
-}
-
-// ─── Query params ────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct ListParams {
-    vehicle_id: Option<Uuid>,
 }
 
 // ─── Request / response bodies ────────────────────────────────────────────────
@@ -65,7 +58,6 @@ struct GeofenceResponse {
 async fn list_geofences(
     auth: AuthUser,
     State(state): State<AppState>,
-    Query(_params): Query<ListParams>,
 ) -> Result<Json<GeofenceResponse>, AppError> {
     let rows = sqlx::query_as!(
         Geofence,

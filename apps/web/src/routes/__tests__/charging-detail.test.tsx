@@ -50,6 +50,7 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatDuration: (v: number) => `${v} min`,
   formatCurrency: (v: number) => `$${v}`,
   formatPercent: (v: number) => `${v}%`,
+  formatEfficiency: (v: number) => `${v} Wh/mi`,
 }));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
