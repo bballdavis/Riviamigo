@@ -14,6 +14,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page);
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
   const trips = (data?.items ?? []) as unknown as TripRow[];
+  const selectedIdSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const trackQueries = useQueries({
     queries: trips.map((trip) => ({
@@ -24,34 +25,38 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
     })),
   });
 
-  const routes = trips
-    .map((trip, index) => {
-      const points = trackQueries[index]?.data ?? [];
-      return {
-        id: trip.id,
-        track: points
-          .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
-          .map((point) => ({ lat: point.lat, lng: point.lng })),
-      } satisfies TripMapRoute;
-    })
-    .filter((route) => route.track.length > 1);
+  const trackDataVersion = trackQueries.map((query) => query.dataUpdatedAt).join(',');
+
+  const routes = React.useMemo(() => (
+    trips
+      .map((trip, index) => {
+        const points = trackQueries[index]?.data ?? [];
+        return {
+          id: trip.id,
+          track: points
+            .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+            .map((point) => ({ lat: point.lat, lng: point.lng })),
+        } satisfies TripMapRoute;
+      })
+      .filter((route) => route.track.length > 1)
+  ), [trackDataVersion, trackQueries, trips]);
 
   const summaryTrips = selectedIds.length
-    ? trips.filter((trip) => selectedIds.includes(trip.id))
+    ? trips.filter((trip) => selectedIdSet.has(trip.id))
     : trips;
   const summary = summarizeTrips(summaryTrips);
 
-  function handleRowClick(row: Row<TripRow>) {
-    toggleTrip(row.original.id);
-  }
-
-  function toggleTrip(tripId: string) {
+  const toggleTrip = React.useCallback((tripId: string) => {
     setSelectedIds((current) => (
       current.includes(tripId)
         ? current.filter((id) => id !== tripId)
         : [...current, tripId]
     ));
-  }
+  }, []);
+
+  const handleRowClick = React.useCallback((row: Row<TripRow>) => {
+    toggleTrip(row.original.id);
+  }, [toggleTrip]);
 
   return (
     <div className="flex flex-col h-full gap-4">
@@ -83,6 +88,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
         columns={tripColumns}
         loading={isLoading}
         onRowClick={handleRowClick}
+        getRowIsSelected={(row) => selectedIdSet.has(row.original.id)}
         emptyTitle="No trips found"
         emptyDescription="Trips will appear here once your vehicle has been driven."
       />
