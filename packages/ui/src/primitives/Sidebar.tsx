@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   LayoutDashboard, Battery, Route, Zap, TrendingUp,
-  Menu, X, MoreVertical,
+  Heart, Menu, X, MoreVertical,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -18,6 +18,7 @@ const DEFAULT_NAV_ITEMS: NavItem[] = [
   { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <Route className="h-4 w-4" /> },
   { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <Zap className="h-4 w-4" /> },
   { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className="h-4 w-4" /> },
+  { key: 'health',     label: 'Health',     href: '/health',    icon: <Heart className="h-4 w-4" /> },
 ];
 
 export interface SidebarProps {

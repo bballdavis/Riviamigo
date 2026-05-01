@@ -94,7 +94,50 @@ export interface ChargingSummary {
   total_energy_kwh: number;
   total_cost_usd: number;
   session_count: number;
+  home_kwh?: number;
+  away_kwh?: number;
+  ac_kwh?: number;
+  dc_kwh?: number;
   weekly: Array<{ week_start: string; energy_kwh: number; sessions: number }>;
+}
+
+export interface VehicleHealthTires {
+  ts: string;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+  tire_fl_status: string | null;
+  tire_fr_status: string | null;
+  tire_rl_status: string | null;
+  tire_rr_status: string | null;
+}
+
+export interface VehicleHealthClosures {
+  ts: string;
+  closure_frunk_closed: boolean | null;
+  closure_liftgate_closed: boolean | null;
+  closure_tailgate_closed: boolean | null;
+  door_front_left_closed: boolean | null;
+  door_front_right_closed: boolean | null;
+  door_rear_left_closed: boolean | null;
+  door_rear_right_closed: boolean | null;
+}
+
+export interface VehicleHealthSoftwareEntry {
+  version: string;
+  installed_at: string;
+  observed_until: string | null;
+}
+
+export interface VehicleHealth {
+  vehicle_id: string;
+  generated_at: string;
+  tires: VehicleHealthTires | null;
+  closures: VehicleHealthClosures | null;
+  current_software_version: string | null;
+  software_history: VehicleHealthSoftwareEntry[];
+  thermal_events_30d: number;
 }
 
 export interface TouPeriod {
