@@ -25,6 +25,7 @@ export interface DashboardPageShellRenderState {
   setLocalConfig: React.Dispatch<React.SetStateAction<DashboardConfig | null>>;
   isEditMode: boolean;
   isLoading: boolean;
+  vehicleId: string | null;
   ctx: WidgetCtx;
   range: DateRange;
   preset: PresetKey | undefined;
@@ -113,6 +114,7 @@ export function DashboardPageShell({
     setLocalConfig,
     isEditMode: currentEditMode,
     isLoading,
+    vehicleId: defaultVehicleId,
     ctx,
     range,
     preset,

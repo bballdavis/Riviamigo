@@ -7,3 +7,4 @@ export { useChargeSessions, useChargeSession, useChargeCurve, useChargingSummary
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
 export { useSummaryStats } from './useStats';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
+export { useVehicleHealth } from './useHealth';

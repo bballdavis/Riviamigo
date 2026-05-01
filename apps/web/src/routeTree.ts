@@ -6,6 +6,7 @@ import { tripDetailRoute } from './routes/trips.$tripId';
 import { chargingRoute } from './routes/charging';
 import { chargingDetailRoute } from './routes/charging.$sessionId';
 import { efficiencyRoute } from './routes/efficiency';
+import { healthRoute } from './routes/health';
 import { settingsRoute } from './routes/settings';
 import { connectRoute } from './routes/connect';
 import { connectOtpRoute } from './routes/connect.otp';
@@ -21,6 +22,7 @@ export const routeTree = rootRoute.addChildren([
   chargingRoute,
   chargingDetailRoute,
   efficiencyRoute,
+  healthRoute,
   settingsRoute,
   connectRoute,
   connectOtpRoute,

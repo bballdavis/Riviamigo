@@ -8,7 +8,7 @@ import type {
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
-  Place, PlaceSearchSuggestion, UpsertPlaceBody,
+  Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -301,6 +301,11 @@ class ApiClient {
       total_kwh?: number;
       total_cost_usd?: number;
       session_count?: number;
+      home_kwh?: number;
+      away_kwh?: number;
+      ac_kwh?: number;
+      ac_l2_kwh?: number;
+      dc_kwh?: number;
       weekly?: Array<{ week_start: string; kwh?: number; energy_kwh?: number; sessions: number }>;
     }>('GET', '/v1/charging/summary', undefined, {
       vehicle_id: vehicleId, from, to,
@@ -309,12 +314,20 @@ class ApiClient {
       total_energy_kwh: summary.total_energy_kwh ?? summary.total_kwh ?? 0,
       total_cost_usd: summary.total_cost_usd ?? 0,
       session_count: summary.session_count ?? 0,
+      home_kwh: summary.home_kwh ?? 0,
+      away_kwh: summary.away_kwh ?? 0,
+      ac_kwh: (summary.ac_kwh ?? 0) + (summary.ac_l2_kwh ?? 0),
+      dc_kwh: summary.dc_kwh ?? 0,
       weekly: (summary.weekly ?? []).map((week) => ({
         week_start: week.week_start,
         energy_kwh: week.energy_kwh ?? week.kwh ?? 0,
         sessions: week.sessions,
       })),
     } satisfies ChargingSummary;
+  }
+
+  async getVehicleHealth(vehicleId: string): Promise<VehicleHealth> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/health`);
   }
 
   // ── Efficiency ────────────────────────────────────────────────────────────

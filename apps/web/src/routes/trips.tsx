@@ -1,10 +1,10 @@
 import React from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { DashboardPage } from '../components/dashboard/DashboardPage';
+import { DrivesDashboardPage } from '../components/dashboard/DrivesDashboardPage';
 
 export function TripsContent() {
-  return <DashboardPage navKey="trips" slug="trips" title="Trips" />;
+  return <DrivesDashboardPage navKey="trips" slug="trips" title="Drives" />;
 }
 
 export const tripsRoute = createRoute({
