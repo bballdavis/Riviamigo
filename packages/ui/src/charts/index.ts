@@ -12,7 +12,7 @@ export type { PhantomDrainChartProps, PhantomDrainPoint } from './PhantomDrainCh
 export { EfficiencyChart } from './EfficiencyChart';
 export type { EfficiencyChartProps, EfficiencyByModePoint } from './EfficiencyChart';
 export { TripMapChart } from './TripMapChart';
-export type { TripMapChartProps, LatLng } from './TripMapChart';
+export type { TripMapChartProps, LatLng, TripMapRoute } from './TripMapChart';
 export { EnergyBarChart } from './EnergyBarChart';
 export type { EnergyBarChartProps, EnergyBarPoint } from './EnergyBarChart';
 export { SpeedProfileChart } from './SpeedProfileChart';

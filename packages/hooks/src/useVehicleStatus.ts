@@ -56,8 +56,9 @@ function wsDebugLog(
   const existing = useLiveStatusStore.getState().status[vehicleId];
   const dropouts: string[] = [];
   if (patch && existing) {
+    const existingFields = existing as unknown as Record<string, unknown>;
     for (const [k, v] of Object.entries(patch)) {
-      const prev = (existing as Record<string, unknown>)[k];
+      const prev = existingFields[k];
       if (prev !== null && prev !== undefined && (v === null || v === undefined)) {
         dropouts.push(`${k}: ${JSON.stringify(prev)} → ${String(v)}`);
       }
@@ -256,7 +257,12 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
     placeholderData: (previous) => previous,
   });
 
-  return { ...query, data: liveStatus ?? query.data ?? null };
+  const data =
+    liveStatus && query.data
+      ? ({ ...query.data, ...liveStatus } as VehicleStatus)
+      : liveStatus ?? query.data ?? null;
+
+  return { ...query, data };
 }
 
 function getWebSocketBaseUrl() {

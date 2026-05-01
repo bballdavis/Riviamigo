@@ -7,7 +7,7 @@ import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { formatEfficiency, getUnitSystem } from '../lib/utils';
+import { getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh } from '../lib/utils';
 
 export interface EfficiencyTrendPoint {
   day: string;
@@ -29,11 +29,17 @@ export function EfficiencyTrendChart({
   showBrush = false,
 }: EfficiencyTrendChartProps) {
   if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
-  const efficiencyUnit = getUnitSystem() === 'metric' ? 'Wh/km' : 'Wh/mi';
+  const isMetric = getUnitSystem() === 'metric';
+  const efficiencyUnit = isMetric ? 'km/kWh' : 'mi/kWh';
+  const chartData = data.map((point) => ({
+    ...point,
+    day_efficiency: convertEfficiency(point.day_avg_wh_mi, isMetric),
+    rolling_efficiency: convertEfficiency(point.rolling_7d_wh_mi, isMetric),
+  }));
 
   return (
     <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>
-      <ComposedChart data={data} margin={CHART_MARGINS.withYAxis}>
+      <ComposedChart data={chartData} margin={CHART_MARGINS.withYAxis}>
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
 
         <XAxis
@@ -57,8 +63,8 @@ export function EfficiencyTrendChart({
           content={<ChartTooltip
             labelFormatter={(v: string) => format(parseISO(v), 'MMM d, yyyy')}
             formatter={(v, name) => [
-              v !== undefined ? formatEfficiency(v) : '-',
-              name === 'day_avg_wh_mi' ? 'Day avg' : '7-day avg',
+              typeof v === 'number' ? `${v.toFixed(1)} ${efficiencyUnit}` : '-',
+              name === 'day_efficiency' ? 'Day avg' : '7-day avg',
             ]}
             multiLine
           />}
@@ -69,11 +75,11 @@ export function EfficiencyTrendChart({
           iconType="circle"
           iconSize={8}
           wrapperStyle={{ fontSize: 11, color: CHART_COLORS.muted, paddingTop: 8 }}
-          formatter={(v) => v === 'day_avg_wh_mi' ? 'Daily' : '7-day avg'}
+          formatter={(v) => v === 'day_efficiency' ? 'Daily' : '7-day avg'}
         />
 
         <Bar
-          dataKey="day_avg_wh_mi"
+          dataKey="day_efficiency"
           fill={CHART_COLORS.sky}
           fillOpacity={0.35}
           radius={[2, 2, 0, 0]}
@@ -81,7 +87,7 @@ export function EfficiencyTrendChart({
         />
         <Line
           type="monotone"
-          dataKey="rolling_7d_wh_mi"
+          dataKey="rolling_efficiency"
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
           dot={false}
@@ -101,4 +107,8 @@ export function EfficiencyTrendChart({
       </ComposedChart>
     </ResponsiveContainer>
   );
+}
+
+function convertEfficiency(value: number | null, metric: boolean) {
+  return metric ? whPerMileToKmPerKwh(value) : whPerMileToMiPerKwh(value);
 }

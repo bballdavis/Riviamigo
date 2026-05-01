@@ -76,9 +76,30 @@ export function formatEfficiency(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
 
   if (getUnitSystem() === 'metric') {
+    const converted = whPerMileToKmPerKwh(value);
+    return converted === null ? '-' : `${formatNumber(converted, 1)} km/kWh`;
+  }
+  const converted = whPerMileToMiPerKwh(value);
+  return converted === null ? '-' : `${formatNumber(converted, 1)} mi/kWh`;
+}
+
+export function formatEnergyPerDistance(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
+  if (getUnitSystem() === 'metric') {
     return `${formatNumber(value / MILES_TO_KM, 0)} Wh/km`;
   }
   return `${formatNumber(value, 0)} Wh/mi`;
+}
+
+export function whPerMileToMiPerKwh(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) return null;
+  return 1000 / value;
+}
+
+export function whPerMileToKmPerKwh(value: number | null | undefined): number | null {
+  const miPerKwh = whPerMileToMiPerKwh(value);
+  return miPerKwh === null ? null : miPerKwh * MILES_TO_KM;
 }
 
 export function formatPressure(value: number | null | undefined): string {
@@ -105,7 +126,8 @@ export function formatCurrency(value: number | null | undefined): string {
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-export function formatDuration(minutes: number): string {
+export function formatDuration(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined || Number.isNaN(minutes)) return '-';
   if (minutes < 60) return `${Math.round(minutes)}m`;
   const h = Math.floor(minutes / 60);
   const m = Math.round(minutes % 60);
