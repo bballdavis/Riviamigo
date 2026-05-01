@@ -80,11 +80,16 @@ vi.mock('../../lib/dates', () => ({
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
   DEFAULT_PRESET: '30d',
 }));
-vi.mock('@riviamigo/ui/lib/utils', () => ({
-  formatMiles: (v: number) => `${v} mi`,
-  formatKwh: (v: number) => `${v} kWh`,
-  formatEfficiency: (v: number) => `${v} Wh/mi`,
-}));
+vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@riviamigo/ui/lib/utils')>();
+  return {
+    ...actual,
+    formatMiles: (v: number) => `${v} mi`,
+    formatKwh: (v: number) => `${v} kWh`,
+    formatEfficiency: (v: number) => `${v} Wh/mi`,
+    formatAltitude: (v: number) => `${v} m`,
+  };
+});
 
 import { indexRoute } from '../index';
 
