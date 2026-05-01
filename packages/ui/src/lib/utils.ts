@@ -35,14 +35,18 @@ export function setUnitSystem(system: UnitSystem) {
   }
 }
 
-export function formatNumber(value: number, decimals = 1): string {
+export function formatNumber(value: number | null | undefined, decimals = 1): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   return value.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
 }
 
-export function formatMiles(value: number): string {
+export function formatMiles(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   if (getUnitSystem() === 'metric') {
     return `${formatNumber(value * MILES_TO_KM, 1)} km`;
   }
@@ -53,39 +57,51 @@ export function formatPercent(value: number, decimals = 0): string {
   return `${formatNumber(value, decimals)}%`;
 }
 
-export function formatKwh(value: number): string {
+export function formatKwh(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   return `${formatNumber(value, 1)} kWh`;
 }
 
-export function formatMph(value: number): string {
+export function formatMph(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   if (getUnitSystem() === 'metric') {
     return `${formatNumber(value * MPH_TO_KMH, 0)} km/h`;
   }
   return `${formatNumber(value, 0)} mph`;
 }
 
-export function formatEfficiency(value: number): string {
+export function formatEfficiency(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   if (getUnitSystem() === 'metric') {
     return `${formatNumber(value / MILES_TO_KM, 0)} Wh/km`;
   }
   return `${formatNumber(value, 0)} Wh/mi`;
 }
 
-export function formatPressure(value: number): string {
+export function formatPressure(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   if (getUnitSystem() === 'metric') {
     return `${formatNumber(value * PSI_TO_KPA, 0)} kPa`;
   }
   return `${formatNumber(value, 0)} psi`;
 }
 
-export function formatAltitude(valueMeters: number): string {
+export function formatAltitude(valueMeters: number | null | undefined): string {
+  if (valueMeters === null || valueMeters === undefined || Number.isNaN(valueMeters)) return '-';
+
   if (getUnitSystem() === 'metric') {
     return `${formatNumber(valueMeters, 0)} m`;
   }
   return `${formatNumber(valueMeters * METERS_TO_FEET, 0)} ft`;
 }
 
-export function formatCurrency(value: number): string {
+export function formatCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
   return value.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
@@ -96,7 +112,9 @@ export function formatDuration(minutes: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-export function formatTemp(celsius: number): string {
+export function formatTemp(celsius: number | null | undefined): string {
+  if (celsius === null || celsius === undefined || Number.isNaN(celsius)) return '-';
+
   if (getUnitSystem() === 'metric') {
     return `${Math.round(celsius)} C`;
   }

@@ -51,6 +51,15 @@ vi.mock('@riviamigo/hooks', () => ({
     },
     isLoading: false,
   }),
+  useCurrentVehicleStatus: () => ({ data: null }),
+  useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Forest R1S' }] }),
+}));
+
+vi.mock('@riviamigo/dashboards', () => ({
+  DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
+  useDashboardBySlug: () => ({ data: { schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }, isLoading: false }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  getDefaultBySlug: () => ({ schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -64,20 +73,11 @@ vi.mock('../../lib/dates', () => ({
 import { TripsContent } from '../trips';
 
 describe('Trips page', () => {
-  it('renders the trip count subtitle and pagination controls', () => {
+  it('renders the trips dashboard shell', () => {
     render(<TripsContent />);
 
     expect(screen.getByText('Trips')).toBeInTheDocument();
-    expect(screen.getByText('26 trips')).toBeInTheDocument();
-    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
-  });
-
-  it('navigates to trip detail when a row is selected', () => {
-    render(<TripsContent />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open trip-1' }));
-
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/trips/$tripId', params: { tripId: 'trip-1' } });
+    expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });
 });
