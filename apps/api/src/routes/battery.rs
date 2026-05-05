@@ -13,6 +13,36 @@ use crate::{
     middleware::auth::{AppState, AuthUser},
 };
 
+/// Returns the vehicle's stored factory capacity (from vehicles.battery_capacity_wh), falling
+/// back to the max ever observed value in telemetry. Used as the "new" baseline for health %.
+async fn resolve_usable_new_wh(
+    pool: &sqlx::PgPool,
+    vehicle_id: uuid::Uuid,
+) -> Result<Option<f64>, crate::errors::AppError> {
+    let stored: Option<f64> = sqlx::query_scalar(
+        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1"
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    if let Some(w) = stored.filter(|&w| w > 10000.0) {
+        return Ok(Some(w));
+    }
+
+    let max_ever: Option<f64> = sqlx::query_scalar(
+        "SELECT max(battery_capacity_wh) FROM timeseries.telemetry \
+         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000"
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    Ok(max_ever)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/battery/soc", get(get_soc))
@@ -156,17 +186,24 @@ async fn get_degradation(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
+    let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
+
     let rows = sqlx::query_as::<_, DegradationPoint>(
-        "SELECT snapshotted_at AS ts,
-                odometer_mi,
-                usable_kwh,
-                rated_kwh,
-                CASE WHEN rated_kwh > 0 THEN (usable_kwh / rated_kwh * 100.0) ELSE NULL END AS capacity_pct
-         FROM riviamigo.battery_capacity_snapshots
-         WHERE vehicle_id=$1
-         ORDER BY snapshotted_at"
+        "SELECT
+             time_bucket('1 week', ts) AS ts,
+             max(odometer_miles) AS odometer_mi,
+             COALESCE(max(battery_capacity_wh) / 1000.0, 0.0) AS usable_kwh,
+             NULL::float8 AS rated_kwh,
+             CASE WHEN $2 > 0
+                  THEN max(battery_capacity_wh) / $2 * 100.0
+                  ELSE NULL END AS capacity_pct
+         FROM timeseries.telemetry
+         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
+         GROUP BY time_bucket('1 week', ts)
+         ORDER BY 1"
     )
     .bind(vid)
+    .bind(usable_new_wh.unwrap_or(0.0))
     .fetch_all(&state.pool)
     .await?;
 
@@ -183,32 +220,23 @@ async fn get_health(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let capacity = sqlx::query!(
-        "WITH ranked AS (
-            SELECT usable_kwh, rated_kwh, snapshotted_at,
-                   row_number() OVER (ORDER BY snapshotted_at DESC) AS rn
-            FROM riviamigo.battery_capacity_snapshots
-            WHERE vehicle_id=$1
-         ),
-         recent AS (
-            SELECT avg(usable_kwh) AS usable_now_kwh
-            FROM ranked
-            WHERE rn <= 10
-         ),
-         first_seen AS (
-            SELECT usable_kwh AS usable_new_kwh, rated_kwh
-            FROM riviamigo.battery_capacity_snapshots
-            WHERE vehicle_id=$1
-            ORDER BY snapshotted_at ASC
-            LIMIT 1
-         )
-         SELECT recent.usable_now_kwh, first_seen.usable_new_kwh, first_seen.rated_kwh
-         FROM recent
-         FULL JOIN first_seen ON true",
-        vid
+    let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
+
+    // Average of daily-peak capacity readings over the last 30 days
+    let usable_now_wh: Option<f64> = sqlx::query_scalar(
+        "SELECT avg(daily_max) FROM (
+             SELECT max(battery_capacity_wh) AS daily_max
+             FROM timeseries.telemetry
+             WHERE vehicle_id = $1
+               AND battery_capacity_wh > 10000
+               AND ts >= now() - INTERVAL '30 days'
+             GROUP BY date_trunc('day', ts)
+         ) sub"
     )
+    .bind(vid)
     .fetch_optional(&state.pool)
-    .await?;
+    .await?
+    .flatten();
 
     let charges = sqlx::query!(
         "SELECT COUNT(*) AS charge_count,
@@ -221,17 +249,15 @@ async fn get_health(
     .fetch_one(&state.pool)
     .await?;
 
-    let usable_now = capacity.as_ref().and_then(|row| row.usable_now_kwh);
-    let usable_new = capacity
-        .as_ref()
-        .and_then(|row| row.rated_kwh.or(row.usable_new_kwh));
+    let usable_now_kwh = usable_now_wh.map(|w| w / 1000.0);
+    let usable_new_kwh = usable_new_wh.map(|w| w / 1000.0);
     let total_added = charges.total_added_kwh;
     let total_used = charges.total_used_kwh;
-    let battery_health_pct = match (usable_now, usable_new) {
+    let battery_health_pct = match (usable_now_kwh, usable_new_kwh) {
         (Some(now), Some(new)) if new > 0.0 => Some((now / new * 100.0).min(100.0)),
         _ => None,
     };
-    let charging_cycles = match (total_added, usable_new) {
+    let charging_cycles = match (total_added, usable_new_kwh) {
         (Some(added), Some(new)) if new > 0.0 => Some((added / new).floor()),
         _ => None,
     };
@@ -241,8 +267,8 @@ async fn get_health(
     };
 
     Ok(Json(serde_json::json!({
-        "usable_now_kwh": usable_now,
-        "usable_new_kwh": usable_new,
+        "usable_now_kwh": usable_now_kwh,
+        "usable_new_kwh": usable_new_kwh,
         "battery_health_pct": battery_health_pct,
         "estimated_degradation_pct": battery_health_pct.map(|pct| (100.0 - pct).max(0.0)),
         "charging_cycles": charging_cycles,
@@ -264,27 +290,15 @@ async fn get_mileage(
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let rows = sqlx::query_as::<_, BatteryMileagePoint>(
-        "SELECT snapshotted_at AS ts,
-                odometer_mi,
-                usable_kwh,
-                CASE
-                    WHEN usable_kwh > 0 AND battery_level > 0
-                    THEN distance_to_empty_mi * 100.0 / battery_level
-                    ELSE NULL
-                END AS range_mi
-         FROM riviamigo.battery_capacity_snapshots s
-         LEFT JOIN LATERAL (
-            SELECT battery_level, distance_to_empty_mi
-            FROM timeseries.telemetry t
-            WHERE t.vehicle_id=s.vehicle_id
-              AND t.ts BETWEEN s.snapshotted_at - interval '12 hours' AND s.snapshotted_at + interval '12 hours'
-              AND t.battery_level IS NOT NULL
-              AND t.distance_to_empty_mi IS NOT NULL
-            ORDER BY abs(extract(epoch from (t.ts - s.snapshotted_at)))
-            LIMIT 1
-         ) t ON true
-         WHERE s.vehicle_id=$1
-         ORDER BY s.snapshotted_at"
+        "SELECT
+             time_bucket('1 week', ts) AS ts,
+             max(odometer_miles) AS odometer_mi,
+             max(battery_capacity_wh) / 1000.0 AS usable_kwh,
+             avg(distance_to_empty_mi) AS range_mi
+         FROM timeseries.telemetry
+         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
+         GROUP BY time_bucket('1 week', ts)
+         ORDER BY max(odometer_miles) NULLS LAST"
     )
     .bind(vid)
     .fetch_all(&state.pool)
