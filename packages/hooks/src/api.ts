@@ -161,6 +161,13 @@ class ApiClient {
     return this.request('POST', '/v1/vehicles/connect/otp', { challenge_id: challengeId, otp_code: otp });
   }
 
+  async updateVehicleBatteryConfig(
+    vehicleId: string,
+    body: { battery_capacity_kwh?: number; battery_config?: string }
+  ): Promise<void> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/battery-config`, body);
+  }
+
   // API access
 
   async listApiKeys(): Promise<ApiKeyRecord[]> {

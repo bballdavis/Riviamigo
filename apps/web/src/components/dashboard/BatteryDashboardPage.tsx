@@ -1,13 +1,53 @@
 import React, { useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useBatteryHealth, useBatteryMileage, useDegradation } from '@riviamigo/hooks';
 import { useUpdateDashboard } from '@riviamigo/dashboards';
 import { BatteryCapacityByMileageChart, DegradationChart, ProjectedRangeByMileageChart } from '@riviamigo/ui/charts';
-import { ChartPicker, StatCard } from '@riviamigo/ui/primitives';
+import { ChartPicker, StatCard, Card } from '@riviamigo/ui/primitives';
 import { formatKwh, formatNumber } from '@riviamigo/ui/lib/utils';
 import { createDefaultDashboardEditActions, renderDefaultDashboardTitleAction, type DashboardPageProps } from './DashboardPage';
 import { DashboardPageShell } from './DashboardPageShell';
 
 type BatteryChartKey = 'capacity-mileage' | 'projected-range-mileage' | 'degradation';
+
+function ComparisonCard({
+  label,
+  labelSuffix,
+  nowValue,
+  newValue,
+  onNewClick,
+  loading = false,
+}: {
+  label: string;
+  labelSuffix: string;
+  nowValue: string;
+  newValue: string;
+  onNewClick: () => void;
+  loading?: boolean;
+}) {
+  return (
+    <Card>
+      <div className="flex items-start justify-between">
+        <p className="text-xs font-medium text-fg-tertiary uppercase tracking-wider">
+          {label}
+          <span className="text-2xs ml-1 font-normal">({labelSuffix})</span>
+        </p>
+      </div>
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="text-2xl font-semibold font-mono tabular-nums tracking-tight text-fg">
+          {loading ? '...' : nowValue}
+        </span>
+        <button
+          onClick={onNewClick}
+          disabled={loading}
+          className="text-sm font-mono tabular-nums text-fg-tertiary hover:text-fg-secondary hover:underline disabled:opacity-50 transition-colors"
+        >
+          {loading ? '...' : newValue}
+        </button>
+      </div>
+    </Card>
+  );
+}
 
 const BATTERY_CHART_OPTIONS: Array<{ value: BatteryChartKey; label: string }> = [
   { value: 'capacity-mileage', label: 'Battery Capacity by Mileage' },
@@ -34,11 +74,20 @@ export function BatteryDashboardPage({ navKey, slug, title }: DashboardPageProps
 }
 
 function BatteryPanel({ vehicleId }: { vehicleId: string | null }) {
+  const navigate = React.useCallback(() => {
+    navigate({ to: '/settings', search: `?section=vehicles&vehicleId=${vehicleId}` });
+  }, [vehicleId]);
+
   const [chartKey, setChartKey] = useState<BatteryChartKey>('capacity-mileage');
   const [chartSearch, setChartSearch] = useState('');
   const { data: health, isLoading: healthLoading } = useBatteryHealth(vehicleId);
   const { data: mileage = [], isLoading: mileageLoading } = useBatteryMileage(vehicleId);
   const { data: degradation = [], isLoading: degradationLoading } = useDegradation(vehicleId);
+
+  const maxRangeNow = mileage.length > 0 ? Math.max(...mileage.map(m => m.range_mi ?? 0)) : null;
+  const maxRangeNew = (maxRangeNow && health?.usable_now_kwh && health?.usable_new_kwh && health.usable_now_kwh > 0)
+    ? (maxRangeNow * health.usable_new_kwh / health.usable_now_kwh)
+    : null;
 
   return (
     <section className="mb-4 space-y-4">
@@ -52,13 +101,21 @@ function BatteryPanel({ vehicleId }: { vehicleId: string | null }) {
           label="Estimated Degradation"
           value={healthLoading ? '...' : formatPercentValue(health?.estimated_degradation_pct)}
         />
-        <StatCard
-          label="Usable Now"
-          value={healthLoading ? '...' : formatKwh(health?.usable_now_kwh)}
+        <ComparisonCard
+          label="Capacity"
+          labelSuffix="now/new"
+          nowValue={healthLoading ? '...' : formatKwh(health?.usable_now_kwh)}
+          newValue={healthLoading ? '...' : formatKwh(health?.usable_new_kwh)}
+          onNewClick={() => navigate({ to: '/settings', search: `?section=vehicles&vehicleId=${vehicleId}` })}
+          loading={healthLoading}
         />
-        <StatCard
-          label="Usable New"
-          value={healthLoading ? '...' : formatKwh(health?.usable_new_kwh)}
+        <ComparisonCard
+          label="Max Range"
+          labelSuffix="now/new"
+          nowValue={(healthLoading || mileageLoading) ? '...' : maxRangeNow != null ? `${formatNumber(maxRangeNow, 0)} mi` : '-'}
+          newValue={(healthLoading || mileageLoading) ? '...' : maxRangeNew != null ? `${formatNumber(maxRangeNew, 0)} mi` : '-'}
+          onNewClick={() => navigate({ to: '/settings', search: `?section=vehicles&vehicleId=${vehicleId}` })}
+          loading={healthLoading || mileageLoading}
         />
       </div>
 
