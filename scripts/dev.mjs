@@ -32,6 +32,14 @@ function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
+function stripAnsi(text) {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function webOrigins() {
+  return Array.from({ length: 11 }, (_, index) => `http://localhost:${ports.web + index}`);
+}
+
 function spawnProcess(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd ?? rootDir,
@@ -156,7 +164,7 @@ function apiEnv() {
     S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
     S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
     PORT: String(ports.api),
-    ALLOWED_ORIGINS: `http://localhost:${ports.web}`,
+    ALLOWED_ORIGINS: webOrigins().join(','),
   };
 }
 
@@ -332,6 +340,68 @@ async function ensureSchema() {
   log('');
 }
 
+function extractViteLocalUrl(output) {
+  const cleaned = stripAnsi(output);
+
+  const localMatch = cleaned.match(/Local:\s+https?:\/\/localhost:(\d+)(?:\/|$)/i);
+  if (localMatch) {
+    return `http://localhost:${localMatch[1]}`;
+  }
+
+  const genericMatch = cleaned.match(/http:\/\/localhost:(\d+)(?:\/|$)/i);
+  if (genericMatch) {
+    return `http://localhost:${genericMatch[1]}`;
+  }
+
+  return null;
+}
+
+async function waitForViteUrl(child, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let output = '';
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.stdout?.off('data', onData);
+      child.stderr?.off('data', onData);
+      child.off('exit', onExit);
+      clearInterval(timer);
+    };
+
+    const settle = (fn, value) => {
+      cleanup();
+      fn(value);
+    };
+
+    const onData = (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      const url = extractViteLocalUrl(output);
+      if (url) {
+        settle(resolve, url);
+      }
+    };
+
+    const onExit = (code, signal) => {
+      settle(
+        reject,
+        new Error(`web dev server exited before announcing a URL (${signal ? `signal ${signal}` : `exit code ${code}`}).`),
+      );
+    };
+
+    const timer = setInterval(() => {
+      if (Date.now() >= deadline) {
+        child.kill(isWindows ? undefined : 'SIGTERM');
+        settle(reject, new Error('Timed out waiting for Vite to announce a local URL.'));
+      }
+    }, 250);
+
+    child.stdout?.on('data', onData);
+    child.stderr?.on('data', onData);
+    child.once('exit', onExit);
+  });
+}
+
 async function startApi() {
   await ensurePortFree(ports.api, 'API');
 
@@ -351,18 +421,21 @@ async function startApi() {
 }
 
 async function startWeb() {
-  await ensurePortFree(ports.web, 'web');
-
   log('Starting web dev server...');
   const viteBin = resolve(webDir, 'node_modules/.bin', isWindows ? 'vite.cmd' : 'vite');
-  const web = spawnProcess(viteBin, ['--strictPort', '--port', String(ports.web)], {
+  const web = spawnProcess(viteBin, ['--port', String(ports.web)], {
     cwd: webDir,
+    stdio: ['ignore', 'pipe', 'pipe'],
     shell: isWindows,
   });
 
-  await waitForHttp(urls.web, web, 'web dev server');
-  log(`Web dev server is responding at ${urls.web}`);
-  return web;
+  web.stdout?.on('data', (chunk) => process.stdout.write(chunk));
+  web.stderr?.on('data', (chunk) => process.stderr.write(chunk));
+
+  const webUrl = await waitForViteUrl(web);
+  await waitForHttp(webUrl, web, 'web dev server');
+  log(`Web dev server is responding at ${webUrl}`);
+  return { child: web, url: webUrl };
 }
 
 async function shutdown(code = 0) {
@@ -394,7 +467,7 @@ async function main() {
 
   log('Starting local dev servers...');
   log(`   API:  ${urls.apiHealth.replace('/health', '')}`);
-  log(`   Web:  ${urls.web}`);
+  log(`   Web:  ${urls.web} (will advance if blocked)`);
   log('');
 
   const api = await startApi();
@@ -411,7 +484,7 @@ async function main() {
 
   await Promise.race([
     onceExit(api, 'API'),
-    onceExit(web, 'Web dev server'),
+    onceExit(web.child, 'Web dev server'),
   ]);
 }
 
