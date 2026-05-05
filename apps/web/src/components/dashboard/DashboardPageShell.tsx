@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@riviamigo/hooks';
 import { PageLayout, DateRangePicker } from '@riviamigo/ui/primitives';
+import { getEfficiencyDisplay, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
   DashboardRenderer,
   getDefaultBySlug,
@@ -44,6 +45,8 @@ export interface DashboardPageShellProps {
   renderTitleAction?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderActions?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderBeforeDashboard?: (state: DashboardPageShellRenderState) => React.ReactNode;
+  renderDashboard?: (state: DashboardPageShellRenderState) => boolean;
+  showEfficiencyDisplayToggle?: boolean;
 }
 
 export function DashboardPageShell({
@@ -55,11 +58,14 @@ export function DashboardPageShell({
   renderTitleAction,
   renderActions,
   renderBeforeDashboard,
+  renderDashboard,
+  showEfficiencyDisplayToggle = false,
 }: DashboardPageShellProps) {
   const { defaultVehicleId } = useAuth();
   const [internalEditMode, setInternalEditMode] = useState(false);
   const [preset, setPreset] = useState<PresetKey | undefined>(DEFAULT_PRESET);
   const [range, setRange] = useState(presetToRange(DEFAULT_PRESET));
+  const [efficiencyDisplay, setEfficiencyDisplayState] = useState<EfficiencyDisplay>(() => getEfficiencyDisplay());
   const { from, to } = rangeToIso(range);
 
   const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
@@ -134,9 +140,25 @@ export function DashboardPageShell({
       }}
     />
   ) : null;
+  const efficiencyDisplayAction = showEfficiencyDisplayToggle && !currentEditMode ? (
+    <button
+      type="button"
+      className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-xs font-medium text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+      onClick={() => {
+        const next = efficiencyDisplay === 'distance_per_energy' ? 'energy_per_distance' : 'distance_per_energy';
+        setEfficiencyDisplay(next);
+        setEfficiencyDisplayState(next);
+      }}
+      aria-label="Toggle efficiency units"
+      title="Toggle efficiency units"
+    >
+      {efficiencyDisplay === 'distance_per_energy' ? 'mi/kWh' : 'Wh/mi'}
+    </button>
+  ) : null;
   const extraActions = renderActions?.(shellState);
-  const pageActions = dateRangeAction || extraActions ? (
+  const pageActions = efficiencyDisplayAction || dateRangeAction || extraActions ? (
     <div className="flex items-center gap-2">
+      {efficiencyDisplayAction}
       {dateRangeAction}
       {extraActions}
     </div>
@@ -157,12 +179,14 @@ export function DashboardPageShell({
           ) : activeConfig ? (
             <>
               {renderBeforeDashboard?.(shellState)}
-              <DashboardRenderer
-                config={activeConfig}
-                ctx={ctx}
-                mode={currentEditMode ? 'edit' : 'view'}
-                onConfigChange={setLocalConfig}
-              />
+              {(renderDashboard?.(shellState) ?? true) ? (
+                <DashboardRenderer
+                  config={activeConfig}
+                  ctx={ctx}
+                  mode={currentEditMode ? 'edit' : 'view'}
+                  onConfigChange={setLocalConfig}
+                />
+              ) : null}
             </>
           ) : null}
         </PageLayout>

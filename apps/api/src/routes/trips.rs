@@ -56,6 +56,10 @@ struct TripRow {
     start_lng: Option<f64>,
     end_lat: Option<f64>,
     end_lng: Option<f64>,
+    start_place: Option<String>,
+    end_place: Option<String>,
+    start_address: Option<String>,
+    end_address: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -86,12 +90,18 @@ async fn list_trips(
 
     let rows = sqlx::query_as!(
         TripRow,
-        "SELECT id, started_at, ended_at, duration_seconds, distance_miles, \
-                efficiency_wh_per_mile, max_speed_mph, drive_mode, soc_start, soc_end, \
-                start_lat, start_lng, end_lat, end_lng \
-         FROM riviamigo.trips \
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3 \
-         ORDER BY started_at DESC LIMIT $4 OFFSET $5",
+        "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
+                t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
+                t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
+                sg.name AS start_place, eg.name AS end_place, \
+                sa.display_name AS start_address, ea.display_name AS end_address \
+         FROM riviamigo.trips t \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
+         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
+         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
         vid,
         from,
         to,
@@ -130,10 +140,17 @@ async fn get_trip(
 
     let row = sqlx::query_as!(
         TripRow,
-        "SELECT id, started_at, ended_at, duration_seconds, distance_miles, \
-                efficiency_wh_per_mile, max_speed_mph, drive_mode, soc_start, soc_end, \
-                start_lat, start_lng, end_lat, end_lng \
-         FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
+        "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
+                t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
+                t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
+                sg.name AS start_place, eg.name AS end_place, \
+                sa.display_name AS start_address, ea.display_name AS end_address \
+         FROM riviamigo.trips t \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
+         WHERE t.id=$1 AND t.vehicle_id=$2",
         id,
         vid
     )

@@ -1,7 +1,7 @@
 export { api } from './api';
 export { useAuth } from './useAuth';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
-export { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation } from './useBattery';
+export { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
 export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile } from './useTrips';
 export { useChargeSessions, useChargeSession, useChargeCurve, useChargingSummary } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';

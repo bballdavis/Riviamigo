@@ -27,7 +27,7 @@ export function RangeAreaChart({
   height = 200,
   showBrush = false,
 }: RangeAreaChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   return (
     <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>
