@@ -115,6 +115,9 @@ async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closure
                   door_rear_left_closed, door_rear_right_closed
            FROM timeseries.telemetry
            WHERE vehicle_id = $1
+             AND (closure_frunk_closed IS NOT NULL
+                  OR door_front_left_closed IS NOT NULL
+                  OR door_front_right_closed IS NOT NULL)
            ORDER BY ts DESC LIMIT 1"#,
         vid
     )

@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 
-export function useTrips(vehicleId: string | null, from: string, to: string, page = 1) {
+export function useTrips(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25) {
   return useQuery({
-    queryKey: ['trips', 'list', vehicleId, from, to, page],
-    queryFn: () => api.listTrips(vehicleId!, from, to, page),
+    queryKey: ['trips', 'list', vehicleId, from, to, page, perPage],
+    queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage),
     enabled: !!vehicleId,
     staleTime: 60 * 1000,
     placeholderData: (previous) => previous,
