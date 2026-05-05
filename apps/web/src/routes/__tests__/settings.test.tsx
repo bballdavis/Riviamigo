@@ -53,6 +53,47 @@ vi.mock('@riviamigo/hooks', () => ({
       },
       samples: [],
     }),
+    getRivianStewardship: vi.fn().mockResolvedValue({
+      generated_at: '2026-05-04T12:00:00Z',
+      retention_days: 7,
+      raw_event_persistence_enabled: true,
+      duplicate_suppression_enabled: true,
+      active_collectors: 1,
+      raw_events_retained: 5,
+      totals_24h: {
+        ws_messages_received: 100,
+        ws_heartbeats_received: 80,
+        ws_payload_messages_received: 20,
+        ws_control_messages_received: 0,
+        ws_connections_opened: 1,
+        ws_reconnects: 0,
+        outbound_messages_sent: 2,
+        outbound_graphql_requests: 0,
+        telemetry_writes_persisted: 10,
+        telemetry_writes_suppressed: 90,
+        telemetry_suppressed_duplicate: 70,
+        telemetry_suppressed_empty: 10,
+        telemetry_suppressed_threshold: 10,
+        collector_lock_skips: 0,
+        raw_events_persisted: 100,
+      },
+      vehicles: [{
+        vehicle_id: 'v1',
+        display_name: 'Adventure Truck',
+        worker_health: 'connected',
+        last_seen_at: '2026-05-04T12:00:00Z',
+        last_payload_at: '2026-05-04T12:00:00Z',
+        last_persisted_at: '2026-05-04T12:00:00Z',
+        last_heartbeat_at: '2026-05-04T12:00:00Z',
+        ws_messages_received: 100,
+        ws_heartbeats_received: 80,
+        ws_payload_messages_received: 20,
+        ws_reconnects: 0,
+        telemetry_writes_persisted: 10,
+        telemetry_writes_suppressed: 90,
+        collector_lock_skips: 0,
+      }],
+    }),
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
   },
@@ -65,6 +106,7 @@ vi.mock('@riviamigo/hooks', () => ({
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('lucide-react', () => ({
+  Activity: () => <svg data-testid="icon-activity" />,
   Car:    () => <svg data-testid="icon-car" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
   Clipboard: () => <svg data-testid="icon-clipboard" />,
@@ -158,6 +200,19 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Account'));
     expect(screen.getAllByText('Account').length).toBeGreaterThan(0);
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
+  });
+
+  it('renders the stewardship section for admin users', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
+    renderSettings();
+    fireEvent.click(screen.getByText('Stewardship'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Rivian Stewardship')).toBeInTheDocument();
+      expect(screen.getByText('Active collectors')).toBeInTheDocument();
+      expect(screen.getByText('Heartbeats ignored')).toBeInTheDocument();
+    });
   });
 
   it('shows active vehicle state for the connected vehicle', () => {

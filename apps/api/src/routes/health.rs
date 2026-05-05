@@ -54,7 +54,7 @@ struct Closures {
 
 #[derive(Serialize, sqlx::FromRow)]
 struct SoftwareEntry {
-    version: String,
+    version: Option<String>,
     installed_at: DateTime<Utc>,
     observed_until: Option<DateTime<Utc>>,
 }
@@ -74,8 +74,8 @@ async fn health(
     )?;
 
     let current_version = sw_history.iter()
-        .find(|e| e.observed_until.is_none())
-        .map(|e| e.version.clone());
+        .find(|e| e.observed_until.is_none() && e.version.is_some())
+        .and_then(|e| e.version.clone());
 
     Ok(Json(HealthResponse {
         vehicle_id,

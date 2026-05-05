@@ -1,8 +1,8 @@
 //! Per-vehicle ingestion worker: WS + poll + trip/charge detection + DB writes.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
-use sqlx::PgPool;
+use sqlx::{pool::PoolConnection, PgPool, Postgres};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
@@ -15,13 +15,18 @@ use crate::{
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
         },
-        ws_client,
+        ws_client::{self, WsInboundEvent, WsInboundKind},
     },
-    models::{cost_profile::compute_cost, state_period::VehicleState, telemetry::TelemetryEvent},
+    models::{
+        cost_profile::compute_cost,
+        state_period::VehicleState,
+        telemetry::{ChargerState, PowerState, TelemetryEvent},
+    },
     services::{cost::resolve_profile, geofences::match_geofence},
 };
 
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
+const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 
 struct MatchedLocation {
     geofence_id: Option<Uuid>,
@@ -34,7 +39,7 @@ pub async fn run_vehicle_worker(
     pool: PgPool,
     redis: redis::Client,
     age_key: String,
-    _config: Config,
+    config: Config,
     shutdown: broadcast::Receiver<()>,
 ) {
     tracing::info!(vehicle_id = %vehicle_id, "worker starting");
@@ -74,9 +79,23 @@ pub async fn run_vehicle_worker(
         }
     };
 
+    let mut lock_conn = match acquire_collector_lock(&pool, vehicle_id).await {
+        Ok(Some(conn)) => conn,
+        Ok(None) => {
+            increment_counter(&pool, vehicle_id, "collector_lock_skips").await;
+            upsert_health(&pool, vehicle_id, false, "passive", "collector lock held").await;
+            tracing::info!(vehicle_id = %vehicle_id, "collector lock held; worker staying passive");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(vehicle_id=%vehicle_id, err=%e, "collector lock failed");
+            return;
+        }
+    };
+
     upsert_health(&pool, vehicle_id, true, "connected", "").await;
 
-    let (ev_tx, mut ev_rx) = mpsc::channel::<TelemetryEvent>(256);
+    let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
 
     // Get rivian_vehicle_id
     let riv_id: Option<String> = sqlx::query_scalar!(
@@ -100,6 +119,7 @@ pub async fn run_vehicle_worker(
     let ev_tx_ws = ev_tx.clone();
     let tokens_clone = tokens.clone();
     let riv_id_clone = rivian_vehicle_id.clone();
+    let ws_config = config.clone();
     tokio::spawn(async move {
         ws_client::run_ws_loop(
             vehicle_id,
@@ -107,6 +127,7 @@ pub async fn run_vehicle_worker(
             tokens_clone,
             ev_tx_ws,
             ws_shutdown,
+            ws_config,
         )
         .await;
     });
@@ -127,13 +148,34 @@ pub async fn run_vehicle_worker(
     // Software version tracking
     let mut last_software_version: Option<String> = None;
     let mut sw_version_start: Option<chrono::DateTime<Utc>> = None;
+    let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
+    let mut raw_cleanup_tick: u64 = 0;
 
-    while let Some(event) = ev_rx.recv().await {
+    while let Some(inbound) = ev_rx.recv().await {
+        handle_inbound_accounting(&pool, vehicle_id, &config, &inbound).await;
+        raw_cleanup_tick += 1;
+        if raw_cleanup_tick % 500 == 0 {
+            cleanup_raw_events(&pool, config.rivian_raw_event_retention_days).await;
+        }
+
+        let Some(event) = inbound.telemetry else {
+            continue;
+        };
+
+        if inbound.kind == WsInboundKind::Heartbeat {
+            upsert_seen(
+                &pool,
+                vehicle_id,
+                event.is_online.unwrap_or(true),
+                event.ts,
+                SeenKind::Heartbeat,
+            )
+            .await;
+            continue;
+        }
+
         let trip_id = trip_det.active_trip_id();
         let session_id = charge_det.active_session_id();
-
-        // Write to timeseries (with trip_id / charge_session_id stamps)
-        let _ = write_telemetry(&pool, &event, trip_id, session_id).await;
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
@@ -141,7 +183,33 @@ pub async fn run_vehicle_worker(
         let _ = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await;
 
         // Update runtime state
-        upsert_online(&pool, vehicle_id, event.is_online.unwrap_or(true), event.ts).await;
+        upsert_seen(
+            &pool,
+            vehicle_id,
+            event.is_online.unwrap_or(true),
+            event.ts,
+            SeenKind::Payload,
+        )
+        .await;
+
+        let persistence_decision = if config.rivian_suppress_duplicate_telemetry {
+            persistence_gate.decide(&event)
+        } else {
+            PersistenceDecision::Persist
+        };
+
+        if matches!(persistence_decision, PersistenceDecision::Persist) {
+            if write_telemetry(&pool, &event, trip_id, session_id)
+                .await
+                .is_ok()
+            {
+                increment_counter(&pool, vehicle_id, "telemetry_writes_persisted").await;
+                mark_persisted(&pool, vehicle_id, event.ts).await;
+            }
+        } else if let PersistenceDecision::Suppress(reason) = persistence_decision {
+            increment_counter(&pool, vehicle_id, "telemetry_writes_suppressed").await;
+            increment_counter(&pool, vehicle_id, reason.counter_column()).await;
+        }
 
         // ── State period tracking ────────────────────────────────────────────
         let current_state = infer_vehicle_state(&event);
@@ -194,6 +262,650 @@ pub async fn run_vehicle_worker(
             let _ = persist_charge_session(&pool, &session).await;
         }
     }
+
+    let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeenKind {
+    Payload,
+    Heartbeat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersistenceDecision {
+    Persist,
+    Suppress(SuppressionReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuppressionReason {
+    Empty,
+    Duplicate,
+    Threshold,
+}
+
+impl SuppressionReason {
+    fn counter_column(self) -> &'static str {
+        match self {
+            Self::Empty => "telemetry_suppressed_empty",
+            Self::Duplicate => "telemetry_suppressed_duplicate",
+            Self::Threshold => "telemetry_suppressed_threshold",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TelemetryPersistenceGate {
+    vehicle_id: Uuid,
+    latest: Option<TelemetryEvent>,
+    last_persisted: Option<TelemetryEvent>,
+    last_persisted_at: Option<DateTime<Utc>>,
+    last_persisted_location: Option<(f64, f64)>,
+}
+
+impl TelemetryPersistenceGate {
+    fn new(vehicle_id: Uuid) -> Self {
+        Self {
+            vehicle_id,
+            latest: None,
+            last_persisted: None,
+            last_persisted_at: None,
+            last_persisted_location: None,
+        }
+    }
+
+    fn decide(&mut self, event: &TelemetryEvent) -> PersistenceDecision {
+        if !event_has_meaningful_payload(event) {
+            return PersistenceDecision::Suppress(SuppressionReason::Empty);
+        }
+
+        let previous = self.latest.clone();
+        if previous
+            .as_ref()
+            .is_some_and(|state| event_is_duplicate_patch(event, state))
+        {
+            return PersistenceDecision::Suppress(SuppressionReason::Duplicate);
+        }
+
+        let mut next = previous
+            .clone()
+            .unwrap_or_else(|| blank_event(self.vehicle_id, event.ts));
+        patch_event(&mut next, event);
+        self.latest = Some(next.clone());
+
+        let should_persist = match previous.as_ref() {
+            None => true,
+            Some(prev) => {
+                immediate_change(event, prev)
+                    || self.active_threshold_change(event, &next)
+                    || self.parked_threshold_change(event, &next)
+            }
+        };
+
+        if should_persist {
+            self.last_persisted_at = Some(event.ts);
+            self.last_persisted_location = next.latitude.zip(next.longitude);
+            self.last_persisted = Some(next);
+            PersistenceDecision::Persist
+        } else {
+            PersistenceDecision::Suppress(SuppressionReason::Threshold)
+        }
+    }
+
+    fn active_threshold_change(&self, event: &TelemetryEvent, next: &TelemetryEvent) -> bool {
+        let mode = inferred_activity(next);
+        let elapsed = self
+            .last_persisted_at
+            .map(|ts| event.ts.signed_duration_since(ts).num_seconds())
+            .unwrap_or(i64::MAX);
+
+        match mode {
+            ActivityMode::Driving => {
+                elapsed >= 5
+                    && (location_moved_m(
+                        self.last_persisted_location,
+                        next.latitude,
+                        next.longitude,
+                    )
+                    .is_some_and(|meters| meters >= 25.0)
+                        || changed_f64(
+                            event.speed_mph,
+                            latest_f64(&self.last_persisted, |e| e.speed_mph),
+                            1.0,
+                        )
+                        || changed_f64(
+                            event.battery_level,
+                            latest_f64(&self.last_persisted, |e| e.battery_level),
+                            0.1,
+                        ))
+            }
+            ActivityMode::Charging => {
+                elapsed >= 15
+                    && (changed_f64(
+                        event.battery_level,
+                        latest_f64(&self.last_persisted, |e| e.battery_level),
+                        0.1,
+                    ) || changed_f64(
+                        event.power_kw,
+                        latest_f64(&self.last_persisted, |e| e.power_kw),
+                        0.5,
+                    ))
+            }
+            ActivityMode::Parked => false,
+        }
+    }
+
+    fn parked_threshold_change(&self, event: &TelemetryEvent, next: &TelemetryEvent) -> bool {
+        if inferred_activity(next) != ActivityMode::Parked {
+            return false;
+        }
+
+        changed_f64(
+            event.battery_level,
+            latest_f64(&self.last_persisted, |e| e.battery_level),
+            0.5,
+        ) || location_moved_m(self.last_persisted_location, next.latitude, next.longitude)
+            .is_some_and(|meters| meters >= 100.0)
+            || tire_material_change(event, &self.last_persisted)
+            || changed_f64(
+                event.cabin_temp_c,
+                latest_f64(&self.last_persisted, |e| e.cabin_temp_c),
+                2.0,
+            )
+            || changed_f64(
+                event.driver_temp_c,
+                latest_f64(&self.last_persisted, |e| e.driver_temp_c),
+                2.0,
+            )
+            || changed_f64(
+                event.outside_temp_c,
+                latest_f64(&self.last_persisted, |e| e.outside_temp_c),
+                2.0,
+            )
+            || changed_bool(
+                event.hvac_active,
+                latest_bool(&self.last_persisted, |e| e.hvac_active),
+            )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityMode {
+    Driving,
+    Charging,
+    Parked,
+}
+
+fn inferred_activity(event: &TelemetryEvent) -> ActivityMode {
+    if matches!(event.charger_state, Some(ChargerState::Charging))
+        || matches!(event.power_state, Some(PowerState::Charging))
+    {
+        return ActivityMode::Charging;
+    }
+    if matches!(event.power_state, Some(PowerState::Drive | PowerState::Go)) {
+        return ActivityMode::Driving;
+    }
+    ActivityMode::Parked
+}
+
+fn blank_event(vehicle_id: Uuid, ts: DateTime<Utc>) -> TelemetryEvent {
+    TelemetryEvent {
+        vehicle_id,
+        ts,
+        latitude: None,
+        longitude: None,
+        altitude_m: None,
+        speed_mph: None,
+        battery_level: None,
+        battery_capacity_wh: None,
+        distance_to_empty_mi: None,
+        battery_limit: None,
+        power_state: None,
+        charger_state: None,
+        charger_status: None,
+        time_to_end_of_charge_min: None,
+        drive_mode: None,
+        gear_status: None,
+        cabin_temp_c: None,
+        driver_temp_c: None,
+        outside_temp_c: None,
+        hvac_active: None,
+        power_kw: None,
+        regen_power_kw: None,
+        heading_deg: None,
+        odometer_miles: None,
+        tire_fl_psi: None,
+        tire_fr_psi: None,
+        tire_rl_psi: None,
+        tire_rr_psi: None,
+        tire_fl_status: None,
+        tire_fr_status: None,
+        tire_rl_status: None,
+        tire_rr_status: None,
+        door_front_left_locked: None,
+        door_front_right_locked: None,
+        door_rear_left_locked: None,
+        door_rear_right_locked: None,
+        closure_frunk_locked: None,
+        closure_frunk_closed: None,
+        closure_liftgate_locked: None,
+        closure_liftgate_closed: None,
+        closure_tailgate_locked: None,
+        closure_tailgate_closed: None,
+        door_front_left_closed: None,
+        door_front_right_closed: None,
+        door_rear_left_closed: None,
+        door_rear_right_closed: None,
+        ota_current_version: None,
+        ota_available_version: None,
+        ota_status: None,
+        ota_current_status: None,
+        hv_thermal_event: None,
+        twelve_volt_health: None,
+        is_online: None,
+    }
+}
+
+macro_rules! patch_opt {
+    ($target:expr, $source:expr, $field:ident) => {
+        if $source.$field.is_some() {
+            $target.$field = $source.$field.clone();
+        }
+    };
+}
+
+fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
+    target.ts = source.ts;
+    patch_opt!(target, source, latitude);
+    patch_opt!(target, source, longitude);
+    patch_opt!(target, source, altitude_m);
+    patch_opt!(target, source, speed_mph);
+    patch_opt!(target, source, battery_level);
+    patch_opt!(target, source, battery_capacity_wh);
+    patch_opt!(target, source, distance_to_empty_mi);
+    patch_opt!(target, source, battery_limit);
+    patch_opt!(target, source, power_state);
+    patch_opt!(target, source, charger_state);
+    patch_opt!(target, source, charger_status);
+    patch_opt!(target, source, time_to_end_of_charge_min);
+    patch_opt!(target, source, drive_mode);
+    patch_opt!(target, source, gear_status);
+    patch_opt!(target, source, cabin_temp_c);
+    patch_opt!(target, source, driver_temp_c);
+    patch_opt!(target, source, outside_temp_c);
+    patch_opt!(target, source, hvac_active);
+    patch_opt!(target, source, power_kw);
+    patch_opt!(target, source, regen_power_kw);
+    patch_opt!(target, source, heading_deg);
+    patch_opt!(target, source, odometer_miles);
+    patch_opt!(target, source, tire_fl_psi);
+    patch_opt!(target, source, tire_fr_psi);
+    patch_opt!(target, source, tire_rl_psi);
+    patch_opt!(target, source, tire_rr_psi);
+    patch_opt!(target, source, tire_fl_status);
+    patch_opt!(target, source, tire_fr_status);
+    patch_opt!(target, source, tire_rl_status);
+    patch_opt!(target, source, tire_rr_status);
+    patch_opt!(target, source, door_front_left_locked);
+    patch_opt!(target, source, door_front_right_locked);
+    patch_opt!(target, source, door_rear_left_locked);
+    patch_opt!(target, source, door_rear_right_locked);
+    patch_opt!(target, source, door_front_left_closed);
+    patch_opt!(target, source, door_front_right_closed);
+    patch_opt!(target, source, door_rear_left_closed);
+    patch_opt!(target, source, door_rear_right_closed);
+    patch_opt!(target, source, closure_frunk_locked);
+    patch_opt!(target, source, closure_frunk_closed);
+    patch_opt!(target, source, closure_liftgate_locked);
+    patch_opt!(target, source, closure_liftgate_closed);
+    patch_opt!(target, source, closure_tailgate_locked);
+    patch_opt!(target, source, closure_tailgate_closed);
+    patch_opt!(target, source, ota_current_version);
+    patch_opt!(target, source, ota_available_version);
+    patch_opt!(target, source, ota_status);
+    patch_opt!(target, source, ota_current_status);
+    patch_opt!(target, source, hv_thermal_event);
+    patch_opt!(target, source, twelve_volt_health);
+    patch_opt!(target, source, is_online);
+}
+
+macro_rules! duplicate_field {
+    ($event:expr, $state:expr, $field:ident) => {
+        $event.$field.is_none() || $event.$field == $state.$field
+    };
+}
+
+fn event_is_duplicate_patch(event: &TelemetryEvent, state: &TelemetryEvent) -> bool {
+    duplicate_field!(event, state, latitude)
+        && duplicate_field!(event, state, longitude)
+        && duplicate_field!(event, state, altitude_m)
+        && duplicate_field!(event, state, speed_mph)
+        && duplicate_field!(event, state, battery_level)
+        && duplicate_field!(event, state, battery_capacity_wh)
+        && duplicate_field!(event, state, distance_to_empty_mi)
+        && duplicate_field!(event, state, battery_limit)
+        && duplicate_field!(event, state, power_state)
+        && duplicate_field!(event, state, charger_state)
+        && duplicate_field!(event, state, charger_status)
+        && duplicate_field!(event, state, time_to_end_of_charge_min)
+        && duplicate_field!(event, state, drive_mode)
+        && duplicate_field!(event, state, gear_status)
+        && duplicate_field!(event, state, cabin_temp_c)
+        && duplicate_field!(event, state, driver_temp_c)
+        && duplicate_field!(event, state, outside_temp_c)
+        && duplicate_field!(event, state, hvac_active)
+        && duplicate_field!(event, state, power_kw)
+        && duplicate_field!(event, state, regen_power_kw)
+        && duplicate_field!(event, state, heading_deg)
+        && duplicate_field!(event, state, odometer_miles)
+        && duplicate_field!(event, state, tire_fl_psi)
+        && duplicate_field!(event, state, tire_fr_psi)
+        && duplicate_field!(event, state, tire_rl_psi)
+        && duplicate_field!(event, state, tire_rr_psi)
+        && duplicate_field!(event, state, tire_fl_status)
+        && duplicate_field!(event, state, tire_fr_status)
+        && duplicate_field!(event, state, tire_rl_status)
+        && duplicate_field!(event, state, tire_rr_status)
+        && duplicate_field!(event, state, door_front_left_locked)
+        && duplicate_field!(event, state, door_front_right_locked)
+        && duplicate_field!(event, state, door_rear_left_locked)
+        && duplicate_field!(event, state, door_rear_right_locked)
+        && duplicate_field!(event, state, door_front_left_closed)
+        && duplicate_field!(event, state, door_front_right_closed)
+        && duplicate_field!(event, state, door_rear_left_closed)
+        && duplicate_field!(event, state, door_rear_right_closed)
+        && duplicate_field!(event, state, closure_frunk_locked)
+        && duplicate_field!(event, state, closure_frunk_closed)
+        && duplicate_field!(event, state, closure_liftgate_locked)
+        && duplicate_field!(event, state, closure_liftgate_closed)
+        && duplicate_field!(event, state, closure_tailgate_locked)
+        && duplicate_field!(event, state, closure_tailgate_closed)
+        && duplicate_field!(event, state, ota_current_version)
+        && duplicate_field!(event, state, ota_available_version)
+        && duplicate_field!(event, state, ota_status)
+        && duplicate_field!(event, state, ota_current_status)
+        && duplicate_field!(event, state, hv_thermal_event)
+        && duplicate_field!(event, state, twelve_volt_health)
+        && duplicate_field!(event, state, is_online)
+}
+
+fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
+    !event_is_duplicate_patch(event, &blank_event(event.vehicle_id, event.ts))
+}
+
+fn immediate_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool {
+    changed_enum(&event.power_state, &prev.power_state)
+        || changed_enum(&event.charger_state, &prev.charger_state)
+        || changed_string(
+            event.charger_status.as_deref(),
+            prev.charger_status.as_deref(),
+        )
+        || changed_string(
+            event
+                .drive_mode
+                .as_ref()
+                .map(|d| format!("{d:?}").to_lowercase())
+                .as_deref(),
+            prev.drive_mode
+                .as_ref()
+                .map(|d| format!("{d:?}").to_lowercase())
+                .as_deref(),
+        )
+        || changed_string(event.gear_status.as_deref(), prev.gear_status.as_deref())
+        || changed_f64(event.odometer_miles, prev.odometer_miles, 0.01)
+        || changed_bool(event.is_online, prev.is_online)
+        || closure_or_lock_change(event, prev)
+        || software_change(event, prev)
+        || tire_status_change(event, prev)
+}
+
+fn closure_or_lock_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool {
+    changed_bool(event.door_front_left_locked, prev.door_front_left_locked)
+        || changed_bool(event.door_front_right_locked, prev.door_front_right_locked)
+        || changed_bool(event.door_rear_left_locked, prev.door_rear_left_locked)
+        || changed_bool(event.door_rear_right_locked, prev.door_rear_right_locked)
+        || changed_bool(event.door_front_left_closed, prev.door_front_left_closed)
+        || changed_bool(event.door_front_right_closed, prev.door_front_right_closed)
+        || changed_bool(event.door_rear_left_closed, prev.door_rear_left_closed)
+        || changed_bool(event.door_rear_right_closed, prev.door_rear_right_closed)
+        || changed_bool(event.closure_frunk_locked, prev.closure_frunk_locked)
+        || changed_bool(event.closure_frunk_closed, prev.closure_frunk_closed)
+        || changed_bool(event.closure_liftgate_locked, prev.closure_liftgate_locked)
+        || changed_bool(event.closure_liftgate_closed, prev.closure_liftgate_closed)
+        || changed_bool(event.closure_tailgate_locked, prev.closure_tailgate_locked)
+        || changed_bool(event.closure_tailgate_closed, prev.closure_tailgate_closed)
+}
+
+fn software_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool {
+    changed_string(
+        event.ota_current_version.as_deref(),
+        prev.ota_current_version.as_deref(),
+    ) || changed_string(
+        event.ota_available_version.as_deref(),
+        prev.ota_available_version.as_deref(),
+    ) || changed_string(event.ota_status.as_deref(), prev.ota_status.as_deref())
+        || changed_string(
+            event.ota_current_status.as_deref(),
+            prev.ota_current_status.as_deref(),
+        )
+}
+
+fn tire_status_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool {
+    changed_string(
+        event.tire_fl_status.as_deref(),
+        prev.tire_fl_status.as_deref(),
+    ) || changed_string(
+        event.tire_fr_status.as_deref(),
+        prev.tire_fr_status.as_deref(),
+    ) || changed_string(
+        event.tire_rl_status.as_deref(),
+        prev.tire_rl_status.as_deref(),
+    ) || changed_string(
+        event.tire_rr_status.as_deref(),
+        prev.tire_rr_status.as_deref(),
+    )
+}
+
+fn tire_material_change(event: &TelemetryEvent, last: &Option<TelemetryEvent>) -> bool {
+    changed_f64(event.tire_fl_psi, latest_f64(last, |e| e.tire_fl_psi), 0.5)
+        || changed_f64(event.tire_fr_psi, latest_f64(last, |e| e.tire_fr_psi), 0.5)
+        || changed_f64(event.tire_rl_psi, latest_f64(last, |e| e.tire_rl_psi), 0.5)
+        || changed_f64(event.tire_rr_psi, latest_f64(last, |e| e.tire_rr_psi), 0.5)
+}
+
+fn changed_f64(current: Option<f64>, previous: Option<f64>, threshold: f64) -> bool {
+    match (current, previous) {
+        (Some(c), Some(p)) => (c - p).abs() >= threshold,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+fn changed_bool(current: Option<bool>, previous: Option<bool>) -> bool {
+    matches!(current, Some(_)) && current != previous
+}
+
+fn changed_string(current: Option<&str>, previous: Option<&str>) -> bool {
+    current.is_some() && current != previous
+}
+
+fn changed_enum<T: PartialEq>(current: &Option<T>, previous: &Option<T>) -> bool {
+    current.is_some() && current != previous
+}
+
+fn latest_f64(
+    event: &Option<TelemetryEvent>,
+    getter: impl Fn(&TelemetryEvent) -> Option<f64>,
+) -> Option<f64> {
+    event.as_ref().and_then(getter)
+}
+
+fn latest_bool(
+    event: &Option<TelemetryEvent>,
+    getter: impl Fn(&TelemetryEvent) -> Option<bool>,
+) -> Option<bool> {
+    event.as_ref().and_then(getter)
+}
+
+fn location_moved_m(
+    previous: Option<(f64, f64)>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> Option<f64> {
+    let (prev_lat, prev_lon) = previous?;
+    let (lat, lon) = latitude.zip(longitude)?;
+    Some(haversine_m(prev_lat, prev_lon, lat, lon))
+}
+
+fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let radius_m = 6_371_000.0_f64;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1 = lat1.to_radians();
+    let lat2 = lat2.to_radians();
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    2.0 * radius_m * a.sqrt().asin()
+}
+
+async fn handle_inbound_accounting(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    config: &Config,
+    inbound: &WsInboundEvent,
+) {
+    if !is_synthetic_control(inbound.message_type.as_deref()) {
+        increment_counter(pool, vehicle_id, "ws_messages_received").await;
+        match inbound.kind {
+            WsInboundKind::Control => {
+                increment_counter(pool, vehicle_id, "ws_control_messages_received").await
+            }
+            WsInboundKind::Heartbeat => {
+                increment_counter(pool, vehicle_id, "ws_heartbeats_received").await
+            }
+            WsInboundKind::Telemetry => {
+                increment_counter(pool, vehicle_id, "ws_payload_messages_received").await
+            }
+        }
+    }
+    match inbound.message_type.as_deref() {
+        Some("connection_open") => {
+            increment_counter(pool, vehicle_id, "ws_connections_opened").await
+        }
+        Some("reconnect") => increment_counter(pool, vehicle_id, "ws_reconnects").await,
+        Some("connection_init" | "subscribe") => {
+            increment_counter(pool, vehicle_id, "outbound_messages_sent").await
+        }
+        _ => {}
+    }
+    if config.rivian_persist_raw_events {
+        persist_raw_event(pool, vehicle_id, inbound).await;
+    }
+}
+
+fn is_synthetic_control(message_type: Option<&str>) -> bool {
+    matches!(
+        message_type,
+        Some("connection_open" | "connection_init" | "subscribe" | "reconnect")
+    )
+}
+
+async fn persist_raw_event(pool: &PgPool, vehicle_id: Uuid, inbound: &WsInboundEvent) {
+    let payload_json = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO riviamigo.rivian_ws_raw_events
+          (vehicle_id, received_at, event_type, message_type, payload_json, payload_text)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(vehicle_id)
+    .bind(inbound.received_at)
+    .bind(inbound.kind.as_str())
+    .bind(inbound.message_type.as_deref())
+    .bind(payload_json)
+    .bind(&inbound.raw)
+    .execute(pool)
+    .await;
+
+    if result.is_ok() {
+        increment_counter(pool, vehicle_id, "raw_events_persisted").await;
+    }
+}
+
+async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
+    let _ = sqlx::query(
+        "DELETE FROM riviamigo.rivian_ws_raw_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
+    )
+    .bind(retention_days.max(1) as i32)
+    .execute(pool)
+    .await;
+}
+
+async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {
+    let Some(column) = stewardship_counter_column(column) else {
+        return;
+    };
+    let sql = format!(
+        "INSERT INTO riviamigo.rivian_stewardship_counters (vehicle_id, day, {column}) \
+         VALUES ($1, CURRENT_DATE, 1) \
+         ON CONFLICT (vehicle_id, day) DO UPDATE \
+         SET {column} = riviamigo.rivian_stewardship_counters.{column} + 1, updated_at = now()"
+    );
+    let _ = sqlx::query(&sql).bind(vehicle_id).execute(pool).await;
+}
+
+fn stewardship_counter_column(column: &str) -> Option<&'static str> {
+    match column {
+        "ws_messages_received" => Some("ws_messages_received"),
+        "ws_heartbeats_received" => Some("ws_heartbeats_received"),
+        "ws_payload_messages_received" => Some("ws_payload_messages_received"),
+        "ws_control_messages_received" => Some("ws_control_messages_received"),
+        "ws_connections_opened" => Some("ws_connections_opened"),
+        "ws_reconnects" => Some("ws_reconnects"),
+        "outbound_messages_sent" => Some("outbound_messages_sent"),
+        "outbound_graphql_requests" => Some("outbound_graphql_requests"),
+        "telemetry_writes_persisted" => Some("telemetry_writes_persisted"),
+        "telemetry_writes_suppressed" => Some("telemetry_writes_suppressed"),
+        "telemetry_suppressed_duplicate" => Some("telemetry_suppressed_duplicate"),
+        "telemetry_suppressed_empty" => Some("telemetry_suppressed_empty"),
+        "telemetry_suppressed_threshold" => Some("telemetry_suppressed_threshold"),
+        "collector_lock_skips" => Some("collector_lock_skips"),
+        "raw_events_persisted" => Some("raw_events_persisted"),
+        _ => None,
+    }
+}
+
+fn collector_lock_key(vehicle_id: Uuid) -> i64 {
+    let bytes = vehicle_id.as_bytes();
+    let mut first = [0u8; 8];
+    let mut second = [0u8; 8];
+    first.copy_from_slice(&bytes[0..8]);
+    second.copy_from_slice(&bytes[8..16]);
+    i64::from_be_bytes(first) ^ i64::from_be_bytes(second) ^ ADVISORY_LOCK_NAMESPACE
+}
+
+async fn acquire_collector_lock(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+) -> anyhow::Result<Option<PoolConnection<Postgres>>> {
+    let mut conn = pool.acquire().await?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(collector_lock_key(vehicle_id))
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(acquired.then_some(conn))
+}
+
+async fn release_collector_lock(
+    conn: &mut PoolConnection<Postgres>,
+    vehicle_id: Uuid,
+) -> anyhow::Result<()> {
+    let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        .bind(collector_lock_key(vehicle_id))
+        .fetch_one(&mut **conn)
+        .await?;
+    Ok(())
 }
 
 async fn write_telemetry(
@@ -788,17 +1500,133 @@ async fn upsert_health(pool: &PgPool, vehicle_id: Uuid, online: bool, health: &s
     .await;
 }
 
-async fn upsert_online(pool: &PgPool, vehicle_id: Uuid, online: bool, ts: chrono::DateTime<Utc>) {
-    let _ = sqlx::query!(
+async fn upsert_seen(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    online: bool,
+    ts: DateTime<Utc>,
+    kind: SeenKind,
+) {
+    let (payload_at, heartbeat_at) = match kind {
+        SeenKind::Payload => (Some(ts), None),
+        SeenKind::Heartbeat => (None, Some(ts)),
+    };
+    let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
-           (vehicle_id, is_online, last_event_at, updated_at)
-           VALUES ($1,$2,$3,now())
+           (vehicle_id, is_online, last_event_at, last_seen_at, last_payload_at, last_heartbeat_at, updated_at)
+           VALUES ($1,$2,$3,$3,$4,$5,now())
            ON CONFLICT (vehicle_id) DO UPDATE
-           SET is_online=$2, last_event_at=$3, updated_at=now()"#,
-        vehicle_id,
-        online,
-        ts
+           SET is_online=$2,
+               last_event_at=$3,
+               last_seen_at=$3,
+               last_payload_at=COALESCE($4, riviamigo.vehicle_runtime_state.last_payload_at),
+               last_heartbeat_at=COALESCE($5, riviamigo.vehicle_runtime_state.last_heartbeat_at),
+               updated_at=now()"#,
     )
+    .bind(vehicle_id)
+    .bind(online)
+    .bind(ts)
+    .bind(payload_at)
+    .bind(heartbeat_at)
     .execute(pool)
     .await;
+}
+
+async fn mark_persisted(pool: &PgPool, vehicle_id: Uuid, ts: DateTime<Utc>) {
+    let _ = sqlx::query(
+        r#"INSERT INTO riviamigo.vehicle_runtime_state
+           (vehicle_id, last_persisted_at, updated_at)
+           VALUES ($1,$2,now())
+           ON CONFLICT (vehicle_id) DO UPDATE
+           SET last_persisted_at=$2, updated_at=now()"#,
+    )
+    .bind(vehicle_id)
+    .bind(ts)
+    .execute(pool)
+    .await;
+}
+
+#[cfg(test)]
+mod stewardship_tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn event(vehicle_id: Uuid, offset_seconds: i64) -> TelemetryEvent {
+        blank_event(vehicle_id, Utc::now() + Duration::seconds(offset_seconds))
+    }
+
+    #[test]
+    fn empty_event_is_suppressed() {
+        let vehicle_id = Uuid::new_v4();
+        let mut gate = TelemetryPersistenceGate::new(vehicle_id);
+
+        assert_eq!(
+            gate.decide(&event(vehicle_id, 0)),
+            PersistenceDecision::Suppress(SuppressionReason::Empty)
+        );
+    }
+
+    #[test]
+    fn duplicate_sparse_payload_is_suppressed_after_first_persist() {
+        let vehicle_id = Uuid::new_v4();
+        let mut gate = TelemetryPersistenceGate::new(vehicle_id);
+        let mut first = event(vehicle_id, 0);
+        first.battery_level = Some(72.0);
+
+        assert_eq!(gate.decide(&first), PersistenceDecision::Persist);
+
+        let mut duplicate = event(vehicle_id, 30);
+        duplicate.battery_level = Some(72.0);
+        assert_eq!(
+            gate.decide(&duplicate),
+            PersistenceDecision::Suppress(SuppressionReason::Duplicate)
+        );
+    }
+
+    #[test]
+    fn material_soc_change_persists_when_parked() {
+        let vehicle_id = Uuid::new_v4();
+        let mut gate = TelemetryPersistenceGate::new(vehicle_id);
+        let mut first = event(vehicle_id, 0);
+        first.power_state = Some(PowerState::Ready);
+        first.battery_level = Some(72.0);
+        assert_eq!(gate.decide(&first), PersistenceDecision::Persist);
+
+        let mut changed = event(vehicle_id, 300);
+        changed.battery_level = Some(71.4);
+        assert_eq!(gate.decide(&changed), PersistenceDecision::Persist);
+    }
+
+    #[test]
+    fn small_parked_soc_change_is_threshold_suppressed() {
+        let vehicle_id = Uuid::new_v4();
+        let mut gate = TelemetryPersistenceGate::new(vehicle_id);
+        let mut first = event(vehicle_id, 0);
+        first.power_state = Some(PowerState::Ready);
+        first.battery_level = Some(72.0);
+        assert_eq!(gate.decide(&first), PersistenceDecision::Persist);
+
+        let mut changed = event(vehicle_id, 300);
+        changed.battery_level = Some(71.8);
+        assert_eq!(
+            gate.decide(&changed),
+            PersistenceDecision::Suppress(SuppressionReason::Threshold)
+        );
+    }
+
+    #[test]
+    fn driving_location_threshold_persists() {
+        let vehicle_id = Uuid::new_v4();
+        let mut gate = TelemetryPersistenceGate::new(vehicle_id);
+        let mut first = event(vehicle_id, 0);
+        first.power_state = Some(PowerState::Drive);
+        first.latitude = Some(30.0);
+        first.longitude = Some(-97.0);
+        assert_eq!(gate.decide(&first), PersistenceDecision::Persist);
+
+        let mut moved = event(vehicle_id, 6);
+        moved.latitude = Some(30.0003);
+        moved.longitude = Some(-97.0);
+        assert_eq!(gate.decide(&moved), PersistenceDecision::Persist);
+    }
 }
