@@ -25,3 +25,7 @@ export { DegradationChart } from './DegradationChart';
 export type { DegradationChartProps, DegradationPoint } from './DegradationChart';
 export { ElevationProfileChart } from './ElevationProfileChart';
 export type { ElevationProfileChartProps, ElevationPoint } from './ElevationProfileChart';
+export { EfficiencyDrivesChart } from './EfficiencyDrivesChart';
+export type { EfficiencyDrivesChartProps } from './EfficiencyDrivesChart';
+export { ChargingSessionsChart } from './ChargingSessionsChart';
+export type { ChargingSessionsChartProps } from './ChargingSessionsChart';
