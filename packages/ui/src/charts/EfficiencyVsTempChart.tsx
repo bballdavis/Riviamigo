@@ -7,7 +7,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { colors } from '../tokens/colors';
-import { getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh } from '../lib/utils';
+import { getEfficiencyDisplay, getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh, whPerMileToWhPerKm } from '../lib/utils';
 
 export interface EfficiencyVsTempPoint {
   temp_c_low: number;
@@ -39,16 +39,21 @@ export function EfficiencyVsTempChart({
   height = 200,
   unit = 'f',
 }: EfficiencyVsTempChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
   const isMetric = getUnitSystem() === 'metric';
-  const efficiencyUnit = isMetric ? 'km/kWh' : 'mi/kWh';
+  const display = getEfficiencyDisplay();
+  const efficiencyUnit = display === 'energy_per_distance'
+    ? isMetric ? 'Wh/km' : 'Wh/mi'
+    : isMetric ? 'km/kWh' : 'mi/kWh';
 
   const chartData = data.map((d) => ({
     ...d,
     label: unit === 'f'
       ? `${toF(d.temp_c_low)} F`
       : `${d.temp_c_low} C`,
-    efficiency: isMetric ? whPerMileToKmPerKwh(d.avg_efficiency_wh_mi) : whPerMileToMiPerKwh(d.avg_efficiency_wh_mi),
+    efficiency: display === 'energy_per_distance'
+      ? isMetric ? whPerMileToWhPerKm(d.avg_efficiency_wh_mi) : d.avg_efficiency_wh_mi
+      : isMetric ? whPerMileToKmPerKwh(d.avg_efficiency_wh_mi) : whPerMileToMiPerKwh(d.avg_efficiency_wh_mi),
   }));
 
   return (

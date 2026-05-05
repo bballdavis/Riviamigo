@@ -24,7 +24,7 @@ export function ChargeCurveChart({
   loading = false,
   height = 200,
 }: ChargeCurveChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   return (
     <ResponsiveContainer width="100%" height={height}>

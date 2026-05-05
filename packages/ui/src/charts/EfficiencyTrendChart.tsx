@@ -7,7 +7,7 @@ import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh } from '../lib/utils';
+import { getEfficiencyDisplay, getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh, whPerMileToWhPerKm } from '../lib/utils';
 
 export interface EfficiencyTrendPoint {
   day: string;
@@ -28,13 +28,16 @@ export function EfficiencyTrendChart({
   height = 220,
   showBrush = false,
 }: EfficiencyTrendChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
   const isMetric = getUnitSystem() === 'metric';
-  const efficiencyUnit = isMetric ? 'km/kWh' : 'mi/kWh';
+  const display = getEfficiencyDisplay();
+  const efficiencyUnit = display === 'energy_per_distance'
+    ? isMetric ? 'Wh/km' : 'Wh/mi'
+    : isMetric ? 'km/kWh' : 'mi/kWh';
   const chartData = data.map((point) => ({
     ...point,
-    day_efficiency: convertEfficiency(point.day_avg_wh_mi, isMetric),
-    rolling_efficiency: convertEfficiency(point.rolling_7d_wh_mi, isMetric),
+    day_efficiency: convertEfficiency(point.day_avg_wh_mi, isMetric, display),
+    rolling_efficiency: convertEfficiency(point.rolling_7d_wh_mi, isMetric, display),
   }));
 
   return (
@@ -109,6 +112,9 @@ export function EfficiencyTrendChart({
   );
 }
 
-function convertEfficiency(value: number | null, metric: boolean) {
+function convertEfficiency(value: number | null, metric: boolean, display: 'distance_per_energy' | 'energy_per_distance') {
+  if (display === 'energy_per_distance') {
+    return metric ? whPerMileToWhPerKm(value) : value;
+  }
   return metric ? whPerMileToKmPerKwh(value) : whPerMileToMiPerKwh(value);
 }

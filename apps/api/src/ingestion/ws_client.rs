@@ -3,13 +3,23 @@
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error as WsError, Message};
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest, protocol::CloseFrame, Error as WsError, Message,
+};
 use uuid::Uuid;
 
 use crate::ingestion::{parser, session_store::RivianTokenBundle};
 use crate::models::telemetry::TelemetryEvent;
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
+const RIVIAN_CONNECTION_TTL_EXPIRED_CODE: u16 = 4420;
+const RIVIAN_CONNECTION_TTL_EXPIRED_REASON: &str = "Connection TTL expired";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WsLoopEnd {
+    Shutdown,
+    ConnectionTtlExpired,
+}
 
 const VEHICLE_STATE_SUBSCRIPTION: &str = r#"
 subscription vehicleState($vehicleID: String!) {
@@ -76,9 +86,16 @@ pub async fn run_ws_loop(
     loop {
         match connect_and_subscribe(&vehicle_id, &rivian_veh_id, &tokens, &tx, &mut shutdown).await
         {
-            Ok(()) => {
+            Ok(WsLoopEnd::Shutdown) => {
                 tracing::info!(vehicle_id = %vehicle_id, "WS connection closed gracefully");
                 break;
+            }
+            Ok(WsLoopEnd::ConnectionTtlExpired) => {
+                tracing::info!(
+                    vehicle_id = %vehicle_id,
+                    "Rivian WS connection TTL expired; renewing subscription"
+                );
+                backoff_secs = 1;
             }
             Err(e) => {
                 tracing::warn!(vehicle_id = %vehicle_id, err = %e, backoff = backoff_secs, "WS error, reconnecting");
@@ -98,7 +115,7 @@ async fn connect_and_subscribe(
     tokens: &RivianTokenBundle,
     tx: &mpsc::Sender<TelemetryEvent>,
     shutdown: &mut tokio::sync::broadcast::Receiver<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<WsLoopEnd> {
     let request = build_rivian_ws_request()?;
 
     let (mut ws, _) = match tokio_tungstenite::connect_async(request).await {
@@ -167,7 +184,7 @@ async fn connect_and_subscribe(
 
     loop {
         tokio::select! {
-            _ = shutdown.recv() => { return Ok(()); }
+            _ = shutdown.recv() => { return Ok(WsLoopEnd::Shutdown); }
             msg = ws.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -185,6 +202,16 @@ async fn connect_and_subscribe(
                         ws.send(Message::Pong(data)).await?;
                     }
                     Some(Ok(Message::Close(frame))) => {
+                        let ttl_expired = is_rivian_connection_ttl_expired(frame.as_ref());
+                        if ttl_expired {
+                            tracing::info!(
+                                vehicle_id = %vehicle_id,
+                                close_code = frame.as_ref().map(|f| f.code.to_string()),
+                                close_reason = frame.as_ref().map(|f| f.reason.to_string()),
+                                "Rivian WS close frame"
+                            );
+                            return Ok(WsLoopEnd::ConnectionTtlExpired);
+                        }
                         tracing::warn!(
                             vehicle_id = %vehicle_id,
                             close_code = frame.as_ref().map(|f| f.code.to_string()),
@@ -201,6 +228,13 @@ async fn connect_and_subscribe(
             }
         }
     }
+}
+
+fn is_rivian_connection_ttl_expired(frame: Option<&CloseFrame<'_>>) -> bool {
+    frame.is_some_and(|f| {
+        u16::from(f.code) == RIVIAN_CONNECTION_TTL_EXPIRED_CODE
+            && f.reason.as_ref() == RIVIAN_CONNECTION_TTL_EXPIRED_REASON
+    })
 }
 
 fn build_rivian_ws_request(
@@ -223,6 +257,8 @@ fn truncate_ws_message(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
     #[test]
     fn rivian_ws_request_includes_required_handshake_headers() {
@@ -240,5 +276,33 @@ mod tests {
         assert!(headers.contains_key("Upgrade"));
         assert!(headers.contains_key("Sec-WebSocket-Version"));
         assert!(headers.contains_key("Sec-WebSocket-Key"));
+    }
+
+    #[test]
+    fn classifies_rivian_ttl_close_as_renewable() {
+        let frame = CloseFrame {
+            code: CloseCode::Library(RIVIAN_CONNECTION_TTL_EXPIRED_CODE),
+            reason: Cow::Borrowed(RIVIAN_CONNECTION_TTL_EXPIRED_REASON),
+        };
+
+        assert!(is_rivian_connection_ttl_expired(Some(&frame)));
+    }
+
+    #[test]
+    fn does_not_classify_other_rivian_closes_as_ttl() {
+        let no_subscription_frame = CloseFrame {
+            code: CloseCode::Library(4410),
+            reason: Cow::Borrowed("Socket with no active subscriptions, disconnecting"),
+        };
+        let wrong_reason_frame = CloseFrame {
+            code: CloseCode::Library(RIVIAN_CONNECTION_TTL_EXPIRED_CODE),
+            reason: Cow::Borrowed("Something else"),
+        };
+
+        assert!(!is_rivian_connection_ttl_expired(Some(
+            &no_subscription_frame
+        )));
+        assert!(!is_rivian_connection_ttl_expired(Some(&wrong_reason_frame)));
+        assert!(!is_rivian_connection_ttl_expired(None));
     }
 }

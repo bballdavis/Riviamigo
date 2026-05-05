@@ -62,6 +62,7 @@ export interface ChargeSession {
 }
 
 export interface ChargeCurvePoint {
+  minutes_elapsed?: number | null;
   soc_pct: number;
   power_kw: number;
 }
@@ -98,7 +99,32 @@ export interface ChargingSummary {
   away_kwh?: number;
   ac_kwh?: number;
   dc_kwh?: number;
+  charging_cycles?: number | null;
+  charging_efficiency_pct?: number | null;
+  total_energy_used_kwh?: number | null;
+  max_charge_limit_pct?: number | null;
+  max_charge_rate_kw?: number | null;
+  typed_session_count?: number;
   weekly: Array<{ week_start: string; energy_kwh: number; sessions: number }>;
+}
+
+export interface BatteryHealthSummary {
+  usable_now_kwh: number | null;
+  usable_new_kwh: number | null;
+  battery_health_pct: number | null;
+  estimated_degradation_pct: number | null;
+  charging_cycles: number | null;
+  charge_count: number;
+  total_energy_added_kwh: number | null;
+  total_energy_used_kwh: number | null;
+  charging_efficiency_pct: number | null;
+}
+
+export interface BatteryMileagePoint {
+  ts: string;
+  odometer_mi: number | null;
+  usable_kwh: number | null;
+  range_mi: number | null;
 }
 
 export interface VehicleHealthTires {

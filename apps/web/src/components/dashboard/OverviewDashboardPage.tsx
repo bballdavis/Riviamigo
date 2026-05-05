@@ -1,40 +1,72 @@
 import React, { useState } from 'react';
-import { useAuth, useCurrentVehicleStatus, useVehicles, useSocHistory, useRangeHistory, useEfficiencyTrend, useChargingSummary, usePhantomDrain } from '@riviamigo/hooks';
-import { useUpdateDashboard } from '@riviamigo/dashboards';
-import { DashboardPageShell } from './DashboardPageShell';
 import {
-  SocAreaChart,
-  RangeAreaChart,
+  useAuth,
+  useBatteryMileage,
+  useChargeSessions,
+  useChargingSummary,
+  useCurrentVehicleStatus,
+  useDegradation,
+  useEfficiencyByMode,
+  useEfficiencyTrend,
+  useEfficiencyVsTemp,
+  usePhantomDrain,
+  useRangeHistory,
+  useSocHistory,
+  useSummaryStats,
+  useVehicles,
+} from '@riviamigo/hooks';
+import { useUpdateDashboard } from '@riviamigo/dashboards';
+import {
+  BatteryCapacityByMileageChart,
+  ChargingSessionsChart,
+  DegradationChart,
+  EfficiencyChart,
   EfficiencyTrendChart,
+  EfficiencyVsTempChart,
   EnergyBarChart,
   PhantomDrainChart,
+  ProjectedRangeByMileageChart,
+  RangeAreaChart,
+  SocAreaChart,
 } from '@riviamigo/ui/charts';
+import { ChartPicker, StatCard } from '@riviamigo/ui/primitives';
+import { formatEfficiency, formatKwh, formatMiles } from '@riviamigo/ui/lib/utils';
 import {
   createDefaultDashboardEditActions,
   CurrentVehicleStatePanel,
   renderDefaultDashboardTitleAction,
   type DashboardPageProps,
 } from './DashboardPage';
+import { DashboardPageShell } from './DashboardPageShell';
 
-// ── Available metrics ────────────────────────────────────────────────────────
+type OverviewChartKey =
+  | 'soc'
+  | 'range'
+  | 'charge-level'
+  | 'charging-sessions'
+  | 'energy'
+  | 'efficiency-trend'
+  | 'efficiency-temperature'
+  | 'efficiency-mode'
+  | 'phantom'
+  | 'battery-degradation'
+  | 'battery-capacity-mileage'
+  | 'projected-range-mileage';
 
-type MetricKey = 'soc' | 'range' | 'efficiency' | 'energy' | 'phantom';
-
-interface MetricOption {
-  key: MetricKey;
-  label: string;
-  description: string;
-}
-
-const METRICS: MetricOption[] = [
-  { key: 'soc',        label: 'Battery Level (SoC)',   description: 'State of charge over time' },
-  { key: 'range',      label: 'Estimated Range',        description: 'Rated range over time' },
-  { key: 'efficiency', label: 'Efficiency Trend',       description: '7-day rolling avg + daily' },
-  { key: 'energy',     label: 'Energy Charged',         description: 'Energy added per week' },
-  { key: 'phantom',    label: 'Phantom Drain',          description: 'Overnight idle battery loss' },
+const OVERVIEW_CHART_OPTIONS: Array<{ value: OverviewChartKey; label: string }> = [
+  { value: 'soc', label: 'Battery Level' },
+  { value: 'range', label: 'Estimated Range' },
+  { value: 'charge-level', label: 'Charge Level' },
+  { value: 'charging-sessions', label: 'Charging Sessions' },
+  { value: 'energy', label: 'Energy Charged' },
+  { value: 'efficiency-trend', label: 'Efficiency Trend' },
+  { value: 'efficiency-temperature', label: 'Efficiency by Temperature' },
+  { value: 'efficiency-mode', label: 'Efficiency by Drive Mode' },
+  { value: 'phantom', label: 'Phantom Drain' },
+  { value: 'battery-degradation', label: 'Battery Health' },
+  { value: 'battery-capacity-mileage', label: 'Battery Capacity by Mileage' },
+  { value: 'projected-range-mileage', label: 'Projected Range - Mileage' },
 ];
-
-// ── Page ─────────────────────────────────────────────────────────────────────
 
 export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const { defaultVehicleId } = useAuth();
@@ -50,23 +82,47 @@ export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProp
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
       renderActions={createDefaultDashboardEditActions(updateDashboard)}
+      showEfficiencyDisplayToggle
       renderBeforeDashboard={({ isEditMode, ctx }) =>
         !isEditMode ? (
           <>
             <CurrentVehicleStatePanel status={currentStatus} images={activeVehicle?.images} />
-            <MetricExplorerPanel vehicleId={ctx.vehicleId} from={ctx.from} to={ctx.to} />
+            <OverviewStatsRow vehicleId={ctx.vehicleId} />
+            <OverviewChartPanel vehicleId={ctx.vehicleId} from={ctx.from} to={ctx.to} />
           </>
         ) : (
           <CurrentVehicleStatePanel status={currentStatus} images={activeVehicle?.images} />
         )
       }
+      renderDashboard={({ isEditMode }) => isEditMode}
     />
   );
 }
 
-// ── Metric explorer ───────────────────────────────────────────────────────────
+function OverviewStatsRow({ vehicleId }: { vehicleId: string | null }) {
+  const { data: stats, isLoading } = useSummaryStats(vehicleId);
 
-function MetricExplorerPanel({
+  return (
+    <section className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <StatCard
+        label="Total Miles"
+        value={isLoading ? '...' : formatMiles(stats?.total_miles ?? 0)}
+        accent
+      />
+      <StatCard label="Total Trips" value={isLoading ? '...' : String(stats?.total_trips ?? 0)} />
+      <StatCard
+        label="Energy Charged"
+        value={isLoading ? '...' : formatKwh(stats?.total_energy_kwh ?? 0)}
+      />
+      <StatCard
+        label="Avg Efficiency"
+        value={isLoading ? '...' : formatEfficiency(stats?.avg_efficiency_wh_mi)}
+      />
+    </section>
+  );
+}
+
+function OverviewChartPanel({
   vehicleId,
   from,
   to,
@@ -75,114 +131,125 @@ function MetricExplorerPanel({
   from: string;
   to: string;
 }) {
-  const [activeKey, setActiveKey] = useState<MetricKey>('soc');
-  const activeMetric = METRICS.find((m) => m.key === activeKey) ?? METRICS[0];
+  const [chartKey, setChartKey] = useState<OverviewChartKey>('soc');
+  const [chartSearch, setChartSearch] = useState('');
 
   return (
     <div className="mb-4 rounded-xl border border-border bg-bg-elevated/70 p-4">
-      {/* Selector bar */}
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-sm font-semibold text-fg">{activeMetric.label}</div>
-          <div className="text-xs text-fg-tertiary">{activeMetric.description}</div>
-        </div>
-        <select
-          className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent"
-          value={activeKey}
-          onChange={(e) => setActiveKey(e.target.value as MetricKey)}
-          aria-label="Select metric"
-        >
-          {METRICS.map((m) => (
-            <option key={m.key} value={m.key}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Chart */}
-      <MetricChart metricKey={activeKey} vehicleId={vehicleId} from={from} to={to} />
+      <ChartPicker
+        value={chartKey}
+        options={OVERVIEW_CHART_OPTIONS}
+        onChange={setChartKey}
+        searchValue={chartSearch}
+        onSearchChange={setChartSearch}
+      />
+      <OverviewChart chartKey={chartKey} vehicleId={vehicleId} from={from} to={to} />
     </div>
   );
 }
 
-function MetricChart({
-  metricKey,
+function OverviewChart({
+  chartKey,
   vehicleId,
   from,
   to,
 }: {
-  metricKey: MetricKey;
+  chartKey: OverviewChartKey;
   vehicleId: string | null;
   from: string;
   to: string;
 }) {
   const { data: soc = [], isFetching: socFetching } = useSocHistory(
-    metricKey === 'soc' ? vehicleId : null, from, to
+    chartKey === 'soc' ? vehicleId : null,
+    from,
+    to,
   );
   const { data: range = [], isFetching: rangeFetching } = useRangeHistory(
-    metricKey === 'range' ? vehicleId : null, from, to
+    chartKey === 'range' ? vehicleId : null,
+    from,
+    to,
   );
   const { data: trend = [], isFetching: trendFetching } = useEfficiencyTrend(
-    metricKey === 'efficiency' ? vehicleId : null, from, to
+    chartKey === 'efficiency-trend' ? vehicleId : null,
+    from,
+    to,
   );
   const { data: chargeSummary, isFetching: chargeFetching } = useChargingSummary(
-    metricKey === 'energy' ? vehicleId : null, from, to
+    chartKey === 'energy' ? vehicleId : null,
+    from,
+    to,
+  );
+  const { data: sessionsPage, isLoading: sessionsLoading } = useChargeSessions(
+    chartKey === 'charging-sessions' || chartKey === 'charge-level' ? vehicleId : null,
+    from,
+    to,
+    1,
+    200,
   );
   const { data: phantom = [], isFetching: phantomFetching } = usePhantomDrain(
-    metricKey === 'phantom' ? vehicleId : null, from, to
+    chartKey === 'phantom' ? vehicleId : null,
+    from,
+    to,
+  );
+  const { data: degradation = [], isLoading: degradationLoading } = useDegradation(
+    chartKey === 'battery-degradation' ? vehicleId : null,
+  );
+  const { data: mileage = [], isLoading: mileageLoading } = useBatteryMileage(
+    chartKey === 'battery-capacity-mileage' || chartKey === 'projected-range-mileage' ? vehicleId : null,
+  );
+  const { data: efficiencyByMode = [], isFetching: efficiencyByModeFetching } = useEfficiencyByMode(
+    chartKey === 'efficiency-mode' ? vehicleId : null,
+    from,
+    to,
+  );
+  const { data: efficiencyByTemp = [], isFetching: efficiencyByTempFetching } = useEfficiencyVsTemp(
+    chartKey === 'efficiency-temperature' ? vehicleId : null,
+    from,
+    to,
   );
 
-  const weekly = (chargeSummary?.weekly ?? []).map((w) => ({
-    ts: w.week_start,
-    energy_added_kwh: w.energy_kwh,
+  const sessions = sessionsPage?.items ?? [];
+  const weekly = (chargeSummary?.weekly ?? []).map((week) => ({
+    ts: week.week_start,
+    energy_added_kwh: week.energy_kwh,
   }));
 
-  switch (metricKey) {
+  switch (chartKey) {
     case 'soc':
-      return (
-        <SocAreaChart
-          data={soc}
-          loading={socFetching}
-          height={300}
-          showBrush
-          showGrid
-        />
-      );
+      return <SocAreaChart data={soc} loading={socFetching} height={300} showBrush showGrid />;
     case 'range':
-      return (
-        <RangeAreaChart
-          data={range}
-          loading={rangeFetching}
-          height={300}
-          showBrush
-        />
-      );
-    case 'efficiency':
-      return (
-        <EfficiencyTrendChart
-          data={trend}
-          loading={trendFetching}
-          height={300}
-          showBrush
-        />
-      );
+      return <RangeAreaChart data={range} loading={rangeFetching} height={300} showBrush />;
+    case 'charge-level':
+      return <SocAreaChart data={buildChargeLevelSeries(sessions)} loading={sessionsLoading} height={300} showBrush />;
+    case 'charging-sessions':
+      return <ChargingSessionsChart sessions={sessions} loading={sessionsLoading} height={300} />;
     case 'energy':
-      return (
-        <EnergyBarChart
-          data={weekly}
-          loading={chargeFetching}
-          height={300}
-          showBrush
-        />
-      );
+      return <EnergyBarChart data={weekly} loading={chargeFetching} height={300} showBrush />;
+    case 'efficiency-trend':
+      return <EfficiencyTrendChart data={trend} loading={trendFetching} height={300} showBrush />;
+    case 'efficiency-temperature':
+      return <EfficiencyVsTempChart data={efficiencyByTemp} loading={efficiencyByTempFetching} height={300} />;
+    case 'efficiency-mode':
+      return <EfficiencyChart data={efficiencyByMode} loading={efficiencyByModeFetching} height={300} />;
     case 'phantom':
-      return (
-        <PhantomDrainChart
-          data={phantom}
-          loading={phantomFetching}
-          height={300}
-        />
-      );
+      return <PhantomDrainChart data={phantom} loading={phantomFetching} height={300} />;
+    case 'battery-degradation':
+      return <DegradationChart data={degradation} loading={degradationLoading} height={300} showBrush />;
+    case 'battery-capacity-mileage':
+      return <BatteryCapacityByMileageChart data={mileage} loading={mileageLoading} height={300} />;
+    case 'projected-range-mileage':
+      return <ProjectedRangeByMileageChart data={mileage} loading={mileageLoading} height={300} />;
   }
+}
+
+function buildChargeLevelSeries(sessions: Array<{ started_at: string; ended_at?: string | null; soc_start?: number | null; soc_end?: number | null }>) {
+  return [...sessions]
+    .filter((session) => session.soc_end != null)
+    .sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime())
+    .flatMap((session) => {
+      const points = [];
+      if (session.soc_start != null) points.push({ ts: session.started_at, soc: session.soc_start });
+      points.push({ ts: session.ended_at ?? session.started_at, soc: session.soc_end ?? 0 });
+      return points;
+    });
 }

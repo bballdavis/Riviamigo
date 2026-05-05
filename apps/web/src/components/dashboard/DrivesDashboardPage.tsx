@@ -1,7 +1,8 @@
 import React from 'react';
 import { useTrips } from '@riviamigo/hooks';
 import { useUpdateDashboard } from '@riviamigo/dashboards';
-import { formatDuration, formatEnergyPerDistance, formatMiles } from '@riviamigo/ui/lib/utils';
+import { StatCard } from '@riviamigo/ui/primitives';
+import { formatDuration, formatEfficiency, formatMiles } from '@riviamigo/ui/lib/utils';
 import { createDefaultDashboardEditActions, renderDefaultDashboardTitleAction, type DashboardPageProps } from './DashboardPage';
 import { DashboardPageShell } from './DashboardPageShell';
 
@@ -15,6 +16,7 @@ export function DrivesDashboardPage({ navKey, slug, title }: DashboardPageProps)
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
       renderActions={createDefaultDashboardEditActions(updateDashboard)}
+      showEfficiencyDisplayToggle
       renderBeforeDashboard={({ isEditMode, ctx }) => (
         !isEditMode ? <DrivesSummaryPanel vehicleId={ctx.vehicleId} from={ctx.from} to={ctx.to} /> : null
       )}
@@ -35,19 +37,10 @@ function DrivesSummaryPanel({ vehicleId, from, to }: { vehicleId: string | null;
 
   return (
     <section className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <MetricCard label="Trips in Range" value={isLoading ? '...' : String(data?.total ?? 0)} />
-      <MetricCard label="Distance (Page)" value={isLoading ? '...' : formatMiles(totalDistance)} />
-      <MetricCard label="Avg Consumption" value={isLoading ? '...' : (avgEfficiency === null ? '-' : formatEnergyPerDistance(avgEfficiency))} />
-      <MetricCard label="Avg Duration" value={isLoading ? '...' : (recentDuration === null ? '-' : formatDuration(recentDuration))} />
+      <StatCard label="Trips in Range" value={isLoading ? '...' : String(data?.total ?? 0)} />
+      <StatCard label="Distance (Page)" value={isLoading ? '...' : formatMiles(totalDistance)} accent />
+      <StatCard label="Avg Efficiency" value={isLoading ? '...' : (avgEfficiency === null ? '-' : formatEfficiency(avgEfficiency))} />
+      <StatCard label="Avg Duration" value={isLoading ? '...' : (recentDuration === null ? '-' : formatDuration(recentDuration))} />
     </section>
-  );
-}
-
-function MetricCard({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-border bg-bg-elevated/70 px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-fg-tertiary">{label}</div>
-      <div className="mt-1 font-mono text-sm font-semibold text-fg">{value}</div>
-    </div>
   );
 }

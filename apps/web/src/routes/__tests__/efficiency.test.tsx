@@ -10,6 +10,9 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [{ id: 'v1', display_name: 'Forest R1S' }] }),
+  useEfficiencyTrend: () => ({ data: [], isFetching: false }),
+  useEfficiencyVsTemp: () => ({ data: [], isFetching: false }),
+  useTrips: () => ({ data: { items: [], total: 0, page: 1, per_page: 200 }, isFetching: false }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -48,16 +51,18 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => vi.fn() };
 });
 
-import { DashboardPage } from '../../components/dashboard/DashboardPage';
+import { EfficiencyDashboardPage } from '../../components/dashboard/EfficiencyDashboardPage';
 
 describe('Efficiency dashboard page', () => {
   it('renders the page title', () => {
-    render(<DashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />);
+    render(<EfficiencyDashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />);
     expect(screen.getByText('Efficiency')).toBeInTheDocument();
   });
 
-  it('renders the dashboard renderer', () => {
-    render(<DashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />);
-    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+  it('renders the temperature efficiency picker without duplicate widgets', () => {
+    render(<EfficiencyDashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />);
+    expect(screen.getByText('Temperature - Driving Efficiency')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
   });
 });

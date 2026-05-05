@@ -27,7 +27,7 @@ export function EnergyBarChart({
   height = 200,
   showBrush = false,
 }: EnergyBarChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   return (
     <ResponsiveContainer width="100%" height={height + (showBrush ? 36 : 0)}>

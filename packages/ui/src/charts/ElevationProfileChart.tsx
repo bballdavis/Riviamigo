@@ -29,7 +29,7 @@ export function ElevationProfileChart({
   height = 140,
   unit = 'ft',
 }: ElevationProfileChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   const chartData = data.map((d) => ({
     ts: d.ts,

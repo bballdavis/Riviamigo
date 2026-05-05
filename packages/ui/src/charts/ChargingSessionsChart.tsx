@@ -49,7 +49,7 @@ export function ChargingSessionsChart({
   height = 220,
   title,
 }: ChargingSessionsChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   const data: BarDatum[] = [...sessions]
     .sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime())

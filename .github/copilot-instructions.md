@@ -8,6 +8,8 @@
 - Keep widgets in `packages/dashboards/src/widgets/` small and focused. If several widgets need shared derived data, create a hook or page adapter instead of coupling the widgets together.
 - Keep dashboard API access and response normalization in `packages/hooks/src/`.
 - Keep generic charts, tables, badges, and primitives in `packages/ui/src/` and free of page-specific fetch logic.
+- Use the shared `ChartPicker` primitive above selectable charts: search input on the left quarter, chart dropdown on the right three quarters, full chart width, product-native labels, and no reference-product names in visible UI.
+- Chart viewers should expose visible legends for multi-series or color-encoded charts. Prefer clickable legend series toggles when practical, and add brush or zoom controls for dense time-series charts.
 
 ## Composition Rules
 

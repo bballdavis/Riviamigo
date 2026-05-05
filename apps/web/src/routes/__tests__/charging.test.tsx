@@ -10,6 +10,47 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [{ id: 'v1', display_name: 'Forest R1S' }] }),
+  useChargingSummary: () => ({
+    data: {
+      session_count: 1,
+      total_energy_kwh: 50,
+      total_cost_usd: 12,
+      home_kwh: 20,
+      away_kwh: 30,
+      ac_kwh: 20,
+      dc_kwh: 30,
+      charging_cycles: 1,
+      charging_efficiency_pct: 94,
+      max_charge_rate_kw: 160,
+      max_charge_limit_pct: 85,
+      typed_session_count: 1,
+      weekly: [],
+    },
+    isLoading: false,
+  }),
+  useChargeSessions: () => ({
+    data: {
+      items: [{
+        id: 'c1',
+        vehicle_id: 'v1',
+        started_at: '2024-01-10T00:00:00Z',
+        ended_at: '2024-01-10T01:00:00Z',
+        location_name: 'Home',
+        charger_type: 'ac_l2',
+        energy_added_kwh: 50,
+        duration_min: 60,
+        soc_start: 20,
+        soc_end: 80,
+        peak_power_kw: 11,
+        cost_usd: 12,
+      }],
+      total: 1,
+      page: 1,
+      per_page: 25,
+    },
+    isLoading: false,
+  }),
+  useChargeCurve: () => ({ data: [], isFetching: false }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -48,16 +89,19 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => vi.fn() };
 });
 
-import { DashboardPage } from '../../components/dashboard/DashboardPage';
+import { ChargingDashboardPage } from '../../components/dashboard/ChargingDashboardPage';
 
 describe('Charging dashboard page', () => {
   it('renders the page title', () => {
-    render(<DashboardPage navKey="charging" slug="charging" title="Charging" />);
+    render(<ChargingDashboardPage navKey="charging" slug="charging" title="Charging" />);
     expect(screen.getByText('Charging')).toBeInTheDocument();
   });
 
-  it('renders the dashboard renderer', () => {
-    render(<DashboardPage navKey="charging" slug="charging" title="Charging" />);
-    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+  it('renders the charge-level picker without duplicate widgets', () => {
+    render(<ChargingDashboardPage navKey="charging" slug="charging" title="Charging" />);
+    expect(screen.getByText('Charge Level')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
+    expect(screen.getByText('Charging Cycles')).toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
   });
 });

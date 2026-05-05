@@ -18,6 +18,8 @@ pub fn router() -> Router<AppState> {
         .route("/battery/soc", get(get_soc))
         .route("/battery/range", get(get_range))
         .route("/battery/capacity", get(get_capacity))
+        .route("/battery/health", get(get_health))
+        .route("/battery/mileage", get(get_mileage))
         .route("/battery/phantom-drain", get(get_phantom_drain))
         .route("/battery/degradation", get(get_degradation))
 }
@@ -130,9 +132,18 @@ pub struct PhantomDrainPoint {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DegradationPoint {
     pub ts: DateTime<Utc>,
+    pub odometer_mi: Option<f64>,
     pub usable_kwh: f64,
     pub rated_kwh: Option<f64>,
     pub capacity_pct: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct BatteryMileagePoint {
+    pub ts: DateTime<Utc>,
+    pub odometer_mi: Option<f64>,
+    pub usable_kwh: Option<f64>,
+    pub range_mi: Option<f64>,
 }
 
 async fn get_degradation(
@@ -147,12 +158,133 @@ async fn get_degradation(
 
     let rows = sqlx::query_as::<_, DegradationPoint>(
         "SELECT snapshotted_at AS ts,
+                odometer_mi,
                 usable_kwh,
                 rated_kwh,
                 CASE WHEN rated_kwh > 0 THEN (usable_kwh / rated_kwh * 100.0) ELSE NULL END AS capacity_pct
          FROM riviamigo.battery_capacity_snapshots
          WHERE vehicle_id=$1
          ORDER BY snapshotted_at"
+    )
+    .bind(vid)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+async fn get_health(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(p): Query<TimeRangeParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    let capacity = sqlx::query!(
+        "WITH ranked AS (
+            SELECT usable_kwh, rated_kwh, snapshotted_at,
+                   row_number() OVER (ORDER BY snapshotted_at DESC) AS rn
+            FROM riviamigo.battery_capacity_snapshots
+            WHERE vehicle_id=$1
+         ),
+         recent AS (
+            SELECT avg(usable_kwh) AS usable_now_kwh
+            FROM ranked
+            WHERE rn <= 10
+         ),
+         first_seen AS (
+            SELECT usable_kwh AS usable_new_kwh, rated_kwh
+            FROM riviamigo.battery_capacity_snapshots
+            WHERE vehicle_id=$1
+            ORDER BY snapshotted_at ASC
+            LIMIT 1
+         )
+         SELECT recent.usable_now_kwh, first_seen.usable_new_kwh, first_seen.rated_kwh
+         FROM recent
+         FULL JOIN first_seen ON true",
+        vid
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let charges = sqlx::query!(
+        "SELECT COUNT(*) AS charge_count,
+                SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS total_added_kwh,
+                SUM(GREATEST(COALESCE(kwh_added, energy_added_wh / 1000.0), COALESCE(energy_used_wh / 1000.0, 0))) AS total_used_kwh
+         FROM riviamigo.charge_sessions
+         WHERE vehicle_id=$1 AND COALESCE(kwh_added, energy_added_wh / 1000.0) > 0.01",
+        vid
+    )
+    .fetch_one(&state.pool)
+    .await?;
+
+    let usable_now = capacity.as_ref().and_then(|row| row.usable_now_kwh);
+    let usable_new = capacity
+        .as_ref()
+        .and_then(|row| row.rated_kwh.or(row.usable_new_kwh));
+    let total_added = charges.total_added_kwh;
+    let total_used = charges.total_used_kwh;
+    let battery_health_pct = match (usable_now, usable_new) {
+        (Some(now), Some(new)) if new > 0.0 => Some((now / new * 100.0).min(100.0)),
+        _ => None,
+    };
+    let charging_cycles = match (total_added, usable_new) {
+        (Some(added), Some(new)) if new > 0.0 => Some((added / new).floor()),
+        _ => None,
+    };
+    let charging_efficiency_pct = match (total_added, total_used) {
+        (Some(added), Some(used)) if used > 0.0 => Some(added / used * 100.0),
+        _ => None,
+    };
+
+    Ok(Json(serde_json::json!({
+        "usable_now_kwh": usable_now,
+        "usable_new_kwh": usable_new,
+        "battery_health_pct": battery_health_pct,
+        "estimated_degradation_pct": battery_health_pct.map(|pct| (100.0 - pct).max(0.0)),
+        "charging_cycles": charging_cycles,
+        "charge_count": charges.charge_count,
+        "total_energy_added_kwh": total_added,
+        "total_energy_used_kwh": total_used,
+        "charging_efficiency_pct": charging_efficiency_pct,
+    })))
+}
+
+async fn get_mileage(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(p): Query<TimeRangeParams>,
+) -> Result<Json<Vec<BatteryMileagePoint>>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    let rows = sqlx::query_as::<_, BatteryMileagePoint>(
+        "SELECT snapshotted_at AS ts,
+                odometer_mi,
+                usable_kwh,
+                CASE
+                    WHEN usable_kwh > 0 AND battery_level > 0
+                    THEN distance_to_empty_mi * 100.0 / battery_level
+                    ELSE NULL
+                END AS range_mi
+         FROM riviamigo.battery_capacity_snapshots s
+         LEFT JOIN LATERAL (
+            SELECT battery_level, distance_to_empty_mi
+            FROM timeseries.telemetry t
+            WHERE t.vehicle_id=s.vehicle_id
+              AND t.ts BETWEEN s.snapshotted_at - interval '12 hours' AND s.snapshotted_at + interval '12 hours'
+              AND t.battery_level IS NOT NULL
+              AND t.distance_to_empty_mi IS NOT NULL
+            ORDER BY abs(extract(epoch from (t.ts - s.snapshotted_at)))
+            LIMIT 1
+         ) t ON true
+         WHERE s.vehicle_id=$1
+         ORDER BY s.snapshotted_at"
     )
     .bind(vid)
     .fetch_all(&state.pool)

@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 
-export function useChargeSessions(vehicleId: string | null, from: string, to: string, page = 1) {
+export function useChargeSessions(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25) {
   return useQuery({
-    queryKey: ['charging', 'list', vehicleId, from, to, page],
-    queryFn: () => api.listChargeSessions(vehicleId!, from, to, page),
+    queryKey: ['charging', 'list', vehicleId, from, to, page, perPage],
+    queryFn: () => api.listChargeSessions(vehicleId!, from, to, page, perPage),
     enabled: !!vehicleId,
     staleTime: 60 * 1000,
     placeholderData: (previous) => previous,
