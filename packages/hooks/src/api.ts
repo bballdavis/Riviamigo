@@ -8,7 +8,8 @@ import type {
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
-  Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth,
+  Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
+  BatteryMileagePoint,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -220,9 +221,17 @@ class ApiClient {
   }
 
   async getDegradation(vehicleId: string) {
-    return this.request<{ ts: string; usable_kwh: number; rated_kwh: number | null; capacity_pct: number }[]>(
+    return this.request<{ ts: string; usable_kwh: number; rated_kwh: number | null; capacity_pct: number; odometer_mi?: number | null }[]>(
       'GET', '/v1/battery/degradation', undefined, { vehicle_id: vehicleId }
     );
+  }
+
+  async getBatteryHealth(vehicleId: string): Promise<BatteryHealthSummary> {
+    return this.request('GET', '/v1/battery/health', undefined, { vehicle_id: vehicleId });
+  }
+
+  async getBatteryMileage(vehicleId: string): Promise<BatteryMileagePoint[]> {
+    return this.request('GET', '/v1/battery/mileage', undefined, { vehicle_id: vehicleId });
   }
 
   // ── Trips ─────────────────────────────────────────────────────────────────
@@ -290,6 +299,7 @@ class ApiClient {
       'GET', `/v1/charging/${sessionId}/curve`, undefined, { vehicle_id: vehicleId }
     );
     return rows.map((row) => ({
+      minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
       soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
       power_kw: finiteNumber(row.power_kw) ?? finiteNumber(row.charge_rate_kw) ?? 0,
     })) satisfies ChargeCurvePoint[];
@@ -306,18 +316,33 @@ class ApiClient {
       ac_kwh?: number;
       ac_l2_kwh?: number;
       dc_kwh?: number;
+      by_type?: { ac_kwh?: number; ac_l2_kwh?: number; dc_kwh?: number };
+      charging_cycles?: number | null;
+      charging_efficiency_pct?: number | null;
+      total_energy_used_kwh?: number | null;
+      max_charge_limit_pct?: number | null;
+      max_charge_rate_kw?: number | null;
+      typed_session_count?: number;
       weekly?: Array<{ week_start: string; kwh?: number; energy_kwh?: number; sessions: number }>;
     }>('GET', '/v1/charging/summary', undefined, {
       vehicle_id: vehicleId, from, to,
     });
+    const acKwh = (summary.ac_kwh ?? summary.by_type?.ac_kwh ?? 0) + (summary.ac_l2_kwh ?? summary.by_type?.ac_l2_kwh ?? 0);
+    const dcKwh = summary.dc_kwh ?? summary.by_type?.dc_kwh ?? 0;
     return {
       total_energy_kwh: summary.total_energy_kwh ?? summary.total_kwh ?? 0,
       total_cost_usd: summary.total_cost_usd ?? 0,
       session_count: summary.session_count ?? 0,
       home_kwh: summary.home_kwh ?? 0,
       away_kwh: summary.away_kwh ?? 0,
-      ac_kwh: (summary.ac_kwh ?? 0) + (summary.ac_l2_kwh ?? 0),
-      dc_kwh: summary.dc_kwh ?? 0,
+      ac_kwh: acKwh,
+      dc_kwh: dcKwh,
+      charging_cycles: summary.charging_cycles ?? null,
+      charging_efficiency_pct: summary.charging_efficiency_pct ?? null,
+      total_energy_used_kwh: summary.total_energy_used_kwh ?? null,
+      max_charge_limit_pct: summary.max_charge_limit_pct ?? null,
+      max_charge_rate_kw: summary.max_charge_rate_kw ?? null,
+      typed_session_count: summary.typed_session_count ?? 0,
       weekly: (summary.weekly ?? []).map((week) => ({
         week_start: week.week_start,
         energy_kwh: week.energy_kwh ?? week.kwh ?? 0,
@@ -488,12 +513,16 @@ function normalizeTrip(raw: unknown): Trip {
 
 function normalizeChargeSession(raw: unknown): ChargeSession {
   const row = isRecord(raw) ? raw : {};
+  const lat = finiteNumber(row.location_lat);
+  const lng = finiteNumber(row.location_lng);
+  const coordinateLocation =
+    lat !== undefined && lng !== undefined ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : null;
   return {
     id: String(row.id ?? ''),
     vehicle_id: String(row.vehicle_id ?? ''),
     started_at: String(row.started_at ?? ''),
     ended_at: row.ended_at == null ? null : String(row.ended_at),
-    location_name: typeof row.location_name === 'string' ? row.location_name : (row.is_home === true ? 'Home' : null),
+    location_name: typeof row.location_name === 'string' ? row.location_name : (row.is_home === true ? 'Home' : coordinateLocation),
     charger_type: typeof row.charger_type === 'string' ? row.charger_type as ChargeSession['charger_type'] : null,
     energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? finiteNumber(row.kwh_added) ?? (
       finiteNumber(row.energy_added_wh) !== undefined ? finiteNumber(row.energy_added_wh)! / 1000 : null

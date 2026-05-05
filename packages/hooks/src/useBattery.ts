@@ -40,3 +40,23 @@ export function useDegradation(vehicleId: string | null) {
     placeholderData: (previous) => previous,
   });
 }
+
+export function useBatteryHealth(vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['battery', 'health', vehicleId],
+    queryFn: () => api.getBatteryHealth(vehicleId!),
+    enabled: !!vehicleId,
+    staleTime: 60 * 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useBatteryMileage(vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['battery', 'mileage', vehicleId],
+    queryFn: () => api.getBatteryMileage(vehicleId!),
+    enabled: !!vehicleId,
+    staleTime: 60 * 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}

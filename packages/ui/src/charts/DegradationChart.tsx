@@ -31,7 +31,7 @@ export function DegradationChart({
   height = 220,
   showBrush = false,
 }: DegradationChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   const latestPct = data[data.length - 1]?.capacity_pct ?? 100;
   const color = latestPct > 95 ? CHART_COLORS.success

@@ -2,8 +2,10 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 export type UnitSystem = 'imperial' | 'metric';
+export type EfficiencyDisplay = 'distance_per_energy' | 'energy_per_distance';
 
 const UNIT_SYSTEM_STORAGE_KEY = 'rm-units';
+const EFFICIENCY_DISPLAY_STORAGE_KEY = 'rm-efficiency-display';
 const MILES_TO_KM = 1.609344;
 const MPH_TO_KMH = 1.609344;
 const METERS_TO_FEET = 3.28084;
@@ -32,6 +34,28 @@ export function setUnitSystem(system: UnitSystem) {
     window.dispatchEvent(new Event('rm-units-change'));
   } catch {
     // Ignore storage errors; formatting still falls back to imperial.
+  }
+}
+
+export function getEfficiencyDisplay(): EfficiencyDisplay {
+  if (typeof window === 'undefined') return 'distance_per_energy';
+
+  try {
+    const stored = window.localStorage.getItem(EFFICIENCY_DISPLAY_STORAGE_KEY);
+    return stored === 'energy_per_distance' ? 'energy_per_distance' : 'distance_per_energy';
+  } catch {
+    return 'distance_per_energy';
+  }
+}
+
+export function setEfficiencyDisplay(display: EfficiencyDisplay) {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(EFFICIENCY_DISPLAY_STORAGE_KEY, display);
+    window.dispatchEvent(new Event('rm-efficiency-display-change'));
+  } catch {
+    // Formatting still falls back to the Rivian-style display.
   }
 }
 
@@ -75,6 +99,10 @@ export function formatMph(value: number | null | undefined): string {
 export function formatEfficiency(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
 
+  if (getEfficiencyDisplay() === 'energy_per_distance') {
+    return formatEnergyPerDistance(value);
+  }
+
   if (getUnitSystem() === 'metric') {
     const converted = whPerMileToKmPerKwh(value);
     return converted === null ? '-' : `${formatNumber(converted, 1)} km/kWh`;
@@ -100,6 +128,11 @@ export function whPerMileToMiPerKwh(value: number | null | undefined): number | 
 export function whPerMileToKmPerKwh(value: number | null | undefined): number | null {
   const miPerKwh = whPerMileToMiPerKwh(value);
   return miPerKwh === null ? null : miPerKwh * MILES_TO_KM;
+}
+
+export function whPerMileToWhPerKm(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return value / MILES_TO_KM;
 }
 
 export function formatPressure(value: number | null | undefined): string {

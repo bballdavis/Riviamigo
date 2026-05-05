@@ -13,8 +13,10 @@ import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from '.
 import { ChartSkeleton } from '../primitives/Skeleton';
 import {
   getUnitSystem,
+  getEfficiencyDisplay,
   whPerMileToMiPerKwh,
   whPerMileToKmPerKwh,
+  whPerMileToWhPerKm,
   formatMiles,
   formatDuration,
 } from '../lib/utils';
@@ -29,8 +31,19 @@ export interface EfficiencyDrivesChartProps {
   title?: string;
 }
 
-function convertEff(wh_mi: number | null | undefined, isMetric: boolean): number | null {
+function efficiencyUnit() {
+  const isMetric = getUnitSystem() === 'metric';
+  const display = getEfficiencyDisplay();
+  return display === 'energy_per_distance'
+    ? isMetric ? 'Wh/km' : 'Wh/mi'
+    : isMetric ? 'km/kWh' : 'mi/kWh';
+}
+
+function convertEff(wh_mi: number | null | undefined, isMetric: boolean, display: 'distance_per_energy' | 'energy_per_distance'): number | null {
   if (wh_mi == null) return null;
+  if (display === 'energy_per_distance') {
+    return isMetric ? whPerMileToWhPerKm(wh_mi) : wh_mi;
+  }
   return isMetric ? whPerMileToKmPerKwh(wh_mi) : whPerMileToMiPerKwh(wh_mi);
 }
 
@@ -58,7 +71,7 @@ const DriveTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{
         <div className="text-fg-secondary truncate max-w-[200px]">→ {p.endLabel}</div>
       ) : null}
       <div className="mt-1.5 space-y-0.5 text-fg-secondary">
-        <div>{typeof p.eff === 'number' ? `${p.eff.toFixed(2)} ${getUnitSystem() === 'metric' ? 'km/kWh' : 'mi/kWh'}` : '-'}</div>
+        <div>{typeof p.eff === 'number' ? `${p.eff.toFixed(2)} ${efficiencyUnit()}` : '-'}</div>
         <div>{formatMiles(p.dist)}</div>
         {p.duration ? <div>{formatDuration(p.duration)}</div> : null}
       </div>
@@ -69,7 +82,7 @@ const DriveTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{
 const RollingTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: RollingPoint }> }) => {
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
-  const unit = getUnitSystem() === 'metric' ? 'km/kWh' : 'mi/kWh';
+  const unit = efficiencyUnit();
   return (
     <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm shadow-lg">
       <div className="text-fg-secondary">{format(new Date(p.ts), 'MMM d, yyyy')}</div>
@@ -85,23 +98,24 @@ export function EfficiencyDrivesChart({
   height = 300,
   title,
 }: EfficiencyDrivesChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   const isMetric = getUnitSystem() === 'metric';
-  const unit = isMetric ? 'km/kWh' : 'mi/kWh';
+  const display = getEfficiencyDisplay();
+  const unit = efficiencyUnit();
 
   const rollingData: RollingPoint[] = trend
     .filter((p) => p.rolling_7d_wh_mi != null)
     .map((p) => ({
       ts: new Date(p.day).getTime(),
-      rolling: convertEff(p.rolling_7d_wh_mi, isMetric) ?? 0,
+      rolling: convertEff(p.rolling_7d_wh_mi, isMetric, display) ?? 0,
     }));
 
   const drivePoints: DrivePoint[] = drives
     .filter((d) => d.efficiency_wh_mi != null)
     .map((d) => ({
       ts: new Date(d.started_at).getTime(),
-      eff: convertEff(d.efficiency_wh_mi, isMetric) ?? 0,
+      eff: convertEff(d.efficiency_wh_mi, isMetric, display) ?? 0,
       dist: d.distance_mi ?? 0,
       label: d.start_place ?? d.start_address ?? 'Drive',
       endLabel: d.end_place ?? d.end_address ?? '',

@@ -20,13 +20,14 @@ export const StatCardGrid = ({ children }: { children: React.ReactNode }) => (
   <div data-testid="stat-card-grid">{children}</div>
 );
 
-export const StatCard = ({ label, value, unit }: {
-  label: string; value: React.ReactNode; unit?: string; accent?: boolean; icon?: React.ReactNode;
+export const StatCard = ({ label, value, unit, detail }: {
+  label: string; value: React.ReactNode; unit?: string; detail?: string; accent?: boolean; icon?: React.ReactNode;
 }) => (
   <div data-testid={`stat-${label.toLowerCase().replace(/\s+/g, '-')}`}>
     <span>{label}</span>
     <span>{value}</span>
     {unit && <span>{unit}</span>}
+    {detail && <span>{detail}</span>}
   </div>
 );
 
@@ -85,6 +86,34 @@ export const MetricTabs = ({
     </div>
   );
 };
+
+export const ChartPicker = ({
+  value,
+  options,
+  onChange,
+  searchValue,
+  onSearchChange,
+}: {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+}) => (
+  <div data-testid="chart-picker">
+    <input
+      aria-label="Search charts"
+      value={searchValue}
+      onChange={(event) => onSearchChange(event.target.value)}
+      placeholder="Search charts"
+    />
+    <select aria-label="Chart" value={value} onChange={(event) => onChange(event.target.value)}>
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>{option.label}</option>
+      ))}
+    </select>
+  </div>
+);
 
 export const DateRangePicker = ({ onChange }: {
   value?: unknown; preset?: string; onChange?: (r: unknown, p?: string) => void;

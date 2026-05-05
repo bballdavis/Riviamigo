@@ -50,6 +50,7 @@ struct SessionRow {
     ended_at: Option<DateTime<Utc>>,
     location_lat: Option<f64>,
     location_lng: Option<f64>,
+    location_name: Option<String>,
     is_home: Option<bool>,
     charger_type: Option<String>,
     kwh_added: Option<f64>,
@@ -79,13 +80,26 @@ async fn list_sessions(
 
     let rows = sqlx::query_as!(
         SessionRow,
-        "SELECT id, started_at, ended_at, location_lat, location_lng, is_home, charger_type, \
-                COALESCE(kwh_added, energy_added_wh / 1000.0) AS kwh_added, soc_start, soc_end, \
-                COALESCE(max_charge_rate_kw, avg_charge_rate_kw) AS max_charge_rate_kw, duration_minutes, \
-                cost_usd \
-         FROM riviamigo.charge_sessions \
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3 \
-         ORDER BY started_at DESC LIMIT $4 OFFSET $5",
+        "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
+                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
+                cs.is_home, COALESCE(cs.charger_type, \
+                    CASE \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 50 THEN 'ac_l2' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) IS NOT NULL THEN 'dc' \
+                    END \
+                ) AS charger_type, \
+                COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
+                cs.cost_usd \
+         FROM riviamigo.charge_sessions cs \
+         LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
+         LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+         ORDER BY cs.started_at DESC LIMIT $4 OFFSET $5",
         vid,
         from,
         to,
@@ -124,10 +138,24 @@ async fn get_session(
 
     let session = sqlx::query_as!(
         SessionRow,
-        "SELECT id, started_at, ended_at, location_lat, location_lng, is_home, charger_type, \
-                COALESCE(kwh_added, energy_added_wh / 1000.0) AS kwh_added, soc_start, soc_end, \
-                COALESCE(max_charge_rate_kw, avg_charge_rate_kw) AS max_charge_rate_kw, duration_minutes, cost_usd \
-         FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
+        "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
+                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
+                cs.is_home, COALESCE(cs.charger_type, \
+                    CASE \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 50 THEN 'ac_l2' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) IS NOT NULL THEN 'dc' \
+                    END \
+                ) AS charger_type, \
+                COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd \
+         FROM riviamigo.charge_sessions cs \
+         LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
+         LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         WHERE cs.id=$1 AND cs.vehicle_id=$2",
         id,
         vid
     )
@@ -218,13 +246,26 @@ async fn list_sessions_response(
 
     let rows = sqlx::query_as!(
         SessionRow,
-        "SELECT id, started_at, ended_at, location_lat, location_lng, is_home, charger_type, \
-                COALESCE(kwh_added, energy_added_wh / 1000.0) AS kwh_added, soc_start, soc_end, \
-                COALESCE(max_charge_rate_kw, avg_charge_rate_kw) AS max_charge_rate_kw, duration_minutes, \
-                cost_usd \
-         FROM riviamigo.charge_sessions \
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3 \
-         ORDER BY started_at DESC LIMIT $4 OFFSET $5",
+        "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
+                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
+                cs.is_home, COALESCE(cs.charger_type, \
+                    CASE \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 50 THEN 'ac_l2' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) IS NOT NULL THEN 'dc' \
+                    END \
+                ) AS charger_type, \
+                COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
+                cs.cost_usd \
+         FROM riviamigo.charge_sessions cs \
+         LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
+         LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+         ORDER BY cs.started_at DESC LIMIT $4 OFFSET $5",
         vehicle_id,
         from,
         to,
@@ -265,10 +306,24 @@ async fn get_session_response(
 
     let session = sqlx::query_as!(
         SessionRow,
-        "SELECT id, started_at, ended_at, location_lat, location_lng, is_home, charger_type, \
-                COALESCE(kwh_added, energy_added_wh / 1000.0) AS kwh_added, soc_start, soc_end, \
-                COALESCE(max_charge_rate_kw, avg_charge_rate_kw) AS max_charge_rate_kw, duration_minutes, cost_usd \
-         FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
+        "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
+                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
+                cs.is_home, COALESCE(cs.charger_type, \
+                    CASE \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 50 THEN 'ac_l2' \
+                        WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
+                            CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) IS NOT NULL THEN 'dc' \
+                    END \
+                ) AS charger_type, \
+                COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd \
+         FROM riviamigo.charge_sessions cs \
+         LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
+         LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         WHERE cs.id=$1 AND cs.vehicle_id=$2",
         id,
         vehicle_id
     )
@@ -317,18 +372,55 @@ async fn get_summary_response(
     let to = p.to.unwrap_or_else(Utc::now);
 
     let agg = sqlx::query!(
-        "SELECT COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)),0) AS total_kwh,
-                COUNT(*) AS session_count,
-            COALESCE(SUM(CASE WHEN is_home THEN COALESCE(kwh_added, energy_added_wh / 1000.0) ELSE 0 END),0) AS home_kwh,
-            COALESCE(SUM(CASE WHEN NOT COALESCE(is_home,false) THEN COALESCE(kwh_added, energy_added_wh / 1000.0) ELSE 0 END),0) AS away_kwh,
-            COALESCE(SUM(CASE WHEN charger_type='ac' THEN COALESCE(kwh_added, energy_added_wh / 1000.0) ELSE 0 END),0) AS ac_kwh,
-            COALESCE(SUM(CASE WHEN charger_type='ac_l2' THEN COALESCE(kwh_added, energy_added_wh / 1000.0) ELSE 0 END),0) AS ac_l2_kwh,
-            COALESCE(SUM(CASE WHEN charger_type='dc' THEN COALESCE(kwh_added, energy_added_wh / 1000.0) ELSE 0 END),0) AS dc_kwh,
+        "WITH normalized AS (
+            SELECT
+                COALESCE(kwh_added, energy_added_wh / 1000.0) AS energy_kwh,
+                is_home,
+                charger_type,
+                charge_limit,
+                cost_usd,
+                energy_used_wh,
+                COALESCE(max_charge_rate_kw, avg_charge_rate_kw,
+                    CASE WHEN duration_minutes > 0 THEN COALESCE(kwh_added, energy_added_wh / 1000.0) / (duration_minutes::float8 / 60.0) END
+                ) AS rate_kw
+            FROM riviamigo.charge_sessions
+            WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
+        ),
+        typed AS (
+            SELECT *,
+                COALESCE(charger_type, CASE
+                    WHEN rate_kw < 12 THEN 'ac'
+                    WHEN rate_kw < 50 THEN 'ac_l2'
+                    WHEN rate_kw IS NOT NULL THEN 'dc'
+                END) AS derived_type
+            FROM normalized
+        )
+        SELECT COALESCE(SUM(energy_kwh),0) AS total_kwh,
+            COUNT(*) AS session_count,
+            COALESCE(SUM(CASE WHEN is_home THEN energy_kwh ELSE 0 END),0) AS home_kwh,
+            COALESCE(SUM(CASE WHEN NOT COALESCE(is_home,false) THEN energy_kwh ELSE 0 END),0) AS away_kwh,
+            COALESCE(SUM(CASE WHEN derived_type='ac' THEN energy_kwh ELSE 0 END),0) AS ac_kwh,
+            COALESCE(SUM(CASE WHEN derived_type='ac_l2' THEN energy_kwh ELSE 0 END),0) AS ac_l2_kwh,
+            COALESCE(SUM(CASE WHEN derived_type='dc' THEN energy_kwh ELSE 0 END),0) AS dc_kwh,
+            COUNT(derived_type) AS typed_session_count,
+            MAX(charge_limit) AS max_charge_limit_pct,
+            MAX(rate_kw) AS max_charge_rate_kw,
+            SUM(GREATEST(energy_kwh, COALESCE(energy_used_wh / 1000.0, 0))) AS total_energy_used_kwh,
             COALESCE(SUM(cost_usd),0) AS total_cost_usd
-         FROM riviamigo.charge_sessions
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3",
+         FROM typed",
         vehicle_id, from, to
     ).fetch_one(&state.pool).await?;
+
+    let capacity_kwh = sqlx::query_scalar!(
+        "SELECT COALESCE(
+            (SELECT rated_kwh FROM riviamigo.battery_capacity_snapshots WHERE vehicle_id=$1 AND rated_kwh IS NOT NULL ORDER BY snapshotted_at ASC LIMIT 1),
+            (SELECT battery_capacity_wh / 1000.0 FROM timeseries.telemetry WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL ORDER BY ts ASC LIMIT 1)
+        )",
+        vehicle_id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
 
     let weekly = sqlx::query!(
         "SELECT date_trunc('week', started_at) AS week_start,
@@ -346,6 +438,20 @@ async fn get_summary_response(
     .await?;
 
     let total_kwh = agg.total_kwh.unwrap_or(0.0);
+    let total_energy_used_kwh = agg.total_energy_used_kwh.unwrap_or(0.0);
+    let charging_cycles = capacity_kwh.and_then(|cap| {
+        if cap > 0.0 {
+            Some((total_kwh / cap).floor())
+        } else {
+            None
+        }
+    });
+    let charging_efficiency_pct = if total_energy_used_kwh > 0.0 {
+        Some(total_kwh / total_energy_used_kwh * 100.0)
+    } else {
+        None
+    };
+
     Ok(Json(serde_json::json!({
         "total_kwh":       total_kwh,
         "total_energy_kwh": total_kwh,
@@ -358,6 +464,12 @@ async fn get_summary_response(
             "ac_l2_kwh": agg.ac_l2_kwh,
             "dc_kwh":   agg.dc_kwh,
         },
+        "charging_cycles": charging_cycles,
+        "charging_efficiency_pct": charging_efficiency_pct,
+        "total_energy_used_kwh": total_energy_used_kwh,
+        "max_charge_limit_pct": agg.max_charge_limit_pct,
+        "max_charge_rate_kw": agg.max_charge_rate_kw,
+        "typed_session_count": agg.typed_session_count,
         "weekly": weekly.iter().map(|r| serde_json::json!({
             "week_start": r.week_start,
             "kwh":        r.kwh,

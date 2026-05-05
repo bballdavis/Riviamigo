@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
 import { format, parseISO } from 'date-fns';
-import { formatMiles, formatDuration, formatPercent, formatEnergyPerDistance } from '../lib/utils';
+import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '../lib/utils';
 import type { Place } from '@riviamigo/types';
 
 export interface TripRow {
@@ -59,11 +59,11 @@ export function createTripColumns(places: Place[] = []) {
       },
     }),
     col.accessor('efficiency_wh_mi', {
-      header: 'Ø Consumption (net)',
+      header: 'Avg Efficiency',
       cell: (info) => {
         const v = info.getValue();
         return v !== null ? (
-          <span className="font-mono text-fg whitespace-nowrap">{formatEnergyPerDistance(v)}</span>
+          <span className="font-mono text-fg whitespace-nowrap">{formatEfficiency(v)}</span>
         ) : (
           <span className="text-fg-tertiary">-</span>
         );

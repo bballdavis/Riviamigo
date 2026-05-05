@@ -9,6 +9,7 @@ export interface StatCardProps {
   unit?: string;
   delta?: number;
   deltaLabel?: string;
+  detail?: string;
   icon?: React.ReactNode;
   accent?: boolean;
   className?: string;
@@ -20,6 +21,7 @@ export function StatCard({
   unit,
   delta,
   deltaLabel,
+  detail,
   icon,
   accent = false,
   className,
@@ -72,6 +74,9 @@ export function StatCard({
           </span>
         </div>
       )}
+      {detail && !hasDelta ? (
+        <div className="mt-2 text-xs text-fg-tertiary">{detail}</div>
+      ) : null}
     </Card>
   );
 }

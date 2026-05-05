@@ -38,7 +38,7 @@ export function SocAreaChart({
   showBrush = false,
   showChargeLimit,
 }: SocAreaChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   const gradientId = 'socGradient';
   const latestSoc = data[data.length - 1]?.soc ?? 100;

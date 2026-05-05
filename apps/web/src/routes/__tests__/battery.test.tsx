@@ -10,6 +10,22 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [{ id: 'v1', display_name: 'Forest R1S' }] }),
+  useBatteryHealth: () => ({
+    data: {
+      usable_now_kwh: 125,
+      usable_new_kwh: 130,
+      battery_health_pct: 96,
+      estimated_degradation_pct: 4,
+      charging_cycles: 12,
+      charge_count: 50,
+      total_energy_added_kwh: 1600,
+      total_energy_used_kwh: 1700,
+      charging_efficiency_pct: 94,
+    },
+    isLoading: false,
+  }),
+  useBatteryMileage: () => ({ data: [], isLoading: false }),
+  useDegradation: () => ({ data: [], isLoading: false }),
 }));
 
 vi.mock('../../components/layout/AppLayout',  () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -48,16 +64,19 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => vi.fn() };
 });
 
-import { DashboardPage } from '../../components/dashboard/DashboardPage';
+import { BatteryDashboardPage } from '../../components/dashboard/BatteryDashboardPage';
 
 describe('Battery dashboard page', () => {
   it('renders the page title', () => {
-    render(<DashboardPage navKey="battery" slug="battery" title="Battery" />);
+    render(<BatteryDashboardPage navKey="battery" slug="battery" title="Battery" />);
     expect(screen.getByText('Battery')).toBeInTheDocument();
   });
 
-  it('renders the dashboard renderer', () => {
-    render(<DashboardPage navKey="battery" slug="battery" title="Battery" />);
-    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+  it('renders Battery Health stats and chart picker without duplicate widgets', () => {
+    render(<BatteryDashboardPage navKey="battery" slug="battery" title="Battery" />);
+    expect(screen.getByText('Charging Cycles')).toBeInTheDocument();
+    expect(screen.getByText('Battery Capacity by Mileage')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
   });
 });

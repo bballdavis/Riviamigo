@@ -29,3 +29,5 @@ export { EfficiencyDrivesChart } from './EfficiencyDrivesChart';
 export type { EfficiencyDrivesChartProps } from './EfficiencyDrivesChart';
 export { ChargingSessionsChart } from './ChargingSessionsChart';
 export type { ChargingSessionsChartProps } from './ChargingSessionsChart';
+export { BatteryCapacityByMileageChart, ProjectedRangeByMileageChart } from './BatteryMileageCharts';
+export type { BatteryMileageChartProps, BatteryMileageDatum } from './BatteryMileageCharts';

@@ -30,7 +30,7 @@ export function SpeedProfileChart({
   loading = false,
   height = 160,
 }: SpeedProfileChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
 
   return (
     <ResponsiveContainer width="100%" height={height}>

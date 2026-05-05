@@ -10,6 +10,9 @@ export type { CardProps } from './Card';
 export { Input } from './Input';
 export type { InputProps } from './Input';
 
+export { ChartPicker } from './ChartPicker';
+export type { ChartPickerOption, ChartPickerProps } from './ChartPicker';
+
 export { Skeleton, ChartSkeleton, StatCardSkeleton } from './Skeleton';
 export type { SkeletonProps } from './Skeleton';
 

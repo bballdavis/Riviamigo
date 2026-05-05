@@ -6,7 +6,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh } from '../lib/utils';
+import { getEfficiencyDisplay, getUnitSystem, whPerMileToKmPerKwh, whPerMileToMiPerKwh, whPerMileToWhPerKm } from '../lib/utils';
 
 export interface EfficiencyByModePoint {
   drive_mode: string;
@@ -33,17 +33,20 @@ export function EfficiencyChart({
   loading = false,
   height = 200,
 }: EfficiencyChartProps) {
-  if (loading) return <ChartSkeleton className={`h-[${height}px]`} />;
+  if (loading) return <ChartSkeleton height={height} />;
   const isMetric = getUnitSystem() === 'metric';
-  const efficiencyUnit = isMetric ? 'km/kWh' : 'mi/kWh';
+  const display = getEfficiencyDisplay();
+  const efficiencyUnit = display === 'energy_per_distance'
+    ? isMetric ? 'Wh/km' : 'Wh/mi'
+    : isMetric ? 'km/kWh' : 'mi/kWh';
 
   const chartData = data.map((d) => ({
     ...d,
     label: MODE_LABELS[d.drive_mode] ?? d.drive_mode,
-    avg_display: convertEfficiency(d.avg_efficiency, isMetric),
+    avg_display: convertEfficiency(d.avg_efficiency, isMetric, display),
     range: [
-      convertEfficiency(d.p90_efficiency, isMetric) ?? 0,
-      Math.max(0, (convertEfficiency(d.p10_efficiency, isMetric) ?? 0) - (convertEfficiency(d.p90_efficiency, isMetric) ?? 0)),
+      convertEfficiency(d.p90_efficiency, isMetric, display) ?? 0,
+      Math.abs((convertEfficiency(d.p10_efficiency, isMetric, display) ?? 0) - (convertEfficiency(d.p90_efficiency, isMetric, display) ?? 0)),
     ] as [number, number],
   }));
 
@@ -89,6 +92,9 @@ export function EfficiencyChart({
   );
 }
 
-function convertEfficiency(value: number | null | undefined, metric: boolean) {
+function convertEfficiency(value: number | null | undefined, metric: boolean, display: 'distance_per_energy' | 'energy_per_distance') {
+  if (display === 'energy_per_distance') {
+    return metric ? whPerMileToWhPerKm(value) : value;
+  }
   return metric ? whPerMileToKmPerKwh(value) : whPerMileToMiPerKwh(value);
 }
