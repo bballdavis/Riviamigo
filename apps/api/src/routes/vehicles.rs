@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/status", get(vehicle_status))
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
+        .route("/vehicles/:id/battery-config", put(update_battery_config))
 }
 
 #[derive(Deserialize)]
@@ -359,6 +360,34 @@ async fn add_vehicle(
     // Spawn worker
     // (supervisor handle is stored in AppState in main — passed via extension)
     Ok(Json(serde_json::json!({"vehicle_id": vehicle_id})))
+}
+
+#[derive(Deserialize)]
+struct UpdateBatteryConfigBody {
+    battery_capacity_kwh: Option<f64>,
+    battery_config: Option<String>,
+}
+
+async fn update_battery_config(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateBatteryConfigBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let capacity_wh = body.battery_capacity_kwh.map(|kwh| kwh * 1000.0);
+    sqlx::query(
+        "UPDATE riviamigo.vehicles
+         SET battery_capacity_wh = COALESCE($2, battery_capacity_wh),
+             battery_config = COALESCE($3, battery_config)
+         WHERE id = $1"
+    )
+    .bind(vid)
+    .bind(capacity_wh)
+    .bind(body.battery_config)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn list_vehicles(

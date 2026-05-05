@@ -21,6 +21,14 @@ export interface BatteryMileageChartProps {
   height?: number;
 }
 
+function ChartEmptyState({ height, message = 'No data yet' }: { height: number; message?: string }) {
+  return (
+    <div style={{ height }} className="flex items-center justify-center text-sm text-text-muted">
+      {message}
+    </div>
+  );
+}
+
 export function BatteryCapacityByMileageChart({
   data,
   loading = false,
@@ -35,6 +43,8 @@ export function BatteryCapacityByMileageChart({
       odometer_mi: point.odometer_mi ?? 0,
       usable_kwh: point.usable_kwh ?? 0,
     }));
+
+  if (chartData.length === 0) return <ChartEmptyState height={height} message="No battery capacity data recorded yet" />;
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -95,6 +105,8 @@ export function ProjectedRangeByMileageChart({
       odometer_mi: point.odometer_mi ?? 0,
       range_mi: point.range_mi ?? 0,
     }));
+
+  if (chartData.length === 0) return <ChartEmptyState height={height} message="No range data recorded yet" />;
 
   return (
     <ResponsiveContainer width="100%" height={height}>

@@ -13,8 +13,28 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Activity, Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Plus, Ruler, ShieldCheck, Trash2,
+  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Pencil, Plus, Ruler, ShieldCheck, Trash2,
 } from 'lucide-react';
+
+type BatteryGen = 'gen1' | 'gen2';
+
+const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: string; kwh: number | null }>> = {
+  gen1: [
+    { key: 'r1_standard_g1', label: 'R1T / R1S Standard (Gen 1)', kwh: 105 },
+    { key: 'r1_large_g1',    label: 'R1T / R1S Large (Gen 1)',    kwh: 135 },
+    { key: 'r1_max_g1',      label: 'R1T / R1S Max (Gen 1)',      kwh: 180 },
+    { key: 'custom',         label: 'Custom',                     kwh: null },
+  ],
+  gen2: [
+    { key: 'r1_standard_g2', label: 'R1T / R1S Standard (Gen 2)', kwh: 92.5 },
+    { key: 'r1_large_g2',    label: 'R1T / R1S Large (Gen 2)',    kwh: 109 },
+    { key: 'r1_max_g2',      label: 'R1T / R1S Max (Gen 2)',      kwh: 140 },
+    { key: 'custom',         label: 'Custom',                     kwh: null },
+  ],
+};
+
+const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
+const R2S_PRESET = { key: 'r2s', label: 'R2S', kwh: 82 };
 
 export const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -22,7 +42,7 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'stewardship' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'appearance' | 'account';
 
 const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
@@ -30,7 +50,6 @@ const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementT
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'raw', label: 'Raw Data', icon: Database },
-  { id: 'stewardship', label: 'Stewardship', icon: Activity },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
 ];
@@ -104,6 +123,11 @@ export function SettingsContent() {
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
   const [rawVehicleId, setRawVehicleId] = React.useState('');
   const [unitSystem, setUnitSystemState] = React.useState<UnitSystem>(() => getUnitSystem());
+  const [rawTableView, setRawTableView] = React.useState<'table' | 'json'>('table');
+  const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
+  const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
+  const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
+  const [customKwh, setCustomKwh] = React.useState('');
   const isAdmin = me.data?.role === 'admin';
 
   const apiKeys = useQuery({
@@ -121,7 +145,7 @@ export function SettingsContent() {
   const stewardship = useQuery({
     queryKey: ['rivian-stewardship'],
     queryFn: () => api.getRivianStewardship(),
-    enabled: activeSection === 'stewardship' && isAdmin,
+    enabled: activeSection === 'raw' && isAdmin,
   });
 
   React.useEffect(() => {
@@ -161,6 +185,47 @@ export function SettingsContent() {
     mutationFn: (id: string) => api.revokeApiKey(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['api-keys'] }),
   });
+
+  const updateBatteryConfig = useMutation({
+    mutationFn: ({ vehicleId, kwh, config }: { vehicleId: string; kwh: number; config: string }) =>
+      api.updateVehicleBatteryConfig(vehicleId, { battery_capacity_kwh: kwh, battery_config: config }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      setEditingBatteryVehicleId(null);
+    },
+  });
+
+  function startEditBattery(vehicleId: string, currentKwh: number | null | undefined) {
+    setEditingBatteryVehicleId(vehicleId);
+    const vehicle = vehicles?.find((v) => v.id === vehicleId);
+    const modelLower = vehicle?.model?.toLowerCase() ?? '';
+    const isGen2 = modelLower.includes('gen 2') || modelLower.includes('2nd') || (vehicle?.year && vehicle.year >= 2025);
+    const gen: BatteryGen = isGen2 ? 'gen2' : 'gen1';
+    setBatteryGen(gen);
+
+    if (currentKwh != null) {
+      const match = RIVIAN_BATTERY_PRESETS[gen].find((p) => p.kwh === currentKwh);
+      if (match && match.key !== 'custom') {
+        setBatteryPreset(match.key);
+        setCustomKwh('');
+      } else {
+        setBatteryPreset('custom');
+        setCustomKwh(String(currentKwh));
+      }
+    } else {
+      setBatteryPreset(gen === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
+      setCustomKwh('');
+    }
+  }
+
+  function handleSaveBatteryConfig(vehicleId: string) {
+    const preset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
+    if (!preset) return;
+    const kwh = preset.key === 'custom' ? parseFloat(customKwh) : preset.kwh!;
+    if (!isFinite(kwh) || kwh <= 0) return;
+    const config = preset.key === 'custom' ? `Custom (${kwh} kWh)` : `${preset.label}`;
+    updateBatteryConfig.mutate({ vehicleId, kwh, config });
+  }
 
   async function handleLogout() {
     await logout();
@@ -220,34 +285,131 @@ export function SettingsContent() {
                   <div className="divide-y divide-border">
                     {vehicles?.map((v) => {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
+                      const isEditingBattery = editingBatteryVehicleId === v.id;
+                      const selectedPreset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
                       return (
-                      <div key={v.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                        <div className="flex min-w-0 items-center gap-3">
-                          <div
-                            className={[
-                              'flex h-12 w-24 items-center justify-center rounded-xl border bg-bg-elevated/70 p-1 transition-shadow',
-                              isActive ? 'border-accent/60 shadow-[0_0_24px_rgba(56,189,248,0.22)]' : 'border-border',
-                            ].join(' ')}
-                            aria-label={isActive ? 'Active vehicle' : 'Vehicle'}
-                          >
-                            <ThemeVehicleImage
-                              images={v.images}
-                              placement="side"
-                              className="h-full max-h-10 w-full object-contain"
-                              fallback={<Car className="h-5 w-5 text-fg-secondary" />}
-                            />
+                      <div key={v.id} className="py-3">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div
+                              className={[
+                                'flex h-12 w-24 items-center justify-center rounded-xl border bg-bg-elevated/70 p-1 transition-shadow',
+                                isActive ? 'border-accent/60 shadow-[0_0_24px_rgba(56,189,248,0.22)]' : 'border-border',
+                              ].join(' ')}
+                              aria-label={isActive ? 'Active vehicle' : 'Vehicle'}
+                            >
+                              <ThemeVehicleImage
+                                images={v.images}
+                                placement="side"
+                                className="h-full max-h-10 w-full object-contain"
+                                fallback={<Car className="h-5 w-5 text-fg-secondary" />}
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-fg">{v.display_name}</p>
+                              <p className="text-xs text-fg-tertiary">
+                                {[v.model, v.year, v.trim].filter(Boolean).join(' / ') || 'Vehicle details pending'}
+                              </p>
+                            </div>
                           </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-fg">{v.display_name}</p>
-                            <p className="text-xs text-fg-tertiary">
-                              {[v.model, v.year, v.trim].filter(Boolean).join(' / ') || 'Vehicle details pending'}
-                            </p>
+                          <div className="grid gap-1 text-xs text-fg-tertiary sm:justify-items-end">
+                            <span>VIN: <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span></span>
+                            <span>Rivian ID: <span className="font-mono text-fg">{v.rivian_vehicle_id}</span></span>
+                            <span className={isActive ? 'text-accent' : 'text-fg-tertiary'}>{isActive ? 'Active vehicle' : 'Connected'}</span>
                           </div>
                         </div>
-                        <div className="grid gap-1 text-xs text-fg-tertiary sm:justify-items-end">
-                          <span>VIN: <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span></span>
-                          <span>Rivian ID: <span className="font-mono text-fg">{v.rivian_vehicle_id}</span></span>
-                          <span className={isActive ? 'text-accent' : 'text-fg-tertiary'}>{isActive ? 'Active vehicle' : 'Connected'}</span>
+
+                        {/* Battery capacity configuration */}
+                        <div className="mt-3 rounded-lg border border-border bg-bg-elevated/40 p-3">
+                          {isEditingBattery ? (
+                            <div className="grid gap-3">
+                              <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Factory Battery Capacity</p>
+                              <div className="flex flex-wrap items-end gap-2">
+                                {(v.model?.includes('R1') || v.model?.includes('r1')) && (
+                                  <label className="grid gap-1">
+                                    <span className="text-xs text-fg-tertiary">Generation</span>
+                                    <select
+                                      value={batteryGen}
+                                      onChange={(e) => {
+                                        setBatteryGen(e.target.value as BatteryGen);
+                                        setBatteryPreset(e.target.value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
+                                        setCustomKwh('');
+                                      }}
+                                      className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                    >
+                                      <option value="gen1">Gen 1</option>
+                                      <option value="gen2">Gen 2</option>
+                                    </select>
+                                  </label>
+                                )}
+                                <label className="grid gap-1">
+                                  <span className="text-xs text-fg-tertiary">Pack</span>
+                                  <select
+                                    value={batteryPreset}
+                                    onChange={(e) => setBatteryPreset(e.target.value)}
+                                    className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                  >
+                                    {(v.model?.includes('R2') || v.model?.includes('r2') ? [R2S_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((p) => (
+                                      <option key={p.key} value={p.key}>
+                                        {p.label}{p.kwh != null ? ` (${p.kwh} kWh)` : ''}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                {batteryPreset === 'custom' && (
+                                  <label className="grid gap-1">
+                                    <span className="text-xs text-fg-tertiary">kWh</span>
+                                    <input
+                                      type="number"
+                                      value={customKwh}
+                                      onChange={(e) => setCustomKwh(e.target.value)}
+                                      placeholder="e.g. 135"
+                                      min="1"
+                                      max="500"
+                                      step="1"
+                                      className="h-9 w-28 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                    />
+                                  </label>
+                                )}
+                                <Button
+                                  size="sm"
+                                  loading={updateBatteryConfig.isPending}
+                                  disabled={batteryPreset === 'custom' && (!customKwh || isNaN(parseFloat(customKwh)))}
+                                  onClick={() => handleSaveBatteryConfig(v.id)}
+                                >
+                                  Save
+                                </Button>
+                                <Button variant="secondary" size="sm" onClick={() => setEditingBatteryVehicleId(null)}>
+                                  Cancel
+                                </Button>
+                              </div>
+                              {selectedPreset && selectedPreset.key !== 'custom' && (
+                                <p className="text-xs text-fg-tertiary">
+                                  This value is used as the baseline for battery health % and degradation charts.
+                                  Defaults can be overridden if your vehicle came with a different pack.
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Factory Battery Capacity</p>
+                                <p className="mt-0.5 text-sm text-fg">
+                                  {v.battery_capacity_kwh != null
+                                    ? `${v.battery_capacity_kwh} kWh`
+                                    : <span className="text-fg-tertiary">Not set — using max observed from telemetry</span>}
+                                </p>
+                              </div>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                iconLeft={<Pencil className="h-3.5 w-3.5" />}
+                                onClick={() => startEditBattery(v.id, v.battery_capacity_kwh)}
+                              >
+                                {v.battery_capacity_kwh != null ? 'Edit' : 'Set'}
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       </div>
                       );
@@ -486,16 +648,11 @@ export function SettingsContent() {
 
             {activeSection === 'raw' && (
               <div className="flex flex-col gap-5">
+                {/* Vehicle Stats */}
                 <Card>
                   <CardHeader>
-                    <CardTitle>Raw Data Viewer</CardTitle>
-                    <Button variant="secondary" size="sm" loading={rawTelemetry.isFetching} onClick={() => rawTelemetry.refetch()}>
-                      Refresh
-                    </Button>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    <label className="grid max-w-sm gap-1">
-                      <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle</span>
+                    <CardTitle>Vehicle Stats</CardTitle>
+                    <div className="flex items-center gap-2">
                       <select
                         value={rawVehicleId}
                         onChange={(event) => setRawVehicleId(event.target.value)}
@@ -505,11 +662,15 @@ export function SettingsContent() {
                           <option key={v.id} value={v.id}>{v.display_name}</option>
                         ))}
                       </select>
-                    </label>
-
+                      <Button variant="secondary" size="sm" loading={rawTelemetry.isFetching} onClick={() => rawTelemetry.refetch()}>
+                        Refresh
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="grid gap-4">
                     <div className="grid gap-3 md:grid-cols-4">
                       {[
-                        ['Samples', rawTelemetry.data?.coverage.sample_count],
+                        ['Total Samples', rawTelemetry.data?.coverage.sample_count],
                         ['Odometer', rawTelemetry.data?.coverage.odometer_samples],
                         ['Battery', rawTelemetry.data?.coverage.battery_samples],
                         ['Power', rawTelemetry.data?.coverage.power_samples],
@@ -526,140 +687,164 @@ export function SettingsContent() {
                         </div>
                       ))}
                     </div>
-
                     <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-xs text-fg-tertiary">
-                      <p>
-                        First event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.first_event_at ?? 'none'}</span>
-                      </p>
-                      <p className="mt-1">
-                        Latest event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.last_event_at ?? 'none'}</span>
-                      </p>
-                    </div>
-
-                    <div className="overflow-x-auto rounded-lg border border-border">
-                      <table className="w-full min-w-[64rem] text-left text-xs">
-                        <thead className="bg-bg-elevated text-fg-tertiary">
-                          <tr>
-                            {['Time', 'Odometer', 'SOC', 'Range', 'Power', 'Regen', 'State', 'Charger', 'Temp', 'Tires'].map((heading) => (
-                              <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {rawTelemetry.data?.samples.map((sample) => (
-                            <tr key={sample.ts}>
-                              <td className="px-3 py-2 font-mono text-fg">{new Date(sample.ts).toLocaleString()}</td>
-                              <td className="px-3 py-2">{sample.odometer_miles === null || sample.odometer_miles === undefined ? '-' : formatMiles(sample.odometer_miles)}</td>
-                              <td className="px-3 py-2">{formatRawNumber(sample.battery_level, '%')}</td>
-                              <td className="px-3 py-2">{formatRawNumber(sample.distance_to_empty_mi, ' mi')}</td>
-                              <td className="px-3 py-2">{formatRawNumber(sample.power_kw, ' kW')}</td>
-                              <td className="px-3 py-2">{formatRawNumber(sample.regen_power_kw, ' kW')}</td>
-                              <td className="px-3 py-2">{sample.power_state ?? '-'}</td>
-                              <td className="px-3 py-2">{sample.charger_state ?? '-'}</td>
-                              <td className="px-3 py-2">{sample.outside_temp_c === null || sample.outside_temp_c === undefined ? '-' : formatTemp(sample.outside_temp_c)}</td>
-                              <td className="px-3 py-2">
-                                {[sample.tire_fl_psi, sample.tire_fr_psi, sample.tire_rl_psi, sample.tire_rr_psi]
-                                  .map((psi) => psi === null || psi === undefined ? '-' : formatPressure(psi))
-                                  .join(' / ')}
-                              </td>
-                            </tr>
-                          ))}
-                          {(rawTelemetry.data?.samples.length ?? 0) === 0 && (
-                            <tr>
-                              <td colSpan={10} className="px-3 py-6 text-center text-fg-tertiary">
-                                No telemetry samples stored yet.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                      <p>First event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.first_event_at ?? 'none'}</span></p>
+                      <p className="mt-1">Latest event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.last_event_at ?? 'none'}</span></p>
                     </div>
                   </CardContent>
                 </Card>
-              </div>
-            )}
 
-            {activeSection === 'stewardship' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Rivian Stewardship</CardTitle>
-                  <Button variant="secondary" size="sm" loading={stewardship.isFetching} disabled={!isAdmin} onClick={() => stewardship.refetch()}>
-                    Refresh
-                  </Button>
-                </CardHeader>
-                <CardContent className="grid gap-4">
-                  {!isAdmin && (
-                    <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-sm text-fg-tertiary">
-                      Admin access is required.
-                    </div>
-                  )}
-
-                  {isAdmin && (
-                    <>
-                      <div className="grid gap-3 md:grid-cols-4">
-                        {[
-                          ['Active collectors', stewardship.data?.active_collectors],
-                          ['Reconnects', stewardship.data?.totals_24h.ws_reconnects],
-                          ['Outbound messages', stewardship.data?.totals_24h.outbound_messages_sent],
-                          ['Heartbeats ignored', stewardship.data?.totals_24h.ws_heartbeats_received],
-                          ['Payload messages', stewardship.data?.totals_24h.ws_payload_messages_received],
-                          ['Writes persisted', stewardship.data?.totals_24h.telemetry_writes_persisted],
-                          ['Writes suppressed', stewardship.data?.totals_24h.telemetry_writes_suppressed],
-                          ['Suppression rate', formatSuppressionRate(
-                            stewardship.data?.totals_24h.telemetry_writes_suppressed,
-                            stewardship.data?.totals_24h.telemetry_writes_persisted,
-                          )],
-                          ['Duplicate suppressions', stewardship.data?.totals_24h.telemetry_suppressed_duplicate],
-                          ['Collector lock skips', stewardship.data?.totals_24h.collector_lock_skips],
-                          ['Raw retained', stewardship.data?.raw_events_retained],
-                          ['Retention days', stewardship.data?.retention_days],
-                        ].map(([label, value]) => (
-                          <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
-                            <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
-                            <p className="mt-1 text-lg font-semibold text-fg">
-                              {typeof value === 'string' ? value : formatCount(value as number | undefined)}
-                            </p>
-                          </div>
-                        ))}
+                {/* DB Stats */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>DB Stats</CardTitle>
+                    <Button variant="secondary" size="sm" loading={stewardship.isFetching} disabled={!isAdmin} onClick={() => stewardship.refetch()}>
+                      Refresh
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="grid gap-4">
+                    {!isAdmin ? (
+                      <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-sm text-fg-tertiary">
+                        Admin access is required.
                       </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-3 md:grid-cols-4">
+                          {[
+                            ['Active collectors', stewardship.data?.active_collectors],
+                            ['Reconnects', stewardship.data?.totals_24h.ws_reconnects],
+                            ['Outbound messages', stewardship.data?.totals_24h.outbound_messages_sent],
+                            ['Heartbeats ignored', stewardship.data?.totals_24h.ws_heartbeats_received],
+                            ['Payload messages', stewardship.data?.totals_24h.ws_payload_messages_received],
+                            ['Writes persisted', stewardship.data?.totals_24h.telemetry_writes_persisted],
+                            ['Writes suppressed', stewardship.data?.totals_24h.telemetry_writes_suppressed],
+                            ['Suppression rate', formatSuppressionRate(
+                              stewardship.data?.totals_24h.telemetry_writes_suppressed,
+                              stewardship.data?.totals_24h.telemetry_writes_persisted,
+                            )],
+                            ['Duplicate suppressions', stewardship.data?.totals_24h.telemetry_suppressed_duplicate],
+                            ['Collector lock skips', stewardship.data?.totals_24h.collector_lock_skips],
+                            ['Raw retained', stewardship.data?.raw_events_retained],
+                            ['Retention days', stewardship.data?.retention_days],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
+                              <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
+                              <p className="mt-1 text-lg font-semibold text-fg">
+                                {typeof value === 'string' ? value : formatCount(value as number | undefined)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="overflow-x-auto rounded-lg border border-border">
+                          <table className="w-full min-w-[54rem] text-left text-xs">
+                            <thead className="bg-bg-elevated text-fg-tertiary">
+                              <tr>
+                                {['Vehicle', 'Health', 'Last seen', 'Messages', 'Heartbeats', 'Persisted', 'Suppressed', 'Reconnects'].map((heading) => (
+                                  <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {stewardship.data?.vehicles.map((vehicle) => (
+                                <tr key={vehicle.vehicle_id}>
+                                  <td className="px-3 py-2 text-fg">{vehicle.display_name}</td>
+                                  <td className="px-3 py-2">{vehicle.worker_health ?? '-'}</td>
+                                  <td className="px-3 py-2 font-mono">{vehicle.last_seen_at ? new Date(vehicle.last_seen_at).toLocaleString() : '-'}</td>
+                                  <td className="px-3 py-2">{formatCount(vehicle.ws_messages_received)}</td>
+                                  <td className="px-3 py-2">{formatCount(vehicle.ws_heartbeats_received)}</td>
+                                  <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_persisted)}</td>
+                                  <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_suppressed)}</td>
+                                  <td className="px-3 py-2">{formatCount(vehicle.ws_reconnects)}</td>
+                                </tr>
+                              ))}
+                              {(stewardship.data?.vehicles.length ?? 0) === 0 && (
+                                <tr>
+                                  <td colSpan={8} className="px-3 py-6 text-center text-fg-tertiary">No vehicle stewardship records yet.</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
 
+                {/* Telemetry Records with table / raw JSON toggle */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Telemetry Records</CardTitle>
+                    <div className="flex items-center gap-1 rounded-lg border border-border bg-bg-elevated p-0.5">
+                      {(['table', 'json'] as const).map((view) => (
+                        <button
+                          key={view}
+                          type="button"
+                          onClick={() => setRawTableView(view)}
+                          className={[
+                            'rounded-md px-3 py-1 text-xs font-medium transition-colors',
+                            rawTableView === view
+                              ? 'bg-bg text-fg shadow-sm'
+                              : 'text-fg-secondary hover:text-fg',
+                          ].join(' ')}
+                        >
+                          {view === 'table' ? 'Table' : 'Raw JSON'}
+                        </button>
+                      ))}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {rawTableView === 'table' ? (
                       <div className="overflow-x-auto rounded-lg border border-border">
-                        <table className="w-full min-w-[54rem] text-left text-xs">
+                        <table className="w-full min-w-[64rem] text-left text-xs">
                           <thead className="bg-bg-elevated text-fg-tertiary">
                             <tr>
-                              {['Vehicle', 'Health', 'Last seen', 'Messages', 'Heartbeats', 'Persisted', 'Suppressed', 'Reconnects'].map((heading) => (
+                              {['Time', 'Odometer', 'SOC', 'Range', 'Power', 'Regen', 'State', 'Charger', 'Temp', 'Tires'].map((heading) => (
                                 <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-border">
-                            {stewardship.data?.vehicles.map((vehicle) => (
-                              <tr key={vehicle.vehicle_id}>
-                                <td className="px-3 py-2 text-fg">{vehicle.display_name}</td>
-                                <td className="px-3 py-2">{vehicle.worker_health ?? '-'}</td>
-                                <td className="px-3 py-2 font-mono">{vehicle.last_seen_at ? new Date(vehicle.last_seen_at).toLocaleString() : '-'}</td>
-                                <td className="px-3 py-2">{formatCount(vehicle.ws_messages_received)}</td>
-                                <td className="px-3 py-2">{formatCount(vehicle.ws_heartbeats_received)}</td>
-                                <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_persisted)}</td>
-                                <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_suppressed)}</td>
-                                <td className="px-3 py-2">{formatCount(vehicle.ws_reconnects)}</td>
+                            {rawTelemetry.data?.samples.map((sample) => (
+                              <tr key={sample.ts}>
+                                <td className="px-3 py-2 font-mono text-fg">{new Date(sample.ts).toLocaleString()}</td>
+                                <td className="px-3 py-2">{sample.odometer_miles === null || sample.odometer_miles === undefined ? '-' : formatMiles(sample.odometer_miles)}</td>
+                                <td className="px-3 py-2">{formatRawNumber(sample.battery_level, '%')}</td>
+                                <td className="px-3 py-2">{formatRawNumber(sample.distance_to_empty_mi, ' mi')}</td>
+                                <td className="px-3 py-2">{formatRawNumber(sample.power_kw, ' kW')}</td>
+                                <td className="px-3 py-2">{formatRawNumber(sample.regen_power_kw, ' kW')}</td>
+                                <td className="px-3 py-2">{sample.power_state ?? '-'}</td>
+                                <td className="px-3 py-2">{sample.charger_state ?? '-'}</td>
+                                <td className="px-3 py-2">{sample.outside_temp_c === null || sample.outside_temp_c === undefined ? '-' : formatTemp(sample.outside_temp_c)}</td>
+                                <td className="px-3 py-2">
+                                  {[sample.tire_fl_psi, sample.tire_fr_psi, sample.tire_rl_psi, sample.tire_rr_psi]
+                                    .map((psi) => psi === null || psi === undefined ? '-' : formatPressure(psi))
+                                    .join(' / ')}
+                                </td>
                               </tr>
                             ))}
-                            {(stewardship.data?.vehicles.length ?? 0) === 0 && (
+                            {(rawTelemetry.data?.samples.length ?? 0) === 0 && (
                               <tr>
-                                <td colSpan={8} className="px-3 py-6 text-center text-fg-tertiary">
-                                  No vehicle stewardship records yet.
-                                </td>
+                                <td colSpan={10} className="px-3 py-6 text-center text-fg-tertiary">No telemetry samples stored yet.</td>
                               </tr>
                             )}
                           </tbody>
                         </table>
                       </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-border bg-bg-elevated/40">
+                        <pre className="p-4 text-xs text-fg font-mono leading-relaxed whitespace-pre-wrap break-all">
+                          {rawTelemetry.data?.samples && rawTelemetry.data.samples.length > 0
+                            ? JSON.stringify(rawTelemetry.data.samples, null, 2)
+                            : 'No samples.'}
+                        </pre>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             )}
+
+
 
             {activeSection === 'appearance' && (
               <Card>
