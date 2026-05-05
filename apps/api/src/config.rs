@@ -17,6 +17,16 @@ pub struct Config {
     pub s3_endpoint: Option<String>,
     pub s3_access_key: Option<String>,
     pub s3_secret_key: Option<String>,
+    #[serde(default = "default_rivian_ws_reconnect_initial_seconds")]
+    pub rivian_ws_reconnect_initial_seconds: u64,
+    #[serde(default = "default_rivian_ws_reconnect_max_seconds")]
+    pub rivian_ws_reconnect_max_seconds: u64,
+    #[serde(default = "default_rivian_raw_event_retention_days")]
+    pub rivian_raw_event_retention_days: i64,
+    #[serde(default = "default_true")]
+    pub rivian_persist_raw_events: bool,
+    #[serde(default = "default_true")]
+    pub rivian_suppress_duplicate_telemetry: bool,
 }
 
 fn default_port() -> u16 {
@@ -24,6 +34,22 @@ fn default_port() -> u16 {
 }
 fn default_origins() -> Vec<String> {
     vec!["http://localhost:3000".into()]
+}
+
+fn default_rivian_ws_reconnect_initial_seconds() -> u64 {
+    10
+}
+
+fn default_rivian_ws_reconnect_max_seconds() -> u64 {
+    900
+}
+
+fn default_rivian_raw_event_retention_days() -> i64 {
+    7
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Config {

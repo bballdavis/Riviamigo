@@ -52,6 +52,58 @@ struct AddVehicleBody {
     vin: Option<String>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct LatestVehicleTelemetry {
+    ts: Option<chrono::DateTime<chrono::Utc>>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    altitude_m: Option<f64>,
+    speed_mph: Option<f64>,
+    battery_level: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    distance_to_empty_mi: Option<f64>,
+    battery_limit: Option<f64>,
+    power_state: Option<String>,
+    charger_state: Option<String>,
+    charger_status: Option<String>,
+    time_to_end_of_charge_min: Option<i32>,
+    drive_mode: Option<String>,
+    gear_status: Option<String>,
+    cabin_temp_c: Option<f64>,
+    driver_temp_c: Option<f64>,
+    outside_temp_c: Option<f64>,
+    heading_deg: Option<f64>,
+    odometer_miles: Option<f64>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+    tire_fl_status: Option<String>,
+    tire_fr_status: Option<String>,
+    tire_rl_status: Option<String>,
+    tire_rr_status: Option<String>,
+    door_front_left_locked: Option<bool>,
+    door_front_right_locked: Option<bool>,
+    door_rear_left_locked: Option<bool>,
+    door_rear_right_locked: Option<bool>,
+    door_front_left_closed: Option<bool>,
+    door_front_right_closed: Option<bool>,
+    door_rear_left_closed: Option<bool>,
+    door_rear_right_closed: Option<bool>,
+    closure_frunk_locked: Option<bool>,
+    closure_frunk_closed: Option<bool>,
+    closure_liftgate_locked: Option<bool>,
+    closure_liftgate_closed: Option<bool>,
+    closure_tailgate_locked: Option<bool>,
+    closure_tailgate_closed: Option<bool>,
+    ota_current_version: Option<String>,
+    ota_available_version: Option<String>,
+    ota_status: Option<String>,
+    ota_current_status: Option<String>,
+    hv_thermal_event: Option<String>,
+    twelve_volt_health: Option<String>,
+}
+
 #[derive(Serialize)]
 struct ConnectResponse {
     status: &'static str,
@@ -373,7 +425,7 @@ async fn vehicle_status(
     .fetch_optional(&state.pool)
     .await?;
 
-    let latest = sqlx::query!(
+    let latest = sqlx::query_as::<_, LatestVehicleTelemetry>(
         r#"
         SELECT
           (SELECT ts FROM timeseries.telemetry WHERE vehicle_id = $1 ORDER BY ts DESC LIMIT 1) AS ts,
@@ -425,8 +477,8 @@ async fn vehicle_status(
           (SELECT hv_thermal_event FROM timeseries.telemetry WHERE vehicle_id = $1 AND hv_thermal_event IS NOT NULL ORDER BY ts DESC LIMIT 1) AS hv_thermal_event,
           (SELECT twelve_volt_health FROM timeseries.telemetry WHERE vehicle_id = $1 AND twelve_volt_health IS NOT NULL ORDER BY ts DESC LIMIT 1) AS twelve_volt_health
         "#,
-        vid
     )
+    .bind(vid)
     .fetch_one(&state.pool)
     .await?;
 

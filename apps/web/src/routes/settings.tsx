@@ -13,7 +13,7 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Plus, Ruler, ShieldCheck, Trash2,
+  Activity, Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Plus, Ruler, ShieldCheck, Trash2,
 } from 'lucide-react';
 
 export const settingsRoute = createRoute({
@@ -22,7 +22,7 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'stewardship' | 'appearance' | 'account';
 
 const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
@@ -30,6 +30,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementT
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'raw', label: 'Raw Data', icon: Database },
+  { id: 'stewardship', label: 'Stewardship', icon: Activity },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
 ];
@@ -46,6 +47,16 @@ const accessLevels: Array<{
 
 function formatRawNumber(value: number | null | undefined, unit = '') {
   return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : '-';
+}
+
+function formatCount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '0';
+}
+
+function formatSuppressionRate(suppressed: number | undefined, persisted: number | undefined) {
+  const total = (suppressed ?? 0) + (persisted ?? 0);
+  if (total <= 0) return '0%';
+  return `${Math.round(((suppressed ?? 0) / total) * 100)}%`;
 }
 
 function ThemeVehicleImage({
@@ -105,6 +116,12 @@ export function SettingsContent() {
     queryKey: ['api-catalog'],
     queryFn: () => api.getApiCatalog(),
     enabled: activeSection === 'api',
+  });
+
+  const stewardship = useQuery({
+    queryKey: ['rivian-stewardship'],
+    queryFn: () => api.getRivianStewardship(),
+    enabled: activeSection === 'stewardship' && isAdmin,
   });
 
   React.useEffect(() => {
@@ -560,6 +577,88 @@ export function SettingsContent() {
                   </CardContent>
                 </Card>
               </div>
+            )}
+
+            {activeSection === 'stewardship' && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Rivian Stewardship</CardTitle>
+                  <Button variant="secondary" size="sm" loading={stewardship.isFetching} disabled={!isAdmin} onClick={() => stewardship.refetch()}>
+                    Refresh
+                  </Button>
+                </CardHeader>
+                <CardContent className="grid gap-4">
+                  {!isAdmin && (
+                    <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-sm text-fg-tertiary">
+                      Admin access is required.
+                    </div>
+                  )}
+
+                  {isAdmin && (
+                    <>
+                      <div className="grid gap-3 md:grid-cols-4">
+                        {[
+                          ['Active collectors', stewardship.data?.active_collectors],
+                          ['Reconnects', stewardship.data?.totals_24h.ws_reconnects],
+                          ['Outbound messages', stewardship.data?.totals_24h.outbound_messages_sent],
+                          ['Heartbeats ignored', stewardship.data?.totals_24h.ws_heartbeats_received],
+                          ['Payload messages', stewardship.data?.totals_24h.ws_payload_messages_received],
+                          ['Writes persisted', stewardship.data?.totals_24h.telemetry_writes_persisted],
+                          ['Writes suppressed', stewardship.data?.totals_24h.telemetry_writes_suppressed],
+                          ['Suppression rate', formatSuppressionRate(
+                            stewardship.data?.totals_24h.telemetry_writes_suppressed,
+                            stewardship.data?.totals_24h.telemetry_writes_persisted,
+                          )],
+                          ['Duplicate suppressions', stewardship.data?.totals_24h.telemetry_suppressed_duplicate],
+                          ['Collector lock skips', stewardship.data?.totals_24h.collector_lock_skips],
+                          ['Raw retained', stewardship.data?.raw_events_retained],
+                          ['Retention days', stewardship.data?.retention_days],
+                        ].map(([label, value]) => (
+                          <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
+                            <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
+                            <p className="mt-1 text-lg font-semibold text-fg">
+                              {typeof value === 'string' ? value : formatCount(value as number | undefined)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="overflow-x-auto rounded-lg border border-border">
+                        <table className="w-full min-w-[54rem] text-left text-xs">
+                          <thead className="bg-bg-elevated text-fg-tertiary">
+                            <tr>
+                              {['Vehicle', 'Health', 'Last seen', 'Messages', 'Heartbeats', 'Persisted', 'Suppressed', 'Reconnects'].map((heading) => (
+                                <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {stewardship.data?.vehicles.map((vehicle) => (
+                              <tr key={vehicle.vehicle_id}>
+                                <td className="px-3 py-2 text-fg">{vehicle.display_name}</td>
+                                <td className="px-3 py-2">{vehicle.worker_health ?? '-'}</td>
+                                <td className="px-3 py-2 font-mono">{vehicle.last_seen_at ? new Date(vehicle.last_seen_at).toLocaleString() : '-'}</td>
+                                <td className="px-3 py-2">{formatCount(vehicle.ws_messages_received)}</td>
+                                <td className="px-3 py-2">{formatCount(vehicle.ws_heartbeats_received)}</td>
+                                <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_persisted)}</td>
+                                <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_suppressed)}</td>
+                                <td className="px-3 py-2">{formatCount(vehicle.ws_reconnects)}</td>
+                              </tr>
+                            ))}
+                            {(stewardship.data?.vehicles.length ?? 0) === 0 && (
+                              <tr>
+                                <td colSpan={8} className="px-3 py-6 text-center text-fg-tertiary">
+                                  No vehicle stewardship records yet.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
             )}
 
             {activeSection === 'appearance' && (

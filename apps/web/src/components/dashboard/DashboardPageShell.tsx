@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@riviamigo/hooks';
-import { PageLayout, DateRangePicker } from '@riviamigo/ui/primitives';
+import { PageLayout, DateRangePicker, Tooltip } from '@riviamigo/ui/primitives';
 import { getEfficiencyDisplay, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
   DashboardRenderer,
@@ -8,6 +8,7 @@ import {
   useDashboardBySlug,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig, WidgetCtx } from '@riviamigo/dashboards';
+import { PiSpeedometerFill, PiSpeedometerLight } from 'react-icons/pi';
 import { AppLayout } from '../layout/AppLayout';
 import { AuthGuard } from '../layout/AuthGuard';
 import { NoVehicleState } from '../layout/NoVehicleState';
@@ -140,20 +141,35 @@ export function DashboardPageShell({
       }}
     />
   ) : null;
+  const EfficiencyDisplayIcon = efficiencyDisplay === 'distance_per_energy' ? PiSpeedometerFill : PiSpeedometerLight;
+  const efficiencyDisplayLabel = efficiencyDisplay === 'distance_per_energy' ? 'mi/kWh' : 'Wh/mi';
+  const efficiencyDisplayTooltip = efficiencyDisplay === 'distance_per_energy'
+    ? 'Showing mi/kWh. Click to switch to Wh/mi.'
+    : 'Showing Wh/mi. Click to switch to mi/kWh.';
   const efficiencyDisplayAction = showEfficiencyDisplayToggle && !currentEditMode ? (
-    <button
-      type="button"
-      className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-xs font-medium text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-      onClick={() => {
-        const next = efficiencyDisplay === 'distance_per_energy' ? 'energy_per_distance' : 'distance_per_energy';
-        setEfficiencyDisplay(next);
-        setEfficiencyDisplayState(next);
-      }}
-      aria-label="Toggle efficiency units"
-      title="Toggle efficiency units"
+    <Tooltip
+      content={(
+        <div className="grid gap-1">
+          <span className="text-xs font-medium text-fg">Efficiency units</span>
+          <span className="text-[11px] text-fg-secondary">{efficiencyDisplayTooltip}</span>
+        </div>
+      )}
+      contentClassName="w-60"
     >
-      {efficiencyDisplay === 'distance_per_energy' ? 'mi/kWh' : 'Wh/mi'}
-    </button>
+      <button
+        type="button"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+        onClick={() => {
+          const next = efficiencyDisplay === 'distance_per_energy' ? 'energy_per_distance' : 'distance_per_energy';
+          setEfficiencyDisplay(next);
+          setEfficiencyDisplayState(next);
+        }}
+        aria-label={`Toggle efficiency units, currently ${efficiencyDisplayLabel}`}
+        aria-pressed={efficiencyDisplay === 'distance_per_energy'}
+      >
+        <EfficiencyDisplayIcon className="h-4 w-4" />
+      </button>
+    </Tooltip>
   ) : null;
   const extraActions = renderActions?.(shellState);
   const pageActions = efficiencyDisplayAction || dateRangeAction || extraActions ? (
