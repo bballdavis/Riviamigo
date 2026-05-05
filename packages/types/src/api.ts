@@ -395,3 +395,49 @@ export interface RawTelemetryResponse {
   };
   samples: RawTelemetrySample[];
 }
+
+export interface RivianStewardshipTotals {
+  ws_messages_received: number;
+  ws_heartbeats_received: number;
+  ws_payload_messages_received: number;
+  ws_control_messages_received: number;
+  ws_connections_opened: number;
+  ws_reconnects: number;
+  outbound_messages_sent: number;
+  outbound_graphql_requests: number;
+  telemetry_writes_persisted: number;
+  telemetry_writes_suppressed: number;
+  telemetry_suppressed_duplicate: number;
+  telemetry_suppressed_empty: number;
+  telemetry_suppressed_threshold: number;
+  collector_lock_skips: number;
+  raw_events_persisted: number;
+}
+
+export interface RivianStewardshipVehicle {
+  vehicle_id: string;
+  display_name: string;
+  worker_health: string | null;
+  last_seen_at: string | null;
+  last_payload_at: string | null;
+  last_persisted_at: string | null;
+  last_heartbeat_at: string | null;
+  ws_messages_received: number;
+  ws_heartbeats_received: number;
+  ws_payload_messages_received: number;
+  ws_reconnects: number;
+  telemetry_writes_persisted: number;
+  telemetry_writes_suppressed: number;
+  collector_lock_skips: number;
+}
+
+export interface RivianStewardshipResponse {
+  generated_at: string;
+  retention_days: number;
+  raw_event_persistence_enabled: boolean;
+  duplicate_suppression_enabled: boolean;
+  active_collectors: number;
+  raw_events_retained: number;
+  totals_24h: RivianStewardshipTotals;
+  vehicles: RivianStewardshipVehicle[];
+}

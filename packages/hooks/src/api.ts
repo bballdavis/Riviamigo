@@ -9,7 +9,7 @@ import type {
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
-  BatteryMileagePoint,
+  BatteryMileagePoint, RivianStewardshipResponse,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -427,6 +427,10 @@ class ApiClient {
 
   async getRawTelemetry(vehicleId: string, limit = 25) {
     return this.request<RawTelemetryResponse>('GET', `/v1/vehicles/${vehicleId}/raw-data`, undefined, { limit });
+  }
+
+  async getRivianStewardship(): Promise<RivianStewardshipResponse> {
+    return this.request('GET', '/v1/admin/rivian/stewardship');
   }
 
   private reportFailure(detail: ApiFailureDetail) {
