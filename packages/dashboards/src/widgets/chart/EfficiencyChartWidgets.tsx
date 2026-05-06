@@ -1,12 +1,24 @@
 import React from 'react';
 import { useEfficiencyTrend, useEfficiencyVsTemp, useEfficiencyByMode } from '@riviamigo/hooks';
-import { EfficiencyTrendChart, EfficiencyVsTempChart, EfficiencyChart } from '@riviamigo/ui/charts';
+import { RichTimeSeriesChart, EfficiencyVsTempChart, EfficiencyChart } from '@riviamigo/ui/charts';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 
 function EfficiencyTrendWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data, isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
-  return <EfficiencyTrendChart data={data ?? []} loading={isLoading} height={260} showBrush />;
+  return (
+    <RichTimeSeriesChart
+      points={(data ?? []).map((p) => ({ ts: p.day }))}
+      series={[
+        { key: 'daily', label: 'Daily', values: (data ?? []).map((p) => p.day_avg_wh_mi ?? null) },
+        { key: 'rolling', label: '7 Day', values: (data ?? []).map((p) => p.rolling_7d_wh_mi ?? null) },
+      ]}
+      loading={isLoading}
+      height={260}
+      yUnit="Wh/mi"
+      mode="line"
+    />
+  );
 }
 
 function EfficiencyVsTempWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {

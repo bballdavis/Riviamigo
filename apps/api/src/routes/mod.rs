@@ -30,6 +30,7 @@ pub mod health;
 pub mod idle_drain;
 pub mod live;
 pub mod locations;
+pub mod metrics;
 pub mod overview;
 pub mod places;
 pub mod rivian_stewardship;
@@ -69,6 +70,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(charging::router())
         .merge(efficiency::router())
         .merge(stats::router())
+        .merge(metrics::router())
         .merge(live::router())
         .merge(dashboards::router())
         .merge(cost_profiles::router())

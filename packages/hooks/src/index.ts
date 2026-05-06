@@ -6,5 +6,6 @@ export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile }
 export { useChargeSessions, useChargeSession, useChargeCurve, useChargingSummary } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
 export { useSummaryStats } from './useStats';
+export { useMetricCatalog, useMetricValue, useMetricSeries } from './useMetrics';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';

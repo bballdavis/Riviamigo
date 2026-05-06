@@ -90,7 +90,8 @@ export function ChargingSessionsChart({
             cursor={TOOLTIP_CURSOR_STYLE}
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
-              const d = payload[0].payload as BarDatum;
+              const d = payload[0]?.payload as BarDatum | undefined;
+              if (!d) return null;
               return (
                 <div className="min-w-[160px] rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm shadow-lg">
                   <div className="font-semibold text-fg">{d.label}</div>
@@ -110,7 +111,10 @@ export function ChargingSessionsChart({
             radius={[3, 3, 0, 0]}
             isAnimationActive={false}
             cursor="pointer"
-            onClick={(d: BarDatum) => onSelect?.(d.id)}
+            onClick={(d) => {
+              const id = (d as { id?: string }).id;
+              if (id) onSelect?.(id);
+            }}
           >
             {data.map((entry) => (
               <Cell

@@ -15,6 +15,8 @@
     { "id": "d2000002-0000-0000-0000-000000000005", "widgetId": "chart.soc",               "layout": { "x": 0,  "y": 1, "w": 12, "h": 4 } },
     { "id": "d2000002-0000-0000-0000-000000000006", "widgetId": "chart.range",             "layout": { "x": 0,  "y": 5, "w": 12, "h": 4 } },
     { "id": "d2000002-0000-0000-0000-000000000007", "widgetId": "chart.phantom_drain",     "layout": { "x": 0,  "y": 9, "w": 6,  "h": 4 } },
-    { "id": "d2000002-0000-0000-0000-000000000008", "widgetId": "chart.degradation",       "layout": { "x": 6,  "y": 9, "w": 6,  "h": 4 } }
+    { "id": "d2000002-0000-0000-0000-000000000008", "widgetId": "chart.degradation",       "layout": { "x": 6,  "y": 9, "w": 6,  "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000009", "widgetId": "chart.battery_capacity_mileage", "layout": { "x": 0, "y": 13, "w": 6, "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000010", "widgetId": "chart.projected_range_mileage", "layout": { "x": 6, "y": 13, "w": 6, "h": 4 } }
   ]
 }
