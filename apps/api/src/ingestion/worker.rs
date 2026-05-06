@@ -28,6 +28,15 @@ use crate::{
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 
+/// Shared rate-limit gate for Nominatim reverse geocoding in the ingestion worker.
+/// Ensures ≥ 1100 ms between calls across all concurrent trip-close events.
+static NOMINATIM_NEXT_CALL: std::sync::OnceLock<tokio::sync::Mutex<std::time::Instant>> =
+    std::sync::OnceLock::new();
+
+fn nominatim_gate() -> &'static tokio::sync::Mutex<std::time::Instant> {
+    NOMINATIM_NEXT_CALL.get_or_init(|| tokio::sync::Mutex::new(std::time::Instant::now()))
+}
+
 struct MatchedLocation {
     geofence_id: Option<Uuid>,
     address_id: Option<Uuid>,
@@ -1374,8 +1383,172 @@ async fn match_point(
             address_id: geofence.address_id,
             is_home: Some(geofence.is_home),
         },
-        None => MatchedLocation::none(),
+        None => {
+            // No named geofence — reverse-geocode so trips get road/city labels.
+            let address_id = reverse_geocode_and_store(pool, lat, lon).await;
+            MatchedLocation {
+                geofence_id: None,
+                address_id,
+                is_home: None,
+            }
+        }
     })
+}
+
+/// Call Nominatim reverse geocoding, store the result in `riviamigo.addresses`,
+/// and return the row's UUID.  Returns `None` on any network / DB error so
+/// callers can degrade gracefully.
+async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<Uuid> {
+    // ── rate limit ────────────────────────────────────────────────────────
+    let sleep_for = {
+        let mut next = nominatim_gate().lock().await;
+        let now = std::time::Instant::now();
+        let wait = next.saturating_duration_since(now);
+        *next = now + wait + std::time::Duration::from_millis(1100);
+        wait
+    };
+    if !sleep_for.is_zero() {
+        tokio::time::sleep(sleep_for).await;
+    }
+
+    // ── HTTP request ──────────────────────────────────────────────────────
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error=%e, "worker.reverse_geocode_client_build_failed");
+            return None;
+        }
+    };
+
+    let lat_s = lat.to_string();
+    let lon_s = lon.to_string();
+    let resp = match client
+        .get("https://nominatim.openstreetmap.org/reverse")
+        .header(
+            reqwest::header::USER_AGENT,
+            "riviamigo-api/0.1 (contact: support@riviamigo.com)",
+        )
+        .query(&[
+            ("format", "jsonv2"),
+            ("addressdetails", "1"),
+            ("lat", lat_s.as_str()),
+            ("lon", lon_s.as_str()),
+        ])
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error=%e, lat=%lat, lon=%lon, "worker.reverse_geocode_request_failed");
+            return None;
+        }
+    };
+
+    if !resp.status().is_success() {
+        tracing::warn!(status=%resp.status(), lat=%lat, lon=%lon, "worker.reverse_geocode_http_error");
+        return None;
+    }
+
+    let raw: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error=%e, "worker.reverse_geocode_decode_failed");
+            return None;
+        }
+    };
+
+    // ── parse ─────────────────────────────────────────────────────────────
+    let display_name = raw.get("display_name")?.as_str()?.to_string();
+    let osm_id = raw.get("osm_id").and_then(|v| v.as_i64());
+    let addr = raw.get("address").and_then(|v| v.as_object());
+
+    let road: Option<String> = addr
+        .and_then(|a| {
+            a.get("road")
+                .or_else(|| a.get("pedestrian"))
+                .or_else(|| a.get("footway"))
+        })
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let city: Option<String> = addr
+        .and_then(|a| {
+            a.get("city")
+                .or_else(|| a.get("town"))
+                .or_else(|| a.get("village"))
+        })
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let state: Option<String> = addr
+        .and_then(|a| a.get("state"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let postcode: Option<String> = addr
+        .and_then(|a| a.get("postcode"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let country: Option<String> = addr
+        .and_then(|a| a.get("country"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    // ── persist ───────────────────────────────────────────────────────────
+    let result: Result<Uuid, sqlx::Error> = if let Some(oid) = osm_id {
+        sqlx::query_scalar!(
+            r#"INSERT INTO riviamigo.addresses
+               (display_name, osm_id, latitude, longitude, road, city, state, postcode, country, raw)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (osm_id) DO UPDATE SET
+                 display_name = EXCLUDED.display_name,
+                 road = EXCLUDED.road,
+                 city = EXCLUDED.city,
+                 state = EXCLUDED.state,
+                 postcode = EXCLUDED.postcode,
+                 country = EXCLUDED.country,
+                 raw = EXCLUDED.raw
+               RETURNING id"#,
+            display_name,
+            oid,
+            lat,
+            lon,
+            road,
+            city,
+            state,
+            postcode,
+            country,
+            raw,
+        )
+        .fetch_one(pool)
+        .await
+    } else {
+        sqlx::query_scalar!(
+            r#"INSERT INTO riviamigo.addresses
+               (display_name, latitude, longitude, road, city, state, postcode, country, raw)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING id"#,
+            display_name,
+            lat,
+            lon,
+            road,
+            city,
+            state,
+            postcode,
+            country,
+            raw,
+        )
+        .fetch_one(pool)
+        .await
+    };
+
+    match result {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(error=%e, "worker.reverse_geocode_db_insert_failed");
+            None
+        }
+    }
 }
 
 /// Infer a coarse VehicleState from the latest telemetry event.
