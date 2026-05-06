@@ -412,6 +412,34 @@ describe('useCurrentVehicleStatus', () => {
     expect(result.current.data?.tire_fl_psi).toBe(34.2);
   });
 
+  it('lets fresher stored status win over older live status without blanking good fields', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    queryClient.setQueryData(['vehicles', 'status', 'vid-1'], {
+      vehicle_id: 'vid-1',
+      is_online: true,
+      battery_level: 72,
+      range_miles: 221,
+      battery_capacity_kwh: null,
+      last_updated: '2026-01-01T00:05:00Z',
+    } satisfies Partial<VehicleStatus>);
+    const queryWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    seedStore('vid-1', {
+      vehicle_id: 'vid-1',
+      is_online: true,
+      battery_level: 88,
+      range_miles: 140,
+      battery_capacity_kwh: 135,
+      last_updated: '2026-01-01T00:00:00Z',
+    });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: queryWrapper });
+
+    expect(result.current.data?.battery_level).toBe(72);
+    expect(result.current.data?.range_miles).toBe(221);
+    expect(result.current.data?.battery_capacity_kwh).toBe(135);
+  });
+
   it('does NOT write REST query data back into the Zustand store', async () => {
     // Regression test for the root cause of sensor dropouts.
     // Previously a useEffect called setStatus(vehicleId, apiData) on every

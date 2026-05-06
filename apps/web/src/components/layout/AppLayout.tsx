@@ -2,8 +2,7 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle } from '@riviamigo/ui/primitives';
 import { getUnitSystem } from '@riviamigo/ui/lib/utils';
-import { useAuth } from '@riviamigo/hooks';
-import { useVehicleStatus } from '@riviamigo/hooks';
+import { useAuth, useCurrentVehicleStatus, useVehicleStatus } from '@riviamigo/hooks';
 import { LogOut, Settings } from 'lucide-react';
 
 interface AppLayoutProps {
@@ -14,7 +13,9 @@ interface AppLayoutProps {
 export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const navigate = useNavigate();
   const { accessToken, defaultVehicleId, logout } = useAuth();
-  const { status, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
+  const { status: liveStatus, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
+  const { data: currentStatus } = useCurrentVehicleStatus(defaultVehicleId);
+  const status = currentStatus ?? liveStatus;
   const [unitSystem, setUnitSystem] = React.useState(() => getUnitSystem());
 
   React.useEffect(() => {

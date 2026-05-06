@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Arc, time::Instant};
+
 use axum::{
     extract::FromRequestParts,
     http::{header::AUTHORIZATION, request::Parts, Method},
@@ -50,9 +52,13 @@ impl JwtKeys {
 pub struct AppState {
     pub pool: sqlx::PgPool,
     pub redis: redis::Client,
-    pub jwt_keys: std::sync::Arc<JwtKeys>,
+    pub jwt_keys: Arc<JwtKeys>,
     pub age_key: String,
     pub config: crate::config::Config,
+    /// Tracks when the next Nominatim call is allowed (rate limit: 1 req/1.1s).
+    pub nominatim_next_call: Arc<tokio::sync::Mutex<Instant>>,
+    /// Short-lived in-memory cache: normalised query -> (cached_at, json result).
+    pub nominatim_cache: Arc<tokio::sync::RwLock<HashMap<String, (Instant, serde_json::Value)>>>,
 }
 
 #[async_trait::async_trait]

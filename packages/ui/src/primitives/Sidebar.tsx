@@ -15,8 +15,8 @@ export interface NavItem {
 const DEFAULT_NAV_ITEMS: NavItem[] = [
   { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <LayoutDashboard className="h-4 w-4" /> },
   { key: 'battery',    label: 'Battery',    href: '/battery',   icon: <Battery className="h-4 w-4" /> },
-  { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <Route className="h-4 w-4" /> },
   { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <Zap className="h-4 w-4" /> },
+  { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <Route className="h-4 w-4" /> },
   { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className="h-4 w-4" /> },
   { key: 'health',     label: 'Health',     href: '/health',    icon: <Heart className="h-4 w-4" /> },
 ];

@@ -99,4 +99,12 @@ describe('StatusBar', () => {
     expect(screen.getByLabelText('Vehicle status: Connection failed')).toBeInTheDocument();
     expect(screen.getByText('Connection failed')).toBeInTheDocument();
   });
+
+  it('keeps the battery indicator visible in compact mode', () => {
+    const { container } = render(<StatusBar onlineState="online" socPercent={42} compact />);
+
+    expect(screen.getByLabelText('Battery status: 42%')).toBeInTheDocument();
+    expect(screen.queryByText('42%')).not.toBeInTheDocument();
+    expect(container.querySelector('svg')).toBeInTheDocument();
+  });
 });

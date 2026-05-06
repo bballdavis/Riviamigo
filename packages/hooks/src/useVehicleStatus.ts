@@ -257,12 +257,43 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
     placeholderData: (previous) => previous,
   });
 
-  const data =
-    liveStatus && query.data
-      ? ({ ...query.data, ...liveStatus } as VehicleStatus)
-      : liveStatus ?? query.data ?? null;
+  const data = mergeVehicleStatus(query.data ?? null, liveStatus ?? null);
 
   return { ...query, data };
+}
+
+function mergeVehicleStatus(
+  storedStatus: VehicleStatus | null,
+  liveStatus: VehicleStatus | null,
+): VehicleStatus | null {
+  if (storedStatus && liveStatus) {
+    const storedTime = statusTimestampMs(storedStatus);
+    const liveTime = statusTimestampMs(liveStatus);
+    const liveIsNewest = liveTime !== null && (storedTime === null || liveTime >= storedTime);
+    const base = liveIsNewest ? storedStatus : liveStatus;
+    const preferred = liveIsNewest ? liveStatus : storedStatus;
+
+    return mergeDefinedStatus(base, preferred);
+  }
+
+  return liveStatus ?? storedStatus ?? null;
+}
+
+function mergeDefinedStatus(base: VehicleStatus, preferred: VehicleStatus): VehicleStatus {
+  const merged = { ...base } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(preferred)) {
+    if (value !== null && value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged as unknown as VehicleStatus;
+}
+
+function statusTimestampMs(status: VehicleStatus): number | null {
+  const timestamp = status.last_updated ?? status.last_event_at;
+  if (!timestamp) return null;
+  const value = new Date(timestamp).getTime();
+  return Number.isFinite(value) ? value : null;
 }
 
 function getWebSocketBaseUrl() {

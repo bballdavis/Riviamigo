@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useBatteryHealth, useBatteryMileage, useDegradation } from '@riviamigo/hooks';
+import { useBatteryHealth, useBatteryMileage, useCurrentVehicleStatus, useDegradation } from '@riviamigo/hooks';
 import { useUpdateDashboard } from '@riviamigo/dashboards';
 import { BatteryCapacityByMileageChart, DegradationChart, ProjectedRangeByMileageChart } from '@riviamigo/ui/charts';
 import { ChartPicker, StatCard, Card } from '@riviamigo/ui/primitives';
@@ -30,7 +30,7 @@ function ComparisonCard({
       <div className="flex items-start justify-between">
         <p className="text-xs font-medium text-fg-tertiary uppercase tracking-wider">
           {label}
-          <span className="text-2xs ml-1 font-normal">({labelSuffix})</span>
+          <span className="ml-1 text-[10px] font-normal leading-none">({labelSuffix})</span>
         </p>
       </div>
       <div className="mt-2 flex items-baseline gap-2">
@@ -42,7 +42,7 @@ function ComparisonCard({
           disabled={loading}
           className="text-sm font-mono tabular-nums text-fg-tertiary hover:text-fg-secondary hover:underline disabled:opacity-50 transition-colors"
         >
-          {loading ? '...' : newValue}
+          {loading ? '...' : `/${newValue}`}
         </button>
       </div>
     </Card>
@@ -74,20 +74,25 @@ export function BatteryDashboardPage({ navKey, slug, title }: DashboardPageProps
 }
 
 function BatteryPanel({ vehicleId }: { vehicleId: string | null }) {
-  const navigate = React.useCallback(() => {
-    navigate({ to: '/settings', search: `?section=vehicles&vehicleId=${vehicleId}` });
-  }, [vehicleId]);
+  const navigate = useNavigate();
 
   const [chartKey, setChartKey] = useState<BatteryChartKey>('capacity-mileage');
   const [chartSearch, setChartSearch] = useState('');
+  const { data: currentStatus, isLoading: statusLoading } = useCurrentVehicleStatus(vehicleId);
   const { data: health, isLoading: healthLoading } = useBatteryHealth(vehicleId);
   const { data: mileage = [], isLoading: mileageLoading } = useBatteryMileage(vehicleId);
   const { data: degradation = [], isLoading: degradationLoading } = useDegradation(vehicleId);
 
-  const maxRangeNow = mileage.length > 0 ? Math.max(...mileage.map(m => m.range_mi ?? 0)) : null;
-  const maxRangeNew = (maxRangeNow && health?.usable_now_kwh && health?.usable_new_kwh && health.usable_now_kwh > 0)
-    ? (maxRangeNow * health.usable_new_kwh / health.usable_now_kwh)
+  const remainingRangeNow = currentStatus?.range_miles ?? null;
+  const batteryLevelNow = currentStatus?.battery_level ?? null;
+  const chargingCycles = health?.charging_cycles ?? health?.charge_count ?? null;
+  const maxRangeNow = (remainingRangeNow != null && batteryLevelNow != null && batteryLevelNow > 0)
+    ? (remainingRangeNow / batteryLevelNow * 100)
     : null;
+  const maxRangeNew = (maxRangeNow != null && health?.battery_health_pct != null && health.battery_health_pct > 0)
+    ? (maxRangeNow / health.battery_health_pct * 100)
+    : null;
+  const rangeLoading = healthLoading || statusLoading;
 
   return (
     <section className="mb-4 space-y-4">
@@ -112,10 +117,10 @@ function BatteryPanel({ vehicleId }: { vehicleId: string | null }) {
         <ComparisonCard
           label="Max Range"
           labelSuffix="now/new"
-          nowValue={(healthLoading || mileageLoading) ? '...' : maxRangeNow != null ? `${formatNumber(maxRangeNow, 0)} mi` : '-'}
-          newValue={(healthLoading || mileageLoading) ? '...' : maxRangeNew != null ? `${formatNumber(maxRangeNew, 0)} mi` : '-'}
+          nowValue={rangeLoading ? '...' : maxRangeNow != null ? `${formatNumber(maxRangeNow, 0)} mi` : '-'}
+          newValue={rangeLoading ? '...' : maxRangeNew != null ? `${formatNumber(maxRangeNew, 0)} mi` : '-'}
           onNewClick={() => navigate({ to: '/settings', search: `?section=vehicles&vehicleId=${vehicleId}` })}
-          loading={healthLoading || mileageLoading}
+          loading={rangeLoading}
         />
       </div>
 
@@ -126,7 +131,7 @@ function BatteryPanel({ vehicleId }: { vehicleId: string | null }) {
         />
         <StatCard
           label="Charging Cycles"
-          value={healthLoading ? '...' : formatStatNumber(health?.charging_cycles, 0)}
+          value={healthLoading ? '...' : formatStatNumber(chargingCycles, 0)}
         />
         <StatCard
           label="Energy Added"
