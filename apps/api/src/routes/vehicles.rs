@@ -105,6 +105,41 @@ struct LatestVehicleTelemetry {
     twelve_volt_health: Option<String>,
 }
 
+const PLAUSIBLE_MAX_MI_PER_KWH: f64 = 3.4;
+
+fn normalize_remaining_range_miles(
+    raw_range_mi: Option<f64>,
+    battery_level_pct: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+) -> Option<f64> {
+    let raw_range_mi = raw_range_mi.filter(|value| value.is_finite())?;
+    let battery_level_pct = battery_level_pct.filter(|value| value.is_finite())?;
+    if battery_level_pct <= 0.0 {
+        return Some(raw_range_mi);
+    }
+
+    let battery_capacity_kwh = battery_capacity_wh
+        .and_then(|wh| wh.is_finite().then_some(wh))
+        .map(|wh| if wh > 1000.0 { wh / 1000.0 } else { wh });
+    let Some(battery_capacity_kwh) = battery_capacity_kwh else {
+        return Some(raw_range_mi);
+    };
+
+    let plausible_max_range = battery_capacity_kwh * PLAUSIBLE_MAX_MI_PER_KWH;
+    let raw_max_range = raw_range_mi / battery_level_pct * 100.0;
+    if raw_max_range <= plausible_max_range {
+        return Some(raw_range_mi);
+    }
+
+    let converted_from_km = raw_range_mi / 1.609_344;
+    let converted_max_range = converted_from_km / battery_level_pct * 100.0;
+    if converted_max_range <= plausible_max_range {
+        return Some(converted_from_km);
+    }
+
+    Some(raw_range_mi)
+}
+
 #[derive(Serialize)]
 struct ConnectResponse {
     status: &'static str,
@@ -446,6 +481,13 @@ async fn vehicle_status(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
+    let vehicle = sqlx::query!(
+        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1",
+        vid
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+
     let row = sqlx::query!(
         "SELECT is_online, last_event_at, worker_health FROM riviamigo.vehicle_runtime_state \
          WHERE vehicle_id = $1",
@@ -567,6 +609,13 @@ async fn vehicle_status(
         .ota_status
         .as_deref()
         .or(latest.ota_current_status.as_deref());
+    let normalized_range_miles = normalize_remaining_range_miles(
+        latest.distance_to_empty_mi,
+        latest.battery_level,
+        latest
+            .battery_capacity_wh
+            .or_else(|| vehicle.and_then(|row| row.battery_capacity_wh)),
+    );
 
     Ok(Json(serde_json::json!({
         "vehicle_id": vid,
@@ -575,7 +624,7 @@ async fn vehicle_status(
         "last_updated": latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
         "worker_health": row.as_ref().and_then(|r| r.worker_health.as_deref()),
         "battery_level": latest.battery_level,
-        "range_miles": latest.distance_to_empty_mi,
+        "range_miles": normalized_range_miles,
         "battery_capacity_kwh": latest.battery_capacity_wh.map(|w| if w > 1000.0 { w / 1000.0 } else { w }),
         "battery_limit": latest.battery_limit,
         "power_state": latest.power_state.as_deref(),
@@ -627,6 +676,29 @@ async fn vehicle_status(
         "tire_pressure_status": tire_pressure_status,
         "software_update_status": software_update_status,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_remaining_range_miles;
+
+    #[test]
+    fn leaves_plausible_miles_untouched() {
+        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(135_000.0));
+        assert_eq!(value, Some(227.0));
+    }
+
+    #[test]
+    fn converts_implausible_km_value_to_miles() {
+        let value = normalize_remaining_range_miles(Some(380.0), Some(71.0), Some(135_000.0));
+        assert_eq!(value.map(|miles| (miles * 10.0).round() / 10.0), Some(236.1));
+    }
+
+    #[test]
+    fn leaves_high_but_plausible_miles_untouched() {
+        let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(105_000.0));
+        assert_eq!(value, Some(227.0));
+    }
 }
 
 async fn vehicle_images(

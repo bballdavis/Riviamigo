@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -52,6 +52,8 @@ async fn main() -> anyhow::Result<()> {
         jwt_keys,
         age_key: age_key.clone(),
         config: config.clone(),
+        nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
+        nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     let _supervisor =

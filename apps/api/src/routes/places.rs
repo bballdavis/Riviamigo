@@ -132,39 +132,71 @@ async fn get_place(
 
 async fn search_places(
     _auth: AuthUser,
+    State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<AddressRecord>>, AppError> {
-    let query = params.q.trim();
+    let query = params.q.trim().to_lowercase();
     if query.len() < 3 {
         return Ok(Json(Vec::new()));
     }
 
+    // --- cache check (1 hr TTL) ------------------------------------------
+    {
+        let cache = state.nominatim_cache.read().await;
+        if let Some((cached_at, value)) = cache.get(&query) {
+            if cached_at.elapsed() < Duration::from_secs(3600) {
+                let suggestions: Vec<AddressRecord> = value
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .filter_map(|v| value_to_address_record(v.clone()))
+                    .collect();
+                return Ok(Json(suggestions));
+            }
+        }
+    }
+
+    // --- rate-limit: ≥ 1100 ms between Nominatim calls --------------------
+    let sleep_for = {
+        let mut next = state.nominatim_next_call.lock().await;
+        let now = std::time::Instant::now();
+        let wait = next.saturating_duration_since(now);
+        *next = now + wait + Duration::from_millis(1100);
+        wait
+    };
+    if !sleep_for.is_zero() {
+        tokio::time::sleep(sleep_for).await;
+    }
+
+    // --- Nominatim request -----------------------------------------------
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(8))
         .build()
         .map_err(|error| AppError::Internal(anyhow!("address search client build failed: {error}")))?;
 
+    let limit = params.limit.unwrap_or(5).clamp(1, 10).to_string();
     let response = match client
         .get("https://nominatim.openstreetmap.org/search")
-        .header(reqwest::header::USER_AGENT, "Riviamigo/0.1 places search")
+        .header(reqwest::header::USER_AGENT, "riviamigo-api/0.1 (contact: support@riviamigo.com)")
         .query(&[
             ("format", "jsonv2"),
             ("addressdetails", "1"),
-            ("limit", &params.limit.unwrap_or(5).clamp(1, 10).to_string()),
-            ("q", query),
+            ("limit", &limit),
+            ("q", params.q.trim()),
         ])
         .send()
         .await
     {
-        Ok(response) => response,
+        Ok(r) => r,
         Err(error) => {
             warn!(error = %error, query = %query, "places.address_search_request_failed");
             return Ok(Json(Vec::new()));
         }
     };
 
+    // Surface 429 as a log warning but don't fail the request
     let response = match response.error_for_status() {
-        Ok(response) => response,
+        Ok(r) => r,
         Err(error) => {
             warn!(error = %error, query = %query, "places.address_search_http_error");
             return Ok(Json(Vec::new()));
@@ -172,12 +204,20 @@ async fn search_places(
     };
 
     let rows: Vec<Value> = match response.json().await {
-        Ok(rows) => rows,
+        Ok(r) => r,
         Err(error) => {
             warn!(error = %error, query = %query, "places.address_search_decode_failed");
             return Ok(Json(Vec::new()));
         }
     };
+
+    // --- populate cache --------------------------------------------------
+    {
+        let mut cache = state.nominatim_cache.write().await;
+        // Evict expired entries to keep memory bounded
+        cache.retain(|_, (cached_at, _)| cached_at.elapsed() < Duration::from_secs(3600));
+        cache.insert(query.clone(), (std::time::Instant::now(), serde_json::Value::Array(rows.clone())));
+    }
 
     let suggestions = rows
         .into_iter()
