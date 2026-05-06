@@ -93,7 +93,8 @@ async fn list_trips(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
                 t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                sg.name AS \"start_place?\", eg.name AS \"end_place?\", \
+                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS \"start_place?\", \
+                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS \"end_place?\", \
                 sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\" \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
@@ -143,7 +144,8 @@ async fn get_trip(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
                 t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                sg.name AS \"start_place?\", eg.name AS \"end_place?\", \
+                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS \"start_place?\", \
+                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS \"end_place?\", \
                 sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\" \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \

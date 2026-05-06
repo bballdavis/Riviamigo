@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import { api, useTrips } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { TripMapChart, type TripMapRoute } from '@riviamigo/ui/charts';
-import { formatEfficiency, formatKwh, formatMiles } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import type { Row } from '@tanstack/react-table';
@@ -51,11 +50,6 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
       .filter((route) => route.track.length > 1)
   ), [trackDataVersion, trackQueries, trips]);
 
-  const summaryTrips = selectedIds.length
-    ? trips.filter((trip) => selectedIdSet.has(trip.id))
-    : trips;
-  const summary = summarizeTrips(summaryTrips);
-
   const toggleTrip = React.useCallback((tripId: string) => {
     setSelectedIds((current) => (
       current.includes(tripId)
@@ -70,13 +64,6 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
 
   return (
     <div className="flex flex-col h-full gap-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Metric label={selectedIds.length ? 'Selected Trips' : 'Trips'} value={summary.count} />
-        <Metric label="Distance" value={formatMiles(summary.distanceMi)} />
-        <Metric label="Energy" value={summary.energyKwh === null ? '-' : formatKwh(summary.energyKwh)} />
-        <Metric label="Efficiency" value={summary.efficiencyWhMi === null ? '-' : formatEfficiency(summary.efficiencyWhMi)} />
-      </div>
-
       <TripMapChart
         track={[]}
         routes={routes}
@@ -125,30 +112,6 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
       )}
     </div>
   );
-}
-
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-fg-tertiary">{label}</div>
-      <div className="mt-1 font-mono text-sm font-semibold text-fg">{value}</div>
-    </div>
-  );
-}
-
-function summarizeTrips(trips: TripRow[]) {
-  const distanceMi = trips.reduce((sum, trip) => sum + safeNumber(trip.distance_mi), 0);
-  const energyKwh = trips.reduce((sum, trip) => sum + safeNumber(trip.energy_used_kwh), 0);
-  return {
-    count: trips.length,
-    distanceMi,
-    energyKwh: energyKwh > 0 ? energyKwh : null,
-    efficiencyWhMi: energyKwh > 0 && distanceMi > 0 ? (energyKwh * 1000) / distanceMi : null,
-  };
-}
-
-function safeNumber(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 registerWidget({

@@ -8,8 +8,24 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
-  useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [{ id: 'v1', display_name: 'Forest R1S' }] }),
+  useCurrentVehicleStatus: () => ({
+    data: {
+      vehicle_id: 'v1',
+      battery_level: 71,
+      range_miles: 227.2,
+      battery_capacity_kwh: 125,
+      power_state: 'ready',
+      charger_state: 'Disconnected',
+      speed_mph: 0,
+      altitude_m: 0,
+      latitude: 0,
+      longitude: 0,
+      is_online: true,
+      last_updated: '2024-01-01T00:00:00Z',
+    },
+    isLoading: false,
+  }),
   useBatteryHealth: () => ({
     data: {
       usable_now_kwh: 125,
@@ -77,6 +93,9 @@ describe('Battery dashboard page', () => {
     expect(screen.getByText('Charging Cycles')).toBeInTheDocument();
     expect(screen.getByText('Battery Capacity by Mileage')).toBeInTheDocument();
     expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
+    expect(screen.getByText('320 mi')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '/333 mi' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '/130.0 kWh' })).toBeInTheDocument();
     expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
   });
 });

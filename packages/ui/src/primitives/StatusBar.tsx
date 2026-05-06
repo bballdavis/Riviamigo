@@ -75,8 +75,12 @@ export function StatusBar({
         <span className="text-xs text-fg-tertiary truncate max-w-[120px]">{vehicleName}</span>
       )}
 
-      {!compact && socPercent !== undefined && (
-        <div className="flex items-center gap-1 ml-auto">
+      {socPercent !== undefined && (
+        <div
+          className={cn('flex items-center gap-1 ml-auto', compact && 'gap-0')}
+          title={`Battery status: ${Math.round(socPercent)}%`}
+          aria-label={`Battery status: ${Math.round(socPercent)}%`}
+        >
           {isCharging ? (
             <BatteryCharging className="h-3.5 w-3.5 text-accent" />
           ) : (
@@ -87,8 +91,8 @@ export function StatusBar({
               )}
             />
           )}
-          <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>
-          {rangeEstimateMi !== undefined && (
+          {!compact && <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>}
+          {!compact && rangeEstimateMi !== undefined && (
             <span className="text-xs text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>
           )}
         </div>

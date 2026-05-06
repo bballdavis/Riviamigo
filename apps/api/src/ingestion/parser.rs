@@ -46,7 +46,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
 
         battery_level: extract_f64(state, "/batteryLevel/value"),
         battery_capacity_wh: extract_f64(state, "/batteryCapacity/value").map(kwh_to_wh),
-        distance_to_empty_mi: extract_f64(state, "/distanceToEmpty/value"),
+        distance_to_empty_mi: extract_f64(state, "/distanceToEmpty/value").map(km_to_miles),
         battery_limit: extract_f64(state, "/batteryLimit/value"),
 
         power_state: extract_str(state, "/powerState/value").and_then(|s| s.parse().ok()),
@@ -185,6 +185,10 @@ fn meters_to_miles(meters: f64) -> f64 {
     meters / 1609.344
 }
 
+fn km_to_miles(km: f64) -> f64 {
+    km / 1.609_344
+}
+
 fn kwh_to_wh(kwh: f64) -> f64 {
     kwh * 1000.0
 }
@@ -320,6 +324,20 @@ mod tests {
 
         let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
         assert_eq!(ev.odometer_miles, Some(10.0));
+    }
+
+    #[test]
+    fn parses_distance_to_empty_as_miles() {
+        let msg = serde_json::json!({
+            "type": "next",
+            "payload": { "data": { "vehicleState": {
+                "distanceToEmpty": { "timeStamp": "2024-01-15T10:30:00Z", "value": 16.09344 }
+            }}}
+        })
+        .to_string();
+
+        let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
+        assert_eq!(ev.distance_to_empty_mi, Some(10.0));
     }
 
     #[test]

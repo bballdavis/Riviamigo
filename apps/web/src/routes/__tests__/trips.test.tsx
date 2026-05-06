@@ -76,7 +76,7 @@ describe('Trips page', () => {
   it('renders the trips dashboard shell', () => {
     render(<TripsContent />);
 
-    expect(screen.getByText('Trips')).toBeInTheDocument();
+    expect(screen.getByText('Drives')).toBeInTheDocument();
     expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
     expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });
