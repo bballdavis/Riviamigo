@@ -206,10 +206,10 @@ describe('Settings page', () => {
     const hooks = await import('@riviamigo/hooks');
     vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
     renderSettings();
-    fireEvent.click(screen.getByText('Stewardship'));
+    fireEvent.click(screen.getByText('Raw Data'));
 
     await waitFor(() => {
-      expect(screen.getByText('Rivian Stewardship')).toBeInTheDocument();
+      expect(screen.getByText('DB Stats')).toBeInTheDocument();
       expect(screen.getByText('Active collectors')).toBeInTheDocument();
       expect(screen.getByText('Heartbeats ignored')).toBeInTheDocument();
     });

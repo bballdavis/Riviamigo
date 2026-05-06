@@ -3,7 +3,8 @@ import GridLayout, { useContainerWidth } from 'react-grid-layout';
 import type { LayoutItem } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { v4 as uuidv4 } from 'uuid';
-import { X, GripVertical, Plus, AlignHorizontalDistributeCenter, RotateCcw, Search } from 'lucide-react';
+import { X, GripVertical, Plus, AlignHorizontalDistributeCenter, RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
+import { useMetricCatalog } from '@riviamigo/hooks';
 import { getAllWidgets, getWidget } from './registry';
 import { WidgetHost } from './WidgetHost';
 import type { DashboardConfig, WidgetInstance } from './schema';
@@ -69,6 +70,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState(false);
   const [search, setSearch] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const { width, containerRef, mounted } = useContainerWidth();
 
   const update = useCallback(
@@ -100,7 +102,9 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
     const instance: WidgetInstance = {
       id: uuidv4(),
       widgetId,
+      title: def.title,
       layout: { x: 0, y: maxY, w: def.defaultSize.w, h: def.defaultSize.h },
+      options: def.defaultOptions,
     };
     update([...widgets, instance]);
   }
@@ -131,6 +135,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
   }
 
   const allWidgets = getAllWidgets();
+  const editingWidget = editingId ? widgets.find((w) => w.id === editingId) ?? null : null;
   const filteredWidgets = search.trim()
     ? allWidgets.filter(
         (d) =>
@@ -214,6 +219,14 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                       <X className="h-4 w-4" />
                     </button>
 
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setEditingId(w.id); }}
+                      title="Edit widget"
+                      className="absolute top-1.5 left-9 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition text-fg-tertiary hover:text-fg hover:bg-black/20"
+                    >
+                      <SlidersHorizontal className="h-4 w-4" />
+                    </button>
+
                     {/* Drag handle — top-right, hover-only */}
                     <div
                       className="drag-handle absolute top-1.5 right-1.5 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition cursor-grab text-fg-tertiary hover:text-fg hover:bg-black/20"
@@ -268,6 +281,157 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
           </div>
         </aside>
       </div>
+      {editingWidget ? (
+        <WidgetEditModal
+          widget={editingWidget}
+          onClose={() => setEditingId(null)}
+          onSave={(next) => {
+            update(widgets.map((w) => (w.id === next.id ? next : w)));
+            setEditingId(null);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function WidgetEditModal({
+  widget,
+  onClose,
+  onSave,
+}: {
+  widget: WidgetInstance;
+  onClose: () => void;
+  onSave: (next: WidgetInstance) => void;
+}) {
+  const def = getWidget(widget.widgetId);
+  const { data: catalog = [] } = useMetricCatalog();
+  const [title, setTitle] = useState(widget.title ?? def?.title ?? '');
+  const [optionsText, setOptionsText] = useState(() => JSON.stringify(widget.options ?? def?.defaultOptions ?? {}, null, 2));
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const parsedOptions = React.useMemo(() => {
+    try {
+      return JSON.parse(optionsText || '{}') as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }, [optionsText]);
+
+  function patchOption(key: string, value: unknown) {
+    const next = { ...parsedOptions, [key]: value };
+    setOptionsText(JSON.stringify(next, null, 2));
+    setJsonError(null);
+  }
+
+  function handleSave() {
+    try {
+      const options = JSON.parse(optionsText || '{}') as Record<string, unknown>;
+      onSave({ ...widget, title: title.trim() || undefined, options });
+    } catch (error) {
+      setJsonError(error instanceof Error ? error.message : 'Invalid JSON');
+    }
+  }
+
+  const metricMode = def?.editMode === 'metric';
+  const metric = typeof parsedOptions.metric === 'string' ? parsedOptions.metric : 'total_miles';
+  const chartType = typeof parsedOptions.chartType === 'string' ? parsedOptions.chartType : 'line';
+  const valueSize = typeof parsedOptions.valueSize === 'string' ? parsedOptions.valueSize : 'md';
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 px-4">
+      <div className="w-full max-w-xl rounded-xl border border-border bg-bg p-4 shadow-xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-fg">Edit Widget</h2>
+            <p className="text-xs text-fg-tertiary">{def?.title ?? widget.widgetId}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-fg-tertiary hover:bg-bg-elevated hover:text-fg">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid gap-3">
+          <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+            Title
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+            />
+          </label>
+
+          {metricMode ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+                Sensor
+                <select
+                  value={metric}
+                  onChange={(e) => patchOption('metric', e.target.value)}
+                  className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                >
+                  {catalog.map((entry) => (
+                    <option key={entry.id} value={entry.id}>{entry.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+                Background Chart
+                <select
+                  value={chartType}
+                  onChange={(e) => patchOption('chartType', e.target.value)}
+                  className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                >
+                  <option value="none">None</option>
+                  <option value="line">Line</option>
+                  <option value="area">Area</option>
+                  <option value="bar">Bar</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+                Subtitle
+                <input
+                  value={typeof parsedOptions.subtitle === 'string' ? parsedOptions.subtitle : ''}
+                  onChange={(e) => patchOption('subtitle', e.target.value)}
+                  className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+                Value Size
+                <select
+                  value={valueSize}
+                  onChange={(e) => patchOption('valueSize', e.target.value)}
+                  className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                >
+                  <option value="sm">Small</option>
+                  <option value="md">Medium</option>
+                  <option value="lg">Large</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+
+          <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+            Options JSON
+            <textarea
+              value={optionsText}
+              onChange={(e) => setOptionsText(e.target.value)}
+              rows={metricMode ? 7 : 12}
+              spellCheck={false}
+              className="rounded-lg border border-border bg-bg-surface px-3 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
+            />
+          </label>
+          {jsonError ? <p className="text-xs text-red-400">{jsonError}</p> : null}
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-border px-3 py-2 text-xs text-fg-secondary hover:bg-bg-elevated">
+            Cancel
+          </button>
+          <button type="button" onClick={handleSave} className="rounded-lg bg-accent px-3 py-2 text-xs font-medium text-white hover:brightness-110">
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -63,7 +63,8 @@ interface RollingPoint {
 
 const DriveTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: DrivePoint }> }) => {
   if (!active || !payload?.length) return null;
-  const p = payload[0].payload;
+  const p = payload[0]?.payload;
+  if (!p) return null;
   return (
     <div className="min-w-[160px] rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm shadow-lg">
       <div className="font-semibold text-fg truncate max-w-[200px]">{p.label}</div>
@@ -81,7 +82,8 @@ const DriveTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{
 
 const RollingTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: RollingPoint }> }) => {
   if (!active || !payload?.length) return null;
-  const p = payload[0].payload;
+  const p = payload[0]?.payload;
+  if (!p) return null;
   const unit = efficiencyUnit();
   return (
     <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm shadow-lg">

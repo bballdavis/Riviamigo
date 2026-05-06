@@ -11,10 +11,12 @@ export interface WidgetCtx {
 
 export interface WidgetDef {
   id: string;
-  category: 'stat' | 'chart' | 'table';
+  category: 'stat' | 'chart' | 'table' | 'custom';
   title: string;
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
+  defaultOptions?: Record<string, unknown>;
+  editMode?: 'metric' | 'json' | 'none';
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }
 

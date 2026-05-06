@@ -59,10 +59,9 @@ describe('Efficiency dashboard page', () => {
     expect(screen.getByText('Efficiency')).toBeInTheDocument();
   });
 
-  it('renders the temperature efficiency picker without duplicate widgets', () => {
+  it('renders the modular dashboard renderer in view mode', () => {
     render(<EfficiencyDashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />);
-    expect(screen.getByText('Temperature - Driving Efficiency')).toBeInTheDocument();
-    expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
-    expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search charts')).not.toBeInTheDocument();
   });
 });

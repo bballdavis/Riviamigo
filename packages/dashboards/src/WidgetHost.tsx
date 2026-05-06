@@ -21,7 +21,7 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
   const Component = def.component;
   return (
     <div className="h-full">
-      {instance.title && (
+      {instance.title && def.category !== 'stat' && (
         <p className="text-xs font-medium text-fg-tertiary uppercase tracking-wider mb-2">
           {instance.title}
         </p>

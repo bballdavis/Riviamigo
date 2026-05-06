@@ -227,6 +227,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@riviamigo/types':
+        specifier: workspace:*
+        version: link:../types
       '@tanstack/react-table':
         specifier: ^8.21.0
         version: 8.21.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -263,6 +266,9 @@ importers:
       tailwind-merge:
         specifier: ^2.3.0
         version: 2.6.1
+      uplot:
+        specifier: ^1.6.32
+        version: 1.6.32
     devDependencies:
       '@riviamigo/config':
         specifier: workspace:*
@@ -273,6 +279,9 @@ importers:
       '@storybook/addon-essentials':
         specifier: ^8.6.0
         version: 8.6.14(@types/react@18.3.28)(storybook@8.6.18(prettier@3.8.3))
+      '@storybook/react':
+        specifier: ^8.6.18
+        version: 8.6.18(@storybook/test@8.6.18(storybook@8.6.18(prettier@3.8.3)))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(storybook@8.6.18(prettier@3.8.3))(typescript@6.0.3)
       '@storybook/react-vite':
         specifier: ^8.6.0
         version: 8.6.18(@storybook/test@8.6.18(storybook@8.6.18(prettier@3.8.3)))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(rollup@4.60.2)(storybook@8.6.18(prettier@3.8.3))(typescript@6.0.3)(vite@5.4.21(@types/node@22.19.17)(lightningcss@1.32.0))
@@ -3137,6 +3146,9 @@ packages:
     hasBin: true
     peerDependencies:
       browserslist: '>= 4.21.0'
+
+  uplot@1.6.32:
+    resolution: {integrity: sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==}
 
   use-sync-external-store@1.6.0:
     resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
@@ -6065,6 +6077,8 @@ snapshots:
       browserslist: 4.28.2
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  uplot@1.6.32: {}
 
   use-sync-external-store@1.6.0(react@18.3.1):
     dependencies:

@@ -1,6 +1,10 @@
 export { CHART_COLORS, CHART_MARGINS, CHART_FONT, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
+export { RichTimeSeriesChart } from './RichTimeSeriesChart';
+export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
+export { MiniSparkline } from './MiniSparkline';
+export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
 export { SocAreaChart } from './SocAreaChart';
 export type { SocAreaChartProps, SocDataPoint } from './SocAreaChart';
 export { RangeAreaChart } from './RangeAreaChart';
