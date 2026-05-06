@@ -97,11 +97,9 @@ describe('Charging dashboard page', () => {
     expect(screen.getByText('Charging')).toBeInTheDocument();
   });
 
-  it('renders the charge-level picker without duplicate widgets', () => {
+  it('renders the modular dashboard renderer in view mode', () => {
     render(<ChargingDashboardPage navKey="charging" slug="charging" title="Charging" />);
-    expect(screen.getByText('Charge Level')).toBeInTheDocument();
-    expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
-    expect(screen.getByText('Charging Cycles')).toBeInTheDocument();
-    expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search charts')).not.toBeInTheDocument();
   });
 });

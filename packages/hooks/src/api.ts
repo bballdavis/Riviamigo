@@ -9,7 +9,8 @@ import type {
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
-  BatteryMileagePoint, RivianStewardshipResponse,
+  BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
+  MetricValueResponse,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -430,6 +431,31 @@ class ApiClient {
       total_charge_sessions: stats.total_charging_sessions,
       total_cost_usd: stats.estimated_total_cost_usd,
     } satisfies StatsSummary;
+  }
+
+  async getMetricCatalog(): Promise<MetricCatalogEntry[]> {
+    const response = await this.request<{ metrics: MetricCatalogEntry[] }>('GET', '/v1/metrics/catalog');
+    return response.metrics ?? [];
+  }
+
+  async getMetricValue(vehicleId: string, metric: string): Promise<MetricValueResponse> {
+    return this.request('GET', '/v1/metrics/value', undefined, { vehicle_id: vehicleId, metric });
+  }
+
+  async getMetricSeries(
+    vehicleId: string,
+    metric: string,
+    from: string,
+    to: string,
+    bucket = 'day',
+  ): Promise<MetricSeriesPoint[]> {
+    return this.request('GET', '/v1/metrics/series', undefined, {
+      vehicle_id: vehicleId,
+      metric,
+      from,
+      to,
+      bucket,
+    });
   }
 
   async getRawTelemetry(vehicleId: string, limit = 25) {

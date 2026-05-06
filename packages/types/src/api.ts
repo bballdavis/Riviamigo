@@ -10,6 +10,31 @@ export interface TimeSeriesPoint {
   value: number;
 }
 
+export type MetricValueKind = 'number' | 'percent' | 'distance' | 'energy' | 'temperature' | 'pressure' | 'speed';
+
+export interface MetricCatalogEntry {
+  id: string;
+  label: string;
+  unit: string | null;
+  kind: MetricValueKind;
+  source: 'summary' | 'telemetry' | 'trips' | 'charging' | 'battery';
+  supports_series: boolean;
+  default_aggregation: 'latest' | 'sum' | 'avg' | 'max';
+}
+
+export interface MetricValueResponse {
+  metric: string;
+  value: number | null;
+  unit: string | null;
+  label: string;
+  ts: string | null;
+}
+
+export interface MetricSeriesPoint {
+  ts: string;
+  value: number | null;
+}
+
 export interface PhantomDrainPoint {
   date: string;
   drain_pct: number;

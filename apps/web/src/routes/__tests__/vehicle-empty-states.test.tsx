@@ -26,6 +26,8 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatPercent: (v: number) => `${v}%`,
   formatMiles: (v: number) => `${v} mi`,
   formatEfficiency: (v: number) => `${v} Wh/mi`,
+  getEfficiencyDisplay: () => 'distance_per_energy',
+  setEfficiencyDisplay: vi.fn(),
   cn: (...args: unknown[]) => args.filter(Boolean).join(' '),
 }));
 

@@ -88,14 +88,9 @@ describe('Battery dashboard page', () => {
     expect(screen.getByText('Battery')).toBeInTheDocument();
   });
 
-  it('renders Battery Health stats and chart picker without duplicate widgets', () => {
+  it('renders the modular dashboard renderer in view mode', () => {
     render(<BatteryDashboardPage navKey="battery" slug="battery" title="Battery" />);
-    expect(screen.getByText('Charging Cycles')).toBeInTheDocument();
-    expect(screen.getByText('Battery Capacity by Mileage')).toBeInTheDocument();
-    expect(screen.getByLabelText('Search charts')).toBeInTheDocument();
-    expect(screen.getByText('320 mi')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '/333 mi' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '/130.0 kWh' })).toBeInTheDocument();
-    expect(screen.queryByTestId('dashboard-renderer')).not.toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search charts')).not.toBeInTheDocument();
   });
 });

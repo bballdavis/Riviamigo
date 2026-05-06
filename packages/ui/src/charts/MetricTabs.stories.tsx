@@ -20,7 +20,7 @@ const TABS = [
 ];
 
 function InteractiveWrapper({ tabs = TABS }: { tabs?: typeof TABS }) {
-  const [active, setActive] = useState(tabs[0].key);
+  const [active, setActive] = useState(tabs[0]?.key ?? 'soc');
   return (
     <MetricTabs tabs={tabs} active={active} onChange={setActive} title="Battery" subtitle="30-day history">
       <div className="h-48 flex items-center justify-center text-fg-tertiary text-sm">
@@ -37,7 +37,11 @@ export const Default: Story = {
 
 export const DropdownMode: Story = {
   render: () => {
-    const manyTabs = Array.from({ length: 7 }, (_, i) => ({ key: `t${i}`, label: `Metric ${i + 1}` }));
+    const manyTabs = Array.from({ length: 7 }, (_, i) => ({
+      key: `t${i}`,
+      label: `Metric ${i + 1}`,
+      icon: <Activity className="w-3.5 h-3.5" />,
+    }));
     return <InteractiveWrapper tabs={manyTabs} />;
   },
   args: { tabs: [], active: 't0', onChange: () => {}, children: null },
