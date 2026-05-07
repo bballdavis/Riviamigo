@@ -217,12 +217,19 @@ function shouldUseBundledDefault(
   bundledDefault: DashboardConfig | undefined,
 ) {
   if (!apiConfig || !bundledDefault) return false;
-  if (!apiConfig.isDefault || !apiConfig.isLocked) return false;
+  if (!apiConfig.isDefault || !apiConfig.isLocked || apiConfig.ownerId) return false;
 
-  const apiWidgets = Array.isArray(apiConfig.widgets) ? apiConfig.widgets : [];
-  const bundledWidgets = Array.isArray(bundledDefault.widgets) ? bundledDefault.widgets : [];
-  const apiHasCustomPageWidget = apiWidgets.some((widget) => widget.widgetId.startsWith('custom.'));
-  const bundledHasCustomPageWidget = bundledWidgets.some((widget) => widget.widgetId.startsWith('custom.'));
+  return getDefaultSignature(apiConfig) !== getDefaultSignature(bundledDefault);
+}
 
-  return bundledHasCustomPageWidget && !apiHasCustomPageWidget;
+function getDefaultSignature(config: DashboardConfig) {
+  return JSON.stringify({
+    controls: config.controls,
+    widgets: config.widgets.map((widget) => ({
+      widgetId: widget.widgetId,
+      title: widget.title ?? null,
+      options: widget.options ?? null,
+      layout: widget.layout,
+    })),
+  });
 }

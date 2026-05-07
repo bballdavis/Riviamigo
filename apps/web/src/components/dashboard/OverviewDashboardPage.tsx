@@ -1,5 +1,5 @@
 import React from 'react';
-import { useUpdateDashboard } from '@riviamigo/dashboards';
+import { useCreateDashboard, useUpdateDashboard } from '@riviamigo/dashboards';
 import {
   createDefaultDashboardEditActions,
   renderDefaultDashboardTitleAction,
@@ -9,6 +9,7 @@ import { DashboardPageShell } from './DashboardPageShell';
 
 export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
+  const createDashboard = useCreateDashboard();
 
   return (
     <DashboardPageShell
@@ -16,7 +17,7 @@ export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProp
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions(updateDashboard)}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard })}
       showEfficiencyDisplayToggle
     />
   );

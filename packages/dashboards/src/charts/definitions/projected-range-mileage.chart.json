@@ -1,0 +1,12 @@
+{
+  "id": "projected-range-mileage",
+  "title": "Projected Range by Mileage",
+  "description": "Projected range plotted against odometer mileage.",
+  "pages": ["overview", "battery"],
+  "source": "projected_range_mileage",
+  "mode": "line",
+  "yUnit": "mi",
+  "defaultSize": { "w": 6, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No projected range mileage data recorded yet"
+}

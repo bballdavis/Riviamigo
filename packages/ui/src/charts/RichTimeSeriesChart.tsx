@@ -19,14 +19,14 @@ export interface RichTimeSeriesChartProps {
   series: RichSeries[];
   height?: number;
   loading?: boolean;
-  emptyTitle?: string;
-  yUnit?: string;
-  className?: string;
-  mode?: 'line' | 'area' | 'bar' | 'scatter';
+  emptyTitle?: string | undefined;
+  yUnit?: string | undefined;
+  className?: string | undefined;
+  mode?: 'line' | 'area' | 'bar' | 'scatter' | undefined;
   xTime?: boolean;
-  xUnit?: string;
-  xValueFormatter?: (value: number) => string;
-  yValueFormatter?: (value: number | null | undefined, unit?: string) => string;
+  xUnit?: string | undefined;
+  xValueFormatter?: ((value: number) => string) | undefined;
+  yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
 }
 
 function toSeconds(value: string | number | Date) {

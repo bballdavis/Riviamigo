@@ -1,0 +1,12 @@
+{
+  "id": "soc-history",
+  "title": "Battery Level",
+  "description": "State of charge over time.",
+  "pages": ["overview", "battery"],
+  "source": "soc_history",
+  "mode": "area",
+  "yUnit": "%",
+  "defaultSize": { "w": 6, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No battery level history for this period"
+}

@@ -1,10 +1,11 @@
 import React from 'react';
-import { useUpdateDashboard } from '@riviamigo/dashboards';
+import { useCreateDashboard, useUpdateDashboard } from '@riviamigo/dashboards';
 import { createDefaultDashboardEditActions, renderDefaultDashboardTitleAction, type DashboardPageProps } from './DashboardPage';
 import { DashboardPageShell } from './DashboardPageShell';
 
 export function EfficiencyDashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
+  const createDashboard = useCreateDashboard();
 
   return (
     <DashboardPageShell
@@ -12,7 +13,7 @@ export function EfficiencyDashboardPage({ navKey, slug, title }: DashboardPagePr
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions(updateDashboard)}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard })}
       showEfficiencyDisplayToggle
     />
   );

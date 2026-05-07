@@ -1,0 +1,11 @@
+{
+  "id": "efficiency-trend",
+  "title": "Efficiency Trend",
+  "description": "Daily driving efficiency and rolling trend.",
+  "pages": ["overview", "efficiency", "trips"],
+  "source": "efficiency_trend",
+  "mode": "line",
+  "defaultSize": { "w": 12, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No efficiency data for this period"
+}
