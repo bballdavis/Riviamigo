@@ -10,3 +10,4 @@ import './chart/EfficiencyChartWidgets';
 import './chart/ChargingChartWidgets';
 import './table/ChargingTableWidget';
 import './table/TripsTableWidget';
+import './custom/LegacyPageWidgets';

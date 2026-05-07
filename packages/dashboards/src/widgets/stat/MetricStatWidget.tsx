@@ -43,20 +43,20 @@ export function MetricStatWidget({ instance, ctx }: { instance: WidgetInstance; 
   const displayValue = formatMetricValue(value?.value, value?.unit);
 
   return (
-    <Card className="relative flex h-full min-h-0 flex-col overflow-hidden border-accent/20">
+    <Card padding="none" className="relative flex h-full min-h-0 flex-col overflow-hidden border-accent/20 p-3">
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">{title}</p>
-          {options.subtitle ? <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p> : null}
+          {options.subtitle ? <p className="mt-0.5 truncate text-[11px] text-fg-tertiary">{options.subtitle}</p> : null}
         </div>
         <Activity className="h-4 w-4 shrink-0 text-accent" />
       </div>
 
-      <div className="relative z-10 mt-2 flex items-baseline gap-1">
+      <div className="relative z-10 mt-1.5 flex items-baseline gap-1">
         <span
           className={cn(
             'font-mono font-semibold tabular-nums tracking-tight text-accent',
-            options.valueSize === 'sm' ? 'text-xl' : options.valueSize === 'lg' ? 'text-3xl' : 'text-2xl',
+            options.valueSize === 'sm' ? 'text-lg' : options.valueSize === 'lg' ? 'text-2xl' : 'text-xl',
           )}
         >
           {displayValue}
@@ -64,8 +64,8 @@ export function MetricStatWidget({ instance, ctx }: { instance: WidgetInstance; 
       </div>
 
       {options.chartType !== 'none' ? (
-        <div className="mt-auto pt-2 opacity-90">
-          <MiniSparkline data={series} type={options.chartType} height={44} />
+        <div className="mt-auto pt-1 opacity-90">
+          <MiniSparkline data={series} type={options.chartType} height={26} />
         </div>
       ) : null}
     </Card>
@@ -76,8 +76,8 @@ registerWidget({
   id: 'metric.stat',
   category: 'stat',
   title: 'Sensor Reading',
-  defaultSize: { w: 3, h: 2 },
-  minSize: { w: 2, h: 2 },
+  defaultSize: { w: 3, h: 1 },
+  minSize: { w: 2, h: 1 },
   defaultOptions: {
     metric: 'total_miles',
     subtitle: 'Daily activity',

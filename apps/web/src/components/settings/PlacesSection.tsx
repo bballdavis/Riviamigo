@@ -64,6 +64,9 @@ function buildNextSchedule(schedule: ScheduleDraft[]) {
   const nextSchedule = [...schedule];
   const lastIndex = nextSchedule.length - 1;
   const lastPeriod = nextSchedule[lastIndex];
+  if (!lastPeriod) {
+    return normalizeScheduleEdges([{ label: 'All day', start: '00:00', end: '24:00', rate: '0' }]);
+  }
   const startMinute = parseTimeToMinute(lastPeriod.start, false);
   const endMinute = parseTimeToMinute(lastPeriod.end, true);
 
@@ -89,15 +92,16 @@ function buildNextSchedule(schedule: ScheduleDraft[]) {
   return normalizeScheduleEdges(nextSchedule);
 }
 
-function normalizeScheduleEdges(schedule: ScheduleDraft[]) {
+function normalizeScheduleEdges(schedule: ScheduleDraft[]): ScheduleDraft[] {
   if (schedule.length === 0) {
     return [{ label: 'All day', start: '00:00', end: '24:00', rate: '0' }];
   }
 
-  return schedule.map((period, index) => ({
-    ...period,
+  return schedule.map((period, index): ScheduleDraft => ({
+    label: period.label,
     start: index === 0 ? '00:00' : period.start,
     end: index === schedule.length - 1 ? '24:00' : period.end,
+    rate: period.rate,
   }));
 }
 
@@ -199,7 +203,10 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       ));
 
       if (syncNextStart && index < schedule.length - 1 && updates.end) {
-        schedule[index + 1] = { ...schedule[index + 1], start: updates.end };
+        const nextPeriod = schedule[index + 1];
+        if (nextPeriod) {
+          schedule[index + 1] = { ...nextPeriod, start: updates.end };
+        }
       }
 
       return { ...current, schedule: normalizeScheduleEdges(schedule) };
@@ -568,7 +575,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                       </Badge>
                     )}
                     {place.is_work && <Badge variant="default" className="text-xs">Work</Badge>}
-                    {!place.is_home && !place.is_work && <Badge variant="secondary" className="text-xs">POI</Badge>}
+                    {!place.is_home && !place.is_work && <Badge variant="default" className="text-xs">POI</Badge>}
                     {place.charging && (
                       <Badge variant="default" className="inline-flex items-center gap-1 text-xs">
                         <Zap className="h-3 w-3" />

@@ -71,7 +71,8 @@ export function DashboardPageShell({
 
   const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
   const localDefault = getDefaultBySlug(slug);
-  const savedConfig: DashboardConfig | undefined = apiConfig ?? localDefault;
+  const savedConfig: DashboardConfig | undefined =
+    shouldUseBundledDefault(apiConfig, localDefault) ? localDefault : apiConfig ?? localDefault;
 
   const [localConfig, setLocalConfig] = useState<DashboardConfig | null>(null);
   const currentEditMode = controlledEditMode ?? internalEditMode;
@@ -209,4 +210,19 @@ export function DashboardPageShell({
       </AppLayout>
     </AuthGuard>
   );
+}
+
+function shouldUseBundledDefault(
+  apiConfig: DashboardConfig | undefined,
+  bundledDefault: DashboardConfig | undefined,
+) {
+  if (!apiConfig || !bundledDefault) return false;
+  if (!apiConfig.isDefault || !apiConfig.isLocked) return false;
+
+  const apiWidgets = Array.isArray(apiConfig.widgets) ? apiConfig.widgets : [];
+  const bundledWidgets = Array.isArray(bundledDefault.widgets) ? bundledDefault.widgets : [];
+  const apiHasCustomPageWidget = apiWidgets.some((widget) => widget.widgetId.startsWith('custom.'));
+  const bundledHasCustomPageWidget = bundledWidgets.some((widget) => widget.widgetId.startsWith('custom.'));
+
+  return bundledHasCustomPageWidget && !apiHasCustomPageWidget;
 }

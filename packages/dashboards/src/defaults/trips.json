@@ -8,9 +8,7 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d5000005-0000-0000-0000-000000000001", "widgetId": "metric.stat", "title": "Miles Driven", "options": { "metric": "total_miles", "subtitle": "Daily distance", "chartType": "line", "valueSize": "md" }, "layout": { "x": 0, "y": 0, "w": 4, "h": 2 } },
-    { "id": "d5000005-0000-0000-0000-000000000002", "widgetId": "metric.stat", "title": "Trips", "options": { "metric": "total_trips", "subtitle": "Daily count", "chartType": "bar", "valueSize": "md" }, "layout": { "x": 4, "y": 0, "w": 4, "h": 2 } },
-    { "id": "d5000005-0000-0000-0000-000000000003", "widgetId": "metric.stat", "title": "Efficiency", "options": { "metric": "avg_efficiency", "subtitle": "Daily average", "chartType": "line", "valueSize": "md" }, "layout": { "x": 8, "y": 0, "w": 4, "h": 2 } },
-    { "id": "d5000005-0000-0000-0000-000000000004", "widgetId": "table.trips", "layout": { "x": 0, "y": 2, "w": 12, "h": 10 } }
+    { "id": "d5000005-0000-0000-0000-000000000001", "widgetId": "custom.drives_summary", "layout": { "x": 0, "y": 0, "w": 12, "h": 2 } },
+    { "id": "d5000005-0000-0000-0000-000000000002", "widgetId": "table.trips", "layout": { "x": 0, "y": 2, "w": 12, "h": 10 } }
   ]
 }
