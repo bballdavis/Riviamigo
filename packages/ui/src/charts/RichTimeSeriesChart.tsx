@@ -11,6 +11,7 @@ export interface RichSeries {
   label: string;
   color?: string;
   values: Array<number | null>;
+  mode?: 'line' | 'area' | 'bar' | 'scatter';
 }
 
 export interface RichTimeSeriesChartProps {
@@ -21,7 +22,11 @@ export interface RichTimeSeriesChartProps {
   emptyTitle?: string;
   yUnit?: string;
   className?: string;
-  mode?: 'line' | 'area' | 'bar';
+  mode?: 'line' | 'area' | 'bar' | 'scatter';
+  xTime?: boolean;
+  xUnit?: string;
+  xValueFormatter?: (value: number) => string;
+  yValueFormatter?: (value: number | null | undefined, unit?: string) => string;
 }
 
 function toSeconds(value: string | number | Date) {
@@ -43,6 +48,13 @@ function formatValue(value: number | null | undefined, unit?: string) {
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
+function formatXAxisValue(secondsOrValue: number, xTime: boolean, formatter?: (value: number) => string, unit?: string) {
+  if (formatter) return formatter(secondsOrValue);
+  if (xTime) return formatDate(secondsOrValue);
+  const formatted = Math.abs(secondsOrValue) >= 100 ? secondsOrValue.toFixed(0) : secondsOrValue.toFixed(1);
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
 export function RichTimeSeriesChart({
   points,
   series,
@@ -52,15 +64,19 @@ export function RichTimeSeriesChart({
   yUnit,
   className,
   mode = 'line',
+  xTime = true,
+  xUnit,
+  xValueFormatter,
+  yValueFormatter = formatValue,
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
   const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
 
   const alignedData = React.useMemo<AlignedData>(() => {
-    const x = points.map((point) => toSeconds(point.ts));
+    const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
     return [x, ...series.map((item) => item.values.map((value) => value ?? null))] as AlignedData;
-  }, [points, series]);
+  }, [points, series, xTime]);
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
 
@@ -74,13 +90,16 @@ export function RichTimeSeriesChart({
         {},
         ...series.map((item, index) => {
           const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.sky);
+          const seriesMode = item.mode ?? mode;
           const next: Series = {
             label: item.label,
             stroke: color,
             width: 2,
+            points: { show: seriesMode === 'scatter', size: 6, stroke: color, fill: color },
           };
-          if (mode === 'area') next.fill = `${color}22`;
-          if (mode === 'bar') next.paths = uPlot.paths.bars!({ size: [0.64, Infinity] });
+          if (seriesMode === 'area') next.fill = `${color}22`;
+          if (seriesMode === 'bar') next.paths = uPlot.paths.bars!({ size: [0.64, Infinity] });
+          if (seriesMode === 'scatter') next.width = 0;
           return next;
         }),
       ];
@@ -95,19 +114,19 @@ export function RichTimeSeriesChart({
           points: { size: 6 },
         },
         legend: { show: false },
-        scales: { x: { time: true }, y: { auto: true } },
+        scales: { x: { time: xTime }, y: { auto: true } },
         axes: [
           {
             stroke: CHART_COLORS.muted,
             grid: { stroke: CHART_COLORS.grid, width: 1 },
             font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
-            values: (_u, vals) => vals.map((v) => formatDate(v)),
+            values: (_u, vals) => vals.map((v) => formatXAxisValue(v, xTime, xValueFormatter, xUnit)),
           },
           {
             stroke: CHART_COLORS.muted,
             grid: { stroke: CHART_COLORS.grid, width: 1 },
             font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
-            values: (_u, vals) => vals.map((v) => formatValue(v, yUnit)),
+            values: (_u, vals) => vals.map((v) => yValueFormatter(v, yUnit)),
           },
         ],
         series: uSeries,
@@ -122,12 +141,15 @@ export function RichTimeSeriesChart({
               const timestamp = alignedData[0]?.[idx];
               const rows = series.map((item, seriesIndex) => {
                 const value = alignedData[seriesIndex + 1]?.[idx] as number | null | undefined;
-                return `${item.label}: ${formatValue(value, yUnit)}`;
+                return `${item.label}: ${yValueFormatter(value, yUnit)}`;
               });
               setTooltip({
                 left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
                 top: Math.max((u.cursor.top ?? 0) + 12, 12),
-                text: [timestamp ? formatDate(timestamp as number) : '', ...rows].filter(Boolean).join('\n'),
+                text: [
+                  timestamp != null ? formatXAxisValue(timestamp as number, xTime, xValueFormatter, xUnit) : '',
+                  ...rows,
+                ].filter(Boolean).join('\n'),
               });
             },
           ],
@@ -150,7 +172,7 @@ export function RichTimeSeriesChart({
       chartRef.current = null;
       setTooltip(null);
     };
-  }, [alignedData, hasData, height, loading, mode, series, yUnit]);
+  }, [alignedData, hasData, height, loading, mode, series, xTime, xUnit, xValueFormatter, yUnit, yValueFormatter]);
 
   if (loading) return <ChartSkeleton height={height} />;
 
