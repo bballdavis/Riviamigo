@@ -1,0 +1,12 @@
+{
+  "id": "phantom-drain",
+  "title": "Phantom Drain",
+  "description": "Battery percentage lost while parked.",
+  "pages": ["overview", "battery"],
+  "source": "phantom_drain",
+  "mode": "bar",
+  "yUnit": "%",
+  "defaultSize": { "w": 6, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No phantom drain data for this period"
+}

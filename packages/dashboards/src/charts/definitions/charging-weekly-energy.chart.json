@@ -1,0 +1,12 @@
+{
+  "id": "charging-weekly-energy",
+  "title": "Energy Charged",
+  "description": "Weekly charging energy from stored charging sessions.",
+  "pages": ["overview", "charging"],
+  "source": "charging_weekly_energy",
+  "mode": "bar",
+  "yUnit": "kWh",
+  "defaultSize": { "w": 12, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No charging energy for this period"
+}

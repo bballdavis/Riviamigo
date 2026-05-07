@@ -103,7 +103,10 @@ export function useCreateDashboard() {
         method: 'POST',
         body: JSON.stringify(dashboardMutationBody(config)),
       }).then(normalizeDashboardConfig),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboards'] }),
+    onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
+      qc.invalidateQueries({ queryKey: ['dashboards'] });
+      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
+    },
   });
 }
 

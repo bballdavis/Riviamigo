@@ -1,0 +1,12 @@
+{
+  "id": "battery-capacity-mileage",
+  "title": "Battery Capacity by Mileage",
+  "description": "Usable battery capacity plotted against odometer mileage.",
+  "pages": ["overview", "battery"],
+  "source": "battery_capacity_mileage",
+  "mode": "line",
+  "yUnit": "kWh",
+  "defaultSize": { "w": 6, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No battery capacity mileage data recorded yet"
+}

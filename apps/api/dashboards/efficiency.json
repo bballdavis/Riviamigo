@@ -8,12 +8,21 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d3000003-0000-0000-0000-000000000001", "widgetId": "stat.avg_efficiency_period", "layout": { "x": 0, "y": 0, "w": 3, "h": 1 } },
-    { "id": "d3000003-0000-0000-0000-000000000002", "widgetId": "stat.best_efficiency",       "layout": { "x": 3, "y": 0, "w": 3, "h": 1 } },
-    { "id": "d3000003-0000-0000-0000-000000000003", "widgetId": "stat.worst_efficiency",      "layout": { "x": 6, "y": 0, "w": 3, "h": 1 } },
-    { "id": "d3000003-0000-0000-0000-000000000004", "widgetId": "stat.efficiency_miles",      "layout": { "x": 9, "y": 0, "w": 3, "h": 1 } },
-    { "id": "d3000003-0000-0000-0000-000000000005", "widgetId": "chart.efficiency_by_mode",   "layout": { "x": 0, "y": 1, "w": 12, "h": 4 } },
-    { "id": "d3000003-0000-0000-0000-000000000006", "widgetId": "chart.efficiency_trend",     "layout": { "x": 0, "y": 5, "w": 12, "h": 4 } },
-    { "id": "d3000003-0000-0000-0000-000000000007", "widgetId": "chart.efficiency_vs_temp",   "layout": { "x": 0, "y": 9, "w": 12, "h": 4 } }
+    { "id": "d3000003-0000-0000-0000-000000000001", "widgetId": "stat.avg_efficiency_period", "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d3000003-0000-0000-0000-000000000002", "widgetId": "stat.best_efficiency", "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d3000003-0000-0000-0000-000000000003", "widgetId": "stat.worst_efficiency", "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d3000003-0000-0000-0000-000000000004", "widgetId": "stat.efficiency_miles", "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    {
+      "id": "d3000003-0000-0000-0000-000000000005",
+      "widgetId": "chart.catalog",
+      "title": "Efficiency Charts",
+      "options": {
+        "page": "efficiency",
+        "chartId": "efficiency-trend",
+        "chartIds": ["efficiency-trend", "efficiency-temperature", "efficiency-mode"],
+        "showPicker": true
+      },
+      "layout": { "x": 0, "y": 2, "w": 12, "h": 5 }
+    }
   ]
 }

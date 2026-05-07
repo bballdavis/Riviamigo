@@ -8,6 +8,7 @@ import './stat/ChargingStatWidgets';
 import './chart/BatteryChartWidgets';
 import './chart/EfficiencyChartWidgets';
 import './chart/ChargingChartWidgets';
+import './chart/DashboardChartWidget';
 import './table/ChargingTableWidget';
 import './table/TripsTableWidget';
 import './custom/LegacyPageWidgets';

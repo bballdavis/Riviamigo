@@ -2,12 +2,17 @@
   "schemaVersion": 1,
   "id": "00000000-0000-0000-0000-000000000005",
   "slug": "trips",
-  "name": "Trips",
+  "name": "Drives",
   "isDefault": true,
   "isLocked": true,
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d5000005-0000-0000-0000-000000000001", "widgetId": "table.trips", "layout": { "x": 0, "y": 0, "w": 12, "h": 10 } }
+    { "id": "d5000005-0000-0000-0000-000000000001", "widgetId": "metric.stat", "title": "Miles Driven", "options": { "metric": "total_miles", "subtitle": "Selected period", "chartType": "line", "valueSize": "md", "valueMode": "sum" }, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d5000005-0000-0000-0000-000000000002", "widgetId": "metric.stat", "title": "Trips", "options": { "metric": "total_trips", "subtitle": "Selected period", "chartType": "bar", "valueSize": "md", "valueMode": "sum" }, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d5000005-0000-0000-0000-000000000003", "widgetId": "metric.stat", "title": "Avg Efficiency", "options": { "metric": "avg_efficiency", "subtitle": "Selected period", "chartType": "line", "valueSize": "md", "valueMode": "avg" }, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d5000005-0000-0000-0000-000000000004", "widgetId": "metric.stat", "title": "Avg Duration", "options": { "metric": "avg_trip_duration", "subtitle": "Selected period", "chartType": "bar", "valueSize": "md", "valueMode": "avg" }, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d5000005-0000-0000-0000-000000000005", "widgetId": "map.trips", "title": "Trip Map", "layout": { "x": 0, "y": 2, "w": 12, "h": 5 } },
+    { "id": "d5000005-0000-0000-0000-000000000006", "widgetId": "table.trips", "title": "Trip History", "layout": { "x": 0, "y": 7, "w": 12, "h": 7 } }
   ]
 }

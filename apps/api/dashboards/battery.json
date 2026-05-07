@@ -8,13 +8,15 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d2000002-0000-0000-0000-000000000001", "widgetId": "stat.current_soc",       "layout": { "x": 0,  "y": 0, "w": 3, "h": 1 } },
-    { "id": "d2000002-0000-0000-0000-000000000002", "widgetId": "stat.est_range",          "layout": { "x": 3,  "y": 0, "w": 3, "h": 1 } },
-    { "id": "d2000002-0000-0000-0000-000000000003", "widgetId": "stat.phantom_drain_avg",  "layout": { "x": 6,  "y": 0, "w": 3, "h": 1 } },
-    { "id": "d2000002-0000-0000-0000-000000000004", "widgetId": "stat.capacity_health",    "layout": { "x": 9,  "y": 0, "w": 3, "h": 1 } },
-    { "id": "d2000002-0000-0000-0000-000000000005", "widgetId": "chart.soc",               "layout": { "x": 0,  "y": 1, "w": 12, "h": 4 } },
-    { "id": "d2000002-0000-0000-0000-000000000006", "widgetId": "chart.range",             "layout": { "x": 0,  "y": 5, "w": 12, "h": 4 } },
-    { "id": "d2000002-0000-0000-0000-000000000007", "widgetId": "chart.phantom_drain",     "layout": { "x": 0,  "y": 9, "w": 6,  "h": 4 } },
-    { "id": "d2000002-0000-0000-0000-000000000008", "widgetId": "chart.degradation",       "layout": { "x": 6,  "y": 9, "w": 6,  "h": 4 } }
+    { "id": "d2000002-0000-0000-0000-000000000001", "widgetId": "stat.current_soc", "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000002", "widgetId": "stat.est_range", "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000003", "widgetId": "stat.phantom_drain_avg", "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000004", "widgetId": "stat.capacity_health", "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000005", "widgetId": "chart.catalog", "title": "Battery Level", "options": { "page": "battery", "chartId": "soc-history", "chartIds": ["soc-history"], "showPicker": false }, "layout": { "x": 0, "y": 2, "w": 12, "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000006", "widgetId": "chart.catalog", "title": "Estimated Range", "options": { "page": "battery", "chartId": "range-history", "chartIds": ["range-history"], "showPicker": false }, "layout": { "x": 0, "y": 6, "w": 12, "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000007", "widgetId": "chart.catalog", "title": "Phantom Drain", "options": { "page": "battery", "chartId": "phantom-drain", "chartIds": ["phantom-drain"], "showPicker": false }, "layout": { "x": 0, "y": 10, "w": 6, "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000008", "widgetId": "chart.catalog", "title": "Battery Health", "options": { "page": "battery", "chartId": "battery-degradation", "chartIds": ["battery-degradation"], "showPicker": false }, "layout": { "x": 6, "y": 10, "w": 6, "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000009", "widgetId": "chart.catalog", "title": "Battery Capacity by Mileage", "options": { "page": "battery", "chartId": "battery-capacity-mileage", "chartIds": ["battery-capacity-mileage"], "showPicker": false }, "layout": { "x": 0, "y": 14, "w": 6, "h": 4 } },
+    { "id": "d2000002-0000-0000-0000-000000000010", "widgetId": "chart.catalog", "title": "Projected Range by Mileage", "options": { "page": "battery", "chartId": "projected-range-mileage", "chartIds": ["projected-range-mileage"], "showPicker": false }, "layout": { "x": 6, "y": 14, "w": 6, "h": 4 } }
   ]
 }

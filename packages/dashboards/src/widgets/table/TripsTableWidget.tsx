@@ -1,29 +1,17 @@
 import React, { useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { api, useTrips } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { TripMapChart, type TripMapRoute } from '@riviamigo/ui/charts';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
-import type { Row } from '@tanstack/react-table';
+import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
 
-function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
-  const [page, setPage] = useState(1);
+function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page);
-  const placesQuery = useQuery({
-    queryKey: ['places'],
-    queryFn: () => api.listPlaces(),
-    staleTime: 5 * 60 * 1000,
-  });
-  const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, 1, 50);
   const trips = (data?.items ?? []) as unknown as TripRow[];
-  const selectedIdSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
-  const columns = React.useMemo(
-    () => createTripColumns(placesQuery.data ?? []),
-    [placesQuery.data]
-  );
+  const { ref, height } = useMeasuredWidgetHeight(360, 180);
 
   const trackQueries = useQueries({
     queries: trips.map((trip) => ({
@@ -58,67 +46,95 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
     ));
   }, []);
 
-  const handleRowClick = React.useCallback((row: Row<TripRow>) => {
-    toggleTrip(row.original.id);
-  }, [toggleTrip]);
-
   return (
-    <div className="flex flex-col h-full gap-4">
-      <TripMapChart
-        track={[]}
-        routes={routes}
-        selectedRouteIds={selectedIds}
-        onRouteClick={toggleTrip}
-        height={360}
-        className="w-full rounded-lg overflow-hidden border border-border"
-      />
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div ref={ref} className="min-h-0 flex-1">
+        <TripMapChart
+          track={[]}
+          routes={routes}
+          selectedRouteIds={selectedIds}
+          onRouteClick={toggleTrip}
+          height={height}
+          className="w-full overflow-hidden rounded-lg border border-border"
+        />
+      </div>
 
-      {selectedIds.length > 0 && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-fg-secondary">
-          <span>{selectedIds.length} route{selectedIds.length === 1 ? '' : 's'} selected. Click a selected route or row again to return it to the period view.</span>
+      {selectedIds.length > 0 ? (
+        <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-fg-secondary">
+          <span>{selectedIds.length} route{selectedIds.length === 1 ? '' : 's'} selected.</span>
           <button className="font-medium text-accent hover:underline" onClick={() => setSelectedIds([])}>Show all</button>
         </div>
-      )}
+      ) : isLoading ? (
+        <div className="shrink-0 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-tertiary">Loading route map...</div>
+      ) : null}
+    </div>
+  );
+}
 
+function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+  const [page, setPage] = useState(1);
+  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page);
+  const placesQuery = useQuery({
+    queryKey: ['places'],
+    queryFn: () => api.listPlaces(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const trips = (data?.items ?? []) as unknown as TripRow[];
+  const columns = React.useMemo(
+    () => createTripColumns(placesQuery.data ?? []),
+    [placesQuery.data],
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
       <DataTable
         data={trips}
         columns={columns}
         loading={isLoading}
-        onRowClick={handleRowClick}
-        getRowIsSelected={(row) => selectedIdSet.has(row.original.id)}
         emptyTitle="No trips found"
         emptyDescription="Trips will appear here once your vehicle has been driven."
       />
-      {data && data.total > data.per_page && (
-        <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+      {data && data.total > data.per_page ? (
+        <div className="mt-4 flex shrink-0 items-center justify-between border-t border-border pt-4">
           <p className="text-xs text-fg-tertiary">Page {page} of {totalPages}</p>
           <div className="flex gap-2">
             <button
               disabled={page <= 1}
               onClick={() => setPage((p) => p - 1)}
-              className="text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors"
+              className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               Previous
             </button>
             <button
               disabled={page >= totalPages}
               onClick={() => setPage((p) => p + 1)}
-              className="text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors"
+              className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
               Next
             </button>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
 registerWidget({
+  id: 'map.trips',
+  category: 'chart',
+  title: 'Trip Map',
+  defaultSize: { w: 12, h: 5 },
+  minSize: { w: 6, h: 3 },
+  editMode: 'none',
+  component: TripsMapWidget,
+});
+
+registerWidget({
   id: 'table.trips',
   category: 'table',
   title: 'Trip History',
-  defaultSize: { w: 12, h: 5 },
+  defaultSize: { w: 12, h: 6 },
   minSize: { w: 6, h: 3 },
   component: TripsTableWidget,
 });

@@ -1,0 +1,11 @@
+{
+  "id": "efficiency-temperature",
+  "title": "Efficiency by Temperature",
+  "description": "Driving efficiency against outside temperature bins.",
+  "pages": ["overview", "efficiency"],
+  "source": "efficiency_temperature",
+  "mode": "scatter",
+  "defaultSize": { "w": 12, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No outside-temperature telemetry is available for this range yet"
+}
