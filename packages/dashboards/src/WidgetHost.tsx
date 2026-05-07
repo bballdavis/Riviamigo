@@ -20,13 +20,15 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
 
   const Component = def.component;
   return (
-    <div className="h-full">
-      {instance.title && def.category !== 'stat' && (
-        <p className="text-xs font-medium text-fg-tertiary uppercase tracking-wider mb-2">
+    <div className="flex h-full min-h-0 flex-col">
+      {instance.title && def.category !== 'stat' ? (
+        <p className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
           {instance.title}
         </p>
-      )}
-      <Component instance={instance} ctx={ctx} />
+      ) : null}
+      <div className="min-h-0 flex-1 [&>*]:h-full">
+        <Component instance={instance} ctx={ctx} />
+      </div>
     </div>
   );
 }

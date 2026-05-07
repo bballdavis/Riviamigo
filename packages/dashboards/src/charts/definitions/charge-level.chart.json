@@ -1,0 +1,12 @@
+{
+  "id": "charge-level",
+  "title": "Charge Level",
+  "description": "Start and end state-of-charge points for charging sessions.",
+  "pages": ["overview", "charging"],
+  "source": "charge_level",
+  "mode": "line",
+  "yUnit": "%",
+  "defaultSize": { "w": 12, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No charge level data for this period"
+}

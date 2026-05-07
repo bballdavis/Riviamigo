@@ -1,0 +1,12 @@
+{
+  "id": "battery-degradation",
+  "title": "Battery Health",
+  "description": "Estimated battery capacity percentage over time.",
+  "pages": ["overview", "battery"],
+  "source": "battery_degradation",
+  "mode": "line",
+  "yUnit": "%",
+  "defaultSize": { "w": 6, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No battery health history recorded yet"
+}

@@ -9,6 +9,7 @@ import { getAllWidgets, getWidget } from './registry';
 import { WidgetHost } from './WidgetHost';
 import type { DashboardConfig, WidgetInstance } from './schema';
 import type { WidgetCtx } from './registry';
+import { getChartDefinitions, type DashboardChartPage } from './charts/catalog';
 
 /** Pixels per row unit — must match DashboardRenderer. */
 const ROW_HEIGHT = 80;
@@ -134,7 +135,9 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
     onConfigChange?.({ ...config, widgets: configWidgets });
   }
 
-  const allWidgets = getAllWidgets();
+  const allWidgets = getAllWidgets().filter(
+    (def) => !def.id.startsWith('custom.') || def.id === 'custom.overview_vehicle',
+  );
   const editingWidget = editingId ? widgets.find((w) => w.id === editingId) ?? null : null;
   const filteredWidgets = search.trim()
     ? allWidgets.filter(
@@ -190,7 +193,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
               Fill Row
             </button>
             <span className="text-xs text-fg-tertiary">
-              Drag to move · resize from corner · hover for controls
+              Drag to move, resize from the corner, or use the sliders to edit
             </span>
             <button
               onClick={handleReset}
@@ -225,7 +228,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                     <button
                       onClick={(e) => { e.stopPropagation(); removeWidget(w.id); }}
                       title="Remove widget"
-                      className="absolute top-1.5 left-1.5 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition text-fg-tertiary hover:text-red-400 hover:bg-black/20"
+                      className="absolute left-1.5 top-1.5 z-10 rounded-md p-1 opacity-75 transition text-fg-tertiary hover:bg-black/20 hover:text-red-400 group-hover:opacity-100"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -233,19 +236,19 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                     <button
                       onClick={(e) => { e.stopPropagation(); setEditingId(w.id); }}
                       title="Edit widget"
-                      className="absolute top-1.5 left-9 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition text-fg-tertiary hover:text-fg hover:bg-black/20"
+                      className="absolute left-9 top-1.5 z-10 rounded-md p-1 opacity-75 transition text-fg-tertiary hover:bg-black/20 hover:text-fg group-hover:opacity-100"
                     >
                       <SlidersHorizontal className="h-4 w-4" />
                     </button>
 
                     {/* Drag handle — top-right, hover-only */}
                     <div
-                      className="drag-handle absolute top-1.5 right-1.5 z-10 p-1 rounded-md opacity-0 group-hover:opacity-100 transition cursor-grab text-fg-tertiary hover:text-fg hover:bg-black/20"
+                      className="drag-handle absolute right-1.5 top-1.5 z-10 cursor-grab rounded-md p-1 opacity-75 transition text-fg-tertiary hover:bg-black/20 hover:text-fg active:cursor-grabbing group-hover:opacity-100"
                     >
                       <GripVertical className="h-4 w-4" />
                     </div>
 
-                    <div className="p-2 pt-7 h-full overflow-hidden [&>*]:h-full">
+                    <div className="h-full overflow-hidden p-2 pt-7 [&>*]:h-full">
                       <WidgetHost instance={w} ctx={ctx} />
                     </div>
                   </div>
@@ -328,10 +331,14 @@ function WidgetEditModal({
     }
   }, [optionsText]);
 
-  function patchOption(key: string, value: unknown) {
-    const next = { ...parsedOptions, [key]: value };
+  function patchOptions(patch: Record<string, unknown>) {
+    const next = { ...parsedOptions, ...patch };
     setOptionsText(JSON.stringify(next, null, 2));
     setJsonError(null);
+  }
+
+  function patchOption(key: string, value: unknown) {
+    patchOptions({ [key]: value });
   }
 
   function handleSave() {
@@ -344,9 +351,32 @@ function WidgetEditModal({
   }
 
   const metricMode = def?.editMode === 'metric';
+  const chartMode = def?.editMode === 'chart';
   const metric = typeof parsedOptions.metric === 'string' ? parsedOptions.metric : 'total_miles';
   const chartType = typeof parsedOptions.chartType === 'string' ? parsedOptions.chartType : 'line';
   const valueSize = typeof parsedOptions.valueSize === 'string' ? parsedOptions.valueSize : 'md';
+  const chartPage = isDashboardChartPage(parsedOptions.page) ? parsedOptions.page : undefined;
+  const chartDefinitions = getChartDefinitions(chartPage);
+  const configuredChartIds = Array.isArray(parsedOptions.chartIds)
+    ? parsedOptions.chartIds.filter((id): id is string => typeof id === 'string' && chartDefinitions.some((definition) => definition.id === id))
+    : [];
+  const selectedChartIds = configuredChartIds.length > 0 ? configuredChartIds : chartDefinitions.map((definition) => definition.id);
+  const selectedChartIdSet = new Set(selectedChartIds);
+  const selectedChartId = typeof parsedOptions.chartId === 'string' && selectedChartIdSet.has(parsedOptions.chartId)
+    ? parsedOptions.chartId
+    : selectedChartIds[0] ?? chartDefinitions[0]?.id ?? '';
+  const showPicker = parsedOptions.showPicker !== false;
+
+  function toggleChartDefinition(id: string) {
+    const nextIds = selectedChartIdSet.has(id)
+      ? selectedChartIds.filter((chartId) => chartId !== id)
+      : [...selectedChartIds, id];
+    const safeIds = nextIds.length > 0 ? nextIds : [id];
+    patchOptions({
+      chartIds: safeIds,
+      chartId: safeIds.includes(selectedChartId) ? selectedChartId : safeIds[0],
+    });
+  }
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 px-4">
@@ -421,12 +451,79 @@ function WidgetEditModal({
             </div>
           ) : null}
 
+          {chartMode ? (
+            <div className="grid gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+                  Chart Group
+                  <select
+                    value={chartPage ?? ''}
+                    onChange={(e) => patchOptions({ page: e.target.value || undefined, chartIds: undefined })}
+                    className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                  >
+                    <option value="">All charts</option>
+                    <option value="overview">Overview</option>
+                    <option value="battery">Battery</option>
+                    <option value="charging">Charging</option>
+                    <option value="efficiency">Efficiency</option>
+                    <option value="trips">Trips</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+                  Default Chart
+                  <select
+                    value={selectedChartId}
+                    onChange={(e) => patchOption('chartId', e.target.value)}
+                    className="rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+                  >
+                    {chartDefinitions.map((definition) => (
+                      <option key={definition.id} value={definition.id}>{definition.title}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="flex items-center gap-2 rounded-lg border border-border bg-bg-surface px-3 py-2 text-xs font-medium text-fg-secondary">
+                <input
+                  type="checkbox"
+                  checked={showPicker}
+                  onChange={(e) => patchOption('showPicker', e.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--rm-accent)]"
+                />
+                Show chart dropdown inside this widget
+              </label>
+
+              <div className="grid gap-2 rounded-lg border border-border bg-bg-surface p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium text-fg-secondary">Charts available in this widget</span>
+                  <span className="text-[11px] text-fg-tertiary">{selectedChartIds.length} selected</span>
+                </div>
+                <div className="grid max-h-48 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {chartDefinitions.map((definition) => (
+                    <label key={definition.id} className="flex items-start gap-2 rounded-md px-2 py-1.5 text-xs text-fg-secondary hover:bg-bg-elevated">
+                      <input
+                        type="checkbox"
+                        checked={selectedChartIdSet.has(definition.id)}
+                        onChange={() => toggleChartDefinition(definition.id)}
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--rm-accent)]"
+                      />
+                      <span className="grid gap-0.5">
+                        <span className="font-medium text-fg">{definition.title}</span>
+                        {definition.description ? <span className="text-[11px] text-fg-tertiary">{definition.description}</span> : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <label className="grid gap-1 text-xs font-medium text-fg-secondary">
             Options JSON
             <textarea
               value={optionsText}
               onChange={(e) => setOptionsText(e.target.value)}
-              rows={metricMode ? 7 : 12}
+              rows={metricMode ? 7 : chartMode ? 6 : 12}
               spellCheck={false}
               className="rounded-lg border border-border bg-bg-surface px-3 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
             />
@@ -445,4 +542,8 @@ function WidgetEditModal({
       </div>
     </div>
   );
+}
+
+function isDashboardChartPage(value: unknown): value is DashboardChartPage {
+  return value === 'overview' || value === 'battery' || value === 'charging' || value === 'efficiency' || value === 'trips';
 }

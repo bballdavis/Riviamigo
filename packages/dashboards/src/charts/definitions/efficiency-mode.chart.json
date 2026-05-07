@@ -1,0 +1,11 @@
+{
+  "id": "efficiency-mode",
+  "title": "Efficiency by Drive Mode",
+  "description": "Average driving efficiency grouped by Rivian drive mode.",
+  "pages": ["overview", "efficiency"],
+  "source": "efficiency_mode",
+  "mode": "bar",
+  "defaultSize": { "w": 12, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No drive mode efficiency data for this period"
+}

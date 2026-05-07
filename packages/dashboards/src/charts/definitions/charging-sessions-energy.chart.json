@@ -1,0 +1,12 @@
+{
+  "id": "charging-sessions-energy",
+  "title": "Energy per Session",
+  "description": "Energy added per charging session.",
+  "pages": ["overview", "charging"],
+  "source": "charging_sessions_energy",
+  "mode": "bar",
+  "yUnit": "kWh",
+  "defaultSize": { "w": 12, "h": 4 },
+  "minSize": { "w": 4, "h": 3 },
+  "emptyTitle": "No charging sessions for this period"
+}

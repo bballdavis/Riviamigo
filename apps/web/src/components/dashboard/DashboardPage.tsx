@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import {
+  useCreateDashboard,
   useUpdateDashboard,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
@@ -24,6 +25,7 @@ export interface DashboardPageProps {
 
 export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
+  const createDashboard = useCreateDashboard();
 
   return (
     <DashboardPageShell
@@ -31,7 +33,7 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions(updateDashboard)}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard })}
     />
   );
 }
@@ -48,8 +50,15 @@ export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: Das
   ) : undefined;
 }
 
-export function createDefaultDashboardEditActions(updateDashboard: ReturnType<typeof useUpdateDashboard>) {
+interface DashboardEditMutations {
+  updateDashboard: ReturnType<typeof useUpdateDashboard>;
+  createDashboard: ReturnType<typeof useCreateDashboard>;
+}
+
+export function createDefaultDashboardEditActions({ updateDashboard, createDashboard }: DashboardEditMutations) {
   return function renderDefaultDashboardEditActions({ isEditMode, localConfig, exitEdit }: DashboardPageShellRenderState) {
+    const isPending = updateDashboard.isPending || createDashboard.isPending;
+
     return isEditMode ? (
       <>
         <button
@@ -59,13 +68,22 @@ export function createDefaultDashboardEditActions(updateDashboard: ReturnType<ty
               return;
             }
             try {
-              await updateDashboard.mutateAsync(localConfig);
+              if (shouldCreateUserDashboard(localConfig)) {
+                await createDashboard.mutateAsync({
+                  ...localConfig,
+                  isDefault: false,
+                  isLocked: false,
+                  ownerId: null,
+                });
+              } else {
+                await updateDashboard.mutateAsync(localConfig);
+              }
               exitEdit();
             } catch {
-              // API unavailable or rejected — stay in edit mode so changes aren't lost
+              // API unavailable or rejected; stay in edit mode so changes aren't lost.
             }
           }}
-          disabled={updateDashboard.isPending}
+          disabled={isPending}
           title="Save changes"
           className="p-2 rounded-lg bg-accent text-white disabled:opacity-40 hover:bg-accent/90 transition-colors"
         >
@@ -81,6 +99,10 @@ export function createDefaultDashboardEditActions(updateDashboard: ReturnType<ty
       </>
     ) : undefined;
   };
+}
+
+function shouldCreateUserDashboard(config: DashboardConfig) {
+  return config.isDefault && config.isLocked && config.ownerId === null;
 }
 
 export function CurrentVehicleStatePanel({ status, images }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined }) {

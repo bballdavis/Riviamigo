@@ -65,8 +65,8 @@ registerWidget({
   id: 'stat.avg_efficiency_period',
   category: 'stat',
   title: 'Avg Efficiency (Period)',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: AvgEfficiencyStatWidget,
 });
 
@@ -74,8 +74,8 @@ registerWidget({
   id: 'stat.best_efficiency',
   category: 'stat',
   title: 'Best Efficiency',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: BestEfficiencyWidget,
 });
 
@@ -83,8 +83,8 @@ registerWidget({
   id: 'stat.worst_efficiency',
   category: 'stat',
   title: 'Worst Efficiency',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: WorstEfficiencyWidget,
 });
 
@@ -92,7 +92,7 @@ registerWidget({
   id: 'stat.efficiency_miles',
   category: 'stat',
   title: 'Miles Driven (Period)',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: EfficiencyMilesWidget,
 });

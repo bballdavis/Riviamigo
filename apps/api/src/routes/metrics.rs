@@ -87,6 +87,7 @@ const METRICS: &[MetricDef] = &[
     MetricDef { id: "total_trips", label: "Total Trips", unit: None, kind: "number", source_label: "summary", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
     MetricDef { id: "energy_charged", label: "Energy Charged", unit: Some("kWh"), kind: "energy", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
     MetricDef { id: "avg_efficiency", label: "Avg Efficiency", unit: Some("Wh/mi"), kind: "number", source_label: "trips", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
+    MetricDef { id: "avg_trip_duration", label: "Avg Trip Duration", unit: Some("min"), kind: "number", source_label: "trips", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
     MetricDef { id: "battery_level", label: "Battery Level", unit: Some("%"), kind: "percent", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("battery_level") },
     MetricDef { id: "range_miles", label: "Estimated Range", unit: Some("mi"), kind: "distance", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("distance_to_empty_mi") },
     MetricDef { id: "odometer_miles", label: "Odometer", unit: Some("mi"), kind: "distance", source_label: "telemetry", supports_series: true, default_aggregation: "max", source: MetricSource::Telemetry("odometer_miles") },
@@ -238,6 +239,13 @@ async fn summary_value(
         .fetch_optional(pool)
         .await?
         .flatten(),
+        "avg_trip_duration" => sqlx::query_scalar(
+            "SELECT AVG(duration_seconds / 60.0)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND duration_seconds IS NOT NULL",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
         _ => None,
     };
 
@@ -284,6 +292,13 @@ async fn summary_series(
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND efficiency_wh_per_mile IS NOT NULL
+             GROUP BY 1 ORDER BY 1"
+        }
+        "avg_trip_duration" => {
+            "SELECT started_at::date::timestamptz AS ts, AVG(duration_seconds / 60.0)::float8 AS value
+             FROM riviamigo.trips
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             AND duration_seconds IS NOT NULL
              GROUP BY 1 ORDER BY 1"
         }
         _ => return Ok(Vec::new()),

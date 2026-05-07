@@ -50,8 +50,8 @@ registerWidget({
   id: 'stat.total_miles',
   category: 'stat',
   title: 'Total Miles',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: TotalMilesWidget,
 });
 
@@ -59,8 +59,8 @@ registerWidget({
   id: 'stat.total_trips',
   category: 'stat',
   title: 'Total Trips',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: TotalTripsWidget,
 });
 
@@ -68,8 +68,8 @@ registerWidget({
   id: 'stat.energy_charged',
   category: 'stat',
   title: 'Energy Charged',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: EnergyChargedWidget,
 });
 
@@ -77,7 +77,7 @@ registerWidget({
   id: 'stat.avg_efficiency',
   category: 'stat',
   title: 'Avg Efficiency',
-  defaultSize: { w: 3, h: 1 },
-  minSize: { w: 2, h: 1 },
+  defaultSize: { w: 3, h: 2 },
+  minSize: { w: 2, h: 2 },
   component: AvgEfficiencyWidget,
 });

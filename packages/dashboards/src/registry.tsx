@@ -16,7 +16,7 @@ export interface WidgetDef {
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
   defaultOptions?: Record<string, unknown>;
-  editMode?: 'metric' | 'json' | 'none';
+  editMode?: 'metric' | 'chart' | 'json' | 'none';
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }
 
