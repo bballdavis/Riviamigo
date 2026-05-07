@@ -158,9 +158,19 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
           border-radius: 8px;
         }
         .rgl-editor .react-resizable-handle {
-          z-index: 20;
+          z-index: 30;
+          width: 26px;
+          height: 26px;
+          right: 2px;
+          bottom: 2px;
+          border-radius: 8px 0 8px 0;
+          background: color-mix(in oklab, var(--rm-accent) 18%, transparent);
         }
         .rgl-editor .react-resizable-handle::after {
+          right: 8px;
+          bottom: 8px;
+          width: 8px;
+          height: 8px;
           border-color: rgba(99,102,241,0.7);
         }
       `}</style>
@@ -199,6 +209,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                 width={width}
                 gridConfig={{ cols: COLS, rowHeight: ROW_HEIGHT, margin: [16, 16] as readonly [number, number], containerPadding: [0, 0] as readonly [number, number], maxRows: Infinity }}
                 dragConfig={{ enabled: true, bounded: false, handle: '.drag-handle', threshold: 3 }}
+                resizeConfig={{ enabled: true, handles: ['se'] }}
                 onLayoutChange={handleLayoutChange}
                 className="bg-bg-elevated/30 rounded-xl border border-dashed border-border"
               >
@@ -234,7 +245,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                       <GripVertical className="h-4 w-4" />
                     </div>
 
-                    <div className="p-2 pt-7 h-full overflow-hidden">
+                    <div className="p-2 pt-7 h-full overflow-hidden [&>*]:h-full">
                       <WidgetHost instance={w} ctx={ctx} />
                     </div>
                   </div>
