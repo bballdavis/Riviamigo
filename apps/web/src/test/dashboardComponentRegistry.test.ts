@@ -9,7 +9,7 @@ describe('dashboard component registry', () => {
       expect(dashboard.schemaVersion).toBe(2);
 
       for (const widget of dashboard.widgets) {
-        expect(['custom', 'sensor', 'chart', 'battery', 'table']).toContain(widget.componentType);
+        expect(['custom', 'sensor', 'chart', 'battery', 'charging', 'table']).toContain(widget.componentType);
         expect(registered.has(`${widget.componentType}:${widget.definitionId}`)).toBe(true);
       }
     }

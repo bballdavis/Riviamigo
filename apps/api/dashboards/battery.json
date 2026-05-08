@@ -8,12 +8,16 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d2000002-0000-0000-0000-000000000001", "componentType": "battery", "definitionId": "health_pct",       "title": "Battery Health",     "options": {}, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000002", "componentType": "battery", "definitionId": "usable_capacity",  "title": "Usable Capacity",    "options": {}, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000003", "componentType": "sensor",  "definitionId": "battery_level",    "title": "Current SOC",        "options": { "metric": "battery_level", "icon": "lucide:battery", "chartType": "area", "showSprite": true, "accentBorder": true }, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000004", "componentType": "sensor",  "definitionId": "range_miles",      "title": "Estimated Range",    "options": { "metric": "range_miles",   "icon": "lucide:route",   "chartType": "area", "showSprite": true }, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000001", "componentType": "battery", "definitionId": "health_pct",                "title": "Battery Health",         "options": {}, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000002", "componentType": "battery", "definitionId": "estimated_degradation_pct", "title": "Estimated Degradation",  "options": {}, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000003", "componentType": "battery", "definitionId": "usable_capacity",           "title": "Usable Capacity",        "options": {}, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000004", "componentType": "battery", "definitionId": "max_range",                "title": "Max Range",              "options": {}, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000005", "componentType": "battery", "definitionId": "charge_count",             "title": "Charges",                "options": {}, "layout": { "x": 0, "y": 2, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000006", "componentType": "battery", "definitionId": "charging_cycles",          "title": "Charging Cycles",        "options": {}, "layout": { "x": 3, "y": 2, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000007", "componentType": "battery", "definitionId": "energy_added",             "title": "Energy Added",           "options": {}, "layout": { "x": 6, "y": 2, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000008", "componentType": "battery", "definitionId": "charge_efficiency",        "title": "Charge Efficiency",      "options": {}, "layout": { "x": 9, "y": 2, "w": 3, "h": 2 } },
     {
-      "id": "d2000002-0000-0000-0000-000000000005",
+      "id": "d2000002-0000-0000-0000-000000000009",
       "componentType": "chart",
       "definitionId": "catalog",
       "title": "Battery Charts",
@@ -23,7 +27,7 @@
         "chartIds": ["soc-history", "range-history", "phantom-drain", "battery-degradation", "battery-capacity-mileage", "projected-range-mileage"],
         "showPicker": true
       },
-      "layout": { "x": 0, "y": 2, "w": 12, "h": 10 }
+      "layout": { "x": 0, "y": 4, "w": 12, "h": 10 }
     }
   ]
 }
