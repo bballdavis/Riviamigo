@@ -1,4 +1,5 @@
 import React from 'react';
+import { SlidersHorizontal } from 'lucide-react';
 import {
   useBatteryMileage,
   useChargeSessions,
@@ -13,6 +14,7 @@ import {
 } from '@riviamigo/hooks';
 import { RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
+import { cn } from '@riviamigo/ui/lib/utils';
 import {
   formatMiles,
   formatTemp,
@@ -75,6 +77,9 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const [chartId, setChartId] = React.useState(options.chartId);
   const [search, setSearch] = React.useState('');
+  const [smoothed, setSmoothed] = React.useState(true);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const settingsRef = React.useRef<HTMLDivElement>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
 
   React.useEffect(() => {
@@ -83,7 +88,58 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     }
   }, [chartId, options.chartId, options.chartIds]);
 
+  React.useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!settingsRef.current?.contains(event.target as Node)) {
+        setSettingsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, []);
+
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
+
+  const settingsButton = (
+    <div ref={settingsRef} className="relative">
+      <button
+        type="button"
+        aria-label="Chart settings"
+        onClick={() => setSettingsOpen((v) => !v)}
+        className={cn(
+          'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
+          'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent',
+          settingsOpen && 'border-accent text-accent',
+        )}
+      >
+        <SlidersHorizontal className="h-4 w-4" />
+      </button>
+      {settingsOpen ? (
+        <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[180px] rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
+          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-fg">
+            <span>Smooth curves</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={smoothed}
+              onClick={() => setSmoothed((v) => !v)}
+              className={cn(
+                'relative h-5 w-9 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1',
+                smoothed ? 'bg-accent' : 'bg-border-strong',
+              )}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+                  smoothed ? 'translate-x-4' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+          </label>
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -95,16 +151,17 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           searchValue={search}
           onSearchChange={setSearch}
           className="shrink-0"
+          trailing={settingsButton}
         />
       ) : null}
       <div ref={ref} className="min-h-0 flex-1">
-        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} />
+        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothed={smoothed} />
       </div>
     </div>
   );
 }
 
-export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: string; ctx: WidgetCtx; height: number }) {
+export function DashboardChartRenderer({ chartId, ctx, height, smoothed = false }: { chartId: string; ctx: WidgetCtx; height: number; smoothed?: boolean }) {
   const definition = getChartDefinition(chartId);
   const source = definition?.source;
   const { data: soc = [], isLoading: socLoading } = useSocHistory(source === 'soc_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
@@ -139,11 +196,11 @@ export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: stri
 
   switch (definition.source) {
     case 'soc_history':
-      return renderSingleChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })));
+      return renderSingleChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })), smoothed);
     case 'range_history':
-      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })));
+      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })), smoothed);
     case 'charge_level':
-      return renderSingleChart(definition, height, sessionsLoading, buildChargeLevelSeries(sessions).map((point) => ({ ts: point.ts, value: point.soc })));
+      return renderSingleChart(definition, height, sessionsLoading, buildChargeLevelSeries(sessions).map((point) => ({ ts: point.ts, value: point.soc })), smoothed);
     case 'charging_sessions_energy':
       return (
         <ChargingSessionsChart
@@ -151,6 +208,7 @@ export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: stri
           sessions={sessions}
           loading={sessionsLoading}
           height={height}
+          smoothed={smoothed}
         />
       );
     case 'charging_weekly_energy':
@@ -159,17 +217,18 @@ export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: stri
         height,
         chargeSummaryLoading,
         weekly.map((point) => ({ ts: point.week_start, value: point.energy_kwh ?? null })),
+        smoothed,
       );
     case 'efficiency_trend':
-      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} />;
+      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothed={smoothed} />;
     case 'efficiency_temperature':
-      return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} />;
+      return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} smoothed={smoothed} />;
     case 'efficiency_mode':
-      return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
+      return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} smoothed={smoothed} />;
     case 'phantom_drain':
-      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })));
+      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })), smoothed);
     case 'battery_degradation':
-      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })));
+      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), smoothed);
     case 'battery_capacity_mileage':
       return (
         <MileageChart
@@ -177,6 +236,7 @@ export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: stri
           loading={mileageLoading}
           height={height}
           points={mileage.map((point) => ({ x: point.odometer_mi, y: point.usable_kwh }))}
+          smoothed={smoothed}
         />
       );
     case 'projected_range_mileage':
@@ -186,6 +246,7 @@ export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: stri
           loading={mileageLoading}
           height={height}
           points={mileage.map((point) => ({ x: point.odometer_mi, y: point.range_mi }))}
+          smoothed={smoothed}
         />
       );
   }
@@ -196,6 +257,7 @@ function renderSingleChart(
   height: number,
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
+  smoothed = false,
 ) {
   return (
     <RichTimeSeriesChart
@@ -206,6 +268,7 @@ function renderSingleChart(
       height={height}
       yUnit={definition.yUnit}
       mode={definition.mode}
+      smoothed={smoothed}
     />
   );
 }
@@ -215,11 +278,13 @@ function ChargingSessionsChart({
   sessions,
   loading,
   height,
+  smoothed,
 }: {
   definition: DashboardChartDefinition;
   sessions: ChargeSession[];
   loading: boolean;
   height: number;
+  smoothed?: boolean;
 }) {
   const sorted = [...sessions].sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
   return (
@@ -231,6 +296,7 @@ function ChargingSessionsChart({
       height={height}
       yUnit={definition.yUnit}
       mode={definition.mode}
+      smoothed={smoothed}
     />
   );
 }
@@ -240,11 +306,13 @@ function EfficiencyTrendChart({
   trend,
   loading,
   height,
+  smoothed,
 }: {
   definition: DashboardChartDefinition;
   trend: Array<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }>;
   loading: boolean;
   height: number;
+  smoothed?: boolean;
 }) {
   const unit = getEfficiencyUnit();
   return (
@@ -259,6 +327,7 @@ function EfficiencyTrendChart({
       height={height}
       yUnit={unit}
       mode={definition.mode}
+      smoothed={smoothed}
     />
   );
 }
@@ -268,11 +337,13 @@ function EfficiencyTemperatureChart({
   data,
   loading,
   height,
+  smoothed,
 }: {
   definition: DashboardChartDefinition;
   data: Array<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null }>;
   loading: boolean;
   height: number;
+  smoothed?: boolean;
 }) {
   const points = data
     .filter((point) => point.avg_efficiency_wh_mi != null)
@@ -293,6 +364,7 @@ function EfficiencyTemperatureChart({
       yUnit={getEfficiencyUnit()}
       mode="scatter"
       xValueFormatter={(value) => formatTemp(value)}
+      smoothed={smoothed}
     />
   );
 }
@@ -302,11 +374,13 @@ function EfficiencyModeChart({
   data,
   loading,
   height,
+  smoothed,
 }: {
   definition: DashboardChartDefinition;
   data: Array<{ drive_mode: string; avg_efficiency: number | null }>;
   loading: boolean;
   height: number;
+  smoothed?: boolean;
 }) {
   const rows = data.filter((point) => point.avg_efficiency != null);
   return (
@@ -320,6 +394,7 @@ function EfficiencyModeChart({
       yUnit={getEfficiencyUnit()}
       mode="bar"
       xValueFormatter={(value) => rows[Math.round(value) - 1]?.drive_mode ?? ''}
+      smoothed={smoothed}
     />
   );
 }
@@ -329,11 +404,13 @@ function MileageChart({
   points,
   loading,
   height,
+  smoothed,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ x: number | null; y: number | null }>;
   loading: boolean;
   height: number;
+  smoothed?: boolean;
 }) {
   const rows = points
     .filter((point): point is { x: number; y: number } => point.x != null && point.y != null)
@@ -351,6 +428,7 @@ function MileageChart({
       yUnit={definition.yUnit}
       mode={definition.mode}
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
+      smoothed={smoothed}
     />
   );
 }

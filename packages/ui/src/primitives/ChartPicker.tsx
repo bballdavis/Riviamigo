@@ -16,6 +16,7 @@ export interface ChartPickerProps<TValue extends string = string> {
   searchPlaceholder?: string;
   selectLabel?: string;
   className?: string;
+  trailing?: React.ReactNode;
 }
 
 export function ChartPicker<TValue extends string = string>({
@@ -27,6 +28,7 @@ export function ChartPicker<TValue extends string = string>({
   searchPlaceholder = 'Search charts',
   selectLabel = 'Chart',
   className,
+  trailing,
 }: ChartPickerProps<TValue>) {
   const [isOpen, setIsOpen] = React.useState(false);
   const rootRef = React.useRef<HTMLDivElement>(null);
@@ -66,7 +68,7 @@ export function ChartPicker<TValue extends string = string>({
   }
 
   return (
-    <div ref={rootRef} className={cn('relative mb-3 grid w-full grid-cols-1 gap-2 sm:grid-cols-4', className)}>
+    <div ref={rootRef} className={cn('relative mb-3 grid w-full grid-cols-1 gap-2', trailing ? 'sm:grid-cols-[1fr_minmax(0,3fr)_auto]' : 'sm:grid-cols-4', className)}>
       <label className="relative sm:col-span-1">
         <span className="sr-only">Search charts</span>
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" />
@@ -85,7 +87,7 @@ export function ChartPicker<TValue extends string = string>({
           )}
         />
       </label>
-      <div className="sm:col-span-3">
+      <div>
         <span className="sr-only">{selectLabel}</span>
         <button
           type="button"
@@ -102,6 +104,7 @@ export function ChartPicker<TValue extends string = string>({
           <ChevronDown className={cn('h-4 w-4 shrink-0 text-fg-tertiary transition-transform', isOpen && 'rotate-180')} />
         </button>
       </div>
+      {trailing ? <div className="flex items-center">{trailing}</div> : null}
 
       {isOpen ? (
         <div
