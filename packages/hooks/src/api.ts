@@ -211,19 +211,19 @@ class ApiClient {
   // ── Battery ───────────────────────────────────────────────────────────────
 
   async getSoc(vehicleId: string, from: string, to: string) {
-    return this.request<{ ts: string; soc: number }[]>('GET', '/v1/battery/soc', undefined, {
+    return this.request<{ ts: string; value: number | null }[]>('GET', '/v1/battery/soc', undefined, {
       vehicle_id: vehicleId, from, to,
     });
   }
 
   async getRange(vehicleId: string, from: string, to: string) {
-    return this.request<{ ts: string; range_mi: number }[]>('GET', '/v1/battery/range', undefined, {
+    return this.request<{ ts: string; value: number | null }[]>('GET', '/v1/battery/range', undefined, {
       vehicle_id: vehicleId, from, to,
     });
   }
 
   async getPhantomDrain(vehicleId: string, from: string, to: string) {
-    return this.request<{ date: string; drain_pct: number }[]>(
+    return this.request<{ day: string; total_soc_lost: number | null; avg_drain_rate: number | null; hours_parked: number | null }[]>(
       'GET', '/v1/battery/phantom-drain', undefined, { vehicle_id: vehicleId, from, to }
     );
   }

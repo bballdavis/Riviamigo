@@ -35,6 +35,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   ),
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => mockConfig,
 }));
 
@@ -45,6 +46,11 @@ vi.mock('../../lib/dates', () => ({
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
   DEFAULT_PRESET: '30d',
 }));
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+});
+
 vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/ui/lib/utils')>();
   return {

@@ -7,7 +7,7 @@ export const LayoutSchema = z.object({
   h: z.number().int().min(1),
 });
 
-export const ComponentTypeSchema = z.enum(['custom', 'sensor', 'chart']);
+export const ComponentTypeSchema = z.enum(['custom', 'sensor', 'chart', 'battery', 'table']);
 
 export const WidgetInstanceSchema = z.object({
   id: z.string().uuid(),

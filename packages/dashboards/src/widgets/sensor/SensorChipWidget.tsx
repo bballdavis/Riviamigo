@@ -48,11 +48,12 @@ const DEFAULT_WINDOW_DAYS = 30;
 function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
   const definition = getSensorDefinition(instance.definitionId) ?? SENSOR_DEFINITIONS[0]!;
   const options = (instance.options ?? {}) as SensorChipOptions;
+  const chartType = options.chartType ?? definition.chartType;
 
   return {
     metric: options.metric ?? definition.metric,
     icon: options.icon ?? definition.icon,
-    chartType: options.chartType ?? definition.chartType,
+    chartType,
     showSprite: options.showSprite ?? true,
     showSubtitle: options.showSubtitle ?? false,
     subtitle: options.subtitle ?? '',
@@ -62,7 +63,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     curveColor: options.curveColor ?? 'accent',
     curveSmoothing: normalizeCurveSmoothing(
       options.curveSmoothing,
-      defaultCurveSmoothing(definition.chartType)
+      defaultCurveSmoothing(chartType)
     ),
     windowDays:
       typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
