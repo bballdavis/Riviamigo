@@ -8,10 +8,10 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d2000002-0000-0000-0000-000000000001", "componentType": "sensor", "definitionId": "battery_level", "title": "Current SOC", "options": { "metric": "battery_level", "icon": "battery", "chartType": "area", "valueSize": "md", "showSprite": true, "showSubtitle": false, "accentBorder": true }, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000002", "componentType": "sensor", "definitionId": "range_miles", "title": "Estimated Range", "options": { "metric": "range_miles", "icon": "route", "chartType": "area", "valueSize": "md", "showSprite": true, "showSubtitle": false }, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000003", "componentType": "sensor", "definitionId": "odometer_miles", "title": "Odometer", "options": { "metric": "odometer_miles", "icon": "route", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false }, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000004", "componentType": "sensor", "definitionId": "power_kw", "title": "Power", "options": { "metric": "power_kw", "icon": "zap", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false }, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000001", "componentType": "battery", "definitionId": "health_pct",       "title": "Battery Health",     "options": {}, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000002", "componentType": "battery", "definitionId": "usable_capacity",  "title": "Usable Capacity",    "options": {}, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000003", "componentType": "sensor",  "definitionId": "battery_level",    "title": "Current SOC",        "options": { "metric": "battery_level", "icon": "lucide:battery", "chartType": "area", "showSprite": true, "accentBorder": true }, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000004", "componentType": "sensor",  "definitionId": "range_miles",      "title": "Estimated Range",    "options": { "metric": "range_miles",   "icon": "lucide:route",   "chartType": "area", "showSprite": true }, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
     {
       "id": "d2000002-0000-0000-0000-000000000005",
       "componentType": "chart",

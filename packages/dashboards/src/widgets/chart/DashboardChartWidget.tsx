@@ -104,7 +104,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   );
 }
 
-function DashboardChartRenderer({ chartId, ctx, height }: { chartId: string; ctx: WidgetCtx; height: number }) {
+export function DashboardChartRenderer({ chartId, ctx, height }: { chartId: string; ctx: WidgetCtx; height: number }) {
   const definition = getChartDefinition(chartId);
   const source = definition?.source;
   const { data: soc = [], isLoading: socLoading } = useSocHistory(source === 'soc_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
@@ -139,9 +139,9 @@ function DashboardChartRenderer({ chartId, ctx, height }: { chartId: string; ctx
 
   switch (definition.source) {
     case 'soc_history':
-      return renderSingleChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.soc ?? null })));
+      return renderSingleChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })));
     case 'range_history':
-      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.range_mi ?? null })));
+      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })));
     case 'charge_level':
       return renderSingleChart(definition, height, sessionsLoading, buildChargeLevelSeries(sessions).map((point) => ({ ts: point.ts, value: point.soc })));
     case 'charging_sessions_energy':
@@ -167,7 +167,7 @@ function DashboardChartRenderer({ chartId, ctx, height }: { chartId: string; ctx
     case 'efficiency_mode':
       return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
     case 'phantom_drain':
-      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.date, value: point.drain_pct ?? null })));
+      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })));
     case 'battery_degradation':
       return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })));
     case 'battery_capacity_mileage':

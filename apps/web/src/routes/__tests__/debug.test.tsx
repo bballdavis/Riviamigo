@@ -43,6 +43,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => mockConfig,
   downloadDashboardYaml: vi.fn(),
@@ -52,6 +53,11 @@ vi.mock('@riviamigo/dashboards', () => ({
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
   return { ...actual, useNavigate: () => vi.fn() };
+});
+
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
 });
 
 import { DashboardPage } from '../../components/dashboard/DashboardPage';

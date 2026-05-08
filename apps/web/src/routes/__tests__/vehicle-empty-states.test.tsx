@@ -19,6 +19,11 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   };
 });
 
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+});
+
 vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatKwh: (v: number) => `${v} kWh`,
   formatDuration: (s: number) => `${s}s`,
@@ -95,6 +100,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: emptyConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => emptyConfig,
   downloadDashboardYaml: vi.fn(),
