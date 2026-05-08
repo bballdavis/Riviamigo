@@ -14,36 +14,11 @@ export { RichTimeSeriesChart } from './RichTimeSeriesChart';
 export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
 export { MiniSparkline } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
-export { SocAreaChart } from './SocAreaChart';
-export type { SocAreaChartProps, SocDataPoint } from './SocAreaChart';
-export { RangeAreaChart } from './RangeAreaChart';
-export type { RangeAreaChartProps, RangeDataPoint } from './RangeAreaChart';
 export { ChargeCurveChart } from './ChargeCurveChart';
 export type { ChargeCurveChartProps, ChargeCurvePoint } from './ChargeCurveChart';
-export { PhantomDrainChart } from './PhantomDrainChart';
-export type { PhantomDrainChartProps, PhantomDrainPoint } from './PhantomDrainChart';
-export { EfficiencyChart } from './EfficiencyChart';
-export type { EfficiencyChartProps, EfficiencyByModePoint } from './EfficiencyChart';
 export { TripMapChart } from './TripMapChart';
 export type { TripMapChartProps, LatLng, TripMapRoute } from './TripMapChart';
-export { EnergyBarChart } from './EnergyBarChart';
-export type { EnergyBarChartProps, EnergyBarPoint } from './EnergyBarChart';
 export { SpeedProfileChart } from './SpeedProfileChart';
 export type { SpeedProfileChartProps, SpeedPoint } from './SpeedProfileChart';
-export { EfficiencyTrendChart } from './EfficiencyTrendChart';
-export type { EfficiencyTrendChartProps, EfficiencyTrendPoint } from './EfficiencyTrendChart';
-export { EfficiencyVsTempChart } from './EfficiencyVsTempChart';
-export type { EfficiencyVsTempChartProps, EfficiencyVsTempPoint } from './EfficiencyVsTempChart';
-export { DegradationChart } from './DegradationChart';
-export type { DegradationChartProps, DegradationPoint } from './DegradationChart';
 export { ElevationProfileChart } from './ElevationProfileChart';
 export type { ElevationProfileChartProps, ElevationPoint } from './ElevationProfileChart';
-export { EfficiencyDrivesChart } from './EfficiencyDrivesChart';
-export type { EfficiencyDrivesChartProps } from './EfficiencyDrivesChart';
-export { ChargingSessionsChart } from './ChargingSessionsChart';
-export type { ChargingSessionsChartProps } from './ChargingSessionsChart';
-export {
-  BatteryCapacityByMileageChart,
-  ProjectedRangeByMileageChart,
-} from './BatteryMileageCharts';
-export type { BatteryMileageChartProps, BatteryMileageDatum } from './BatteryMileageCharts';

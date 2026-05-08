@@ -53,7 +53,7 @@ export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
     id: record.id ?? config.id,
     slug: record.slug ?? config.slug,
     name: record.name ?? config.name,
-    description: record.description ?? config.description,
+    description: record.description ?? config.description ?? undefined,
     isDefault: record.isDefault ?? record.is_default ?? config.isDefault,
     isLocked: record.isLocked ?? record.is_locked ?? config.isLocked,
     ownerId: record.ownerId ?? record.owner_id ?? config.ownerId ?? null,

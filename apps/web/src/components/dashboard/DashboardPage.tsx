@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import {
   useCreateDashboard,
