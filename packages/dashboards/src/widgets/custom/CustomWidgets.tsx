@@ -98,7 +98,7 @@ function CurrentVehicleStatePanel({
               <SocDatum label="Range" value={formatMiles(status?.range_miles)} />
               <SocDatum label="Limit" value={formatPercent(status?.battery_limit)} />
               <SocDatum label="Charging" value={<ChargingGlyph chargerState={status?.charger_state} chargerStatus={status?.charger_status} />} />
-              <SocDatum label="Capacity" value={formatKwh(status?.battery_capacity_kwh)} />
+              <SocDatum label="Time to Full" value={formatTimeToFull(status?.time_to_end_of_charge_min)} />
             </div>
           </div>
         </div>
@@ -233,6 +233,15 @@ function VehicleOverheadLayers({ base, overlays, darkClassName }: { base: string
 
 function formatPercent(value: number | null | undefined) {
   return value === null || value === undefined ? '-' : `${Math.round(value)}%`;
+}
+
+function formatTimeToFull(minutes: number | null | undefined) {
+  if (minutes === null || minutes === undefined || minutes <= 0) return '-';
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (hours === 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
 }
 
 function formatTire(psi: number | null | undefined, status?: string | null) {
@@ -372,7 +381,7 @@ registerWidget({
   componentType: 'custom',
   definitionId: 'overview.vehicle',
   title: 'Vehicle Overview',
-  defaultSize: { w: 12, h: 8 },
+  defaultSize: { w: 12, h: 7 },
   minSize: { w: 8, h: 6 },
   defaultOptions: {},
   component: OverviewVehicleWidget,
