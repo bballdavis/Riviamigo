@@ -1,5 +1,5 @@
 import React from 'react';
-import { getWidget } from './registry';
+import { getWidgetForInstance } from './registry';
 import type { WidgetInstance, WidgetCtx } from './registry';
 
 interface WidgetHostProps {
@@ -8,12 +8,12 @@ interface WidgetHostProps {
 }
 
 export function WidgetHost({ instance, ctx }: WidgetHostProps) {
-  const def = getWidget(instance.widgetId);
+  const def = getWidgetForInstance(instance);
 
   if (!def) {
     return (
       <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary">
-        Unknown widget: {instance.widgetId}
+        Unknown widget: {instance.componentType}/{instance.definitionId}
       </div>
     );
   }
@@ -21,7 +21,7 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
   const Component = def.component;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {instance.title && def.category !== 'stat' ? (
+      {instance.title && instance.componentType !== 'sensor' ? (
         <p className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
           {instance.title}
         </p>

@@ -8,6 +8,9 @@ applyTo:
 ---
 # Dashboard Frontend Boundaries
 
+- Do not add old-version dashboard code, compatibility shims, or runtime transforms. Backfill/migrate dashboard config or DB shape when needed, then keep the app on the current schema.
+- Remove superseded dashboard modules instead of preserving unused wrappers. New sensor/chart behavior should be expressed through definitions/options and the shared component type, not one TSX component per chip or chart.
+- Dashboard configs should use the current reusable component model: `custom`, `sensor`, and `chart`. Store layout and instance options in config; store reusable renderer behavior in code.
 - Routes should stay declarative. Prefer mounting shared dashboard composition over recreating layout, date range, and edit state per route.
 - Shared dashboard page behavior belongs in `apps/web/src/components/dashboard/DashboardPageShell.tsx`.
 - `packages/dashboards/src/DashboardRenderer.tsx` should remain layout-only. Do not add route-specific UI or slug-based behavior there.

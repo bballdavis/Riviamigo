@@ -2,10 +2,13 @@
 
 ## Dashboard Frontend Boundaries
 
+- Do not add old-version dashboard compatibility layers, outdated component names, or runtime shims. Riviamigo dashboards are developed against the current app schema; use one-time migrations or backfills when table/config shape changes are needed.
+- Delete superseded dashboard widgets instead of preserving unused wrappers. If a widget is replaced by a reusable component type, remove the old module from the registry and from the codebase.
+- Dashboard configs are composed from the current reusable component types: `custom`, `sensor`, and `chart`. Store per-instance values, options, and layout in dashboard config; keep reusable renderer behavior in code.
 - Keep dashboard routes thin. Route files should declare path, params, search state, and mount shared dashboard composition.
 - Reuse `apps/web/src/components/dashboard/DashboardPageShell.tsx` for dashboard page scaffolding instead of rebuilding layout, date range, edit state, or renderer wiring in route files.
 - Keep `packages/dashboards/src/DashboardRenderer.tsx` focused on grid layout and widget hosting. Do not add page-specific business logic there.
-- Keep widgets in `packages/dashboards/src/widgets/` small and focused. If several widgets need shared derived data, create a hook or page adapter instead of coupling the widgets together.
+- Keep widgets in `packages/dashboards/src/widgets/` small and focused. Avoid individual TSX wrappers for each sensor or chart when the same reusable component plus definitions/options can express the behavior.
 - Keep dashboard API access and response normalization in `packages/hooks/src/`.
 - Keep generic charts, tables, badges, and primitives in `packages/ui/src/` and free of page-specific fetch logic.
 - Use the shared `ChartPicker` primitive above selectable charts: search input on the left quarter, chart dropdown on the right three quarters, full chart width, product-native labels, and no reference-product names in visible UI.

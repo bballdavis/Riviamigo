@@ -73,7 +73,10 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
 
 function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const [page, setPage] = useState(1);
-  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page);
+  const [pageSize, setPageSize] = useState(15);
+  const [search, setSearch] = useState('');
+  const deferredSearch = React.useDeferredValue(search);
+  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch);
   const placesQuery = useQuery({
     queryKey: ['places'],
     queryFn: () => api.listPlaces(),
@@ -86,18 +89,51 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
     [placesQuery.data],
   );
 
+  React.useEffect(() => {
+    setPage(1);
+  }, [ctx.from, ctx.to, ctx.vehicleId, deferredSearch, pageSize]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+        <label className="relative min-w-[16rem] flex-1 max-w-md">
+          <span className="sr-only">Search trips</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search start or destination"
+            className="w-full rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-fg-tertiary">
+          Rows
+          <select
+            value={pageSize}
+            onChange={(event) => setPageSize(Number(event.target.value))}
+            className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
+          >
+            <option value={15}>15</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </label>
+      </div>
       <DataTable
         data={trips}
         columns={columns}
         loading={isLoading}
+        loadingRows={pageSize}
         emptyTitle="No trips found"
-        emptyDescription="Trips will appear here once your vehicle has been driven."
+        emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
+        className="min-h-0 flex-1"
       />
-      {data && data.total > data.per_page ? (
-        <div className="mt-4 flex shrink-0 items-center justify-between border-t border-border pt-4">
-          <p className="text-xs text-fg-tertiary">Page {page} of {totalPages}</p>
+      {data ? (
+        <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
+          <p className="text-xs text-fg-tertiary">
+            Page {page} of {Math.max(totalPages, 1)} · {data.total} trip{data.total === 1 ? '' : 's'}
+          </p>
           <div className="flex gap-2">
             <button
               disabled={page <= 1}
@@ -107,7 +143,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
               Previous
             </button>
             <button
-              disabled={page >= totalPages}
+              disabled={page >= totalPages || totalPages <= 1}
               onClick={() => setPage((p) => p + 1)}
               className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
             >
@@ -121,20 +157,21 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
 }
 
 registerWidget({
-  id: 'map.trips',
-  category: 'chart',
+  componentType: 'custom',
+  definitionId: 'trips.map',
   title: 'Trip Map',
-  defaultSize: { w: 12, h: 5 },
-  minSize: { w: 6, h: 3 },
-  editMode: 'none',
+  defaultSize: { w: 12, h: 10 },
+  minSize: { w: 6, h: 6 },
+  defaultOptions: {},
   component: TripsMapWidget,
 });
 
 registerWidget({
-  id: 'table.trips',
-  category: 'table',
+  componentType: 'custom',
+  definitionId: 'trips.table',
   title: 'Trip History',
-  defaultSize: { w: 12, h: 6 },
-  minSize: { w: 6, h: 3 },
+  defaultSize: { w: 12, h: 12 },
+  minSize: { w: 6, h: 6 },
+  defaultOptions: {},
   component: TripsTableWidget,
 });

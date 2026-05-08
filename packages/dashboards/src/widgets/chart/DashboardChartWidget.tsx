@@ -390,16 +390,15 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
 }
 
 registerWidget({
-  id: 'chart.catalog',
-  category: 'chart',
+  componentType: 'chart',
+  definitionId: 'catalog',
   title: 'Chart',
-  defaultSize: { w: 12, h: 4 },
-  minSize: { w: 4, h: 3 },
+  defaultSize: { w: 12, h: 8 },
+  minSize: { w: 4, h: 6 },
   defaultOptions: {
     page: 'overview',
     chartId: 'soc-history',
     showPicker: true,
   },
-  editMode: 'chart',
   component: DashboardChartWidget,
 });

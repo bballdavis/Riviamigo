@@ -65,7 +65,7 @@ function normalizeChartDefinition(definition: DashboardChartDefinition): Dashboa
     ...definition,
     pages: Array.isArray(definition.pages) && definition.pages.length > 0 ? definition.pages : ['overview'],
     mode: definition.mode ?? 'line',
-    defaultSize: definition.defaultSize ?? { w: 12, h: 4 },
-    minSize: definition.minSize ?? { w: 4, h: 3 },
+    defaultSize: definition.defaultSize ?? { w: 12, h: 8 },
+    minSize: definition.minSize ?? { w: 4, h: 6 },
   };
 }
