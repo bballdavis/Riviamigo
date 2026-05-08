@@ -172,12 +172,14 @@ export function DashboardPageShell({
       </button>
     </Tooltip>
   ) : null;
-  const extraActions = renderActions?.(shellState);
-  const pageActions = efficiencyDisplayAction || dateRangeAction || extraActions ? (
+  // In edit mode, save/cancel live in the drawer; only date/efficiency go in the page header.
+  const editActions = currentEditMode ? renderActions?.(shellState) : undefined;
+  const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
+  const pageActions = efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
     <div className="flex items-center gap-2">
       {efficiencyDisplayAction}
       {dateRangeAction}
-      {extraActions}
+      {pageExtraActions}
     </div>
   ) : undefined;
 
@@ -202,6 +204,7 @@ export function DashboardPageShell({
                   ctx={ctx}
                   mode={currentEditMode ? 'edit' : 'view'}
                   onConfigChange={setLocalConfig}
+                  editActions={editActions}
                 />
               ) : null}
             </>

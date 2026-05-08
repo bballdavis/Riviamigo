@@ -7,6 +7,7 @@ interface EditorDrawerProps {
   onBackToPalette: () => void;
   paletteContent: React.ReactNode;
   editContent: React.ReactNode | null;
+  editActions?: React.ReactNode;
 }
 
 export function EditorDrawer({
@@ -14,6 +15,7 @@ export function EditorDrawer({
   onBackToPalette,
   paletteContent,
   editContent,
+  editActions,
 }: EditorDrawerProps) {
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -55,6 +57,9 @@ export function EditorDrawer({
               Edit Mode
             </p>
           )}
+          {editActions ? (
+            <div className="ml-auto flex items-center gap-2">{editActions}</div>
+          ) : null}
         </header>
 
         {/* Content — the child component is responsible for its own internal scroll */}
