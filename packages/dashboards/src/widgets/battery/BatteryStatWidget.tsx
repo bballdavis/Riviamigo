@@ -83,7 +83,10 @@ const BATTERY_STAT_DEFINITIONS: BatteryStatDefinition[] = [
     id: 'charging_cycles',
     title: 'Charging Cycles',
     icon: 'lucide:refresh-ccw',
-    getValue: ({ health }) => fmt(health.charging_cycles, (v) => formatNumber(v, 0)),
+    getValue: ({ health }) => {
+      const cycles = health.charging_cycles || health.charge_count;
+      return formatNumber(cycles, 0);
+    },
   },
   {
     id: 'energy_added',

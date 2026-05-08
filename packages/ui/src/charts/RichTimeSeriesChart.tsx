@@ -27,6 +27,7 @@ export interface RichTimeSeriesChartProps {
   xUnit?: string | undefined;
   xValueFormatter?: ((value: number) => string) | undefined;
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
+  smoothed?: boolean;
 }
 
 function toSeconds(value: string | number | Date) {
@@ -68,6 +69,7 @@ export function RichTimeSeriesChart({
   xUnit,
   xValueFormatter,
   yValueFormatter = formatValue,
+  smoothed = false,
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
@@ -103,10 +105,10 @@ export function RichTimeSeriesChart({
   // Stable key describing chart structure — rebuild uPlot only when this changes.
   const structureKey = React.useMemo(
     () =>
-      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|` +
+      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothed}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothed, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -145,6 +147,7 @@ export function RichTimeSeriesChart({
         if (seriesMode === 'area') next.fill = `${color}22`;
         if (seriesMode === 'bar') next.paths = uPlot.paths.bars!({ size: [0.64, 80] });
         if (seriesMode === 'scatter') next.paths = () => null;
+        if (smoothed && (seriesMode === 'line' || seriesMode === 'area')) next.paths = uPlot.paths.spline?.();
         return next;
       }),
     ];

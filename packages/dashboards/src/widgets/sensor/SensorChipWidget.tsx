@@ -120,31 +120,34 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         </div>
       ) : null}
 
-      <div className="relative z-10 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-            {title}
-          </p>
-          {options.showSubtitle && options.subtitle ? (
-            <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
-          ) : null}
+      <div className={cn('relative z-10 flex flex-col', !showSprite && 'flex-1 justify-center')}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+              {title}
+            </p>
+            {options.showSubtitle && options.subtitle ? (
+              <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
+            ) : null}
+          </div>
+          <Icon icon={iconId} className="h-4 w-4 shrink-0 text-accent" />
         </div>
-        <Icon icon={iconId} className="h-4 w-4 shrink-0 text-accent" />
-      </div>
 
-      <div className="relative z-10 mt-1.5 flex items-baseline gap-1">
-        <span
-          className={cn(
-            'font-mono font-semibold tabular-nums tracking-tight text-accent',
-            options.valueSize === 'sm'
-              ? 'text-xl'
-              : options.valueSize === 'lg'
-                ? 'text-3xl'
-                : 'text-2xl'
-          )}
-        >
-          {displayValue}
-        </span>
+        <div className="mt-1.5 flex items-baseline gap-1">
+          <span
+            className={cn(
+              'font-mono font-semibold tabular-nums tracking-tight text-accent',
+              options.valueSize === 'sm'
+                ? 'text-xl'
+                : options.valueSize === 'lg'
+                  ? 'text-3xl'
+                  : 'text-2xl'
+            )}
+            style={{ textShadow: 'var(--rm-value-halo)' }}
+          >
+            {displayValue}
+          </span>
+        </div>
       </div>
     </Card>
   );

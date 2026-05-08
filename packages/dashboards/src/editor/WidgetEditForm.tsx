@@ -467,8 +467,8 @@ function ToggleSwitch({
       >
         {/* Thumb */}
         <span
-          className="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm"
-          style={{ transition: 'transform 150ms', transform: checked ? 'translateX(18px)' : 'translateX(2px)' }}
+          className="absolute h-5 w-5 rounded-full bg-white shadow-sm"
+          style={{ transition: 'transform 150ms', transform: checked ? 'translateX(16px)' : 'translateX(0px)' }}
         />
       </span>
     </button>
