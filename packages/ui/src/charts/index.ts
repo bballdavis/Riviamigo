@@ -1,4 +1,13 @@
-export { CHART_COLORS, CHART_MARGINS, CHART_FONT, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+export {
+  CHART_COLORS,
+  CHART_COLOR_OPTIONS,
+  CHART_MARGINS,
+  CHART_FONT,
+  TICK_STYLE,
+  TOOLTIP_CURSOR_STYLE,
+  getChartColor,
+} from './ChartProvider';
+export type { ChartColorKey } from './ChartProvider';
 export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
@@ -33,5 +42,8 @@ export { EfficiencyDrivesChart } from './EfficiencyDrivesChart';
 export type { EfficiencyDrivesChartProps } from './EfficiencyDrivesChart';
 export { ChargingSessionsChart } from './ChargingSessionsChart';
 export type { ChargingSessionsChartProps } from './ChargingSessionsChart';
-export { BatteryCapacityByMileageChart, ProjectedRangeByMileageChart } from './BatteryMileageCharts';
+export {
+  BatteryCapacityByMileageChart,
+  ProjectedRangeByMileageChart,
+} from './BatteryMileageCharts';
 export type { BatteryMileageChartProps, BatteryMileageDatum } from './BatteryMileageCharts';

@@ -4,7 +4,7 @@ import { rootRoute } from './__root';
 import { DrivesDashboardPage } from '../components/dashboard/DrivesDashboardPage';
 
 export function TripsContent() {
-  return <DrivesDashboardPage navKey="trips" slug="trips" title="Drives" />;
+  return <DrivesDashboardPage navKey="trips" slug="trips" title="Trips" />;
 }
 
 export const tripsRoute = createRoute({

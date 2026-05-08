@@ -1,5 +1,5 @@
 import React from 'react';
-import type { WidgetInstance } from './schema';
+import type { DashboardComponentType, WidgetInstance } from './schema';
 
 export type { WidgetInstance };
 
@@ -10,30 +10,37 @@ export interface WidgetCtx {
 }
 
 export interface WidgetDef {
-  id: string;
-  category: 'stat' | 'chart' | 'table' | 'custom';
+  componentType: DashboardComponentType;
+  definitionId: string;
   title: string;
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
   defaultOptions?: Record<string, unknown>;
-  editMode?: 'metric' | 'chart' | 'json' | 'none';
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }
 
 const registry = new Map<string, WidgetDef>();
 
-export function registerWidget(def: WidgetDef) {
-  registry.set(def.id, def);
+export function widgetKey(componentType: DashboardComponentType, definitionId: string) {
+  return `${componentType}:${definitionId}`;
 }
 
-export function getWidget(id: string): WidgetDef | undefined {
-  return registry.get(id);
+export function registerWidget(def: WidgetDef) {
+  registry.set(widgetKey(def.componentType, def.definitionId), def);
+}
+
+export function getWidget(componentType: DashboardComponentType, definitionId: string): WidgetDef | undefined {
+  return registry.get(widgetKey(componentType, definitionId));
+}
+
+export function getWidgetForInstance(instance: WidgetInstance): WidgetDef | undefined {
+  return getWidget(instance.componentType, instance.definitionId);
 }
 
 export function getAllWidgets(): WidgetDef[] {
   return Array.from(registry.values());
 }
 
-export function getWidgetIds(): string[] {
+export function getWidgetKeys(): string[] {
   return Array.from(registry.keys());
 }

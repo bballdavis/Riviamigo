@@ -6,7 +6,7 @@ import { WidgetHost } from './WidgetHost';
 const GridEditor = lazy(() => import('./GridEditor'));
 
 /** Row height in pixels for the CSS grid. */
-const ROW_HEIGHT = 80;
+const ROW_HEIGHT = 40;
 
 export interface DashboardRendererProps {
   config: DashboardConfig;

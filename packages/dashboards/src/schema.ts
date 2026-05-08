@@ -7,9 +7,12 @@ export const LayoutSchema = z.object({
   h: z.number().int().min(1),
 });
 
+export const ComponentTypeSchema = z.enum(['custom', 'sensor', 'chart']);
+
 export const WidgetInstanceSchema = z.object({
   id: z.string().uuid(),
-  widgetId: z.string(),
+  componentType: ComponentTypeSchema,
+  definitionId: z.string().min(1),
   title: z.string().optional(),
   layout: LayoutSchema,
   options: z.record(z.unknown()).optional(),
@@ -20,7 +23,7 @@ export const DashboardControlsSchema = z.object({
 });
 
 export const DashboardConfigSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   id: z.string().uuid(),
   slug: z.string().regex(/^[a-z0-9-]+$/),
   name: z.string().min(1).max(100),
@@ -33,6 +36,7 @@ export const DashboardConfigSchema = z.object({
 });
 
 export type WidgetLayout = z.infer<typeof LayoutSchema>;
+export type DashboardComponentType = z.infer<typeof ComponentTypeSchema>;
 export type WidgetInstance = z.infer<typeof WidgetInstanceSchema>;
 export type DashboardControls = z.infer<typeof DashboardControlsSchema>;
 export type DashboardConfig = z.infer<typeof DashboardConfigSchema>;
@@ -40,4 +44,4 @@ export type DashboardConfig = z.infer<typeof DashboardConfigSchema>;
 /** Strip server-managed fields for export/import transfer. */
 export type DashboardExport = Omit<DashboardConfig, 'id' | 'ownerId' | 'isDefault' | 'isLocked'>;
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;

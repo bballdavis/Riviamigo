@@ -7,7 +7,7 @@ import { normalizeDashboardConfig, useDashboardBySlug, useUpdateDashboard } from
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const dashboardConfig: DashboardConfig = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: '00000000-0000-0000-0000-000000000002',
   slug: 'battery',
   name: 'Battery',
@@ -18,8 +18,9 @@ const dashboardConfig: DashboardConfig = {
   widgets: [
     {
       id: 'd2000002-0000-0000-0000-000000000001',
-      widgetId: 'stat.current_soc',
-      layout: { x: 0, y: 0, w: 3, h: 1 },
+      componentType: 'sensor',
+      definitionId: 'battery_level',
+      layout: { x: 0, y: 0, w: 3, h: 2 },
     },
   ],
 };
@@ -66,7 +67,8 @@ describe('dashboard API wiring', () => {
 
     expect(normalized.name).toBe('Battery');
     expect(normalized.widgets).toHaveLength(1);
-    expect(normalized.widgets[0]?.widgetId).toBe('stat.current_soc');
+    expect(normalized.widgets[0]?.componentType).toBe('sensor');
+    expect(normalized.widgets[0]?.definitionId).toBe('battery_level');
   });
 
   it('returns the nested config from by-slug responses', async () => {

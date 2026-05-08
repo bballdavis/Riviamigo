@@ -84,8 +84,12 @@ struct SeriesParams {
 
 const METRICS: &[MetricDef] = &[
     MetricDef { id: "total_miles", label: "Total Miles", unit: Some("mi"), kind: "distance", source_label: "summary", supports_series: true, default_aggregation: "latest", source: MetricSource::Summary },
+    MetricDef { id: "trip_miles", label: "Trip Miles", unit: Some("mi"), kind: "distance", source_label: "trips", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
     MetricDef { id: "total_trips", label: "Total Trips", unit: None, kind: "number", source_label: "summary", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
     MetricDef { id: "energy_charged", label: "Energy Charged", unit: Some("kWh"), kind: "energy", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
+    MetricDef { id: "charging_sessions", label: "Charging Sessions", unit: None, kind: "number", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
+    MetricDef { id: "total_cost", label: "Total Cost", unit: Some("USD"), kind: "currency", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
+    MetricDef { id: "avg_session_energy", label: "Avg Session Energy", unit: Some("kWh"), kind: "energy", source_label: "charging", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
     MetricDef { id: "avg_efficiency", label: "Avg Efficiency", unit: Some("Wh/mi"), kind: "number", source_label: "trips", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
     MetricDef { id: "avg_trip_duration", label: "Avg Trip Duration", unit: Some("min"), kind: "number", source_label: "trips", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
     MetricDef { id: "battery_level", label: "Battery Level", unit: Some("%"), kind: "percent", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("battery_level") },
@@ -225,8 +229,36 @@ async fn summary_value(
         .fetch_optional(pool)
         .await?
         .flatten(),
+        "trip_miles" => sqlx::query_scalar(
+            "SELECT COALESCE(SUM(distance_miles), 0)::float8 FROM riviamigo.trips WHERE vehicle_id=$1",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
         "energy_charged" => sqlx::query_scalar(
             "SELECT COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)), 0)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
+        "charging_sessions" => sqlx::query_scalar(
+            "SELECT COUNT(*)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
+        "total_cost" => sqlx::query_scalar(
+            "SELECT COALESCE(SUM(cost_usd), 0)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
+        "avg_session_energy" => sqlx::query_scalar(
+            "SELECT AVG(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
         )
         .bind(vid)
         .fetch_optional(pool)
@@ -281,8 +313,32 @@ async fn summary_series(
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
         }
+        "trip_miles" => {
+            "SELECT date_trunc('day', started_at) AS ts, SUM(distance_miles)::float8 AS value
+             FROM riviamigo.trips
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             GROUP BY 1 ORDER BY 1"
+        }
         "energy_charged" => {
             "SELECT date_trunc('day', started_at) AS ts, SUM(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 AS value
+             FROM riviamigo.charge_sessions
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             GROUP BY 1 ORDER BY 1"
+        }
+        "charging_sessions" => {
+            "SELECT date_trunc('day', started_at) AS ts, COUNT(*)::float8 AS value
+             FROM riviamigo.charge_sessions
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             GROUP BY 1 ORDER BY 1"
+        }
+        "total_cost" => {
+            "SELECT date_trunc('day', started_at) AS ts, SUM(cost_usd)::float8 AS value
+             FROM riviamigo.charge_sessions
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             GROUP BY 1 ORDER BY 1"
+        }
+        "avg_session_energy" => {
+            "SELECT date_trunc('day', started_at) AS ts, AVG(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 AS value
              FROM riviamigo.charge_sessions
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"

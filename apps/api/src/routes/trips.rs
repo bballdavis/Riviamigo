@@ -33,6 +33,7 @@ struct TripListParams {
     offset: Option<i64>,
     page: Option<i64>,
     per_page: Option<i64>,
+    search: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +88,7 @@ async fn list_trips(
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
     let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
+    let search = p.search.as_deref().map(str::trim).filter(|value| !value.is_empty());
 
     let rows = sqlx::query_as!(
         TripRow,
@@ -102,19 +104,40 @@ async fn list_trips(
          LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
          LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
+         AND ($6::text IS NULL OR \
+              COALESCE(sg.name, '') ILIKE '%' || $6 || '%' OR \
+              COALESCE(eg.name, '') ILIKE '%' || $6 || '%' OR \
+              COALESCE(sa.display_name, '') ILIKE '%' || $6 || '%' OR \
+              COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' OR \
+              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' OR \
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%') \
          ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
         vid,
         from,
         to,
         limit,
-        offset
+        offset,
+        search
     )
     .fetch_all(&state.pool)
     .await?;
 
     let total: i64 = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM riviamigo.trips WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3",
-        vid, from, to
+        "SELECT COUNT(*) \
+         FROM riviamigo.trips t \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
+         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
+         AND ($4::text IS NULL OR \
+              COALESCE(sg.name, '') ILIKE '%' || $4 || '%' OR \
+              COALESCE(eg.name, '') ILIKE '%' || $4 || '%' OR \
+              COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' OR \
+              COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' OR \
+              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' OR \
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%')",
+        vid, from, to, search
     ).fetch_one(&state.pool).await?.unwrap_or(0);
 
     Ok(Json(serde_json::json!({

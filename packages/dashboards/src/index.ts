@@ -4,7 +4,7 @@ import './widgets/index';
 export { DashboardRenderer } from './DashboardRenderer';
 export { DashboardContent } from './DashboardContent';
 export { WidgetHost } from './WidgetHost';
-export { registerWidget, getWidget, getAllWidgets, getWidgetIds } from './registry';
+export { registerWidget, getWidget, getAllWidgets, getWidgetKeys } from './registry';
 export type { WidgetDef, WidgetCtx } from './registry';
 export * from './schema';
 export * from './api';
