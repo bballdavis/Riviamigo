@@ -30,7 +30,7 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
           placeholder="Search widgets…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full rounded-lg border border-border bg-bg px-7 py-1.5 text-xs placeholder:text-fg-tertiary focus:outline-none focus:ring-1 focus:ring-accent/50"
+          className="w-full rounded-lg border border-border bg-bg pl-8 pr-3 py-1.5 text-xs placeholder:text-fg-tertiary focus:outline-none focus:ring-1 focus:ring-accent/50"
         />
       </div>
       <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">

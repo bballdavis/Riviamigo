@@ -19,6 +19,7 @@ interface GridEditorProps {
   config: DashboardConfig;
   ctx: WidgetCtx;
   onConfigChange: ((next: DashboardConfig) => void) | undefined;
+  editActions?: React.ReactNode;
 }
 
 function layoutFromConfig(widgets: WidgetInstance[]): LayoutItem[] {
@@ -45,7 +46,7 @@ function applyLayout(widgets: WidgetInstance[], layout: readonly LayoutItem[]): 
   });
 }
 
-export default function GridEditor({ config, ctx, onConfigChange }: GridEditorProps) {
+export default function GridEditor({ config, ctx, onConfigChange, editActions }: GridEditorProps) {
   const widgets = Array.isArray(config.widgets) ? config.widgets : [];
   const [editingId, setEditingId] = useState<string | null>(null);
   const { width, containerRef, mounted } = useContainerWidth();
@@ -151,6 +152,12 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
           opacity: 1;
           pointer-events: auto;
         }
+        /* Delete button hover state */
+        .rgl-editor button.rgl-delete:hover {
+          background-color: #1a1a1a !important;
+          border-color: rgba(248, 113, 113, 0.7) !important;
+          color: rgb(248, 113, 113) !important;
+        }
       `}</style>
 
       <div className="rgl-editor">
@@ -188,36 +195,27 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                       <WidgetHost instance={w} ctx={ctx} />
                     </div>
 
-                    {/*
-                      Move handle — top-left.
-                      overflow:hidden + border-radius on card clips the outer TL corner.
-                      Inner notch via border-radius: 0 0 10px 0.
-                    */}
+                    {/* Move handle — NW corner, inner notch at BR */}
                     <div
-                      className="drag-handle rgl-overlay absolute left-0 top-0 z-40 flex h-7 w-7 cursor-grab items-center justify-center border border-accent/60 bg-[#1a1a1a] text-accent active:cursor-grabbing"
-                      style={{ borderRadius: '0 0 10px 0' }}
+                      className="drag-handle rgl-overlay absolute left-0 top-0 z-40 flex h-7 w-7 cursor-grab items-center justify-center border border-accent/60 text-accent active:cursor-grabbing"
+                      style={{ borderRadius: '0 0 10px 0', backgroundColor: '#1a1a1a' }}
                       title="Drag to move"
                     >
                       <GripVertical className="h-4 w-4" />
                     </div>
 
-                    {/*
-                      Delete — top-right.
-                      Inner notch via border-radius: 0 0 0 10px.
-                    */}
+                    {/* Delete — NE corner, inner notch at BL */}
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); removeWidget(w.id); }}
                       title="Remove widget"
-                      className="rgl-overlay absolute right-0 top-0 z-40 flex h-7 w-7 items-center justify-center border border-accent/60 bg-[#1a1a1a] text-accent transition-colors hover:border-red-400/70 hover:bg-[#1a1a1a] hover:text-red-400"
-                      style={{ borderRadius: '0 0 0 10px' }}
+                      className="rgl-overlay rgl-delete absolute right-0 top-0 z-40 flex h-7 w-7 items-center justify-center border border-accent/60 text-accent transition-colors"
+                      style={{ borderRadius: '0 0 0 10px', backgroundColor: '#1a1a1a' }}
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
 
-                    {/*
-                      Edit — center.
-                    */}
+                    {/* Edit — center */}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -227,9 +225,10 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
                       title={isEditing ? 'Close editor' : 'Edit widget settings'}
                       className={`rgl-overlay absolute left-1/2 top-1/2 z-40 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
                         isEditing
-                          ? 'border-accent bg-accent/20 text-accent'
-                          : 'border-accent/60 bg-[#1a1a1a] text-accent hover:bg-[#252525]'
+                          ? 'border-accent text-accent'
+                          : 'border-accent/60 text-accent'
                       }`}
+                      style={{ backgroundColor: isEditing ? 'rgba(var(--rm-accent-rgb, 251 146 60) / 0.2)' : '#1a1a1a' }}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                       {isEditing ? 'Editing' : 'Edit'}
@@ -245,6 +244,7 @@ export default function GridEditor({ config, ctx, onConfigChange }: GridEditorPr
       <EditorDrawer
         mode={drawerMode}
         onBackToPalette={() => setEditingId(null)}
+        editActions={editActions}
         paletteContent={<PaletteView widgets={getAllWidgets()} onAdd={addWidget} />}
         editContent={
           editingWidget ? (

@@ -7,43 +7,8 @@ vi.mock('@riviamigo/ui/primitives', async () => {
   return m;
 });
 
-vi.mock('@riviamigo/ui/charts', () => ({
-  SocAreaChart: () => <div data-testid="soc-chart" />,
-  EfficiencyTrendChart: () => <div data-testid="efficiency-chart" />,
-}));
-
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
-  useCurrentVehicleStatus: () => ({
-    data: {
-      vehicle_id: 'vehicle-1',
-      battery_level: 79,
-      range_miles: 210,
-      power_state: 'go',
-      charger_state: null,
-      speed_mph: 0,
-      latitude: null,
-      longitude: null,
-      altitude_m: 12,
-      drive_mode: 'all_purpose',
-      is_online: true,
-      last_updated: '2024-01-01T00:00:00Z',
-    },
-  }),
-  useSummaryStats: () => ({
-    data: {
-      total_miles: 1234,
-      total_trips: 42,
-      total_energy_kwh: 456.7,
-      avg_efficiency_wh_mi: 318,
-      total_charge_sessions: 8,
-      total_cost_usd: 12.5,
-    },
-    isLoading: false,
-  }),
-  useSocHistory: () => ({ data: [{ ts: '2024-01-01T00:00:00Z', soc: 79 }], isLoading: false }),
-  useEfficiencyTrend: () => ({ data: [{ day: '2024-01-01', day_avg_wh_mi: 320, rolling_7d_wh_mi: 315 }], isLoading: false }),
-  useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Forest R1S' }] }),
 }));
 
 const mockConfig = {
