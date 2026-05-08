@@ -27,6 +27,8 @@ export interface DashboardPageProps {
 export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
   const createDashboard = useCreateDashboard();
+  const qc = useQueryClient();
+  const isPending = updateDashboard.isPending || createDashboard.isPending;
 
   return (
     <DashboardPageShell
@@ -34,56 +36,61 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard })}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc })}
     />
   );
 }
 
-export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: DashboardPageShellRenderState) {
-  return !isEditMode ? (
-    <button
-      onClick={enterEdit}
-      className="p-1 rounded-md text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
-      title="Edit dashboard"
-    >
-      <Edit2 className="h-4 w-4" />
-    </button>
-  ) : undefined;
-}
-
-interface DashboardEditMutations {
+export interface DashboardEditMutations {
   updateDashboard: ReturnType<typeof useUpdateDashboard>;
   createDashboard: ReturnType<typeof useCreateDashboard>;
+  qc: ReturnType<typeof useQueryClient>;
 }
 
-export function createDefaultDashboardEditActions({ updateDashboard, createDashboard }: DashboardEditMutations) {
+export function createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc }: DashboardEditMutations) {
   return function renderDefaultDashboardEditActions({ isEditMode, localConfig, exitEdit }: DashboardPageShellRenderState) {
+    if (!isEditMode) return undefined;
     const isPending = updateDashboard.isPending || createDashboard.isPending;
 
-    return isEditMode ? (
-      <>
-        <button
-          onClick={async () => {
-            if (!localConfig) {
-              exitEdit();
+    async function handleSave() {
+      if (!localConfig) { exitEdit(); return; }
+      try {
+        if (shouldCreateUserDashboard(localConfig)) {
+          try {
+            await createDashboard.mutateAsync({
+              ...localConfig,
+              isDefault: false,
+              isLocked: false,
+              ownerId: null,
+            });
+          } catch {
+            await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
+            const existing = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
+            if (existing && existing.ownerId !== null) {
+              await updateDashboard.mutateAsync({
+                ...localConfig,
+                id: existing.id,
+                ownerId: existing.ownerId,
+                isDefault: false,
+                isLocked: false,
+              });
+            } else {
               return;
             }
-            try {
-              if (shouldCreateUserDashboard(localConfig)) {
-                await createDashboard.mutateAsync({
-                  ...localConfig,
-                  isDefault: false,
-                  isLocked: false,
-                  ownerId: null,
-                });
-              } else {
-                await updateDashboard.mutateAsync(localConfig);
-              }
-              exitEdit();
-            } catch {
-              // API unavailable or rejected; stay in edit mode so changes aren't lost.
-            }
-          }}
+          }
+        } else {
+          await updateDashboard.mutateAsync(localConfig);
+        }
+        exitEdit();
+      } catch {
+        // stay in edit mode
+      }
+    }
+
+    return (
+      <>
+        <button
+          onClick={handleSave}
           disabled={isPending}
           title="Save changes"
           className="p-2 rounded-lg bg-accent text-white disabled:opacity-40 hover:bg-accent/90 transition-colors"
@@ -98,8 +105,20 @@ export function createDefaultDashboardEditActions({ updateDashboard, createDashb
           <Trash2 className="h-4 w-4" />
         </button>
       </>
-    ) : undefined;
+    );
   };
+}
+
+export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: DashboardPageShellRenderState) {
+  return !isEditMode ? (
+    <button
+      onClick={enterEdit}
+      className="p-1 rounded-md text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
+      title="Edit dashboard"
+    >
+      <Edit2 className="h-4 w-4" />
+    </button>
+  ) : undefined;
 }
 
 function shouldCreateUserDashboard(config: DashboardConfig) {

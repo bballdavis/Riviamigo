@@ -14,6 +14,11 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => mockNavigate };
 });
 
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+});
+
 vi.mock('@riviamigo/ui/tables', () => ({
   tripColumns: [],
   DataTable: ({ data, emptyTitle, onRowClick }: { data: Array<{ id: string; name?: string }>; emptyTitle?: string; onRowClick?: (row: unknown) => void }) => (
