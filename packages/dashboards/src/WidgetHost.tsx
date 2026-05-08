@@ -21,7 +21,7 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
   const Component = def.component;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {instance.title && instance.componentType !== 'sensor' ? (
+      {instance.title && instance.componentType !== 'sensor' && instance.componentType !== 'battery' && instance.componentType !== 'charging' ? (
         <p className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
           {instance.title}
         </p>

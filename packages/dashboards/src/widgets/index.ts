@@ -2,6 +2,7 @@
 // This barrel must be imported once near the app root.
 import './sensor/SensorChipWidget';
 import './battery/BatteryStatWidget';
+import './charging/ChargingStatWidget';
 import './chart/DashboardChartWidget';
 import './table/ChargingTableWidget';
 import './table/TripsTableWidget';
