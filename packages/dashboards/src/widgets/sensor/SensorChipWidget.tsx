@@ -1,17 +1,5 @@
 import React from 'react';
-import {
-  Activity,
-  Battery,
-  Bolt,
-  CalendarDays,
-  Clock3,
-  Gauge,
-  Map,
-  Route,
-  Thermometer,
-  Zap,
-  type LucideIcon,
-} from 'lucide-react';
+import { Icon } from '@iconify/react';
 import { useMetricSeries, useMetricValue } from '@riviamigo/hooks';
 import {
   getChartColor,
@@ -30,12 +18,19 @@ import {
 } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
-import { getSensorDefinition, SENSOR_DEFINITIONS, type SensorIconKey } from './sensorDefinitions';
+import { resolveIconId } from '../../editor/iconMigration';
+import { seriesToDailyDeltas } from '../../editor/dailyDelta';
+import {
+  getSensorDefinition,
+  SENSOR_DEFINITIONS,
+  type SensorChartType,
+  type SensorIconKey,
+} from './sensorDefinitions';
 
 interface SensorChipOptions {
   metric?: string;
   icon?: SensorIconKey;
-  chartType?: MiniSparklineType | 'none';
+  chartType?: SensorChartType | 'none';
   showSprite?: boolean;
   showSubtitle?: boolean;
   subtitle?: string;
@@ -44,22 +39,11 @@ interface SensorChipOptions {
   valueMode?: 'latest' | 'sum' | 'avg' | 'count';
   curveSmoothing?: number | boolean;
   curveColor?: ChartColorKey;
+  windowDays?: number;
 }
 
 const DEFAULT_CURVE_SMOOTHING = 0.45;
-
-const ICONS: Record<SensorIconKey, LucideIcon> = {
-  activity: Activity,
-  battery: Battery,
-  bolt: Bolt,
-  calendar: CalendarDays,
-  clock: Clock3,
-  gauge: Gauge,
-  map: Map,
-  route: Route,
-  thermometer: Thermometer,
-  zap: Zap,
-};
+const DEFAULT_WINDOW_DAYS = 30;
 
 function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
   const definition = getSensorDefinition(instance.definitionId) ?? SENSOR_DEFINITIONS[0]!;
@@ -80,6 +64,10 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
       options.curveSmoothing,
       defaultCurveSmoothing(definition.chartType)
     ),
+    windowDays:
+      typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
+        ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
+        : DEFAULT_WINDOW_DAYS,
   };
 }
 
@@ -89,10 +77,17 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const { data: value } = useMetricValue(ctx.vehicleId, options.metric);
   const { data: series = [] } = useMetricSeries(ctx.vehicleId, options.metric, ctx.from, ctx.to);
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
-  const Icon = ICONS[options.icon] ?? Activity;
+  const iconId = resolveIconId(options.icon);
   const metricValue = deriveMetricValue(options.valueMode, value?.value, series);
   const displayValue = formatMetricValue(metricValue, value?.unit);
-  const spriteData = deriveSpriteData(series, metricValue, value?.ts ?? ctx.to);
+
+  const isDailyDelta = options.chartType === 'daily_delta';
+  const sparklineType: MiniSparklineType = isDailyDelta
+    ? 'bar'
+    : (options.chartType as MiniSparklineType);
+  const spriteData = isDailyDelta
+    ? seriesToDailyDeltas(series, options.windowDays)
+    : deriveSpriteData(series, metricValue, value?.ts ?? ctx.to);
   const showSprite = options.showSprite && options.chartType !== 'none';
 
   return (
@@ -114,7 +109,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         >
           <MiniSparkline
             data={spriteData}
-            type={options.chartType}
+            type={sparklineType}
             height={36}
             color={getChartColor(options.curveColor)}
             showFallback
@@ -133,7 +128,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
           ) : null}
         </div>
-        <Icon className="h-4 w-4 shrink-0 text-accent" />
+        <Icon icon={iconId} className="h-4 w-4 shrink-0 text-accent" />
       </div>
 
       <div className="relative z-10 mt-1.5 flex items-baseline gap-1">
@@ -202,7 +197,7 @@ function formatMetricValue(value: number | null | undefined, unit: string | null
   return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
 
-function defaultCurveSmoothing(chartType: MiniSparklineType | 'none') {
+function defaultCurveSmoothing(chartType: SensorChartType | 'none') {
   return chartType === 'line' || chartType === 'area' ? DEFAULT_CURVE_SMOOTHING : 0;
 }
 
@@ -215,6 +210,7 @@ function normalizeCurveSmoothing(value: number | boolean | undefined, fallback: 
 }
 
 for (const definition of SENSOR_DEFINITIONS) {
+  const cumulative = definition.cumulative === true;
   registerWidget({
     componentType: 'sensor',
     definitionId: definition.id,
@@ -232,6 +228,7 @@ for (const definition of SENSOR_DEFINITIONS) {
       showSubtitle: false,
       accentBorder: definition.accent ?? false,
       valueSize: 'md',
+      ...(cumulative ? { windowDays: DEFAULT_WINDOW_DAYS } : {}),
     },
     component: SensorChipWidget,
   });
