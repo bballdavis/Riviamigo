@@ -59,6 +59,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: { schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => ({ schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }),
 }));
 
@@ -76,7 +77,7 @@ describe('Trips page', () => {
   it('renders the trips dashboard shell', () => {
     render(<TripsContent />);
 
-    expect(screen.getByText('Drives')).toBeInTheDocument();
+    expect(screen.getByText('Trips')).toBeInTheDocument();
     expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
     expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });

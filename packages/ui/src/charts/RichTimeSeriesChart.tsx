@@ -72,6 +72,7 @@ export function RichTimeSeriesChart({
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
   const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
+  const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
 
   const alignedData = React.useMemo<AlignedData>(() => {
     const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
@@ -79,6 +80,17 @@ export function RichTimeSeriesChart({
   }, [points, series, xTime]);
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
+  const showLegend = series.length > 0;
+  const chartHeight = Math.max(120, height - (showLegend ? 34 : 0));
+  const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
+
+  React.useEffect(() => {
+    setHiddenKeys((current) => {
+      const validKeys = new Set(series.map((item) => item.key));
+      const next = new Set([...current].filter((key) => validKeys.has(key)));
+      return next.size === current.size ? current : next;
+    });
+  }, [series]);
 
   React.useEffect(() => {
     const root = rootRef.current;
@@ -93,6 +105,7 @@ export function RichTimeSeriesChart({
           const seriesMode = item.mode ?? mode;
           const next: Series = {
             label: item.label,
+            show: !hiddenKeys.has(item.key),
             stroke: color,
             width: 2,
             points: { show: seriesMode === 'scatter', size: 6, stroke: color, fill: color },
@@ -106,7 +119,7 @@ export function RichTimeSeriesChart({
 
       return {
         width,
-        height,
+        height: chartHeight,
         data: alignedData,
         padding: [10, 12, 4, 4],
         cursor: {
@@ -139,10 +152,13 @@ export function RichTimeSeriesChart({
                 return;
               }
               const timestamp = alignedData[0]?.[idx];
-              const rows = series.map((item, seriesIndex) => {
-                const value = alignedData[seriesIndex + 1]?.[idx] as number | null | undefined;
-                return `${item.label}: ${yValueFormatter(value, yUnit)}`;
-              });
+              const rows = series
+                .map((item, seriesIndex) => {
+                  if (hiddenKeys.has(item.key)) return null;
+                  const value = alignedData[seriesIndex + 1]?.[idx] as number | null | undefined;
+                  return `${item.label}: ${yValueFormatter(value, yUnit)}`;
+                })
+                .filter((row): row is string => Boolean(row));
               setTooltip({
                 left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
                 top: Math.max((u.cursor.top ?? 0) + 12, 12),
@@ -161,7 +177,7 @@ export function RichTimeSeriesChart({
 
     const observer = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(() => {
-          chartRef.current?.setSize({ width: Math.max(320, root.clientWidth || 320), height });
+          chartRef.current?.setSize({ width: Math.max(320, root.clientWidth || 320), height: chartHeight });
         })
       : null;
     observer?.observe(root);
@@ -172,7 +188,7 @@ export function RichTimeSeriesChart({
       chartRef.current = null;
       setTooltip(null);
     };
-  }, [alignedData, hasData, height, loading, mode, series, xTime, xUnit, xValueFormatter, yUnit, yValueFormatter]);
+  }, [alignedData, chartHeight, hasData, hiddenKeySignature, hiddenKeys, loading, mode, series, xTime, xUnit, xValueFormatter, yUnit, yValueFormatter]);
 
   if (loading) return <ChartSkeleton height={height} />;
 
@@ -188,14 +204,40 @@ export function RichTimeSeriesChart({
   }
 
   return (
-    <div className={cn('relative min-w-0 overflow-hidden rounded-lg border border-border bg-bg-elevated/40', className)}>
-      <div ref={rootRef} className="rich-uplot-chart w-full" style={{ height }} />
+    <div className={cn('relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-bg-elevated/40', className)} style={{ height }}>
+      <div ref={rootRef} className="rich-uplot-chart w-full min-h-0 flex-1" style={{ height: chartHeight }} />
       {tooltip ? (
         <div
           className="pointer-events-none absolute z-10 whitespace-pre rounded-md border border-border bg-bg px-2 py-1 text-[11px] leading-4 text-fg-secondary shadow-lg"
           style={{ left: tooltip.left, top: tooltip.top }}
         >
           {tooltip.text}
+        </div>
+      ) : null}
+      {showLegend ? (
+        <div className="flex h-[34px] shrink-0 items-center justify-center gap-3 border-t border-border/60 px-3 text-[11px] text-fg-tertiary">
+          {series.map((item, index) => {
+            const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.sky);
+            const isHidden = hiddenKeys.has(item.key);
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => {
+                  setHiddenKeys((current) => {
+                    const next = new Set(current);
+                    if (next.has(item.key)) next.delete(item.key);
+                    else next.add(item.key);
+                    return next;
+                  });
+                }}
+                className={cn('flex items-center gap-1.5 rounded-md px-1.5 py-1 transition hover:bg-bg', isHidden && 'opacity-45')}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>

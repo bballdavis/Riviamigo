@@ -6,14 +6,34 @@
 import { colors } from '../tokens/colors';
 
 export const CHART_COLORS = {
-  accent:  colors.accent[500],
+  accent: colors.accent[500],
   success: colors.soc.high,
   warning: colors.soc.mid,
-  danger:  colors.soc.low,
-  muted:   colors.slate[600],
-  grid:    'rgba(255,255,255,0.06)',
+  danger: colors.soc.low,
+  muted: colors.slate[600],
+  grid: 'rgba(255,255,255,0.06)',
   ...colors.dataViz,
 } as const;
+
+export const CHART_COLOR_OPTIONS = [
+  { value: 'accent', label: 'Theme Accent', color: 'var(--rm-accent)' },
+  { value: 'emerald', label: 'Emerald', color: CHART_COLORS.emerald },
+  { value: 'amber', label: 'Amber', color: CHART_COLORS.amber },
+  { value: 'sky', label: 'Sky', color: CHART_COLORS.sky },
+  { value: 'violet', label: 'Violet', color: CHART_COLORS.violet },
+  { value: 'rose', label: 'Rose', color: CHART_COLORS.rose },
+  { value: 'teal', label: 'Teal', color: CHART_COLORS.teal },
+  { value: 'indigo', label: 'Indigo', color: CHART_COLORS.indigo },
+] as const;
+
+export type ChartColorKey = (typeof CHART_COLOR_OPTIONS)[number]['value'];
+
+export function getChartColor(value: string | null | undefined) {
+  return (
+    CHART_COLOR_OPTIONS.find((option) => option.value === value)?.color ??
+    CHART_COLOR_OPTIONS[0].color
+  );
+}
 
 export const CHART_MARGINS = {
   default: { top: 12, right: 24, left: 8, bottom: 8 },

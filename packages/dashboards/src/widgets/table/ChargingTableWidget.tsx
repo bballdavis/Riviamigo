@@ -52,10 +52,11 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
 }
 
 registerWidget({
-  id: 'table.charge_sessions',
-  category: 'table',
+  componentType: 'custom',
+  definitionId: 'charging.sessions.table',
   title: 'Charging Sessions',
-  defaultSize: { w: 12, h: 5 },
-  minSize: { w: 6, h: 3 },
+  defaultSize: { w: 12, h: 10 },
+  minSize: { w: 6, h: 6 },
+  defaultOptions: {},
   component: ChargingTableWidget,
 });

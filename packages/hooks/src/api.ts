@@ -244,10 +244,18 @@ class ApiClient {
 
   // ── Trips ─────────────────────────────────────────────────────────────────
 
-  async listTrips(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
+  async listTrips(vehicleId: string, from: string, to: string, page = 1, perPage = 25, search = '') {
     const offset = (page - 1) * perPage;
+    const trimmedSearch = search.trim();
     const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/trips', undefined, {
-      vehicle_id: vehicleId, from, to, page, per_page: perPage, limit: perPage, offset,
+      vehicle_id: vehicleId,
+      from,
+      to,
+      page,
+      per_page: perPage,
+      limit: perPage,
+      offset,
+      ...(trimmedSearch ? { search: trimmedSearch } : {}),
     });
     const normalized = normalizePaginated(response, page, perPage);
     return {

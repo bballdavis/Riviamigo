@@ -226,7 +226,8 @@ function getDefaultSignature(config: DashboardConfig) {
   return JSON.stringify({
     controls: config.controls,
     widgets: config.widgets.map((widget) => ({
-      widgetId: widget.widgetId,
+      componentType: widget.componentType,
+      definitionId: widget.definitionId,
       title: widget.title ?? null,
       options: widget.options ?? null,
       layout: widget.layout,
