@@ -1,7 +1,7 @@
 {
   "id": "phantom-drain",
   "title": "Phantom Drain",
-  "description": "Battery percentage lost while parked.",
+  "description": "Battery percentage lost while parked, per day.",
   "pages": ["overview", "battery"],
   "source": "phantom_drain",
   "mode": "bar",

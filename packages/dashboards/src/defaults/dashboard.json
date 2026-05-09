@@ -38,7 +38,6 @@
         "showPicker": true
       },
       "layout": { "x": 0, "y": 9, "w": 12, "h": 10 }
-    },
-    { "id": "d1000001-0000-0000-0000-000000000007", "componentType": "custom", "definitionId": "trips.table", "title": "Recent Trips", "layout": { "x": 0, "y": 19, "w": 12, "h": 12 }, "options": {} }
+    }
   ]
 }

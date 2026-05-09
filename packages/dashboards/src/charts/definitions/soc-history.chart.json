@@ -6,6 +6,8 @@
   "source": "soc_history",
   "mode": "area",
   "yUnit": "%",
+  "yRange": [0, 100],
+  "stepInterpolation": true,
   "defaultSize": { "w": 6, "h": 4 },
   "minSize": { "w": 4, "h": 3 },
   "emptyTitle": "No battery level history for this period"

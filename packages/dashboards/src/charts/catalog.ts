@@ -5,7 +5,6 @@ export type DashboardChartPage = 'overview' | 'battery' | 'charging' | 'efficien
 export type DashboardChartSource =
   | 'soc_history'
   | 'range_history'
-  | 'charge_level'
   | 'charging_sessions_energy'
   | 'charging_weekly_energy'
   | 'efficiency_trend'
@@ -24,6 +23,8 @@ export interface DashboardChartDefinition {
   source: DashboardChartSource;
   mode?: 'line' | 'area' | 'bar' | 'scatter';
   yUnit?: string;
+  yRange?: [number, number];
+  stepInterpolation?: boolean;
   defaultSize?: WidgetDef['defaultSize'];
   minSize?: WidgetDef['minSize'];
   emptyTitle?: string;

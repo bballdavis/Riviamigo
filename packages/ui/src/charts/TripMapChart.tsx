@@ -8,6 +8,8 @@ export interface TripMapRoute {
   color?: string;
 }
 
+export type MapStyleMode = 'dark' | 'light';
+
 export interface TripMapChartProps {
   track: LatLng[];
   routes?: TripMapRoute[];
@@ -17,6 +19,7 @@ export interface TripMapChartProps {
   endPoint?: LatLng;
   height?: number;
   className?: string;
+  mapStyle?: MapStyleMode;
 }
 
 interface MapSourceApi {
@@ -37,6 +40,27 @@ interface MapApi {
   removeLayer(id: string): void;
   setPaintProperty(layerId: string, name: string, value: unknown): void;
   getCanvas(): { style: CSSStyleDeclaration };
+  setStyle(style: unknown): void;
+}
+
+const TILE_URLS: Record<MapStyleMode, string> = {
+  dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+  light: 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+};
+
+function buildMapLibreStyle(mode: MapStyleMode) {
+  return {
+    version: 8 as const,
+    sources: {
+      'carto-base': {
+        type: 'raster' as const,
+        tiles: [TILE_URLS[mode]],
+        tileSize: 256,
+        attribution: '© OpenStreetMap © CARTO',
+      },
+    },
+    layers: [{ id: 'background', type: 'raster' as const, source: 'carto-base' }],
+  };
 }
 
 /**
@@ -50,6 +74,7 @@ export function TripMapChart({
   onRouteClick,
   height = 320,
   className,
+  mapStyle = 'dark',
 }: TripMapChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MapApi | null>(null);
@@ -57,6 +82,8 @@ export function TripMapChart({
   const syncedRouteIdsRef = React.useRef<string[]>([]);
   const lastRouteSignatureRef = React.useRef<string>('');
   const onRouteClickRef = React.useRef(onRouteClick);
+  const styleGenRef = React.useRef(0);
+
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
     [routes, track],
@@ -82,6 +109,7 @@ export function TripMapChart({
     return () => observer.disconnect();
   }, []);
 
+  // Initial map creation
   React.useEffect(() => {
     if (!containerRef.current || routeList.length === 0 || mapRef.current) return;
 
@@ -99,18 +127,7 @@ export function TripMapChart({
 
       map = new maplibregl.default.Map({
         container: containerRef.current!,
-        style: {
-          version: 8,
-          sources: {
-            'carto-dark': {
-              type: 'raster',
-              tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
-              tileSize: 256,
-              attribution: '© OpenStreetMap © CARTO',
-            },
-          },
-          layers: [{ id: 'background', type: 'raster', source: 'carto-dark' }],
-        },
+        style: buildMapLibreStyle(mapStyle),
         center: [firstPoint.lng, firstPoint.lat],
         zoom: 12,
         attributionControl: false,
@@ -139,8 +156,33 @@ export function TripMapChart({
         mapRef.current = null;
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeList.length]);
 
+  // Swap tile layer when mapStyle changes (after initial load)
+  React.useEffect(() => {
+    if (!mapRef.current || !isLoadedRef.current) return;
+
+    const map = mapRef.current;
+    const gen = ++styleGenRef.current;
+
+    isLoadedRef.current = false;
+    syncedRouteIdsRef.current = [];
+    lastRouteSignatureRef.current = '';
+
+    map.setStyle(buildMapLibreStyle(mapStyle));
+
+    map.on('style.load', () => {
+      if (styleGenRef.current !== gen) return;
+      isLoadedRef.current = true;
+      syncRoutes(map, routeList, selectedRouteIds, onRouteClickRef);
+      requestAnimationFrame(() => { map.resize(); });
+    });
+  // mapStyle is the only real trigger; routeList/selectedRouteIds are handled by the route-sync effect below
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapStyle]);
+
+  // Sync routes whenever routes or selection changes
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current || routeList.length === 0) return;
 

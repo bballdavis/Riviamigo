@@ -1,11 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import {
   useCreateDashboard,
   useUpdateDashboard,
 } from '@riviamigo/dashboards';
-import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
 import { Battery, Car, Gauge, MapPin, Save, Thermometer, Trash2, Edit2, Cpu } from 'lucide-react';
@@ -27,8 +25,6 @@ export interface DashboardPageProps {
 export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
   const createDashboard = useCreateDashboard();
-  const qc = useQueryClient();
-  const isPending = updateDashboard.isPending || createDashboard.isPending;
 
   return (
     <DashboardPageShell
@@ -36,7 +32,7 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc })}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard })}
     />
   );
 }
@@ -44,42 +40,33 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
 export interface DashboardEditMutations {
   updateDashboard: ReturnType<typeof useUpdateDashboard>;
   createDashboard: ReturnType<typeof useCreateDashboard>;
-  qc: ReturnType<typeof useQueryClient>;
 }
 
-export function createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc }: DashboardEditMutations) {
-  return function renderDefaultDashboardEditActions({ isEditMode, localConfig, exitEdit }: DashboardPageShellRenderState) {
+export function createDefaultDashboardEditActions({ updateDashboard, createDashboard }: DashboardEditMutations) {
+  return function renderDefaultDashboardEditActions({ isEditMode, localConfig, savedConfig, exitEdit }: DashboardPageShellRenderState) {
     if (!isEditMode) return undefined;
     const isPending = updateDashboard.isPending || createDashboard.isPending;
 
     async function handleSave() {
       if (!localConfig) { exitEdit(); return; }
       try {
-        if (shouldCreateUserDashboard(localConfig)) {
-          try {
-            await createDashboard.mutateAsync({
-              ...localConfig,
-              isDefault: false,
-              isLocked: false,
-              ownerId: null,
-            });
-          } catch {
-            await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
-            const existing = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
-            if (existing && existing.ownerId !== null) {
-              await updateDashboard.mutateAsync({
-                ...localConfig,
-                id: existing.id,
-                ownerId: existing.ownerId,
-                isDefault: false,
-                isLocked: false,
-              });
-            } else {
-              return;
-            }
-          }
+        // savedConfig is the freshest query result; localConfig flags can be stale if the query resolved after entering edit mode.
+        const ownedCopy = savedConfig?.ownerId != null ? savedConfig : null;
+        if (ownedCopy) {
+          await updateDashboard.mutateAsync({
+            ...localConfig,
+            id: ownedCopy.id,
+            ownerId: ownedCopy.ownerId,
+            isDefault: false,
+            isLocked: false,
+          });
         } else {
-          await updateDashboard.mutateAsync(localConfig);
+          await createDashboard.mutateAsync({
+            ...localConfig,
+            isDefault: false,
+            isLocked: false,
+            ownerId: null,
+          });
         }
         exitEdit();
       } catch {
@@ -119,10 +106,6 @@ export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: Das
       <Edit2 className="h-4 w-4" />
     </button>
   ) : undefined;
-}
-
-function shouldCreateUserDashboard(config: DashboardConfig) {
-  return config.isDefault && config.isLocked && config.ownerId === null;
 }
 
 export function CurrentVehicleStatePanel({ status, images }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined }) {

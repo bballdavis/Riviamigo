@@ -22,7 +22,7 @@ use crate::{
         state_period::VehicleState,
         telemetry::{ChargerState, PowerState, TelemetryEvent},
     },
-    services::{cost::resolve_profile, geofences::match_geofence},
+    services::{cost::resolve_profile, geofences::match_geofence, weather::fetch_ambient_temp_c},
 };
 
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
@@ -140,6 +140,11 @@ pub async fn run_vehicle_worker(
         )
         .await;
     });
+
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
 
     let mut trip_det = TripDetectorState::new(vehicle_id);
     let mut charge_det = ChargeDetectorState::new(vehicle_id);
@@ -260,7 +265,7 @@ pub async fn run_vehicle_worker(
                     &trip.points,
                 );
                 if distance >= MIN_TRIP_DISTANCE_MILES {
-                    let _ = persist_trip(&pool, &trip, distance).await;
+                    let _ = persist_trip(&pool, &http_client, &trip, distance).await;
                 }
             }
             _ => {}
@@ -1174,6 +1179,7 @@ mod snapshot_tests {
 
 async fn persist_trip(
     pool: &PgPool,
+    http_client: &reqwest::Client,
     trip: &crate::ingestion::trip_detector::CompletedTripData,
     distance: f64,
 ) -> anyhow::Result<()> {
@@ -1221,6 +1227,16 @@ async fn persist_trip(
 
     let start = trip.points.first();
     let end = trip.points.last();
+
+    // Fetch ambient temperature from Open-Meteo using trip start location/time.
+    // Falls back to None gracefully if the request fails.
+    let outside_temp_c = match start {
+        Some(pt) => {
+            fetch_ambient_temp_c(http_client, pt.lat, pt.lng, trip.started_at).await
+        }
+        None => None,
+    };
+
     let owner_id = get_vehicle_owner_id(pool, trip.vehicle_id).await?;
     let start_match = match (owner_id, start) {
         (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
@@ -1245,8 +1261,8 @@ async fn persist_trip(
             range_start_mi, range_end_mi,
             power_max_kw, power_min_kw,
             elevation_gain_m, elevation_loss_m,
-            inside_temp_avg_c, regen_wh, energy_wh, energy_strategy)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)"#,
+            inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)"#,
         trip.trip_id,
         trip.vehicle_id,
         trip.started_at,
@@ -1278,6 +1294,7 @@ async fn persist_trip(
         trip.elevation_gain_m,
         trip.elevation_loss_m,
         trip.inside_temp_avg_c,
+        outside_temp_c,
         trip.regen_wh,
         energy_wh,
         energy_strategy.as_deref()

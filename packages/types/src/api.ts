@@ -61,6 +61,7 @@ export interface Trip {
   end_address?: string | null;
   start_place?: string | null;
   end_place?: string | null;
+  outside_temp_c?: number | null;
 }
 
 export interface TrackPoint {

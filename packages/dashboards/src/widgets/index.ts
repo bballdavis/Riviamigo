@@ -6,4 +6,5 @@ import './charging/ChargingStatWidget';
 import './chart/DashboardChartWidget';
 import './table/ChargingTableWidget';
 import './table/TripsTableWidget';
+import './table/TripStatWidget';
 import './custom/CustomWidgets';

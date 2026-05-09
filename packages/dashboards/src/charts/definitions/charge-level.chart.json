@@ -1,11 +1,13 @@
 {
   "id": "charge-level",
   "title": "Charge Level",
-  "description": "Start and end state-of-charge points for charging sessions.",
+  "description": "State-of-charge from telemetry over time, showing charge and discharge patterns.",
   "pages": ["overview", "charging"],
-  "source": "charge_level",
-  "mode": "line",
+  "source": "soc_history",
+  "mode": "area",
   "yUnit": "%",
+  "yRange": [0, 100],
+  "stepInterpolation": true,
   "defaultSize": { "w": 12, "h": 4 },
   "minSize": { "w": 4, "h": 3 },
   "emptyTitle": "No charge level data for this period"

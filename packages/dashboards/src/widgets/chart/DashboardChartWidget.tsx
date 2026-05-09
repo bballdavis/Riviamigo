@@ -72,15 +72,20 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
   };
 }
 
+const DEFAULT_SMOOTHING = 0.4;
+
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const [chartId, setChartId] = React.useState(options.chartId);
   const [search, setSearch] = React.useState('');
-  const [smoothed, setSmoothed] = React.useState(true);
+  // smoothing: 0 = off, >0 = smoothing amount (0–1)
+  const [smoothing, setSmoothing] = React.useState(DEFAULT_SMOOTHING);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const settingsRef = React.useRef<HTMLDivElement>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
+
+  const smoothingOn = smoothing > 0;
 
   React.useEffect(() => {
     if (!options.chartIds.includes(chartId)) {
@@ -115,27 +120,53 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         <SlidersHorizontal className="h-4 w-4" />
       </button>
       {settingsOpen ? (
-        <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[180px] rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
-          <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-fg">
-            <span>Smooth curves</span>
+        <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 w-52 rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
+          {/* Smooth curves toggle row */}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-fg">Smooth curves</span>
+            {/* Toggle — fixed sizing so thumb fits exactly */}
             <button
               type="button"
               role="switch"
-              aria-checked={smoothed}
-              onClick={() => setSmoothed((v) => !v)}
+              aria-checked={smoothingOn}
+              onClick={() => setSmoothing((v) => v > 0 ? 0 : DEFAULT_SMOOTHING)}
               className={cn(
-                'relative h-5 w-9 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1',
-                smoothed ? 'bg-accent' : 'bg-border-strong',
+                'relative inline-flex h-[22px] w-[42px] shrink-0 cursor-pointer rounded-full border-2 border-transparent',
+                'transition-colors duration-200 ease-in-out',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2',
+                smoothingOn ? 'bg-accent' : 'bg-border-strong',
               )}
             >
               <span
+                aria-hidden="true"
                 className={cn(
-                  'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
-                  smoothed ? 'translate-x-4' : 'translate-x-0.5',
+                  'pointer-events-none inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sm',
+                  'transition-transform duration-200 ease-in-out',
+                  smoothingOn ? 'translate-x-5' : 'translate-x-0',
                 )}
               />
             </button>
-          </label>
+          </div>
+          {/* Smoothing amount slider — only shown when on */}
+          {smoothingOn ? (
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs text-fg-tertiary">Amount</span>
+                <span className="text-xs text-fg-tertiary">
+                  {smoothing < 0.25 ? 'Light' : smoothing < 0.6 ? 'Medium' : 'Heavy'}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0.05}
+                max={1}
+                step={0.05}
+                value={smoothing}
+                onChange={(e) => setSmoothing(Number(e.target.value))}
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border-strong accent-accent"
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -155,20 +186,21 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         />
       ) : null}
       <div ref={ref} className="min-h-0 flex-1">
-        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothed={smoothed} />
+        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothing={smoothing} />
       </div>
     </div>
   );
 }
 
-export function DashboardChartRenderer({ chartId, ctx, height, smoothed = false }: { chartId: string; ctx: WidgetCtx; height: number; smoothed?: boolean }) {
+export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: { chartId: string; ctx: WidgetCtx; height: number; smoothing?: number }) {
   const definition = getChartDefinition(chartId);
   const source = definition?.source;
-  const { data: soc = [], isLoading: socLoading } = useSocHistory(source === 'soc_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
+  const needsSoc = source === 'soc_history';
+  const { data: soc = [], isLoading: socLoading } = useSocHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: range = [], isLoading: rangeLoading } = useRangeHistory(source === 'range_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: chargeSummary, isLoading: chargeSummaryLoading } = useChargingSummary(source === 'charging_weekly_energy' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: sessionsPage, isLoading: sessionsLoading } = useChargeSessions(
-    source === 'charging_sessions_energy' || source === 'charge_level' ? ctx.vehicleId : null,
+    source === 'charging_sessions_energy' ? ctx.vehicleId : null,
     ctx.from,
     ctx.to,
     1,
@@ -196,11 +228,9 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothed = false 
 
   switch (definition.source) {
     case 'soc_history':
-      return renderSingleChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })), smoothed);
+      return renderSingleChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })), smoothing);
     case 'range_history':
-      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })), smoothed);
-    case 'charge_level':
-      return renderSingleChart(definition, height, sessionsLoading, buildChargeLevelSeries(sessions).map((point) => ({ ts: point.ts, value: point.soc })), smoothed);
+      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })), smoothing);
     case 'charging_sessions_energy':
       return (
         <ChargingSessionsChart
@@ -208,27 +238,28 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothed = false 
           sessions={sessions}
           loading={sessionsLoading}
           height={height}
-          smoothed={smoothed}
+          smoothing={smoothing}
         />
       );
     case 'charging_weekly_energy':
-      return renderSingleChart(
-        definition,
-        height,
-        chargeSummaryLoading,
-        weekly.map((point) => ({ ts: point.week_start, value: point.energy_kwh ?? null })),
-        smoothed,
+      return (
+        <WeeklyEnergyChart
+          definition={definition}
+          weekly={weekly}
+          loading={chargeSummaryLoading}
+          height={height}
+        />
       );
     case 'efficiency_trend':
-      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothed={smoothed} />;
+      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={smoothing} />;
     case 'efficiency_temperature':
-      return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} smoothed={smoothed} />;
+      return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} />;
     case 'efficiency_mode':
-      return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} smoothed={smoothed} />;
+      return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
     case 'phantom_drain':
-      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })), smoothed);
+      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })), smoothing);
     case 'battery_degradation':
-      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), smoothed);
+      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), smoothing);
     case 'battery_capacity_mileage':
       return (
         <MileageChart
@@ -236,7 +267,7 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothed = false 
           loading={mileageLoading}
           height={height}
           points={mileage.map((point) => ({ x: point.odometer_mi, y: point.usable_kwh }))}
-          smoothed={smoothed}
+          smoothing={smoothing}
         />
       );
     case 'projected_range_mileage':
@@ -246,7 +277,7 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothed = false 
           loading={mileageLoading}
           height={height}
           points={mileage.map((point) => ({ x: point.odometer_mi, y: point.range_mi }))}
-          smoothed={smoothed}
+          smoothing={smoothing}
         />
       );
   }
@@ -257,7 +288,7 @@ function renderSingleChart(
   height: number,
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
-  smoothed = false,
+  smoothing = 0,
 ) {
   return (
     <RichTimeSeriesChart
@@ -267,8 +298,10 @@ function renderSingleChart(
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
+      yRange={definition.yRange}
+      stepInterpolation={definition.stepInterpolation}
       mode={definition.mode}
-      smoothed={smoothed}
+      smoothing={definition.stepInterpolation ? 0 : smoothing}
     />
   );
 }
@@ -278,25 +311,56 @@ function ChargingSessionsChart({
   sessions,
   loading,
   height,
-  smoothed,
+  smoothing,
 }: {
   definition: DashboardChartDefinition;
   sessions: ChargeSession[];
   loading: boolean;
   height: number;
-  smoothed?: boolean;
+  smoothing?: number;
 }) {
   const sorted = [...sessions].sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
   return (
     <RichTimeSeriesChart
       points={sorted.map((session) => ({ ts: session.started_at }))}
-      series={[{ key: 'energy', label: definition.title, values: sorted.map((session) => session.energy_added_kwh ?? null) }]}
+      series={[{ key: 'energy', label: 'Energy Added', values: sorted.map((session) => session.energy_added_kwh ?? null) }]}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
       mode={definition.mode}
-      smoothed={smoothed}
+      smoothing={0}
+    />
+  );
+}
+
+function WeeklyEnergyChart({
+  definition,
+  weekly,
+  loading,
+  height,
+}: {
+  definition: DashboardChartDefinition;
+  weekly: Array<{ week_start: string; energy_kwh: number | null }>;
+  loading: boolean;
+  height: number;
+}) {
+  const formatWeekLabel = (seconds: number) => {
+    const d = new Date(seconds * 1000);
+    return d.toLocaleString([], { month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <RichTimeSeriesChart
+      points={weekly.map((point) => ({ ts: point.week_start }))}
+      series={[{ key: 'energy', label: 'Energy Charged', values: weekly.map((point) => point.energy_kwh ?? null) }]}
+      loading={loading}
+      emptyTitle={definition.emptyTitle}
+      height={height}
+      yUnit={definition.yUnit}
+      mode="bar"
+      xValueFormatter={formatWeekLabel}
+      smoothing={0}
     />
   );
 }
@@ -306,13 +370,13 @@ function EfficiencyTrendChart({
   trend,
   loading,
   height,
-  smoothed,
+  smoothing,
 }: {
   definition: DashboardChartDefinition;
   trend: Array<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }>;
   loading: boolean;
   height: number;
-  smoothed?: boolean;
+  smoothing?: number;
 }) {
   const unit = getEfficiencyUnit();
   return (
@@ -327,7 +391,7 @@ function EfficiencyTrendChart({
       height={height}
       yUnit={unit}
       mode={definition.mode}
-      smoothed={smoothed}
+      smoothing={smoothing}
     />
   );
 }
@@ -337,13 +401,11 @@ function EfficiencyTemperatureChart({
   data,
   loading,
   height,
-  smoothed,
 }: {
   definition: DashboardChartDefinition;
   data: Array<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null }>;
   loading: boolean;
   height: number;
-  smoothed?: boolean;
 }) {
   const points = data
     .filter((point) => point.avg_efficiency_wh_mi != null)
@@ -364,7 +426,7 @@ function EfficiencyTemperatureChart({
       yUnit={getEfficiencyUnit()}
       mode="scatter"
       xValueFormatter={(value) => formatTemp(value)}
-      smoothed={smoothed}
+      smoothing={0}
     />
   );
 }
@@ -374,27 +436,28 @@ function EfficiencyModeChart({
   data,
   loading,
   height,
-  smoothed,
 }: {
   definition: DashboardChartDefinition;
   data: Array<{ drive_mode: string; avg_efficiency: number | null }>;
   loading: boolean;
   height: number;
-  smoothed?: boolean;
 }) {
   const rows = data.filter((point) => point.avg_efficiency != null);
+  const splits = rows.map((_, index) => index + 1);
+
   return (
     <RichTimeSeriesChart
       points={rows.map((_, index) => ({ ts: index + 1 }))}
-      series={[{ key: 'efficiency', label: definition.title, values: rows.map((point) => convertEfficiency(point.avg_efficiency)) }]}
+      series={[{ key: 'efficiency', label: 'Avg Efficiency', values: rows.map((point) => convertEfficiency(point.avg_efficiency)) }]}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
       xTime={false}
       yUnit={getEfficiencyUnit()}
       mode="bar"
+      xSplits={splits}
       xValueFormatter={(value) => rows[Math.round(value) - 1]?.drive_mode ?? ''}
-      smoothed={smoothed}
+      smoothing={0}
     />
   );
 }
@@ -404,13 +467,13 @@ function MileageChart({
   points,
   loading,
   height,
-  smoothed,
+  smoothing,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ x: number | null; y: number | null }>;
   loading: boolean;
   height: number;
-  smoothed?: boolean;
+  smoothing?: number;
 }) {
   const rows = points
     .filter((point): point is { x: number; y: number } => point.x != null && point.y != null)
@@ -426,23 +489,12 @@ function MileageChart({
       xTime={false}
       xUnit="mi"
       yUnit={definition.yUnit}
+      yRange={definition.yRange}
       mode={definition.mode}
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
-      smoothed={smoothed}
+      smoothing={smoothing}
     />
   );
-}
-
-function buildChargeLevelSeries(sessions: Array<{ started_at: string; ended_at?: string | null; soc_start?: number | null; soc_end?: number | null }>) {
-  return [...sessions]
-    .filter((session) => session.soc_end != null)
-    .sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime())
-    .flatMap((session) => {
-      const points: Array<{ ts: string; soc: number | null }> = [];
-      if (session.soc_start != null) points.push({ ts: session.started_at, soc: session.soc_start });
-      points.push({ ts: session.ended_at ?? session.started_at, soc: session.soc_end ?? null });
-      return points;
-    });
 }
 
 function getEfficiencyUnit() {

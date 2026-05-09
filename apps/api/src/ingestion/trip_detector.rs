@@ -55,6 +55,9 @@ pub struct CompletedTripData {
     // Average cabin temperature
     pub inside_temp_avg_c: Option<f64>,
 
+    // Average outside (ambient) temperature
+    pub outside_temp_avg_c: Option<f64>,
+
     // Regenerative braking energy (Wh)
     pub regen_wh: Option<f64>,
 
@@ -96,6 +99,9 @@ pub struct TripDetectorState {
 
     inside_temp_sum: f64,
     inside_temp_count: u32,
+
+    outside_temp_sum: f64,
+    outside_temp_count: u32,
 
     regen_wh_acc: f64,
     last_ts: Option<DateTime<Utc>>,
@@ -183,6 +189,12 @@ impl TripDetectorState {
                 self.inside_temp_count += 1;
             }
 
+            // Outside (ambient) temperature running average
+            if let Some(t) = event.outside_temp_c {
+                self.outside_temp_sum += t;
+                self.outside_temp_count += 1;
+            }
+
             // Regen energy: negative regen_power_kw × Δt
             if let (Some(last_t), Some(kw)) = (self.last_ts, event.regen_power_kw) {
                 let dt_hours = (ts - last_t).num_milliseconds() as f64 / 3_600_000.0;
@@ -208,6 +220,8 @@ impl TripDetectorState {
             self.elevation_loss_acc = 0.0;
             self.inside_temp_sum = 0.0;
             self.inside_temp_count = 0;
+            self.outside_temp_sum = 0.0;
+            self.outside_temp_count = 0;
             self.regen_wh_acc = 0.0;
             self.power_max = event.power_kw;
             self.power_min = event.power_kw;
@@ -253,6 +267,11 @@ impl TripDetectorState {
         } else {
             None
         };
+        let outside_temp_avg = if self.outside_temp_count > 0 {
+            Some(self.outside_temp_sum / self.outside_temp_count as f64)
+        } else {
+            None
+        };
         let elevation_gain = if self.elevation_gain_acc > 0.0 { Some(self.elevation_gain_acc) } else { None };
         let elevation_loss = if self.elevation_loss_acc > 0.0 { Some(self.elevation_loss_acc) } else { None };
         let regen_wh = if self.regen_wh_acc > 0.0 { Some(self.regen_wh_acc) } else { None };
@@ -275,6 +294,7 @@ impl TripDetectorState {
             elevation_gain_m: elevation_gain,
             elevation_loss_m: elevation_loss,
             inside_temp_avg_c: inside_temp_avg,
+            outside_temp_avg_c: outside_temp_avg,
             regen_wh,
             dominant_drive_mode: mode_of(&self.drive_modes),
         };
@@ -292,6 +312,8 @@ impl TripDetectorState {
         self.elevation_loss_acc = 0.0;
         self.inside_temp_sum = 0.0;
         self.inside_temp_count = 0;
+        self.outside_temp_sum = 0.0;
+        self.outside_temp_count = 0;
         self.regen_wh_acc = 0.0;
         self.drive_modes.clear();
 
