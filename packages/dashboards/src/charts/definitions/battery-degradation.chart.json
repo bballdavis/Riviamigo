@@ -6,6 +6,7 @@
   "source": "battery_degradation",
   "mode": "line",
   "yUnit": "%",
+  "yRange": [80, 100],
   "defaultSize": { "w": 6, "h": 4 },
   "minSize": { "w": 4, "h": 3 },
   "emptyTitle": "No battery health history recorded yet"
