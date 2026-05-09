@@ -210,14 +210,11 @@ async fn get_range_vs_temp(
         "SELECT t.id,
                 t.distance_miles,
                 t.efficiency_wh_per_mile,
-                                (SELECT AVG(tel.avg_cabin_temp_c)
-                 FROM timeseries.telemetry_1hr tel
-                 WHERE tel.vehicle_id=t.vehicle_id
-                   AND tel.bucket BETWEEN t.started_at AND t.ended_at
-                ) AS avg_temp_c
+                t.outside_temp_c AS avg_temp_c
          FROM riviamigo.trips t
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0
+           AND t.outside_temp_c IS NOT NULL
          ORDER BY t.started_at DESC LIMIT 500",
         vid,
         from,

@@ -27,7 +27,10 @@ export interface RichTimeSeriesChartProps {
   xUnit?: string | undefined;
   xValueFormatter?: ((value: number) => string) | undefined;
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
-  smoothed?: boolean;
+  smoothing?: number | undefined;
+  yRange?: [number, number] | undefined;
+  stepInterpolation?: boolean | undefined;
+  xSplits?: number[] | undefined;
 }
 
 function toSeconds(value: string | number | Date) {
@@ -35,12 +38,22 @@ function toSeconds(value: string | number | Date) {
   return Math.floor(new Date(value).getTime() / 1000);
 }
 
-function formatDate(seconds: number) {
-  return new Date(seconds * 1000).toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-  });
+function formatDateForSpan(seconds: number, spanSeconds: number) {
+  const d = new Date(seconds * 1000);
+  if (spanSeconds <= 6 * 3600) {
+    return d.toLocaleString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  if (spanSeconds <= 3 * 86400) {
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric' });
+  }
+  if (spanSeconds <= 90 * 86400) {
+    return d.toLocaleString([], { month: 'short', day: 'numeric' });
+  }
+  return d.toLocaleString([], { month: 'short', year: '2-digit' });
+}
+
+function formatDateFallback(seconds: number) {
+  return formatDateForSpan(seconds, 30 * 86400);
 }
 
 function formatValue(value: number | null | undefined, unit?: string) {
@@ -49,11 +62,34 @@ function formatValue(value: number | null | undefined, unit?: string) {
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
-function formatXAxisValue(secondsOrValue: number, xTime: boolean, formatter?: (value: number) => string, unit?: string) {
-  if (formatter) return formatter(secondsOrValue);
-  if (xTime) return formatDate(secondsOrValue);
-  const formatted = Math.abs(secondsOrValue) >= 100 ? secondsOrValue.toFixed(0) : secondsOrValue.toFixed(1);
+function formatNumericAxis(value: number, unit?: string) {
+  const formatted = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
   return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function estimateYLabelWidth(labels: string[]): number {
+  let maxLen = 4;
+  for (const label of labels) {
+    if (label.length > maxLen) maxLen = label.length;
+  }
+  return Math.min(maxLen * 7 + 16, 110);
+}
+
+function smoothSeries(values: Array<number | null>, alpha: number): Array<number | null> {
+  if (alpha <= 0) return values;
+  const window = Math.max(2, Math.round(2 + alpha * 10));
+  const result: Array<number | null> = [];
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] == null) { result.push(null); continue; }
+    let sum = 0;
+    let count = 0;
+    const half = Math.floor(window / 2);
+    for (let j = Math.max(0, i - half); j <= Math.min(values.length - 1, i + half); j++) {
+      if (values[j] != null) { sum += values[j]!; count++; }
+    }
+    result.push(count > 0 ? sum / count : null);
+  }
+  return result;
 }
 
 export function RichTimeSeriesChart({
@@ -69,14 +105,16 @@ export function RichTimeSeriesChart({
   xUnit,
   xValueFormatter,
   yValueFormatter = formatValue,
-  smoothed = false,
+  smoothing = 0,
+  yRange,
+  stepInterpolation = false,
+  xSplits,
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
   const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
   const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
 
-  // Stable refs so setCursor hook never needs to be re-registered to see latest values.
   const seriesRef = React.useRef(series);
   const yUnitRef = React.useRef(yUnit);
   const yValueFormatterRef = React.useRef(yValueFormatter);
@@ -91,10 +129,20 @@ export function RichTimeSeriesChart({
   xUnitRef.current = xUnit;
   xValueFormatterRef.current = xValueFormatter;
 
+  const smoothingAmount = smoothing ?? 0;
+
   const alignedData = React.useMemo<AlignedData>(() => {
     const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
-    return [x, ...series.map((item) => item.values.map((value) => value ?? null))] as AlignedData;
-  }, [points, series, xTime]);
+    const seriesData = series.map((item) => {
+      const raw = item.values.map((value) => value ?? null);
+      const seriesMode = item.mode ?? mode;
+      if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
+        return smoothSeries(raw, smoothingAmount);
+      }
+      return raw;
+    });
+    return [x, ...seriesData] as AlignedData;
+  }, [points, series, xTime, smoothingAmount, mode]);
   alignedDataRef.current = alignedData;
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
@@ -102,13 +150,13 @@ export function RichTimeSeriesChart({
   const chartHeight = Math.max(120, height - (showLegend ? 34 : 0));
   const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
 
-  // Stable key describing chart structure — rebuild uPlot only when this changes.
   const structureKey = React.useMemo(
     () =>
-      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothed}|` +
+      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
+      `${yRange ? yRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothed, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, yRange, xSplits, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -119,12 +167,14 @@ export function RichTimeSeriesChart({
     });
   }, [series]);
 
-  // Full rebuild when structure changes.
   React.useEffect(() => {
     const root = rootRef.current;
     if (!root || loading || !hasData) return undefined;
 
     const width = Math.max(320, root.clientWidth || 320);
+
+    const xValues = alignedDataRef.current[0] as number[];
+    const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
 
     const makeUSeries = (): Series[] => [
       {},
@@ -145,20 +195,70 @@ export function RichTimeSeriesChart({
           },
         };
         if (seriesMode === 'area') next.fill = `${color}22`;
-        if (seriesMode === 'bar') next.paths = uPlot.paths.bars!({ size: [0.64, 80] });
+        if (seriesMode === 'bar') {
+          const barCount = xValues.length;
+          const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : 80;
+          next.paths = uPlot.paths.bars!({ size: [0.64, maxBarPx] });
+        }
         if (seriesMode === 'scatter') next.paths = () => null;
-        if (smoothed && (seriesMode === 'line' || seriesMode === 'area')) next.paths = uPlot.paths.spline?.();
+        if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
+          next.paths = uPlot.paths.stepped!({ align: 1 });
+        } else if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
+          const spline = uPlot.paths.spline?.();
+          if (spline) next.paths = spline;
+        }
         return next;
       }),
     ];
 
     const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
 
+    const yScaleConfig: uPlot.Scale = {
+      auto: !yRange,
+      ...(yRange
+        ? { range: () => yRange }
+        : isBarChart
+          ? { range: (_u: uPlot, dmin: number, dmax: number) => [Math.min(0, dmin), Math.max(0, dmax)] as [number, number] }
+          : {}),
+    };
+
+    const xAxisConfig: uPlot.Axis = {
+      stroke: CHART_COLORS.muted,
+      grid: { stroke: CHART_COLORS.grid, width: 1 },
+      font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      size: isBarChart ? 54 : 44,
+      gap: 6,
+      ...(xSplits
+        ? { splits: () => xSplits }
+        : {}),
+      values: (_u, vals) => {
+        if (xValueFormatterRef.current) {
+          return vals.map((v) => xValueFormatterRef.current!(v));
+        }
+        if (xTimeRef.current) {
+          return vals.map((v) => formatDateForSpan(v, xSpan));
+        }
+        return vals.map((v) => formatNumericAxis(v, xUnitRef.current));
+      },
+    };
+
+    const yAxisConfig: uPlot.Axis = {
+      stroke: CHART_COLORS.muted,
+      grid: { stroke: CHART_COLORS.grid, width: 1 },
+      font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      size: (_self, values) => {
+        if (!values || values.length === 0) return 50;
+        return estimateYLabelWidth(values as string[]);
+      },
+      gap: 8,
+      values: (_u, vals) => vals.map((v) => yValueFormatterRef.current(v, yUnitRef.current)),
+    };
+
     const opts: Options = {
       width,
       height: chartHeight,
       data: alignedDataRef.current,
-      padding: [10, 12, 4, 4],
+      padding: [10, 14, 0, 0],
       cursor: {
         drag: { x: true, y: false },
         points: { size: 6 },
@@ -166,26 +266,9 @@ export function RichTimeSeriesChart({
       legend: { show: false },
       scales: {
         x: { time: xTime },
-        y: {
-          auto: true,
-          ...(isBarChart ? { range: (_u, dmin, dmax) => [Math.min(0, dmin), Math.max(0, dmax)] } : {}),
-        },
+        y: yScaleConfig,
       },
-      axes: [
-        {
-          stroke: CHART_COLORS.muted,
-          grid: { stroke: CHART_COLORS.grid, width: 1 },
-          font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
-          values: (_u, vals) =>
-            vals.map((v) => formatXAxisValue(v, xTimeRef.current, xValueFormatterRef.current, xUnitRef.current)),
-        },
-        {
-          stroke: CHART_COLORS.muted,
-          grid: { stroke: CHART_COLORS.grid, width: 1 },
-          font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
-          values: (_u, vals) => vals.map((v) => yValueFormatterRef.current(v, yUnitRef.current)),
-        },
-      ],
+      axes: [xAxisConfig, yAxisConfig],
       series: makeUSeries(),
       hooks: {
         setCursor: [
@@ -205,17 +288,22 @@ export function RichTimeSeriesChart({
                 return `${item.label}: ${yValueFormatterRef.current(value, yUnitRef.current)}`;
               })
               .filter((row): row is string => Boolean(row));
+
+            let tooltipHeader = '';
+            if (timestamp != null) {
+              if (xValueFormatterRef.current) {
+                tooltipHeader = xValueFormatterRef.current(timestamp as number);
+              } else if (xTimeRef.current) {
+                tooltipHeader = formatDateFallback(timestamp as number);
+              } else {
+                tooltipHeader = formatNumericAxis(timestamp as number, xUnitRef.current);
+              }
+            }
+
             setTooltip({
               left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
               top: Math.max((u.cursor.top ?? 0) + 12, 12),
-              text: [
-                timestamp != null
-                  ? formatXAxisValue(timestamp as number, xTimeRef.current, xValueFormatterRef.current, xUnitRef.current)
-                  : '',
-                ...rows,
-              ]
-                .filter(Boolean)
-                .join('\n'),
+              text: [tooltipHeader, ...rows].filter(Boolean).join('\n'),
             });
           },
         ],
@@ -238,11 +326,9 @@ export function RichTimeSeriesChart({
       chartRef.current = null;
       setTooltip(null);
     };
-    // structureKey encodes all structural deps; hiddenKeys used inside closure but captured via structureKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structureKey, loading, hasData]);
 
-  // Data-only update — avoids destroying/recreating uPlot on every data fetch.
   React.useEffect(() => {
     if (chartRef.current && !loading && hasData) {
       chartRef.current.setData(alignedData);

@@ -61,6 +61,7 @@ struct TripRow {
     end_place: Option<String>,
     start_address: Option<String>,
     end_address: Option<String>,
+    outside_temp_c: Option<f64>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -97,7 +98,8 @@ async fn list_trips(
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS \"start_place?\", \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS \"end_place?\", \
-                sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\" \
+                sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\", \
+                t.outside_temp_c AS \"outside_temp_c?\" \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
          LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
@@ -169,7 +171,8 @@ async fn get_trip(
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS \"start_place?\", \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS \"end_place?\", \
-                sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\" \
+                sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\", \
+                t.outside_temp_c AS \"outside_temp_c?\" \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
          LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
