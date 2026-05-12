@@ -3,6 +3,7 @@ import './widgets/index';
 
 export { DashboardRenderer } from './DashboardRenderer';
 export { WidgetHost } from './WidgetHost';
+export { DashboardChartWidget, DashboardChartRenderer } from './widgets/chart/DashboardChartWidget';
 export { registerWidget, getWidget, getAllWidgets, getWidgetKeys } from './registry';
 export type { WidgetDef, WidgetCtx } from './registry';
 export * from './schema';

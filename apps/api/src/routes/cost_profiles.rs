@@ -65,16 +65,15 @@ async fn list_profiles(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ProfileListResponse>, AppError> {
-    let rows = sqlx::query_as!(
-        CostProfile,
+    let rows = sqlx::query_as::<_, CostProfile>(
         r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
               timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
            WHERE user_id = $1
-           ORDER BY name"#,
-        auth.user_id
+           ORDER BY name"#
     )
+    .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -87,16 +86,15 @@ async fn get_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CostProfile>, AppError> {
-    let row = sqlx::query_as!(
-        CostProfile,
+    let row = sqlx::query_as::<_, CostProfile>(
         r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
               timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
-           WHERE id = $1 AND user_id = $2"#,
-        id,
-        auth.user_id
+           WHERE id = $1 AND user_id = $2"#
     )
+    .bind(id)
+    .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::from)?
@@ -118,26 +116,25 @@ async fn create_profile(
         &tou_periods,
     )?;
 
-    let row = sqlx::query_as!(
-        CostProfile,
+    let row = sqlx::query_as::<_, CostProfile>(
         r#"INSERT INTO riviamigo.cost_profiles
            (user_id, name, billing_type, rate, session_fee, currency,
             timezone, tou_periods, effective_from, effective_to)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
                      timezone, tou_periods,
-                     effective_from, effective_to, created_at"#,
-        auth.user_id,
-        body.name,
-        body.billing_type,
-        body.rate,
-        body.session_fee.unwrap_or(0.0),
-        body.currency.as_deref().unwrap_or("USD"),
-        body.timezone,
-        tou_periods,
-        body.effective_from,
-        body.effective_to
+                     effective_from, effective_to, created_at"#
     )
+    .bind(auth.user_id)
+    .bind(body.name)
+    .bind(body.billing_type)
+    .bind(body.rate)
+    .bind(body.session_fee.unwrap_or(0.0))
+    .bind(body.currency.as_deref().unwrap_or("USD"))
+    .bind(body.timezone)
+    .bind(tou_periods)
+    .bind(body.effective_from)
+    .bind(body.effective_to)
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -151,16 +148,15 @@ async fn update_profile(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateProfileBody>,
 ) -> Result<Json<CostProfile>, AppError> {
-    let current = sqlx::query_as!(
-        CostProfile,
+    let current = sqlx::query_as::<_, CostProfile>(
         r#"SELECT id, user_id, name, billing_type, rate, session_fee, currency,
                   timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
-           WHERE id = $1 AND user_id = $2"#,
-        id,
-        auth.user_id
+           WHERE id = $1 AND user_id = $2"#
     )
+    .bind(id)
+    .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::from)?
@@ -175,8 +171,7 @@ async fn update_profile(
 
     validate_profile_details(&billing_type, rate, timezone.as_deref(), &tou_periods)?;
 
-    let row = sqlx::query_as!(
-        CostProfile,
+    let row = sqlx::query_as::<_, CostProfile>(
         r#"UPDATE riviamigo.cost_profiles SET
            name           = $3,
            billing_type   = $4,
@@ -190,19 +185,19 @@ async fn update_profile(
            WHERE id = $1 AND user_id = $2
            RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
                      timezone, tou_periods,
-                     effective_from, effective_to, created_at"#,
-        id,
-        auth.user_id,
-        body.name.unwrap_or(current.name),
-        billing_type,
-        rate,
-        session_fee,
-        currency,
-        timezone,
-        tou_periods,
-        body.effective_from.or(current.effective_from),
-        body.effective_to.or(current.effective_to)
+                     effective_from, effective_to, created_at"#
     )
+    .bind(id)
+    .bind(auth.user_id)
+    .bind(body.name.unwrap_or(current.name))
+    .bind(billing_type)
+    .bind(rate)
+    .bind(session_fee)
+    .bind(currency)
+    .bind(timezone)
+    .bind(tou_periods)
+    .bind(body.effective_from.or(current.effective_from))
+    .bind(body.effective_to.or(current.effective_to))
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::from)?
@@ -216,11 +211,9 @@ async fn delete_profile(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let result = sqlx::query!(
-        "DELETE FROM riviamigo.cost_profiles WHERE id = $1 AND user_id = $2",
-        id,
-        auth.user_id
-    )
+    let result = sqlx::query("DELETE FROM riviamigo.cost_profiles WHERE id = $1 AND user_id = $2")
+    .bind(id)
+    .bind(auth.user_id)
     .execute(&state.pool)
     .await
     .map_err(AppError::from)?;

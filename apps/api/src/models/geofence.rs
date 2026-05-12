@@ -41,8 +41,7 @@ pub async fn match_geofence(
     lat: f64,
     lon: f64,
 ) -> anyhow::Result<Option<GeofenceMatch>> {
-    let row = sqlx::query_as!(
-        GeofenceMatch,
+    let row = sqlx::query_as::<_, GeofenceMatch>(
         r#"
         SELECT
           id,
@@ -65,11 +64,11 @@ pub async fn match_geofence(
               ) <= radius_m
         ORDER BY 7 ASC
         LIMIT 1
-        "#,
-        user_id,
-        lat,
-        lon,
+        "#
     )
+    .bind(user_id)
+    .bind(lat)
+    .bind(lon)
     .fetch_optional(pool)
     .await?;
 

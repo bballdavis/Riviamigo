@@ -105,6 +105,108 @@ struct LatestVehicleTelemetry {
     twelve_volt_health: Option<String>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct VehicleListRow {
+    id: Uuid,
+    rivian_vehicle_id: String,
+    model: String,
+    trim: Option<String>,
+    vin: Option<String>,
+    color: Option<String>,
+    name: Option<String>,
+    battery_capacity_wh: Option<f64>,
+    home_latitude: Option<f64>,
+    home_longitude: Option<f64>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct VehicleRuntimeStateRow {
+    is_online: Option<bool>,
+    last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    worker_health: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct VehicleImageRow {
+    placement: String,
+    design: Option<String>,
+    size: Option<String>,
+    resolution: Option<String>,
+    url: String,
+    overlays: serde_json::Value,
+    metadata: serde_json::Value,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct RawVehicleSampleRow {
+    ts: chrono::DateTime<chrono::Utc>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    altitude_m: Option<f64>,
+    speed_mph: Option<f64>,
+    battery_level: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    distance_to_empty_mi: Option<f64>,
+    battery_limit: Option<f64>,
+    power_state: Option<String>,
+    charger_state: Option<String>,
+    charger_status: Option<String>,
+    time_to_end_of_charge_min: Option<i32>,
+    drive_mode: Option<String>,
+    gear_status: Option<String>,
+    cabin_temp_c: Option<f64>,
+    driver_temp_c: Option<f64>,
+    outside_temp_c: Option<f64>,
+    hvac_active: Option<bool>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+    heading_deg: Option<f64>,
+    odometer_miles: Option<f64>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+    tire_fl_status: Option<String>,
+    tire_fr_status: Option<String>,
+    tire_rl_status: Option<String>,
+    tire_rr_status: Option<String>,
+    door_front_left_locked: Option<bool>,
+    door_front_right_locked: Option<bool>,
+    door_rear_left_locked: Option<bool>,
+    door_rear_right_locked: Option<bool>,
+    door_front_left_closed: Option<bool>,
+    door_front_right_closed: Option<bool>,
+    door_rear_left_closed: Option<bool>,
+    door_rear_right_closed: Option<bool>,
+    closure_frunk_closed: Option<bool>,
+    closure_liftgate_closed: Option<bool>,
+    closure_tailgate_closed: Option<bool>,
+    ota_current_version: Option<String>,
+    ota_available_version: Option<String>,
+    ota_status: Option<String>,
+    ota_current_status: Option<String>,
+    hv_thermal_event: Option<String>,
+    twelve_volt_health: Option<String>,
+    is_online: Option<bool>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct RawVehicleCoverageRow {
+    first_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    sample_count: i64,
+    odometer_samples: i64,
+    battery_samples: i64,
+    range_samples: i64,
+    outside_temp_samples: i64,
+    power_samples: i64,
+    regen_samples: i64,
+    tire_pressure_samples: i64,
+    lock_samples: i64,
+    software_samples: i64,
+}
+
 const PLAUSIBLE_MAX_MI_PER_KWH: f64 = 3.4;
 
 fn normalize_remaining_range_miles(
@@ -319,6 +421,8 @@ async fn add_vehicle(
     auth: AuthUser,
     Json(body): Json<AddVehicleBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let rivian_vehicle_id = body.rivian_vehicle_id.clone();
+
     info!(
         user_id = %auth.user_id,
         rivian_vehicle_id = %body.rivian_vehicle_id,
@@ -348,37 +452,38 @@ async fn add_vehicle(
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(|e| AppError::Internal(e))?;
 
-    let vehicle_id: Uuid = sqlx::query_scalar!(
+    let vehicle_id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO riviamigo.vehicles
            (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id"#,
-        auth.user_id,
-        body.rivian_vehicle_id,
-        body.model.as_deref().unwrap_or("R1T"),
-        body.trim,
-        body.vin,
-        body.name,
-        body.home_lat,
-        body.home_lng,
     )
+    .bind(auth.user_id)
+    .bind(&rivian_vehicle_id)
+    .bind(body.model.as_deref().unwrap_or("R1T"))
+    .bind(body.trim)
+    .bind(body.vin)
+    .bind(body.name)
+    .bind(body.home_lat)
+    .bind(body.home_lng)
     .fetch_one(&state.pool)
     .await?;
 
-    sqlx::query!(
+    sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at) \
          VALUES ($1,$2,now())",
-        vehicle_id, encrypted.as_slice()
     )
+    .bind(vehicle_id)
+    .bind(encrypted.as_slice())
     .execute(&state.pool)
     .await?;
 
     // Set as default vehicle if user has none
-    sqlx::query!(
+    sqlx::query(
         "UPDATE riviamigo.users SET default_vehicle_id = $1 \
          WHERE id = $2 AND default_vehicle_id IS NULL",
-        vehicle_id,
-        auth.user_id
     )
+    .bind(vehicle_id)
+    .bind(auth.user_id)
     .execute(&state.pool)
     .await?;
 
@@ -388,7 +493,7 @@ async fn add_vehicle(
     info!(
         user_id = %auth.user_id,
         vehicle_id = %vehicle_id,
-        rivian_vehicle_id = %body.rivian_vehicle_id,
+        rivian_vehicle_id = %rivian_vehicle_id,
         "vehicle.add.persisted"
     );
 
@@ -429,12 +534,12 @@ async fn list_vehicles(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, VehicleListRow>(
         "SELECT id, rivian_vehicle_id, model, trim, vin, color, name, battery_capacity_wh, \
                 home_latitude, home_longitude, created_at \
-         FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at",
-        auth.user_id
+         FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at"
     )
+    .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -481,18 +586,19 @@ async fn vehicle_status(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let vehicle = sqlx::query!(
-        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1",
-        vid
+    let vehicle = sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1"
     )
+    .bind(vid)
     .fetch_optional(&state.pool)
-    .await?;
+    .await?
+    .flatten();
 
-    let row = sqlx::query!(
+    let row = sqlx::query_as::<_, VehicleRuntimeStateRow>(
         "SELECT is_online, last_event_at, worker_health FROM riviamigo.vehicle_runtime_state \
-         WHERE vehicle_id = $1",
-        vid
+         WHERE vehicle_id = $1"
     )
+    .bind(vid)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -612,9 +718,7 @@ async fn vehicle_status(
     let normalized_range_miles = normalize_remaining_range_miles(
         latest.distance_to_empty_mi,
         latest.battery_level,
-        latest
-            .battery_capacity_wh
-            .or_else(|| vehicle.and_then(|row| row.battery_capacity_wh)),
+        latest.battery_capacity_wh.or(vehicle),
     );
 
     Ok(Json(serde_json::json!({
@@ -720,7 +824,7 @@ async fn cache_vehicle_images(
         Ok(images) => {
             let image_count = images.len();
             for image in images {
-                let _ = sqlx::query!(
+                                let _ = sqlx::query(
                     r#"
                     INSERT INTO riviamigo.vehicle_images
                       (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
@@ -734,21 +838,21 @@ async fn cache_vehicle_images(
                         metadata = EXCLUDED.metadata,
                         updated_at = now()
                     "#,
-                    vehicle_id,
-                    image.placement.as_deref().unwrap_or("unknown"),
-                    image.design,
-                    image.size,
-                    image.resolution,
-                    image.url,
-                    image.overlays,
-                    serde_json::json!({
-                        "source": image.source,
-                        "vehicle_version": image.vehicle_version,
-                        "rivian_vehicle_id": image.vehicle_id,
-                        "rivian_order_id": image.order_id,
-                        "extension": image.extension
-                    })
                 )
+                .bind(vehicle_id)
+                .bind(image.placement.as_deref().unwrap_or("unknown"))
+                .bind(image.design)
+                .bind(image.size)
+                .bind(image.resolution)
+                .bind(image.url)
+                .bind(image.overlays)
+                .bind(serde_json::json!({
+                    "source": image.source,
+                    "vehicle_version": image.vehicle_version,
+                    "rivian_vehicle_id": image.vehicle_id,
+                    "rivian_order_id": image.order_id,
+                    "extension": image.extension
+                }))
                 .execute(pool)
                 .await;
             }
@@ -761,14 +865,12 @@ async fn cache_vehicle_images(
 }
 
 async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age_key: &str) {
-    let existing = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
-        vehicle_id
+    let existing: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM riviamigo.vehicle_images WHERE vehicle_id = $1"
     )
+    .bind(vehicle_id)
     .fetch_one(pool)
     .await
-    .ok()
-    .flatten()
     .unwrap_or(0);
 
     if existing > 0 {
@@ -783,10 +885,10 @@ async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age
         }
     };
 
-    let encrypted_tokens = match sqlx::query_scalar!(
-        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
-        vehicle_id
+    let encrypted_tokens = match sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1"
     )
+    .bind(vehicle_id)
     .fetch_optional(pool)
     .await
     {
@@ -810,7 +912,7 @@ async fn fetch_vehicle_images_json(
     pool: &sqlx::PgPool,
     vehicle_id: Uuid,
 ) -> Result<serde_json::Value, AppError> {
-    let rows = sqlx::query!(
+    let rows = sqlx::query_as::<_, VehicleImageRow>(
         r#"
         SELECT placement, design, size, resolution, url, overlays, metadata
         FROM riviamigo.vehicle_images
@@ -819,10 +921,10 @@ async fn fetch_vehicle_images_json(
           CASE WHEN size = 'large' THEN 0 ELSE 1 END,
           placement,
           design NULLS LAST,
-          created_at
-        "#,
-        vehicle_id
+                    created_at
+                "#
     )
+        .bind(vehicle_id)
     .fetch_all(pool)
     .await?;
 
@@ -935,7 +1037,7 @@ async fn raw_vehicle_data(
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let limit = params.limit.unwrap_or(25).clamp(1, 100);
 
-    let samples = sqlx::query!(
+    let samples = sqlx::query_as::<_, RawVehicleSampleRow>(
         r#"
         SELECT ts, latitude, longitude, altitude_m, speed_mph,
                battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
@@ -953,14 +1055,14 @@ async fn raw_vehicle_data(
         WHERE vehicle_id = $1
         ORDER BY ts DESC
         LIMIT $2
-        "#,
-        vid,
-        limit
+        "#
     )
+    .bind(vid)
+    .bind(limit)
     .fetch_all(&state.pool)
     .await?;
 
-    let coverage = sqlx::query!(
+    let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(
         r#"
         SELECT min(ts) AS first_event_at,
                max(ts) AS last_event_at,
@@ -976,9 +1078,9 @@ async fn raw_vehicle_data(
                count(ota_status) AS software_samples
         FROM timeseries.telemetry
         WHERE vehicle_id = $1
-        "#,
-        vid
+        "#
     )
+    .bind(vid)
     .fetch_one(&state.pool)
     .await?;
 
@@ -987,16 +1089,16 @@ async fn raw_vehicle_data(
         "coverage": {
             "first_event_at": coverage.first_event_at,
             "last_event_at": coverage.last_event_at,
-            "sample_count": coverage.sample_count.unwrap_or(0),
-            "odometer_samples": coverage.odometer_samples.unwrap_or(0),
-            "battery_samples": coverage.battery_samples.unwrap_or(0),
-            "range_samples": coverage.range_samples.unwrap_or(0),
-            "outside_temp_samples": coverage.outside_temp_samples.unwrap_or(0),
-            "power_samples": coverage.power_samples.unwrap_or(0),
-            "regen_samples": coverage.regen_samples.unwrap_or(0),
-            "tire_pressure_samples": coverage.tire_pressure_samples.unwrap_or(0),
-            "lock_samples": coverage.lock_samples.unwrap_or(0),
-            "software_samples": coverage.software_samples.unwrap_or(0)
+            "sample_count": coverage.sample_count,
+            "odometer_samples": coverage.odometer_samples,
+            "battery_samples": coverage.battery_samples,
+            "range_samples": coverage.range_samples,
+            "outside_temp_samples": coverage.outside_temp_samples,
+            "power_samples": coverage.power_samples,
+            "regen_samples": coverage.regen_samples,
+            "tire_pressure_samples": coverage.tire_pressure_samples,
+            "lock_samples": coverage.lock_samples,
+            "software_samples": coverage.software_samples
         },
         "samples": samples.into_iter().map(|r| serde_json::json!({
             "ts": r.ts,

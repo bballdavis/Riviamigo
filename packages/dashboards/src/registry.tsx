@@ -7,6 +7,7 @@ export interface WidgetCtx {
   vehicleId: string | null;
   from: string;
   to: string;
+  chargeSessionId?: string | null;
 }
 
 export interface WidgetDef {

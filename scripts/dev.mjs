@@ -408,6 +408,12 @@ async function startApi() {
   log('Building API...');
   await run('cargo', ['build'], { cwd: apiDir, env: apiEnv() });
 
+  return launchApi();
+}
+
+async function launchApi() {
+  await ensurePortFree(ports.api, 'API');
+
   log('Starting API...');
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
   const api = spawnProcess(apiBin, [], {
@@ -418,6 +424,30 @@ async function startApi() {
   await waitForHttp(urls.apiHealth, api, 'API');
   log(`API is responding at ${urls.apiHealth}`);
   return api;
+}
+
+async function superviseApi(api) {
+  let currentApi = api;
+
+  while (!shuttingDown) {
+    try {
+      await onceExit(currentApi, 'API');
+      return;
+    } catch (error) {
+      if (shuttingDown) {
+        return;
+      }
+
+      log(`${error.message}`);
+      log('Restarting API...');
+
+      try {
+        currentApi = await launchApi();
+      } catch (restartError) {
+        throw new Error(`API restart failed: ${restartError.message}`);
+      }
+    }
+  }
 }
 
 async function startWeb() {
@@ -471,6 +501,7 @@ async function main() {
   log('');
 
   const api = await startApi();
+  const apiSupervisor = superviseApi(api);
   log('To view infra logs in another terminal, run:');
   log(`   docker compose -f "${composeFile}" logs -f`);
   log('');
@@ -483,7 +514,7 @@ async function main() {
   }
 
   await Promise.race([
-    onceExit(api, 'API'),
+    apiSupervisor,
     onceExit(web.child, 'Web dev server'),
   ]);
 }

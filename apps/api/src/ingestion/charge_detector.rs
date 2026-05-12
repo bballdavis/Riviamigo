@@ -84,12 +84,21 @@ impl ChargeDetectorState {
 
         if let Some(soc) = event.battery_level {
             self.last_soc = Some(soc);
+            if self.is_charging && self.soc_start.is_none() {
+                self.soc_start = Some(soc);
+            }
         }
         if let Some(limit) = event.battery_limit {
             self.charge_limit = Some(limit);
         }
         if let Some(cap) = event.battery_capacity_wh {
             self.battery_capacity = Some(cap);
+        }
+        if self.is_charging && self.start_lat.is_none() && self.start_lng.is_none() {
+            if let (Some(lat), Some(lng)) = (event.latitude, event.longitude) {
+                self.start_lat = Some(lat);
+                self.start_lng = Some(lng);
+            }
         }
 
         // Power integration (|power_kw| for charging — power_kw may be negative
@@ -166,8 +175,9 @@ impl ChargeDetectorState {
             None
         };
 
-        // avg_charge_rate_kw from integrated energy / duration
-        let avg_charge_rate_kw = energy_used_wh.and_then(|wh| {
+        // Prefer grid-side integrated energy, but fall back to pack-side SOC
+        // delta when Rivian omits power telemetry for the session.
+        let avg_charge_rate_kw = energy_used_wh.or(energy_added_wh).and_then(|wh| {
             if duration_hours > 0.0 { Some(wh / 1_000.0 / duration_hours) } else { None }
         });
 
@@ -175,7 +185,7 @@ impl ChargeDetectorState {
         let charger_type = if self.peak_charge_kw > 0.0 {
             Some(classify_charger(self.peak_charge_kw))
         } else {
-            None
+            avg_charge_rate_kw.map(classify_charger)
         };
         let peak = if self.peak_charge_kw > 0.0 { Some(self.peak_charge_kw) } else { None };
 
@@ -226,6 +236,69 @@ fn classify_charger(peak_kw: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
+
+    fn event(
+        vehicle_id: Uuid,
+        ts: DateTime<Utc>,
+        charger_state: Option<ChargerState>,
+    ) -> TelemetryEvent {
+        TelemetryEvent {
+            vehicle_id,
+            ts,
+            latitude: None,
+            longitude: None,
+            altitude_m: None,
+            speed_mph: None,
+            battery_level: None,
+            battery_capacity_wh: None,
+            distance_to_empty_mi: None,
+            battery_limit: None,
+            power_state: None,
+            charger_state,
+            charger_status: None,
+            time_to_end_of_charge_min: None,
+            drive_mode: None,
+            gear_status: None,
+            cabin_temp_c: None,
+            driver_temp_c: None,
+            outside_temp_c: None,
+            hvac_active: None,
+            power_kw: None,
+            regen_power_kw: None,
+            heading_deg: None,
+            odometer_miles: None,
+            tire_fl_psi: None,
+            tire_fr_psi: None,
+            tire_rl_psi: None,
+            tire_rr_psi: None,
+            tire_fl_status: None,
+            tire_fr_status: None,
+            tire_rl_status: None,
+            tire_rr_status: None,
+            door_front_left_locked: None,
+            door_front_right_locked: None,
+            door_rear_left_locked: None,
+            door_rear_right_locked: None,
+            door_front_left_closed: None,
+            door_front_right_closed: None,
+            door_rear_left_closed: None,
+            door_rear_right_closed: None,
+            closure_frunk_locked: None,
+            closure_frunk_closed: None,
+            closure_liftgate_locked: None,
+            closure_liftgate_closed: None,
+            closure_tailgate_locked: None,
+            closure_tailgate_closed: None,
+            ota_current_version: None,
+            ota_available_version: None,
+            ota_status: None,
+            ota_current_status: None,
+            hv_thermal_event: None,
+            twelve_volt_health: None,
+            is_online: None,
+        }
+    }
 
     #[test]
     fn classify_ac_l1() {
@@ -240,5 +313,55 @@ mod tests {
     #[test]
     fn classify_dc() {
         assert_eq!(classify_charger(150.0), "dc");
+    }
+
+    #[test]
+    fn fills_start_soc_and_location_from_later_charge_samples() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now();
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        assert!(matches!(
+            detector.process(&event(vehicle_id, started_at, Some(ChargerState::Charging))),
+            ChargeEvent::SessionStarted
+        ));
+
+        let mut follow_up = event(vehicle_id, started_at + Duration::minutes(2), None);
+        follow_up.battery_level = Some(42.0);
+        follow_up.battery_capacity_wh = Some(111_000.0);
+        follow_up.latitude = Some(29.81);
+        follow_up.longitude = Some(-95.38);
+        assert!(matches!(detector.process(&follow_up), ChargeEvent::NoChange));
+
+        let mut end = event(vehicle_id, started_at + Duration::minutes(62), Some(ChargerState::Done));
+        end.battery_level = Some(52.0);
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+
+        assert_eq!(session.soc_start, Some(42.0));
+        assert_eq!(session.location_lat, Some(29.81));
+        assert_eq!(session.location_lng, Some(-95.38));
+        assert!(session.energy_added_wh.is_some());
+    }
+
+    #[test]
+    fn classifies_from_average_rate_when_peak_power_is_missing() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now();
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.battery_level = Some(40.0);
+        start.battery_capacity_wh = Some(100_000.0);
+        detector.process(&start);
+
+        let mut end = event(vehicle_id, started_at + Duration::minutes(70), Some(ChargerState::Done));
+        end.battery_level = Some(50.0);
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+
+        assert_eq!(session.charger_type.as_deref(), Some("ac"));
     }
 }

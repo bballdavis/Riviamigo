@@ -26,7 +26,7 @@
       "options": {
         "page": "charging",
         "chartId": "charging-sessions-energy",
-        "chartIds": ["charging-sessions-energy", "charge-level", "charging-weekly-energy"],
+        "chartIds": ["charging-sessions-energy", "charge-level", "charging-weekly-energy", "charging-curve-analysis"],
         "showPicker": true
       },
       "layout": { "x": 0, "y": 6, "w": 12, "h": 10 }

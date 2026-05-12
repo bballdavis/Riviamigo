@@ -58,8 +58,7 @@ async fn idle_drain(
     let to = params.to.unwrap_or_else(Utc::now);
     let limit = params.limit.min(500);
 
-    let periods = sqlx::query_as!(
-        PhantomPeriod,
+    let periods = sqlx::query_as::<_, PhantomPeriod>(
         r#"SELECT
                              period_start,
                              period_end,
@@ -73,12 +72,12 @@ async fn idle_drain(
                          AND period_start >= $2
                          AND period_start <= $3
                      ORDER BY period_start DESC
-           LIMIT $4"#,
-        vehicle_id,
-        from,
-        to,
-        limit
+           LIMIT $4"#
     )
+    .bind(vehicle_id)
+    .bind(from)
+    .bind(to)
+    .bind(limit)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -87,15 +86,14 @@ async fn idle_drain(
 }
 
 async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-        vehicle_id,
-        user_id
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
     )
+    .bind(vehicle_id)
+    .bind(user_id)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(false);
+    .map_err(AppError::from)?;
 
     if !owned { Err(AppError::NotFound) } else { Ok(()) }
 }

@@ -93,6 +93,12 @@ export interface ChargeCurvePoint {
   power_kw: number;
 }
 
+export interface ChargeCurveAnalysisPoint {
+  soc_pct: number;
+  charge_rate_kw: number;
+  charger_type: ChargerType | null;
+}
+
 export interface StatsSummary {
   total_miles: number;
   total_trips: number;
@@ -265,6 +271,10 @@ export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | '
 
 export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore';
 
+export type BackupArtifactStorageType = 'local';
+
+export type BackupRestoreRequestStatus = 'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'canceled';
+
 export interface BackupSettings {
   enabled: boolean;
   frequency: BackupFrequency;
@@ -295,11 +305,48 @@ export interface BackupRun {
   updated_at: string;
 }
 
+export interface BackupArtifact {
+  id: string;
+  run_id: string;
+  storage_type: BackupArtifactStorageType;
+  file_name: string;
+  storage_path: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  manifest: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface BackupRestoreRequest {
+  id: string;
+  artifact_id: string;
+  requested_by: string | null;
+  status: BackupRestoreRequestStatus;
+  confirmation_phrase: string;
+  notes: string | null;
+  error_message: string | null;
+  requested_at: string;
+  updated_at: string;
+}
+
 export interface BackupOverview {
   settings: BackupSettings;
   recent_runs: BackupRun[];
+  artifacts: BackupArtifact[];
+  restore_requests: BackupRestoreRequest[];
   latest_successful_run: BackupRun | null;
   next_run_at: string | null;
+}
+
+export interface RunBackupResponse {
+  run: BackupRun;
+  artifact: BackupArtifact;
+}
+
+export interface CreateBackupRestoreRequestBody {
+  artifact_id: string;
+  confirmation_phrase: string;
+  notes?: string | null;
 }
 
 export interface UpdateBackupSettingsBody {

@@ -15,7 +15,12 @@ CREATE TABLE IF NOT EXISTS riviamigo.backup_settings (
   access_key          TEXT,
   secret_key_encrypted BYTEA,
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_by          UUID REFERENCES riviamigo.users(id) ON DELETE SET NULL
+  updated_by          UUID REFERENCES riviamigo.users(id) ON DELETE SET NULL,
+  CONSTRAINT backup_settings_frequency_check CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+  CONSTRAINT backup_settings_target_type_check CHECK (target_type IN ('s3')),
+  CONSTRAINT backup_settings_day_of_week_check CHECK (day_of_week IS NULL OR (day_of_week >= 0 AND day_of_week <= 6)),
+  CONSTRAINT backup_settings_day_of_month_check CHECK (day_of_month IS NULL OR (day_of_month >= 1 AND day_of_month <= 31)),
+  CONSTRAINT backup_settings_retention_check CHECK (retention_count >= 1)
 );
 
 CREATE TABLE IF NOT EXISTS riviamigo.backup_runs (
@@ -29,11 +34,6 @@ CREATE TABLE IF NOT EXISTS riviamigo.backup_runs (
   error_message TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT backup_settings_frequency_check CHECK (frequency IN ('daily', 'weekly', 'monthly')),
-  CONSTRAINT backup_settings_target_type_check CHECK (target_type IN ('s3')),
-  CONSTRAINT backup_settings_day_of_week_check CHECK (day_of_week IS NULL OR (day_of_week >= 0 AND day_of_week <= 6)),
-  CONSTRAINT backup_settings_day_of_month_check CHECK (day_of_month IS NULL OR (day_of_month >= 1 AND day_of_month <= 31)),
-  CONSTRAINT backup_settings_retention_check CHECK (retention_count >= 1),
   CONSTRAINT backup_runs_trigger_check CHECK (trigger IN ('manual', 'scheduled', 'restore')),
   CONSTRAINT backup_runs_status_check CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'canceled'))
 );

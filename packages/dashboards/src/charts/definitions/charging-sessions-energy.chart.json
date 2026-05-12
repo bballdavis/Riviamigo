@@ -1,7 +1,7 @@
 {
   "id": "charging-sessions-energy",
-  "title": "Energy per Session",
-  "description": "Energy added per charging session.",
+  "title": "Session Charge Distribution",
+  "description": "Session frequency by energy band with average charge rate overlay.",
   "pages": ["overview", "charging"],
   "source": "charging_sessions_energy",
   "mode": "bar",

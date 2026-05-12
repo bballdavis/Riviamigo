@@ -1,11 +1,11 @@
 import React from 'react';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { useAuth, useChargeSession, useChargeCurve } from '@riviamigo/hooks';
+import { useAuth, useChargeSession } from '@riviamigo/hooks';
 import {
-  PageLayout, ChartSection, StatCardGrid, StatCard, Button,
+  PageLayout, ChartSection, StatCardGrid, StatCard,
 } from '@riviamigo/ui/primitives';
-import { ChargeCurveChart } from '@riviamigo/ui/charts';
+import { DashboardChartWidget } from '@riviamigo/dashboards';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { NoVehicleState } from '../components/layout/NoVehicleState';
@@ -28,9 +28,22 @@ export function ChargeSessionContent() {
   const navigate = useNavigate();
   const { sessionId } = useParams({ from: '/charging/$sessionId' });
 
-  const { data: session }                         = useChargeSession(sessionId, defaultVehicleId);
-  const { data: curve, isLoading: curveLoading }  = useChargeCurve(sessionId, defaultVehicleId);
+  const { data: session } = useChargeSession(sessionId, defaultVehicleId);
   const hasVehicle = !!defaultVehicleId;
+  const chargeCurveInstance = {
+    id: `charge-session-curve-${sessionId}`,
+    componentType: 'chart' as const,
+    definitionId: 'catalog',
+    title: 'Charge Rate Curve',
+    layout: { x: 0, y: 0, w: 12, h: 8 },
+    options: {
+      page: 'charging',
+      chartId: 'charge-session-curve',
+      chartIds: ['charge-session-curve'],
+      showPicker: false,
+      curveSmoothing: 0.2,
+    },
+  };
 
   const title = session
     ? format(parseISO(session.started_at), 'MMMM d, yyyy · h:mm a')
@@ -41,11 +54,15 @@ export function ChargeSessionContent() {
       <PageLayout
         title={title}
         subtitle={session?.location_name ?? undefined}
-        actions={
-          <Button variant="ghost" size="sm" iconLeft={<ArrowLeft className="h-4 w-4" />}
-            onClick={() => navigate({ to: '/charging' })}>
-            Back
-          </Button>
+        titleAction={
+          <button
+            type="button"
+            aria-label="Back to charging"
+            className="inline-flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent transition-colors hover:bg-accent/10 focus:outline-none focus:ring-1 focus:ring-accent"
+            onClick={() => navigate({ to: '/charging' })}
+          >
+            <ArrowLeft className="h-6 w-6" />
+          </button>
         }
       >
         {!hasVehicle ? (
@@ -76,10 +93,14 @@ export function ChargeSessionContent() {
         </StatCardGrid>
 
         <ChartSection title="Charge Curve" subtitle="Power vs state of charge">
-          <ChargeCurveChart
-            data={(curve ?? []).map((p) => ({ soc: p.soc_pct, power_kw: p.power_kw }))}
-            loading={curveLoading}
-            height={240}
+          <DashboardChartWidget
+            instance={chargeCurveInstance}
+            ctx={{
+              vehicleId: defaultVehicleId,
+              from: session?.started_at ?? '',
+              to: session?.ended_at ?? session?.started_at ?? '',
+              chargeSessionId: sessionId,
+            }}
           />
         </ChartSection>
           </>

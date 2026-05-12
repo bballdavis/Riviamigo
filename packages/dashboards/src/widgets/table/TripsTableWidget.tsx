@@ -59,22 +59,24 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div ref={ref} className="relative min-h-0 flex-1">
-        <TripMapChart
-          track={[]}
-          routes={routes}
-          selectedRouteIds={selectedIds}
-          onRouteClick={toggleTripSelection}
-          height={height}
-          mapStyle={mapStyle}
-          className="w-full overflow-hidden rounded-lg border border-border"
-        />
-        <button
-          onClick={() => setMapStyle((s) => s === 'dark' ? 'light' : 'dark')}
-          aria-label={mapStyle === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
-          className="absolute left-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-white/20 bg-black/50 text-white backdrop-blur-sm transition-colors hover:bg-black/70"
-        >
-          {mapStyle === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        </button>
+        <div className="relative overflow-hidden rounded-lg border border-border bg-[#12121A]" style={{ height }}>
+          <TripMapChart
+            track={[]}
+            routes={routes}
+            selectedRouteIds={selectedIds}
+            onRouteClick={toggleTripSelection}
+            height={height}
+            mapStyle={mapStyle}
+            className="h-full w-full"
+          />
+          <button
+            onClick={() => setMapStyle((style: MapStyleMode) => style === 'dark' ? 'light' : 'dark')}
+            aria-label={mapStyle === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
+            className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-[#FD8304] bg-[#12121A] text-[#FD8304] shadow-lg transition-colors hover:bg-[#1A1A24]"
+          >
+            {mapStyle === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
 
       {selectedIds.length > 0 ? (
@@ -117,7 +119,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
   }, [trips]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex !h-auto min-h-full flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <label className="relative min-w-[16rem] flex-1 max-w-md">
           <span className="sr-only">Search trips</span>
@@ -162,7 +164,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
         getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
         emptyTitle="No trips found"
         emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
-        className="min-h-0 flex-1"
+        className="overflow-visible"
       />
       {data ? (
         <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
