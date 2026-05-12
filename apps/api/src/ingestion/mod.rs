@@ -19,7 +19,7 @@ pub async fn start_workers(
 ) -> anyhow::Result<supervisor::SupervisorHandle> {
     let handle = supervisor::WorkerSupervisor::start(pool.clone(), redis, age_key, config);
 
-    let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar!(
+    let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM riviamigo.vehicles v \
          JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id"
     )

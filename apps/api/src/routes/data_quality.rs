@@ -36,6 +36,15 @@ struct DataQualityResponse {
     gap_count: i64,
 }
 
+#[derive(sqlx::FromRow)]
+struct DataQualityCountsRow {
+    total_samples: i64,
+    samples_with_location: i64,
+    samples_with_battery: i64,
+    samples_with_power_kw: i64,
+    samples_with_odometer: i64,
+}
+
 async fn data_quality(
     auth: AuthUser,
     State(state): State<AppState>,
@@ -48,7 +57,7 @@ async fn data_quality(
     let to = params.to.unwrap_or_else(Utc::now);
 
     // Field presence counts
-    let row = sqlx::query!(
+    let row = sqlx::query_as::<_, DataQualityCountsRow>(
         r#"SELECT
                COUNT(*)                                              AS total_samples,
                COUNT(*) FILTER (WHERE latitude IS NOT NULL
@@ -56,21 +65,21 @@ async fn data_quality(
                COUNT(*) FILTER (WHERE battery_level IS NOT NULL)    AS samples_with_battery,
                COUNT(*) FILTER (WHERE power_kw IS NOT NULL)         AS samples_with_power_kw,
                COUNT(*) FILTER (WHERE odometer_miles IS NOT NULL)   AS samples_with_odometer
-           FROM timeseries.telemetry
-           WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3"#,
-        vehicle_id,
-        from,
-        to
+            FROM timeseries.telemetry
+            WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3"#
     )
+        .bind(vehicle_id)
+        .bind(from)
+        .bind(to)
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)?;
 
-    let total = row.total_samples.unwrap_or(0);
-    let with_loc = row.samples_with_location.unwrap_or(0);
-    let with_bat = row.samples_with_battery.unwrap_or(0);
-    let with_pwr = row.samples_with_power_kw.unwrap_or(0);
-    let with_odo = row.samples_with_odometer.unwrap_or(0);
+        let total = row.total_samples;
+        let with_loc = row.samples_with_location;
+        let with_bat = row.samples_with_battery;
+        let with_pwr = row.samples_with_power_kw;
+        let with_odo = row.samples_with_odometer;
 
     // Coverage: what fraction of 30-second intervals have at least one sample
     let window_secs = (to - from).num_seconds().max(1);
@@ -82,21 +91,20 @@ async fn data_quality(
     };
 
     // Count gaps > 5 minutes (300 s) between consecutive samples
-    let gap_count: i64 = sqlx::query_scalar!(
+    let gap_count: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM (
                SELECT ts - LAG(ts) OVER (ORDER BY ts) AS gap
                FROM timeseries.telemetry
                WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3
            ) sub
-           WHERE gap > interval '5 minutes'"#,
-        vehicle_id,
-        from,
-        to
+           WHERE gap > interval '5 minutes'"#
     )
+    .bind(vehicle_id)
+    .bind(from)
+    .bind(to)
     .fetch_one(&state.pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(0);
+    .map_err(AppError::from)?;
 
     Ok(Json(DataQualityResponse {
         vehicle_id,
@@ -113,15 +121,14 @@ async fn data_quality(
 }
 
 async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-        vehicle_id,
-        user_id
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
     )
+    .bind(vehicle_id)
+    .bind(user_id)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(false);
+    .map_err(AppError::from)?;
 
     if !owned { Err(AppError::NotFound) } else { Ok(()) }
 }

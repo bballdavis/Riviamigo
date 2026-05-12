@@ -1,11 +1,13 @@
 use axum::{
     extract::State,
-    routing::{get, put},
+    http::StatusCode,
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -13,12 +15,15 @@ use crate::{
     errors::AppError,
     ingestion::session_store::encrypt_json,
     middleware::auth::{AppState, AuthUser},
+    services::backups as backup_service,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/backups", get(get_backup_overview))
         .route("/admin/backups/settings", put(update_backup_settings))
+        .route("/admin/backups/run", post(run_backup_now))
+        .route("/admin/backups/restore-requests", post(create_restore_request))
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -135,6 +140,8 @@ impl TryFrom<&str> for BackupRunTrigger {
 struct BackupOverviewResponse {
     settings: BackupSettingsResponse,
     recent_runs: Vec<BackupRunResponse>,
+    artifacts: Vec<BackupArtifactResponse>,
+    restore_requests: Vec<BackupRestoreRequestResponse>,
     latest_successful_run: Option<BackupRunResponse>,
     next_run_at: Option<DateTime<Utc>>,
 }
@@ -171,6 +178,38 @@ struct BackupRunResponse {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize)]
+struct BackupArtifactResponse {
+    id: Uuid,
+    run_id: Uuid,
+    storage_type: String,
+    file_name: String,
+    storage_path: String,
+    size_bytes: i64,
+    checksum_sha256: String,
+    manifest: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRestoreRequestResponse {
+    id: Uuid,
+    artifact_id: Uuid,
+    requested_by: Option<Uuid>,
+    status: String,
+    confirmation_phrase: String,
+    notes: Option<String>,
+    error_message: Option<String>,
+    requested_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRunExecutionResponse {
+    run: BackupRunResponse,
+    artifact: BackupArtifactResponse,
+}
+
 #[derive(Debug, Deserialize)]
 struct UpdateBackupSettingsBody {
     enabled: bool,
@@ -188,6 +227,13 @@ struct UpdateBackupSettingsBody {
     access_key: Option<String>,
     secret_key: Option<String>,
     clear_secret_key: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRestoreRequestBody {
+    artifact_id: Uuid,
+    confirmation_phrase: String,
+    notes: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -222,6 +268,32 @@ struct BackupRunRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, FromRow)]
+struct BackupArtifactRow {
+    id: Uuid,
+    run_id: Uuid,
+    storage_type: String,
+    file_name: String,
+    storage_path: String,
+    size_bytes: i64,
+    checksum_sha256: String,
+    manifest: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupRestoreRequestRow {
+    id: Uuid,
+    artifact_id: Uuid,
+    requested_by: Option<Uuid>,
+    status: String,
+    confirmation_phrase: String,
+    notes: Option<String>,
+    error_message: Option<String>,
+    requested_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
 async fn get_backup_overview(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -230,12 +302,16 @@ async fn get_backup_overview(
 
     let settings = load_settings(&state).await?;
     let recent_runs = load_recent_runs(&state).await?;
+    let artifacts = load_artifacts(&state).await?;
+    let restore_requests = load_restore_requests(&state).await?;
     let latest_successful_run = load_latest_successful_run(&state).await?;
     let next_run_at = compute_next_run(&settings)?;
 
     Ok(Json(BackupOverviewResponse {
         settings,
         recent_runs,
+        artifacts,
+        restore_requests,
         latest_successful_run,
         next_run_at,
     }))
@@ -251,7 +327,7 @@ async fn update_backup_settings(
     let run_at = parse_run_time(&body.run_at)?;
     let timezone = parse_timezone(&body.timezone)?;
     validate_schedule(&body.frequency, body.day_of_week, body.day_of_month)?;
-    validate_target(&body.target_type, body.enabled, &body.bucket)?;
+    validate_target(body.target_type, body.enabled, &body.bucket)?;
 
     let normalized_day_of_week = match body.frequency {
         BackupFrequency::Weekly => body.day_of_week,
@@ -327,6 +403,46 @@ async fn update_backup_settings(
     Ok(Json(load_settings(&state).await?))
 }
 
+async fn run_backup_now(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<BackupRunExecutionResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let result = backup_service::run_backup_now(
+        &state.pool,
+        &state.config,
+        Some(auth.user_id),
+        backup_service::BackupRunTrigger::Manual,
+    )
+    .await?;
+
+    let run = load_run_by_id(&state, result.run_id).await?;
+    let artifact = load_artifact_by_id(&state, result.artifact_id).await?;
+
+    Ok((StatusCode::CREATED, Json(BackupRunExecutionResponse { run, artifact })))
+}
+
+async fn create_restore_request(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateRestoreRequestBody>,
+) -> Result<(StatusCode, Json<BackupRestoreRequestResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let request_id = backup_service::create_restore_request(
+        &state.pool,
+        body.artifact_id,
+        auth.user_id,
+        &body.confirmation_phrase,
+        body.notes,
+    )
+    .await?;
+
+    let request = load_restore_request_by_id(&state, request_id).await?;
+    Ok((StatusCode::CREATED, Json(request)))
+}
+
 async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppError> {
     let row = sqlx::query_as::<_, BackupSettingsRow>(
         r#"
@@ -372,6 +488,93 @@ async fn load_recent_runs(state: &AppState) -> Result<Vec<BackupRunResponse>, Ap
     .await?;
 
     rows.into_iter().map(map_run_row).collect()
+}
+
+async fn load_run_by_id(state: &AppState, run_id: Uuid) -> Result<BackupRunResponse, AppError> {
+    let row = sqlx::query_as::<_, BackupRunRow>(
+        r#"
+        SELECT id, trigger, status, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        FROM riviamigo.backup_runs
+        WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => map_run_row(row),
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn load_artifacts(state: &AppState) -> Result<Vec<BackupArtifactResponse>, AppError> {
+    let rows = sqlx::query_as::<_, BackupArtifactRow>(
+        r#"
+        SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
+        FROM riviamigo.backup_artifacts
+        ORDER BY created_at DESC
+        LIMIT 10
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows.into_iter().map(map_artifact_row).collect())
+}
+
+async fn load_artifact_by_id(state: &AppState, artifact_id: Uuid) -> Result<BackupArtifactResponse, AppError> {
+    let row = sqlx::query_as::<_, BackupArtifactRow>(
+        r#"
+        SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
+        FROM riviamigo.backup_artifacts
+        WHERE id = $1
+        "#,
+    )
+    .bind(artifact_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(map_artifact_row(row)),
+        None => Err(AppError::NotFound),
+    }
+}
+
+async fn load_restore_requests(state: &AppState) -> Result<Vec<BackupRestoreRequestResponse>, AppError> {
+    let rows = sqlx::query_as::<_, BackupRestoreRequestRow>(
+        r#"
+        SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
+        FROM riviamigo.backup_restore_requests
+        ORDER BY requested_at DESC
+        LIMIT 10
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows.into_iter().map(map_restore_request_row).collect())
+}
+
+async fn load_restore_request_by_id(
+    state: &AppState,
+    request_id: Uuid,
+) -> Result<BackupRestoreRequestResponse, AppError> {
+    let row = sqlx::query_as::<_, BackupRestoreRequestRow>(
+        r#"
+        SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
+        FROM riviamigo.backup_restore_requests
+        WHERE id = $1
+        "#,
+    )
+    .bind(request_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match row {
+        Some(row) => Ok(map_restore_request_row(row)),
+        None => Err(AppError::NotFound),
+    }
 }
 
 async fn load_latest_successful_run(
@@ -424,6 +627,34 @@ fn map_run_row(row: BackupRunRow) -> Result<BackupRunResponse, AppError> {
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
+}
+
+fn map_artifact_row(row: BackupArtifactRow) -> BackupArtifactResponse {
+    BackupArtifactResponse {
+        id: row.id,
+        run_id: row.run_id,
+        storage_type: row.storage_type,
+        file_name: row.file_name,
+        storage_path: row.storage_path,
+        size_bytes: row.size_bytes,
+        checksum_sha256: row.checksum_sha256,
+        manifest: row.manifest,
+        created_at: row.created_at,
+    }
+}
+
+fn map_restore_request_row(row: BackupRestoreRequestRow) -> BackupRestoreRequestResponse {
+    BackupRestoreRequestResponse {
+        id: row.id,
+        artifact_id: row.artifact_id,
+        requested_by: row.requested_by,
+        status: row.status,
+        confirmation_phrase: row.confirmation_phrase,
+        notes: row.notes,
+        error_message: row.error_message,
+        requested_at: row.requested_at,
+        updated_at: row.updated_at,
+    }
 }
 
 fn default_settings() -> BackupSettingsResponse {
@@ -590,7 +821,7 @@ fn next_monthly_run(
 
 fn clamp_day_of_month(year: i32, month: u32, day_of_month: i16) -> u32 {
     let max_day = days_in_month(year, month);
-    day_of_month.max(1) as u32.min(max_day)
+    (day_of_month.max(1) as u32).min(max_day)
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {

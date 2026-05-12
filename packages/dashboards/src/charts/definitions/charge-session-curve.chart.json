@@ -1,0 +1,12 @@
+{
+  "id": "charge-session-curve",
+  "title": "Charge Rate Curve",
+  "description": "Charge rate over state of charge for the selected session.",
+  "pages": ["charging"],
+  "source": "charge_session_curve",
+  "mode": "line",
+  "yUnit": "kW",
+  "defaultSize": { "w": 12, "h": 5 },
+  "minSize": { "w": 6, "h": 4 },
+  "emptyTitle": "No charging curve is available for this session"
+}

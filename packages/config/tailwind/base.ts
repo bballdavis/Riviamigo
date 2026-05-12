@@ -22,8 +22,8 @@ export const tailwindBase: Partial<Config> = {
           high: '#10B981', mid: '#F59E0B', low: '#F87171',
         },
         charging: {
-          active: '#F59E0B', done: '#10B981', limited: '#F87171',
-          ac: '#60A5FA', dc: '#A78BFA', dcfc: '#C084FC',
+          active: 'var(--rm-charging-active)', done: 'var(--rm-charging-done)', limited: 'var(--rm-charging-limited)',
+          ac: 'var(--rm-charging-ac)', dc: 'var(--rm-charging-dc)', dcfc: 'var(--rm-charging-dcfc)',
         },
         bg: {
           page:     'var(--rm-bg-page)',

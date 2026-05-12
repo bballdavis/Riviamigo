@@ -16,6 +16,8 @@ target/
 apps/api/Cargo.lock
 apps/api/.sqlx/
 *.lock.tmp
+/tmp
+.tmp/
 
 # Generated branding exports that should not be committed.
 assets/text_black.svg
@@ -27,3 +29,21 @@ playwright-report/
 test-results/
 infra/resolv.conf
 .codex_tmp/
+
+# IDE and system
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Vite
+apps/web/.vite/
+apps/web/dist/
+
+# Turbo cache
+.turbo/cache/
+
+# pnpm
+pnpm-debug.log*

@@ -16,6 +16,12 @@
   --rm-border-default: rgba(255, 255, 255, 0.08);
   --rm-border-strong:  rgba(255, 255, 255, 0.15);
   --rm-border-accent:  rgba(253, 131, 4, 0.3);
+  --rm-charging-active: var(--rm-accent);
+  --rm-charging-done:    #10B981;
+  --rm-charging-limited: #F87171;
+  --rm-charging-ac:      #60A5FA;
+  --rm-charging-dc:      #A78BFA;
+  --rm-charging-dcfc:    #C084FC;
 
   --rm-glow-sm:        0 0 20px rgba(253, 131, 4, 0.15);
   --rm-glow-md:        0 0 40px rgba(253, 131, 4, 0.20);
@@ -54,6 +60,12 @@
   --rm-border-default: rgba(20, 20, 24, 0.08);
   --rm-border-strong:  rgba(20, 20, 24, 0.18);
   --rm-border-accent:  rgba(253, 131, 4, 0.35);
+  --rm-charging-active: var(--rm-accent);
+  --rm-charging-done:    #10B981;
+  --rm-charging-limited: #F87171;
+  --rm-charging-ac:      #60A5FA;
+  --rm-charging-dc:      #A78BFA;
+  --rm-charging-dcfc:    #C084FC;
 
   --rm-glow-sm:        0 0 0 1px rgba(253, 131, 4, 0.10);
   --rm-glow-md:        0 1px 2px rgba(253, 131, 4, 0.15);
@@ -79,4 +91,52 @@ body {
   color: var(--rm-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.rm-accent-range {
+  width: 100%;
+  height: 0.375rem;
+  cursor: pointer;
+  appearance: none;
+  border-radius: 999px;
+  background: var(--rm-border-strong);
+  accent-color: var(--rm-accent);
+}
+
+.rm-accent-range::-webkit-slider-runnable-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.rm-accent-range::-webkit-slider-thumb {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: -0.25rem;
+  appearance: none;
+  border: 2px solid var(--rm-accent);
+  border-radius: 999px;
+  background: var(--rm-bg-surface);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+}
+
+.rm-accent-range::-moz-range-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.rm-accent-range::-moz-range-progress {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--rm-accent);
+}
+
+.rm-accent-range::-moz-range-thumb {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--rm-accent);
+  border-radius: 999px;
+  background: var(--rm-bg-surface);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
 }

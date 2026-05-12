@@ -58,8 +58,7 @@ async fn locations(
     let bucket_secs = params.bucket_secs.max(60).min(86400);
     let limit = params.limit.min(20_000);
 
-    let points = sqlx::query_as!(
-        LocationPoint,
+    let points = sqlx::query_as::<_, LocationPoint>(
         r#"SELECT
                time_bucket(make_interval(secs => $2::float8), ts) AS "bucket: DateTime<Utc>",
                avg(latitude)  AS "latitude: f64",
@@ -72,14 +71,14 @@ async fn locations(
              AND latitude IS NOT NULL
              AND longitude IS NOT NULL
            GROUP BY 1
-           ORDER BY 1 DESC
-           LIMIT $5"#,
-        vehicle_id,
-        bucket_secs as f64,
-        from,
-        to,
-        limit
+            ORDER BY 1 DESC
+            LIMIT $5"#
     )
+        .bind(vehicle_id)
+        .bind(bucket_secs as f64)
+        .bind(from)
+        .bind(to)
+        .bind(limit)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -88,15 +87,14 @@ async fn locations(
 }
 
 async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-        vehicle_id,
-        user_id
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
     )
+    .bind(vehicle_id)
+    .bind(user_id)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(false);
+    .map_err(AppError::from)?;
 
     if !owned { Err(AppError::NotFound) } else { Ok(()) }
 }

@@ -34,10 +34,10 @@ pub async fn resolve_profile(
 
     // Tier 2: geofence-linked profile
     if let Some(gf_id) = geofence_id {
-        let profile_id: Option<Uuid> = sqlx::query_scalar!(
+        let profile_id: Option<Uuid> = sqlx::query_scalar(
             "SELECT cost_profile_id FROM riviamigo.geofences WHERE id = $1",
-            gf_id
         )
+        .bind(gf_id)
         .fetch_optional(pool)
         .await?
         .flatten();
@@ -50,10 +50,10 @@ pub async fn resolve_profile(
     }
 
     // Tier 3: vehicle default
-    let profile_id: Option<Uuid> = sqlx::query_scalar!(
+    let profile_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT cost_profile_id FROM riviamigo.vehicles WHERE id = $1",
-        vehicle_id
     )
+    .bind(vehicle_id)
     .fetch_optional(pool)
     .await?
     .flatten();

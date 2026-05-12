@@ -61,16 +61,15 @@ async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<Dashboard>>, AppError> {
-    let rows = sqlx::query_as!(
-        Dashboard,
+    let rows = sqlx::query_as::<_, Dashboard>(
         r#"
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards
         WHERE owner_id = $1 OR owner_id IS NULL
         ORDER BY is_default DESC, name ASC
-        "#,
-        auth.user_id
+        "#
     )
+    .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -83,14 +82,13 @@ async fn fetch(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Dashboard>, AppError> {
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards WHERE id = $1
-        "#,
-        id
+        "#
     )
+    .bind(id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -106,18 +104,17 @@ async fn by_slug(
     Path(slug): Path<String>,
 ) -> Result<Json<Dashboard>, AppError> {
     // User-owned variant first, then system default
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards
         WHERE slug = $1 AND (owner_id = $2 OR owner_id IS NULL)
         ORDER BY (owner_id = $2) DESC
         LIMIT 1
-        "#,
-        slug,
-        auth.user_id
+        "#
     )
+    .bind(slug)
+    .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -134,23 +131,22 @@ async fn create(
     validate_slug(&body.slug)?;
 
     let id = Uuid::new_v4();
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         INSERT INTO dashboards (id, owner_id, slug, name, description, is_default, is_locked, config)
         VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-        id,
-        auth.user_id,
-        body.slug,
-        body.name,
-        body.description,
-        body.config
+        "#
     )
+    .bind(id)
+    .bind(auth.user_id)
+    .bind(body.slug)
+    .bind(body.name)
+    .bind(body.description)
+    .bind(body.config)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| {
+    .map_err(|e: sqlx::Error| {
         if e.to_string().contains("unique") {
             AppError::Validation("A dashboard with that slug already exists".into())
         } else {
@@ -171,8 +167,7 @@ async fn update(
     let existing = get_dashboard(&state, id).await?;
     check_write_access(&existing, auth.user_id, false)?;
 
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         UPDATE dashboards
         SET name        = COALESCE($1, name),
@@ -181,12 +176,12 @@ async fn update(
             updated_at  = NOW()
         WHERE id = $4
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-        body.name,
-        body.description,
-        body.config,
-        id
+        "#
     )
+    .bind(body.name)
+    .bind(body.description)
+    .bind(body.config)
+    .bind(id)
     .fetch_one(&state.pool)
     .await?;
 
@@ -202,7 +197,8 @@ async fn remove(
     let existing = get_dashboard(&state, id).await?;
     check_write_access(&existing, auth.user_id, false)?;
 
-    sqlx::query!("DELETE FROM dashboards WHERE id = $1", id)
+    sqlx::query("DELETE FROM dashboards WHERE id = $1")
+        .bind(id)
         .execute(&state.pool)
         .await?;
 
@@ -221,23 +217,22 @@ async fn clone_dashboard(
     let new_id = Uuid::new_v4();
     let new_slug = format!("{}-copy", source.slug);
 
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         INSERT INTO dashboards (id, owner_id, slug, name, description, is_default, is_locked, config)
         VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-        new_id,
-        auth.user_id,
-        new_slug,
-        format!("{} (copy)", source.name),
-        source.description,
-        source.config
+        "#
     )
+    .bind(new_id)
+    .bind(auth.user_id)
+    .bind(new_slug)
+    .bind(format!("{} (copy)", source.name))
+    .bind(source.description)
+    .bind(source.config)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| {
+    .map_err(|e: sqlx::Error| {
         if e.to_string().contains("unique") {
             AppError::Validation("You already have a dashboard with that slug".into())
         } else {
@@ -258,8 +253,7 @@ async fn admin_update(
 ) -> Result<Json<Dashboard>, AppError> {
     require_admin(&state, auth.user_id).await?;
 
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         UPDATE dashboards
         SET name        = COALESCE($1, name),
@@ -268,12 +262,12 @@ async fn admin_update(
             updated_at  = NOW()
         WHERE id = $4
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-        body.name,
-        body.description,
-        body.config,
-        id
+        "#
     )
+    .bind(body.name)
+    .bind(body.description)
+    .bind(body.config)
+    .bind(id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -294,16 +288,15 @@ async fn admin_set_lock(
 ) -> Result<Json<Dashboard>, AppError> {
     require_admin(&state, auth.user_id).await?;
 
-    let row = sqlx::query_as!(
-        Dashboard,
+    let row = sqlx::query_as::<_, Dashboard>(
         r#"
         UPDATE dashboards SET is_locked = $1, updated_at = NOW()
         WHERE id = $2
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#,
-        body.locked,
-        id
+        "#
     )
+    .bind(body.locked)
+    .bind(id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -314,14 +307,13 @@ async fn admin_set_lock(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn get_dashboard(state: &AppState, id: Uuid) -> Result<Dashboard, AppError> {
-    sqlx::query_as!(
-        Dashboard,
+    sqlx::query_as::<_, Dashboard>(
         r#"
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards WHERE id = $1
-        "#,
-        id
+        "#
     )
+    .bind(id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)
@@ -352,7 +344,8 @@ fn check_write_access(d: &Dashboard, user_id: Uuid, is_admin: bool) -> Result<()
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role: Option<String> = sqlx::query_scalar!("SELECT role FROM users WHERE id = $1", user_id)
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
+        .bind(user_id)
         .fetch_optional(&state.pool)
         .await?;
 
@@ -409,7 +402,7 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         let name = config["name"].as_str().unwrap_or("Dashboard").to_string();
         let slug = config["slug"].as_str().unwrap_or("dashboard").to_string();
 
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO dashboards (id, owner_id, slug, name, is_default, is_locked, config)
             VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4)
@@ -418,11 +411,11 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
                     name       = EXCLUDED.name,
                     updated_at = NOW()
             "#,
-            id,
-            slug,
-            name,
-            config
         )
+        .bind(id)
+        .bind(slug)
+        .bind(name)
+        .bind(config)
         .execute(pool)
         .await?;
     }

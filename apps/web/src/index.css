@@ -40,12 +40,12 @@
   --color-soc-low:  #F87171;
 
   /* Status — charging */
-  --color-charging-active:  #F59E0B;
-  --color-charging-done:    #10B981;
-  --color-charging-limited: #F87171;
-  --color-charging-ac:      #60A5FA;
-  --color-charging-dc:      #A78BFA;
-  --color-charging-dcfc:    #C084FC;
+  --color-charging-active:  var(--rm-charging-active);
+  --color-charging-done:    var(--rm-charging-done);
+  --color-charging-limited: var(--rm-charging-limited);
+  --color-charging-ac:      var(--rm-charging-ac);
+  --color-charging-dc:      var(--rm-charging-dc);
+  --color-charging-dcfc:    var(--rm-charging-dcfc);
 
   /* Typography */
   --font-display: "Space Grotesk Variable", "Space Grotesk", system-ui, sans-serif;

@@ -15,12 +15,12 @@ export const colors = {
     low:  '#F87171',
   },
   charging: {
-    active:  '#FD8304',
-    done:    '#10B981',
-    limited: '#F87171',
-    ac:      '#60A5FA',
-    dc:      '#A78BFA',
-    dcfc:    '#C084FC',
+    active:  'var(--rm-charging-active)',
+    done:    'var(--rm-charging-done)',
+    limited: 'var(--rm-charging-limited)',
+    ac:      'var(--rm-charging-ac)',
+    dc:      'var(--rm-charging-dc)',
+    dcfc:    'var(--rm-charging-dcfc)',
   },
   dataViz: {
     amber:   '#FD8304',

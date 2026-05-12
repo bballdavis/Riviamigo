@@ -62,15 +62,15 @@ pub async fn run_vehicle_worker(
     };
 
     // Load credentials
-    let creds_row = sqlx::query!(
-        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
-        vehicle_id
+    let creds_row = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1"
     )
+    .bind(vehicle_id)
     .fetch_optional(&pool)
     .await;
 
     let tokens: RivianTokenBundle = match creds_row {
-        Ok(Some(row)) => match decrypt_tokens(&row.encrypted_tokens, &identity) {
+        Ok(Some(encrypted_tokens)) => match decrypt_tokens(&encrypted_tokens, &identity) {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!(vehicle_id=%vehicle_id, err=%e, "decrypt failed");
@@ -107,10 +107,10 @@ pub async fn run_vehicle_worker(
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
 
     // Get rivian_vehicle_id
-    let riv_id: Option<String> = sqlx::query_scalar!(
-        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1",
-        vehicle_id
+    let riv_id: Option<String> = sqlx::query_scalar(
+        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1"
     )
+    .bind(vehicle_id)
     .fetch_optional(&pool)
     .await
     .ok()
@@ -928,7 +928,7 @@ async fn write_telemetry(
     trip_id: Option<Uuid>,
     charge_session_id: Option<Uuid>,
 ) -> anyhow::Result<()> {
-    sqlx::query!(
+    sqlx::query(
         r#"INSERT INTO timeseries.telemetry
            (ts, vehicle_id, latitude, longitude, altitude_m, speed_mph,
             battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
@@ -944,29 +944,64 @@ async fn write_telemetry(
             ota_current_version, ota_available_version, ota_status, ota_current_status,
             hv_thermal_event, twelve_volt_health, is_online,
             trip_id, charge_session_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)
-           ON CONFLICT (vehicle_id, ts) DO NOTHING"#,
-        e.ts, e.vehicle_id,
-        e.latitude, e.longitude, e.altitude_m, e.speed_mph,
-        e.battery_level, e.battery_capacity_wh, e.distance_to_empty_mi, e.battery_limit,
-        e.power_state.as_ref().map(|p| format!("{p:?}").to_lowercase()),
-        e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()),
-        e.charger_status, e.time_to_end_of_charge_min,
-        e.drive_mode.as_ref().map(|d| format!("{d:?}").to_lowercase()),
-        e.gear_status, e.cabin_temp_c, e.driver_temp_c, e.outside_temp_c, e.hvac_active,
-        e.power_kw, e.regen_power_kw, e.heading_deg, e.odometer_miles,
-        e.tire_fl_psi, e.tire_fr_psi, e.tire_rl_psi, e.tire_rr_psi,
-        e.tire_fl_status, e.tire_fr_status, e.tire_rl_status, e.tire_rr_status,
-        e.door_front_left_locked, e.door_front_right_locked, e.door_rear_left_locked, e.door_rear_right_locked,
-        e.door_front_left_closed, e.door_front_right_closed, e.door_rear_left_closed, e.door_rear_right_closed,
-        e.closure_frunk_locked, e.closure_frunk_closed, e.closure_liftgate_locked, e.closure_liftgate_closed,
-        e.closure_tailgate_locked, e.closure_tailgate_closed,
-        e.ota_current_version, e.ota_available_version, e.ota_status, e.ota_current_status,
-        e.hv_thermal_event, e.twelve_volt_health,
-        e.is_online,
-        trip_id,
-        charge_session_id
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)
+            ON CONFLICT (vehicle_id, ts) DO NOTHING"#,
     )
+        .bind(e.ts)
+        .bind(e.vehicle_id)
+        .bind(e.latitude)
+        .bind(e.longitude)
+        .bind(e.altitude_m)
+        .bind(e.speed_mph)
+        .bind(e.battery_level)
+        .bind(e.battery_capacity_wh)
+        .bind(e.distance_to_empty_mi)
+        .bind(e.battery_limit)
+        .bind(e.power_state.as_ref().map(|p| format!("{p:?}").to_lowercase()))
+        .bind(e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()))
+        .bind(&e.charger_status)
+        .bind(e.time_to_end_of_charge_min)
+        .bind(e.drive_mode.as_ref().map(|d| format!("{d:?}").to_lowercase()))
+        .bind(&e.gear_status)
+        .bind(e.cabin_temp_c)
+        .bind(e.driver_temp_c)
+        .bind(e.outside_temp_c)
+        .bind(e.hvac_active)
+        .bind(e.power_kw)
+        .bind(e.regen_power_kw)
+        .bind(e.heading_deg)
+        .bind(e.odometer_miles)
+        .bind(e.tire_fl_psi)
+        .bind(e.tire_fr_psi)
+        .bind(e.tire_rl_psi)
+        .bind(e.tire_rr_psi)
+        .bind(&e.tire_fl_status)
+        .bind(&e.tire_fr_status)
+        .bind(&e.tire_rl_status)
+        .bind(&e.tire_rr_status)
+        .bind(e.door_front_left_locked)
+        .bind(e.door_front_right_locked)
+        .bind(e.door_rear_left_locked)
+        .bind(e.door_rear_right_locked)
+        .bind(e.door_front_left_closed)
+        .bind(e.door_front_right_closed)
+        .bind(e.door_rear_left_closed)
+        .bind(e.door_rear_right_closed)
+        .bind(e.closure_frunk_locked)
+        .bind(e.closure_frunk_closed)
+        .bind(e.closure_liftgate_locked)
+        .bind(e.closure_liftgate_closed)
+        .bind(e.closure_tailgate_locked)
+        .bind(e.closure_tailgate_closed)
+        .bind(&e.ota_current_version)
+        .bind(&e.ota_available_version)
+        .bind(&e.ota_status)
+        .bind(&e.ota_current_status)
+        .bind(&e.hv_thermal_event)
+        .bind(&e.twelve_volt_health)
+        .bind(e.is_online)
+        .bind(trip_id)
+        .bind(charge_session_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -1247,7 +1282,7 @@ async fn persist_trip(
         _ => MatchedLocation::none(),
     };
 
-    sqlx::query!(
+    sqlx::query(
         r#"INSERT INTO riviamigo.trips
            (id, vehicle_id, started_at, ended_at,
             start_lat, start_lng, end_lat, end_lng,
@@ -1262,43 +1297,43 @@ async fn persist_trip(
             power_max_kw, power_min_kw,
             elevation_gain_m, elevation_loss_m,
             inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)"#,
-        trip.trip_id,
-        trip.vehicle_id,
-        trip.started_at,
-        trip.ended_at,
-        start.map(|p| p.lat),
-        start.map(|p| p.lng),
-        end.map(|p| p.lat),
-        end.map(|p| p.lng),
-        distance,
-        duration,
-        trip.soc_start,
-        trip.soc_end,
-        efficiency_wh_per_mi,
-        max_speed,
-        avg_speed,
-        trip.dominant_drive_mode.as_deref(),
-        trip.start_odometer_mi,
-        trip.end_odometer_mi,
-        start.map(|p| p.ts),
-        end.map(|p| p.ts),
-        start_match.geofence_id,
-        end_match.geofence_id,
-        start_match.address_id,
-        end_match.address_id,
-        trip.range_start_mi,
-        trip.range_end_mi,
-        trip.power_max_kw,
-        trip.power_min_kw,
-        trip.elevation_gain_m,
-        trip.elevation_loss_m,
-        trip.inside_temp_avg_c,
-        outside_temp_c,
-        trip.regen_wh,
-        energy_wh,
-        energy_strategy.as_deref()
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)"#,
     )
+        .bind(trip.trip_id)
+        .bind(trip.vehicle_id)
+        .bind(trip.started_at)
+        .bind(trip.ended_at)
+        .bind(start.map(|p| p.lat))
+        .bind(start.map(|p| p.lng))
+        .bind(end.map(|p| p.lat))
+        .bind(end.map(|p| p.lng))
+        .bind(distance)
+        .bind(duration)
+        .bind(trip.soc_start)
+        .bind(trip.soc_end)
+        .bind(efficiency_wh_per_mi)
+        .bind(max_speed)
+        .bind(avg_speed)
+        .bind(trip.dominant_drive_mode.as_deref())
+        .bind(trip.start_odometer_mi)
+        .bind(trip.end_odometer_mi)
+        .bind(start.map(|p| p.ts))
+        .bind(end.map(|p| p.ts))
+        .bind(start_match.geofence_id)
+        .bind(end_match.geofence_id)
+        .bind(start_match.address_id)
+        .bind(end_match.address_id)
+        .bind(trip.range_start_mi)
+        .bind(trip.range_end_mi)
+        .bind(trip.power_max_kw)
+        .bind(trip.power_min_kw)
+        .bind(trip.elevation_gain_m)
+        .bind(trip.elevation_loss_m)
+        .bind(trip.inside_temp_avg_c)
+        .bind(outside_temp_c)
+        .bind(trip.regen_wh)
+        .bind(energy_wh)
+        .bind(energy_strategy.as_deref())
     .execute(pool)
     .await?;
     Ok(())
@@ -1335,7 +1370,7 @@ async fn persist_charge_session(
         Some("unknown")
     };
 
-    sqlx::query!(
+    sqlx::query(
         r#"INSERT INTO riviamigo.charge_sessions
            (id, vehicle_id, started_at, ended_at,
             location_lat, location_lng,
@@ -1347,30 +1382,30 @@ async fn persist_charge_session(
             geofence_id, address_id, cost_profile_id, cost_method,
             charger_type)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)"#,
-        session.session_id,
-        session.vehicle_id,
-        session.started_at,
-        session.ended_at,
-        session.location_lat,
-        session.location_lng,
-        location_match.is_home,
-        session.soc_start,
-        session.soc_end,
-        session.charge_limit,
-        duration_minutes,
-        energy_added_kwh,
-        session.peak_charge_kw,
-        cost_usd,
-        session.energy_added_wh,
-        session.energy_used_wh,
-        session.avg_charge_rate_kw,
-        session.peak_charge_kw,    // peak_voltage column stores peak power for now
-        location_match.geofence_id,
-        location_match.address_id,
-        cost_profile_id,
-        cost_method,
-        session.charger_type.as_deref()
     )
+    .bind(session.session_id)
+    .bind(session.vehicle_id)
+    .bind(session.started_at)
+    .bind(session.ended_at)
+    .bind(session.location_lat)
+    .bind(session.location_lng)
+    .bind(location_match.is_home)
+    .bind(session.soc_start)
+    .bind(session.soc_end)
+    .bind(session.charge_limit)
+    .bind(duration_minutes)
+    .bind(energy_added_kwh)
+    .bind(session.peak_charge_kw)
+    .bind(cost_usd)
+    .bind(session.energy_added_wh)
+    .bind(session.energy_used_wh)
+    .bind(session.avg_charge_rate_kw)
+    .bind(session.peak_charge_kw)
+    .bind(location_match.geofence_id)
+    .bind(location_match.address_id)
+    .bind(cost_profile_id)
+    .bind(cost_method)
+    .bind(session.charger_type.as_deref())
     .execute(pool)
     .await?;
     Ok(())
@@ -1513,7 +1548,7 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
 
     // ── persist ───────────────────────────────────────────────────────────
     let result: Result<Uuid, sqlx::Error> = if let Some(oid) = osm_id {
-        sqlx::query_scalar!(
+        sqlx::query_scalar(
             r#"INSERT INTO riviamigo.addresses
                (display_name, osm_id, latitude, longitude, road, city, state, postcode, country, raw)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -1526,35 +1561,35 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
                  country = EXCLUDED.country,
                  raw = EXCLUDED.raw
                RETURNING id"#,
-            display_name,
-            oid,
-            lat,
-            lon,
-            road,
-            city,
-            state,
-            postcode,
-            country,
-            raw,
         )
+        .bind(display_name)
+        .bind(oid)
+        .bind(lat)
+        .bind(lon)
+        .bind(road)
+        .bind(city)
+        .bind(state)
+        .bind(postcode)
+        .bind(country)
+        .bind(raw)
         .fetch_one(pool)
         .await
     } else {
-        sqlx::query_scalar!(
+        sqlx::query_scalar(
             r#"INSERT INTO riviamigo.addresses
                (display_name, latitude, longitude, road, city, state, postcode, country, raw)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                RETURNING id"#,
-            display_name,
-            lat,
-            lon,
-            road,
-            city,
-            state,
-            postcode,
-            country,
-            raw,
         )
+        .bind(display_name)
+        .bind(lat)
+        .bind(lon)
+        .bind(road)
+        .bind(city)
+        .bind(state)
+        .bind(postcode)
+        .bind(country)
+        .bind(raw)
         .fetch_one(pool)
         .await
     };
@@ -1607,13 +1642,13 @@ async fn open_state_period(
     state: &VehicleState,
     started_at: chrono::DateTime<Utc>,
 ) {
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_state_periods (vehicle_id, state, started_at)
            VALUES ($1, $2, $3)"#,
-        vehicle_id,
-        state.to_string(),
-        started_at
     )
+    .bind(vehicle_id)
+    .bind(state.to_string())
+    .bind(started_at)
     .execute(pool)
     .await;
 }
@@ -1625,15 +1660,15 @@ async fn close_state_period(
     started_at: chrono::DateTime<Utc>,
     ended_at: chrono::DateTime<Utc>,
 ) {
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"UPDATE riviamigo.vehicle_state_periods
            SET ended_at = $1
            WHERE vehicle_id = $2 AND state = $3 AND started_at = $4 AND ended_at IS NULL"#,
-        ended_at,
-        vehicle_id,
-        state.to_string(),
-        started_at
     )
+    .bind(ended_at)
+    .bind(vehicle_id)
+    .bind(state.to_string())
+    .bind(started_at)
     .execute(pool)
     .await;
 }
@@ -1644,14 +1679,14 @@ async fn open_software_version(
     version: &str,
     installed_at: chrono::DateTime<Utc>,
 ) {
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at)
            VALUES ($1, $2, $3)
            ON CONFLICT DO NOTHING"#,
-        vehicle_id,
-        version,
-        installed_at
     )
+    .bind(vehicle_id)
+    .bind(version)
+    .bind(installed_at)
     .execute(pool)
     .await;
 }
@@ -1662,30 +1697,30 @@ async fn close_software_version(
     version: &str,
     observed_until: chrono::DateTime<Utc>,
 ) {
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"UPDATE riviamigo.software_versions
            SET observed_until = $1
            WHERE vehicle_id = $2 AND version = $3 AND observed_until IS NULL"#,
-        observed_until,
-        vehicle_id,
-        version
     )
+    .bind(observed_until)
+    .bind(vehicle_id)
+    .bind(version)
     .execute(pool)
     .await;
 }
 
 async fn upsert_health(pool: &PgPool, vehicle_id: Uuid, online: bool, health: &str, msg: &str) {
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
            (vehicle_id, is_online, worker_health, worker_health_msg, updated_at)
            VALUES ($1,$2,$3,$4,now())
            ON CONFLICT (vehicle_id) DO UPDATE
            SET is_online=$2, worker_health=$3, worker_health_msg=$4, updated_at=now()"#,
-        vehicle_id,
-        online,
-        health,
-        msg
     )
+    .bind(vehicle_id)
+    .bind(online)
+    .bind(health)
+    .bind(msg)
     .execute(pool)
     .await;
 }

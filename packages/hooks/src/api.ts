@@ -4,13 +4,14 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, ChargeSession, ChargeCurvePoint,
+  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
-  MetricValueResponse, BackupOverview, UpdateBackupSettingsBody,
+  MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse,
+  CreateBackupRestoreRequestBody, BackupRestoreRequest,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -216,6 +217,14 @@ class ApiClient {
     return this.request('PUT', '/v1/admin/backups/settings', body);
   }
 
+  async runBackupNow(): Promise<RunBackupResponse> {
+    return this.request('POST', '/v1/admin/backups/run');
+  }
+
+  async requestBackupRestore(body: CreateBackupRestoreRequestBody): Promise<BackupRestoreRequest> {
+    return this.request('POST', '/v1/admin/backups/restore-requests', body);
+  }
+
   // ── Battery ───────────────────────────────────────────────────────────────
 
   async getSoc(vehicleId: string, from: string, to: string) {
@@ -320,13 +329,26 @@ class ApiClient {
 
   async getChargeCurve(sessionId: string, vehicleId: string) {
     const rows = await this.request<Array<Record<string, unknown>>>(
-      'GET', `/v1/charging/${sessionId}/curve`, undefined, { vehicle_id: vehicleId }
+      'GET', `/v1/charging/sessions/${sessionId}/curve`, undefined, { vehicle_id: vehicleId }
     );
     return rows.map((row) => ({
       minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
       soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
       power_kw: finiteNumber(row.power_kw) ?? finiteNumber(row.charge_rate_kw) ?? 0,
     })) satisfies ChargeCurvePoint[];
+  }
+
+  async getChargeCurveAnalysis(vehicleId: string, from: string, to: string) {
+    const rows = await this.request<Array<Record<string, unknown>>>(
+      'GET', '/v1/charging/curve-analysis', undefined, { vehicle_id: vehicleId, from, to }
+    );
+    return rows.map((row) => ({
+      soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
+      charge_rate_kw: finiteNumber(row.charge_rate_kw) ?? finiteNumber(row.power_kw) ?? 0,
+      charger_type: typeof row.charger_type === 'string'
+        ? row.charger_type as ChargeCurveAnalysisPoint['charger_type']
+        : null,
+    })) satisfies ChargeCurveAnalysisPoint[];
   }
 
   async getChargingSummary(vehicleId: string, from: string, to: string) {

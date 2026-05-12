@@ -59,15 +59,14 @@ async fn list_geofences(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<GeofenceResponse>, AppError> {
-    let rows = sqlx::query_as!(
-        Geofence,
+    let rows = sqlx::query_as::<_, Geofence>(
         r#"SELECT id, user_id, name, latitude, longitude, radius_m,
                 address_id, cost_profile_id, is_home, is_work, created_at, updated_at
            FROM riviamigo.geofences
            WHERE user_id = $1
-           ORDER BY name"#,
-        auth.user_id
+           ORDER BY name"#
     )
+    .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -80,15 +79,14 @@ async fn get_geofence(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Geofence>, AppError> {
-    let row = sqlx::query_as!(
-        Geofence,
+    let row = sqlx::query_as::<_, Geofence>(
         r#"SELECT id, user_id, name, latitude, longitude, radius_m,
                 address_id, cost_profile_id, is_home, is_work, created_at, updated_at
            FROM riviamigo.geofences
-           WHERE id = $1 AND user_id = $2"#,
-        id,
-        auth.user_id
+           WHERE id = $1 AND user_id = $2"#
     )
+    .bind(id)
+    .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::from)?
@@ -102,24 +100,23 @@ async fn create_geofence(
     State(state): State<AppState>,
     Json(body): Json<CreateGeofenceBody>,
 ) -> Result<Json<Geofence>, AppError> {
-    let row = sqlx::query_as!(
-        Geofence,
+    let row = sqlx::query_as::<_, Geofence>(
         r#"INSERT INTO riviamigo.geofences
            (user_id, name, latitude, longitude, radius_m,
             is_home, is_work, cost_profile_id, address_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id, user_id, name, latitude, longitude, radius_m,
-                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#,
-        auth.user_id,
-        body.name,
-        body.latitude,
-        body.longitude,
-        body.radius_m,
-        body.is_home.unwrap_or(false),
-        body.is_work.unwrap_or(false),
-        body.cost_profile_id,
-        body.address_id
+                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#
     )
+    .bind(auth.user_id)
+    .bind(body.name)
+    .bind(body.latitude)
+    .bind(body.longitude)
+    .bind(body.radius_m)
+    .bind(body.is_home.unwrap_or(false))
+    .bind(body.is_work.unwrap_or(false))
+    .bind(body.cost_profile_id)
+    .bind(body.address_id)
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -133,8 +130,7 @@ async fn update_geofence(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateGeofenceBody>,
 ) -> Result<Json<Geofence>, AppError> {
-    let row = sqlx::query_as!(
-        Geofence,
+    let row = sqlx::query_as::<_, Geofence>(
         r#"UPDATE riviamigo.geofences SET
            name            = COALESCE($3, name),
            latitude        = COALESCE($4, latitude),
@@ -145,17 +141,17 @@ async fn update_geofence(
            cost_profile_id = COALESCE($9, cost_profile_id)
            WHERE id = $1 AND user_id = $2
            RETURNING id, user_id, name, latitude, longitude, radius_m,
-                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#,
-        id,
-        auth.user_id,
-        body.name,
-        body.latitude,
-        body.longitude,
-        body.radius_m,
-        body.is_home,
-        body.is_work,
-        body.cost_profile_id
+                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#
     )
+    .bind(id)
+    .bind(auth.user_id)
+    .bind(body.name)
+    .bind(body.latitude)
+    .bind(body.longitude)
+    .bind(body.radius_m)
+    .bind(body.is_home)
+    .bind(body.is_work)
+    .bind(body.cost_profile_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(AppError::from)?
@@ -169,11 +165,9 @@ async fn delete_geofence(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let result = sqlx::query!(
-        "DELETE FROM riviamigo.geofences WHERE id = $1 AND user_id = $2",
-        id,
-        auth.user_id
-    )
+    let result = sqlx::query("DELETE FROM riviamigo.geofences WHERE id = $1 AND user_id = $2")
+    .bind(id)
+    .bind(auth.user_id)
     .execute(&state.pool)
     .await
     .map_err(AppError::from)?;

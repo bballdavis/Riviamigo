@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, Cpu, Gauge, Lock, MapPin, PlugZap, Thermometer, Unlock, Unplug } from 'lucide-react';
+import { Battery, Car, Cpu, Gauge, Lock, MapPin, Thermometer, Unlock } from 'lucide-react';
+import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { useAuth, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import {
@@ -154,8 +155,15 @@ function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
 
 function ChargingGlyph({ chargerState, chargerStatus }: { chargerState: string | null | undefined; chargerStatus: string | null | undefined }) {
   const charging = chargerState && !['unknown', 'disconnected'].includes(chargerState.toLowerCase()) && chargerStatus !== 'chrgr_sts_not_connected';
-  const Icon = charging ? PlugZap : Unplug;
-  return <span aria-label={charging ? 'Charging' : 'Not charging'} title={charging ? 'Charging' : 'Not charging'} className={`inline-flex items-center justify-end ${charging ? 'text-accent' : 'text-fg-tertiary'}`}><Icon className="h-5 w-5" /></span>;
+  return (
+    <span
+      aria-label={charging ? 'Charging' : 'Not charging'}
+      title={charging ? 'Charging' : 'Not charging'}
+      className={`inline-flex items-center justify-end ${charging ? 'text-accent' : 'text-fg-tertiary'}`}
+    >
+      {charging ? <PiPlugsConnectedFill className="h-5 w-5" /> : <PiPlugsFill className="h-5 w-5" />}
+    </span>
+  );
 }
 
 function VehicleLabel({ className, value }: { className: string; value: string }) {

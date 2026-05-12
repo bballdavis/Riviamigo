@@ -7,6 +7,8 @@ export type DashboardChartSource =
   | 'range_history'
   | 'charging_sessions_energy'
   | 'charging_weekly_energy'
+  | 'charge_session_curve'
+  | 'charging_curve_analysis'
   | 'efficiency_trend'
   | 'efficiency_temperature'
   | 'efficiency_mode'

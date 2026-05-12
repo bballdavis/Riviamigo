@@ -19,8 +19,8 @@ export function PageLayout({ title, titleAction, subtitle, actions, children, cl
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
             {titleAction}
+            <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
           </div>
           {subtitle && <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>}
         </div>

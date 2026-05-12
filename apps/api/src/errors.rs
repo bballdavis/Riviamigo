@@ -13,8 +13,12 @@ pub enum AppError {
     Unauthorized,
     #[error("Forbidden")]
     Forbidden,
+    #[error("Conflict: {0}")]
+    Conflict(String),
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("Rivian API error: {0}")]
     RivianApi(String),
     #[error("Validation error: {0}")]
@@ -31,7 +35,16 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND", self.to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", self.to_string()),
+            AppError::Conflict(m) => (StatusCode::CONFLICT, "CONFLICT", m.clone()),
             AppError::Validation(m) => (StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION", m.clone()),
+            AppError::Io(e) => {
+                tracing::error!(err = %e, "io error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL",
+                    "Filesystem error".into(),
+                )
+            }
             AppError::Redis(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL",

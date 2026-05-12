@@ -77,8 +77,8 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
     : formatApiValue(value?.value, value?.unit);
 
   const spriteData = series.filter(
-    (p): p is { ts?: string; value: number } =>
-      typeof p.value === 'number' && Number.isFinite(p.value),
+    (p): p is { ts: string; value: number } =>
+      typeof p.ts === 'string' && typeof p.value === 'number' && Number.isFinite(p.value),
   );
 
   return (

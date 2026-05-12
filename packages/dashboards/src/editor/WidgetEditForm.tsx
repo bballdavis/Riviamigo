@@ -10,6 +10,7 @@ import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
 const DEFAULT_CURVE_SMOOTHING = 0.45;
+const MIN_CURVE_SMOOTHING = 0.05;
 const DEFAULT_WINDOW_DAYS = 30;
 
 /** Drawer background color — matches EditorDrawer's --rm-bg. Fields stack on top. */
@@ -37,6 +38,7 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
   const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
   const curveSmoothing = normalizeCurveSmoothing(options.curveSmoothing, chartType);
   const curveSmoothingSupported = supportsCurveSmoothing(chartType);
+  const curveSmoothingOn = curveSmoothingSupported && curveSmoothing > 0;
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
   const valueMode = typeof options.valueMode === 'string' ? options.valueMode : 'latest';
   const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : undefined);
@@ -267,20 +269,34 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
                     />
                   </Field>
                 ) : null}
-                <Field
-                  label={`Curve smoothing — ${Math.round(curveSmoothing * 100)}%`}
-                >
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={curveSmoothing}
-                    disabled={!curveSmoothingSupported}
-                    onChange={(e) => patch({ curveSmoothing: Number(e.target.value) })}
-                    className="w-full cursor-pointer accent-[var(--rm-accent)] disabled:cursor-not-allowed disabled:opacity-40"
+                {curveSmoothingSupported ? (
+                    <ToggleSwitch
+                    label="Smooth curves"
+                    checked={curveSmoothingOn}
+                    onChange={(checked) =>
+                      patch({
+                        curveSmoothing: checked
+                          ? curveSmoothing > 0
+                            ? curveSmoothing
+                            : MIN_CURVE_SMOOTHING
+                          : 0,
+                      })
+                    }
                   />
-                </Field>
+                ) : null}
+                {curveSmoothingOn ? (
+                  <Field label={`Curve smoothing - ${Math.round(curveSmoothing * 100)}%`}>
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1}
+                      step={0.05}
+                      value={curveSmoothing}
+                      onChange={(e) => patch({ curveSmoothing: Number(e.target.value) })}
+                      className="w-full cursor-pointer accent-[var(--rm-accent)]"
+                    />
+                  </Field>
+                ) : null}
                 <Field label="Color">
                   <div className="flex items-center gap-2">
                     <span
@@ -450,6 +466,7 @@ function ToggleSwitch({
     <button
       type="button"
       role="switch"
+      aria-label={label}
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
@@ -461,14 +478,18 @@ function ToggleSwitch({
       <span>{label}</span>
       {/* Pill track */}
       <span
-        className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ${
-          checked ? 'bg-accent' : 'bg-border'
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border px-0.5 transition-all duration-150 ${
+          checked
+            ? 'border-accent bg-accent shadow-[0_0_0_1px_var(--rm-accent)]'
+            : 'border-border-strong bg-bg-elevated'
         }`}
       >
         {/* Thumb */}
         <span
-          className="absolute h-5 w-5 rounded-full bg-white shadow-sm"
-          style={{ transition: 'transform 150ms', transform: checked ? 'translateX(16px)' : 'translateX(0px)' }}
+          className={`h-4 w-4 rounded-full border bg-white shadow-sm ${
+            checked ? 'border-accent' : 'border-border-strong'
+          }`}
+          style={{ transition: 'transform 150ms', transform: checked ? 'translateX(20px)' : 'translateX(0px)' }}
         />
       </span>
     </button>

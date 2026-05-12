@@ -8,6 +8,7 @@ use riviamigo_api::{
     ingestion, keys,
     middleware::auth::{AppState, JwtKeys},
     routes,
+    services,
 };
 
 #[tokio::main]
@@ -58,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
 
     let _supervisor =
         ingestion::start_workers(pool.clone(), redis, age_key, config.clone()).await?;
+    let _backup_scheduler = services::backups::start_backup_scheduler(pool.clone(), config.clone());
 
     let app = routes::build_router(state);
 

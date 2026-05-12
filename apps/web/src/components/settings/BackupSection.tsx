@@ -1,9 +1,9 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
-import type { BackupFrequency, BackupOverview, BackupTargetType, UpdateBackupSettingsBody } from '@riviamigo/types';
+import type { BackupArtifact, BackupFrequency, BackupOverview, BackupTargetType, UpdateBackupSettingsBody } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
-import { CloudUpload, Clock3, DatabaseBackup, History } from 'lucide-react';
+import { CloudUpload, Clock3, DatabaseBackup, History, Play, RotateCcw } from 'lucide-react';
 
 const WEEKDAYS = [
   { value: 0, label: 'Sunday' },
@@ -104,12 +104,16 @@ export function BackupSection() {
   const [draft, setDraft] = React.useState<BackupDraft | null>(null);
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
+  const [selectedArtifactId, setSelectedArtifactId] = React.useState('');
+  const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
+  const [restoreNotes, setRestoreNotes] = React.useState('');
 
   React.useEffect(() => {
     if (!overview.data) return;
     setDraft(buildDraft(overview.data));
     setSecretKey('');
     setClearSecretKey(false);
+    setSelectedArtifactId((current) => current || overview.data.artifacts[0]?.id || '');
   }, [overview.data]);
 
   const saveSettings = useMutation({
@@ -127,6 +131,39 @@ export function BackupSection() {
     onError: (error) => {
       const message = error instanceof Error ? error.message : 'Backup settings could not be saved.';
       emitToast('Backup settings', message);
+    },
+  });
+
+  const runBackupNow = useMutation({
+    mutationFn: () => api.runBackupNow(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Backup run could not be started.';
+      emitToast('Backup run', message);
+    },
+  });
+
+  const requestRestore = useMutation({
+    mutationFn: () => {
+      if (!selectedArtifactId) {
+        throw new Error('Select a backup artifact before requesting a restore.');
+      }
+      return api.requestBackupRestore({
+        artifact_id: selectedArtifactId,
+        confirmation_phrase: restoreConfirmation,
+        notes: restoreNotes.trim() || null,
+      });
+    },
+    onSuccess: () => {
+      setRestoreConfirmation('');
+      setRestoreNotes('');
+      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Restore request could not be created.';
+      emitToast('Restore request', message);
     },
   });
 
@@ -149,26 +186,40 @@ export function BackupSection() {
 
   const currentSettings = overview.data.settings;
   const canSave = draft.run_at.trim().length === 5 && draft.timezone.trim().length > 0 && Number.parseInt(draft.retention_count, 10) >= 1;
+  const restoreArtifact = overview.data.artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
+  const canRequestRestore = Boolean(restoreArtifact) && restoreConfirmation.trim() === 'RESTORE';
 
   return (
     <div className="flex flex-col gap-5">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <CardTitle>Backups</CardTitle>
             <Badge variant={currentSettings.enabled ? 'success' : 'default'}>
               {currentSettings.enabled ? 'Automatic' : 'Disabled'}
             </Badge>
+            <Badge variant="default">Runner active</Badge>
           </div>
-          <Button
-            size="sm"
-            iconLeft={<CloudUpload className="h-3.5 w-3.5" />}
-            loading={saveSettings.isPending}
-            disabled={!canSave}
-            onClick={() => saveSettings.mutate()}
-          >
-            Save backup settings
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={<Play className="h-3.5 w-3.5" />}
+              loading={runBackupNow.isPending}
+              onClick={() => runBackupNow.mutate()}
+            >
+              Run now
+            </Button>
+            <Button
+              size="sm"
+              iconLeft={<CloudUpload className="h-3.5 w-3.5" />}
+              loading={saveSettings.isPending}
+              disabled={!canSave}
+              onClick={() => saveSettings.mutate()}
+            >
+              Save backup settings
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-4">
@@ -356,7 +407,7 @@ export function BackupSection() {
 
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elevated/30 p-3 text-sm text-fg-tertiary">
             <Clock3 className="h-4 w-4 shrink-0" />
-            <span>Secrets are stored encrypted in the application database and the schedule preview uses your selected timezone.</span>
+            <span>Secrets are stored encrypted in the application database. Automatic runs now execute against a local artifact store and reuse the schedule you configure here.</span>
           </div>
 
           <label className="flex items-center gap-3 text-sm text-fg">
@@ -378,7 +429,7 @@ export function BackupSection() {
             <History className="h-4 w-4 text-fg-secondary" />
             <CardTitle>Recent backup runs</CardTitle>
           </div>
-          <Badge variant="default">Foundation slice</Badge>
+          <Badge variant="default">Execution history</Badge>
         </CardHeader>
         <CardContent>
           {overview.data.recent_runs.length === 0 ? (
@@ -404,6 +455,140 @@ export function BackupSection() {
                   {run.artifact_key && (
                     <p className="text-xs font-mono text-fg-tertiary">{run.artifact_key}</p>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <DatabaseBackup className="h-4 w-4 text-fg-secondary" />
+            <CardTitle>Artifacts</CardTitle>
+          </div>
+          <Badge variant="default">Local catalog</Badge>
+        </CardHeader>
+        <CardContent>
+          {overview.data.artifacts.length === 0 ? (
+            <p className="text-sm text-fg-tertiary">No backup artifact has been written yet.</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {overview.data.artifacts.map((artifact) => (
+                <div key={artifact.id} className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-fg">{artifact.file_name}</p>
+                      <Badge variant="success">{artifact.storage_type}</Badge>
+                    </div>
+                    <p className="mt-1 font-mono text-xs text-fg-tertiary">{artifact.storage_path}</p>
+                    <p className="mt-1 text-xs text-fg-tertiary">
+                      {Math.max(artifact.size_bytes, 0).toLocaleString()} bytes / SHA-256 {artifact.checksum_sha256.slice(0, 16)}...
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
+                    onClick={() => setSelectedArtifactId(artifact.id)}
+                  >
+                    Select for restore
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <RotateCcw className="h-4 w-4 text-fg-secondary" />
+            <CardTitle>Restore requests</CardTitle>
+          </div>
+          <Badge variant="danger">Admin only</Badge>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem] md:items-end">
+            <label className="grid gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Artifact</span>
+              <select
+                value={selectedArtifactId}
+                onChange={(event) => setSelectedArtifactId(event.target.value)}
+                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+              >
+                <option value="">Select an artifact</option>
+                {overview.data.artifacts.map((artifact) => (
+                  <option key={artifact.id} value={artifact.id}>{artifact.file_name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="rounded-lg border border-border bg-bg-elevated/30 px-3 py-2 text-xs text-fg-tertiary">
+              Type <span className="font-mono text-fg">RESTORE</span> to request a restore.
+            </div>
+          </div>
+
+          {restoreArtifact && (
+            <div className="rounded-lg border border-border bg-bg-elevated/30 p-3 text-xs text-fg-tertiary">
+              <p>Selected artifact: <span className="font-mono text-fg">{restoreArtifact.file_name}</span></p>
+              <p className="mt-1">Path: <span className="font-mono text-fg">{restoreArtifact.storage_path}</span></p>
+            </div>
+          )}
+
+          <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)] md:items-end">
+            <label className="grid gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Confirmation</span>
+              <input
+                value={restoreConfirmation}
+                onChange={(event) => setRestoreConfirmation(event.target.value)}
+                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                placeholder="RESTORE"
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Notes</span>
+              <input
+                value={restoreNotes}
+                onChange={(event) => setRestoreNotes(event.target.value)}
+                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                placeholder="Optional maintenance or incident context"
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[#F87171]/25 bg-[#7F1D1D]/20 px-3 py-3 text-xs text-fg-secondary">
+            <p>Restore requests are recorded here for the maintenance runner to execute against a selected backup artifact. They do not overwrite the live database inline.</p>
+            <Button
+              variant="danger"
+              size="sm"
+              loading={requestRestore.isPending}
+              disabled={!canRequestRestore}
+              onClick={() => requestRestore.mutate()}
+            >
+              Request restore
+            </Button>
+          </div>
+
+          {overview.data.restore_requests.length === 0 ? (
+            <p className="text-sm text-fg-tertiary">No restore requests have been recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {overview.data.restore_requests.map((request) => (
+                <div key={request.id} className="grid gap-2 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-fg">{request.status}</p>
+                      <Badge variant="default">{request.artifact_id.slice(0, 8)}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-fg-tertiary">
+                      Requested {new Date(request.requested_at).toLocaleString()}
+                    </p>
+                    {request.notes && <p className="mt-1 text-xs text-fg-tertiary">{request.notes}</p>}
+                    {request.error_message && <p className="mt-1 text-xs text-[#FCA5A5]">{request.error_message}</p>}
+                  </div>
+                  <p className="font-mono text-xs text-fg-tertiary">{request.id}</p>
                 </div>
               ))}
             </div>

@@ -112,7 +112,7 @@ async fn authenticate_api_key(
     token: &str,
 ) -> Result<AuthUser, AppError> {
     let hash = hash_api_key(token);
-    let row = sqlx::query!(
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
         SELECT v.user_id, k.vehicle_id, k.access_level
         FROM riviamigo.api_keys k
@@ -120,14 +120,14 @@ async fn authenticate_api_key(
         WHERE k.key_hash = $1
           AND k.revoked_at IS NULL
           AND (k.expires_at IS NULL OR k.expires_at > now())
-        "#,
-        hash.as_slice()
+        "#
     )
+    .bind(hash.as_slice())
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::Unauthorized)?;
 
-    match row.access_level.as_str() {
+    match row.2.as_str() {
         "view" if method != Method::GET => return Err(AppError::Forbidden),
         "edit" if is_admin_path(path) => return Err(AppError::Forbidden),
         "view" if is_admin_path(path) => return Err(AppError::Forbidden),
@@ -136,17 +136,17 @@ async fn authenticate_api_key(
         _ => return Err(AppError::Forbidden),
     }
 
-    sqlx::query!(
-        "UPDATE riviamigo.api_keys SET last_used_at = now(), updated_at = now() WHERE key_hash = $1",
-        hash.as_slice()
+    sqlx::query(
+        "UPDATE riviamigo.api_keys SET last_used_at = now(), updated_at = now() WHERE key_hash = $1"
     )
+    .bind(hash.as_slice())
     .execute(&state.pool)
     .await?;
 
     Ok(AuthUser {
-        user_id: row.user_id,
-        default_vehicle_id: Some(row.vehicle_id),
-        api_access_level: Some(row.access_level),
+        user_id: row.0,
+        default_vehicle_id: Some(row.1),
+        api_access_level: Some(row.2),
     })
 }
 

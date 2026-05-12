@@ -18,8 +18,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   };
 });
 
-vi.mock('@riviamigo/ui/charts', () => ({
-  ChargeCurveChart: () => <div data-testid="charge-curve-chart" />,
+vi.mock('@riviamigo/dashboards', () => ({
+  DashboardChartWidget: () => <div data-testid="charge-curve-chart" />,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
@@ -40,7 +40,6 @@ vi.mock('@riviamigo/hooks', () => ({
       duration_min: 75,
     },
   }),
-  useChargeCurve: () => ({ data: [{ soc_pct: 20, power_kw: 11.5 }], isLoading: false }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -75,7 +74,7 @@ describe('Charge session detail page', () => {
   it('navigates back to the charging page', () => {
     render(<ChargeSessionContent />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to charging' }));
 
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
   });

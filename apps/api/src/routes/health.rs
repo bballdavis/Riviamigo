@@ -89,17 +89,16 @@ async fn health(
 }
 
 async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressures>, AppError> {
-    let row = sqlx::query_as!(
-        TirePressures,
+    let row = sqlx::query_as::<_, TirePressures>(
         r#"SELECT ts,
                   tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
                   tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status
            FROM timeseries.telemetry
            WHERE vehicle_id = $1
              AND (tire_fl_psi IS NOT NULL OR tire_fr_psi IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#,
-        vid
+            ORDER BY ts DESC LIMIT 1"#
     )
+        .bind(vid)
     .fetch_optional(pool)
     .await
     .map_err(AppError::from)?;
@@ -107,8 +106,7 @@ async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressu
 }
 
 async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closures>, AppError> {
-    let row = sqlx::query_as!(
-        Closures,
+    let row = sqlx::query_as::<_, Closures>(
         r#"SELECT ts,
                   closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
                   door_front_left_closed, door_front_right_closed,
@@ -118,9 +116,9 @@ async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closure
              AND (closure_frunk_closed IS NOT NULL
                   OR door_front_left_closed IS NOT NULL
                   OR door_front_right_closed IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#,
-        vid
+            ORDER BY ts DESC LIMIT 1"#
     )
+        .bind(vid)
     .fetch_optional(pool)
     .await
     .map_err(AppError::from)?;
@@ -128,15 +126,14 @@ async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closure
 }
 
 async fn fetch_sw_history(pool: &sqlx::PgPool, vid: Uuid) -> Result<Vec<SoftwareEntry>, AppError> {
-    let rows = sqlx::query_as!(
-        SoftwareEntry,
+    let rows = sqlx::query_as::<_, SoftwareEntry>(
         r#"SELECT version, installed_at, observed_until
            FROM riviamigo.software_versions
            WHERE vehicle_id = $1
            ORDER BY installed_at DESC
-           LIMIT 20"#,
-        vid
+           LIMIT 20"#
     )
+    .bind(vid)
     .fetch_all(pool)
     .await
     .map_err(AppError::from)?;
@@ -144,32 +141,30 @@ async fn fetch_sw_history(pool: &sqlx::PgPool, vid: Uuid) -> Result<Vec<Software
 }
 
 async fn fetch_thermal_count(pool: &sqlx::PgPool, vid: Uuid) -> Result<i64, AppError> {
-    let count: i64 = sqlx::query_scalar!(
+    let count: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*)
            FROM timeseries.telemetry
            WHERE vehicle_id = $1
              AND hv_thermal_event IS NOT NULL
              AND hv_thermal_event != 'none'
-             AND ts >= now() - interval '30 days'"#,
-        vid
+             AND ts >= now() - interval '30 days'"#
     )
+    .bind(vid)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(0);
+    .map_err(AppError::from)?;
     Ok(count)
 }
 
 async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-        vehicle_id,
-        user_id
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
     )
+    .bind(vehicle_id)
+    .bind(user_id)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(false);
+    .map_err(AppError::from)?;
 
     if !owned { Err(AppError::NotFound) } else { Ok(()) }
 }
