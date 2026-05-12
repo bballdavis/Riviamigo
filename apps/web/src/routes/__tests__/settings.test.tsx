@@ -94,6 +94,63 @@ vi.mock('@riviamigo/hooks', () => ({
         collector_lock_skips: 0,
       }],
     }),
+    getBackupOverview: vi.fn().mockResolvedValue({
+      settings: {
+        enabled: true,
+        frequency: 'weekly',
+        run_at: '03:00',
+        timezone: 'America/Chicago',
+        day_of_week: 0,
+        day_of_month: null,
+        retention_count: 8,
+        target_type: 's3',
+        endpoint: 'https://s3.example.com',
+        region: 'us-east-1',
+        bucket: 'riviamigo-backups',
+        prefix: 'prod/riviamigo',
+        access_key: 'backup-user',
+        has_secret_key: true,
+        updated_at: '2026-05-04T12:00:00Z',
+      },
+      recent_runs: [{
+        id: 'run-1',
+        trigger: 'manual',
+        status: 'succeeded',
+        artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
+        started_at: '2026-05-04T12:00:00Z',
+        completed_at: '2026-05-04T12:01:00Z',
+        error_message: null,
+        created_at: '2026-05-04T12:00:00Z',
+        updated_at: '2026-05-04T12:01:00Z',
+      }],
+      artifacts: [{
+        id: 'artifact-1',
+        run_id: 'run-1',
+        storage_type: 'local',
+        file_name: 'backup-20260504T120000Z.dump',
+        storage_path: '/tmp/riviamigo/prod/riviamigo/backup-20260504T120000Z.dump',
+        size_bytes: 2048,
+        checksum_sha256: '0123456789abcdef0123456789abcdef',
+        manifest: {},
+        created_at: '2026-05-04T12:01:00Z',
+      }],
+      restore_requests: [],
+      latest_successful_run: {
+        id: 'run-1',
+        trigger: 'manual',
+        status: 'succeeded',
+        artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
+        started_at: '2026-05-04T12:00:00Z',
+        completed_at: '2026-05-04T12:01:00Z',
+        error_message: null,
+        created_at: '2026-05-04T12:00:00Z',
+        updated_at: '2026-05-04T12:01:00Z',
+      },
+      next_run_at: '2026-05-10T08:00:00Z',
+    }),
+    updateBackupSettings: vi.fn().mockResolvedValue({}),
+    runBackupNow: vi.fn().mockResolvedValue({}),
+    requestBackupRestore: vi.fn().mockResolvedValue({}),
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
   },
@@ -111,12 +168,18 @@ vi.mock('lucide-react', () => ({
   CircleHelp: () => <svg data-testid="icon-help" />,
   Clipboard: () => <svg data-testid="icon-clipboard" />,
   Database: () => <svg data-testid="icon-database" />,
+  DatabaseBackup: () => <svg data-testid="icon-database-backup" />,
+  CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
+  Clock3: () => <svg data-testid="icon-clock" />,
+  History: () => <svg data-testid="icon-history" />,
   KeyRound: () => <svg data-testid="icon-key" />,
   LogOut: () => <svg data-testid="icon-logout" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus:   () => <svg data-testid="icon-plus" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
+  Play: () => <svg data-testid="icon-play" />,
   Ruler: () => <svg data-testid="icon-ruler" />,
+  RotateCcw: () => <svg data-testid="icon-rotate" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
   Trash2: () => <svg data-testid="icon-trash" />,
 }));
@@ -212,6 +275,49 @@ describe('Settings page', () => {
       expect(screen.getByText('DB Stats')).toBeInTheDocument();
       expect(screen.getByText('Active collectors')).toBeInTheDocument();
       expect(screen.getByText('Heartbeats ignored')).toBeInTheDocument();
+    });
+  });
+
+  it('renders and operates the admin Backups section', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
+    renderSettings();
+
+    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Backups'));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
+      expect(screen.getByText('Backup target')).toBeInTheDocument();
+      expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
+      expect(screen.getByText('Artifacts')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByDisplayValue('America/Chicago'), { target: { value: 'UTC' } });
+    fireEvent.change(screen.getByDisplayValue('riviamigo-backups'), { target: { value: 'nightly-backups' } });
+    fireEvent.click(screen.getByText('Save backup settings'));
+
+    await waitFor(() => {
+      expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(expect.objectContaining({
+        timezone: 'UTC',
+        bucket: 'nightly-backups',
+        retention_count: 8,
+      }));
+    });
+
+    fireEvent.click(screen.getByText('Run now'));
+    await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByPlaceholderText('RESTORE'), { target: { value: 'RESTORE' } });
+    fireEvent.change(screen.getByPlaceholderText('Optional maintenance or incident context'), { target: { value: 'Verified artifact restore test' } });
+    fireEvent.click(screen.getByText('Request restore'));
+
+    await waitFor(() => {
+      expect(hooks.api.requestBackupRestore).toHaveBeenCalledWith({
+        artifact_id: 'artifact-1',
+        confirmation_phrase: 'RESTORE',
+        notes: 'Verified artifact restore test',
+      });
     });
   });
 
