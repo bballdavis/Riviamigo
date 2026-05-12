@@ -23,9 +23,18 @@ pub fn router() -> Router<AppState> {
         .route("/charging/:id/curve", get(get_session_curve))
         .route("/charging/:id", get(get_session))
         .route("/charging/curve-analysis", get(get_curve_analysis))
-        .route("/vehicles/:vehicle_id/charging-sessions", get(list_sessions_path))
-        .route("/vehicles/:vehicle_id/charging-sessions/:id/curve", get(get_session_curve_path))
-        .route("/vehicles/:vehicle_id/charging-sessions/:id", get(get_session_path))
+        .route(
+            "/vehicles/:vehicle_id/charging-sessions",
+            get(list_sessions_path),
+        )
+        .route(
+            "/vehicles/:vehicle_id/charging-sessions/:id/curve",
+            get(get_session_curve_path),
+        )
+        .route(
+            "/vehicles/:vehicle_id/charging-sessions/:id",
+            get(get_session_path),
+        )
         .route("/vehicles/:vehicle_id/costs", get(get_summary_path))
 }
 
@@ -364,7 +373,13 @@ async fn get_session_response(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let curve = load_curve(&state.pool, vehicle_id, session.started_at, session.ended_at).await?;
+    let curve = load_curve(
+        &state.pool,
+        vehicle_id,
+        session.started_at,
+        session.ended_at,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({
         "session": session,
@@ -381,7 +396,7 @@ async fn get_session_curve_response(
     require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionBoundsRow>(
-        "SELECT started_at, ended_at FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2"
+        "SELECT started_at, ended_at FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
     )
     .bind(id)
     .bind(vehicle_id)
@@ -389,7 +404,15 @@ async fn get_session_curve_response(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    Ok(Json(serde_json::json!(load_curve(&state.pool, vehicle_id, session.started_at, session.ended_at).await?)))
+    Ok(Json(serde_json::json!(
+        load_curve(
+            &state.pool,
+            vehicle_id,
+            session.started_at,
+            session.ended_at
+        )
+        .await?
+    )))
 }
 
 async fn get_summary_response(
@@ -465,7 +488,7 @@ async fn get_summary_response(
             COUNT(*) AS sessions
          FROM riviamigo.charge_sessions
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-         GROUP BY 1 ORDER BY 1"
+         GROUP BY 1 ORDER BY 1",
     )
     .bind(vehicle_id)
     .bind(from)
@@ -542,11 +565,11 @@ async fn load_curve(
                   avg_soc AS soc
            FROM samples
            WHERE avg_soc IS NOT NULL
-            ORDER BY bucket"#
+            ORDER BY bucket"#,
     )
-        .bind(vehicle_id)
-        .bind(started_at)
-        .bind(ended_at)
+    .bind(vehicle_id)
+    .bind(started_at)
+    .bind(ended_at)
     .fetch_all(pool)
     .await?;
 

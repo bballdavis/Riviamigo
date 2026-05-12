@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/vehicles/:vehicle_id/data-quality", get(data_quality))
@@ -53,7 +56,9 @@ async fn data_quality(
 ) -> Result<Json<DataQualityResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let from = params.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
+    let from = params
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
     let to = params.to.unwrap_or_else(Utc::now);
 
     // Field presence counts
@@ -66,20 +71,20 @@ async fn data_quality(
                COUNT(*) FILTER (WHERE power_kw IS NOT NULL)         AS samples_with_power_kw,
                COUNT(*) FILTER (WHERE odometer_miles IS NOT NULL)   AS samples_with_odometer
             FROM timeseries.telemetry
-            WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3"#
+            WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3"#,
     )
-        .bind(vehicle_id)
-        .bind(from)
-        .bind(to)
+    .bind(vehicle_id)
+    .bind(from)
+    .bind(to)
     .fetch_one(&state.pool)
     .await
     .map_err(AppError::from)?;
 
-        let total = row.total_samples;
-        let with_loc = row.samples_with_location;
-        let with_bat = row.samples_with_battery;
-        let with_pwr = row.samples_with_power_kw;
-        let with_odo = row.samples_with_odometer;
+    let total = row.total_samples;
+    let with_loc = row.samples_with_location;
+    let with_bat = row.samples_with_battery;
+    let with_pwr = row.samples_with_power_kw;
+    let with_odo = row.samples_with_odometer;
 
     // Coverage: what fraction of 30-second intervals have at least one sample
     let window_secs = (to - from).num_seconds().max(1);
@@ -97,7 +102,7 @@ async fn data_quality(
                FROM timeseries.telemetry
                WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3
            ) sub
-           WHERE gap > interval '5 minutes'"#
+           WHERE gap > interval '5 minutes'"#,
     )
     .bind(vehicle_id)
     .bind(from)
@@ -120,9 +125,13 @@ async fn data_quality(
     }))
 }
 
-async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
+async fn ensure_owned(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
     let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
     )
     .bind(vehicle_id)
     .bind(user_id)
@@ -130,5 +139,9 @@ async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> R
     .await
     .map_err(AppError::from)?;
 
-    if !owned { Err(AppError::NotFound) } else { Ok(()) }
+    if !owned {
+        Err(AppError::NotFound)
+    } else {
+        Ok(())
+    }
 }

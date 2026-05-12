@@ -21,6 +21,11 @@ export type {
   ChargeSessionDistributionBand,
   ChargeSessionDistributionChartProps,
 } from './ChargeSessionDistributionChart';
+export { EfficiencyPillBarChart } from './EfficiencyPillBarChart';
+export type {
+  EfficiencyPillBarChartProps,
+  EfficiencyPillBarDatum,
+} from './EfficiencyPillBarChart';
 export { TripMapChart } from './TripMapChart';
 export type { TripMapChartProps, LatLng, TripMapRoute, MapStyleMode } from './TripMapChart';
 export { SpeedProfileChart } from './SpeedProfileChart';

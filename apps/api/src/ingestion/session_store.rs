@@ -20,7 +20,10 @@ pub struct RivianTokenBundle {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub fn encrypt_json<T: Serialize>(value: &T, identity: &x25519::Identity) -> anyhow::Result<Vec<u8>> {
+pub fn encrypt_json<T: Serialize>(
+    value: &T,
+    identity: &x25519::Identity,
+) -> anyhow::Result<Vec<u8>> {
     let recipient = identity.to_public();
     let plaintext = serde_json::to_vec(value)?;
 

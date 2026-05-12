@@ -19,7 +19,9 @@ pub fn router() -> Router<AppState> {
         .route("/geofences", get(list_geofences).post(create_geofence))
         .route(
             "/geofences/:id",
-            get(get_geofence).put(update_geofence).delete(delete_geofence),
+            get(get_geofence)
+                .put(update_geofence)
+                .delete(delete_geofence),
         )
 }
 
@@ -64,7 +66,7 @@ async fn list_geofences(
                 address_id, cost_profile_id, is_home, is_work, created_at, updated_at
            FROM riviamigo.geofences
            WHERE user_id = $1
-           ORDER BY name"#
+           ORDER BY name"#,
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
@@ -83,7 +85,7 @@ async fn get_geofence(
         r#"SELECT id, user_id, name, latitude, longitude, radius_m,
                 address_id, cost_profile_id, is_home, is_work, created_at, updated_at
            FROM riviamigo.geofences
-           WHERE id = $1 AND user_id = $2"#
+           WHERE id = $1 AND user_id = $2"#,
     )
     .bind(id)
     .bind(auth.user_id)
@@ -106,7 +108,7 @@ async fn create_geofence(
             is_home, is_work, cost_profile_id, address_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id, user_id, name, latitude, longitude, radius_m,
-                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#
+                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#,
     )
     .bind(auth.user_id)
     .bind(body.name)
@@ -141,7 +143,7 @@ async fn update_geofence(
            cost_profile_id = COALESCE($9, cost_profile_id)
            WHERE id = $1 AND user_id = $2
            RETURNING id, user_id, name, latitude, longitude, radius_m,
-                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#
+                     address_id, cost_profile_id, is_home, is_work, created_at, updated_at"#,
     )
     .bind(id)
     .bind(auth.user_id)
@@ -166,11 +168,11 @@ async fn delete_geofence(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = sqlx::query("DELETE FROM riviamigo.geofences WHERE id = $1 AND user_id = $2")
-    .bind(id)
-    .bind(auth.user_id)
-    .execute(&state.pool)
-    .await
-    .map_err(AppError::from)?;
+        .bind(id)
+        .bind(auth.user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);

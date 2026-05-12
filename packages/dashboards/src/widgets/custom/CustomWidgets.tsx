@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, Cpu, Gauge, Lock, MapPin, Thermometer, Unlock } from 'lucide-react';
+import { Battery, BatteryCharging, Car, Cpu, Gauge, Lock, MapPin, Thermometer, Unlock, Zap } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { useAuth, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
-import { Tooltip } from '@riviamigo/ui/primitives';
+import { useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { Badge, Tooltip } from '@riviamigo/ui/primitives';
+import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
 import {
   formatAltitude,
   formatKwh,
   formatMiles,
   formatMph,
+  formatNumber,
+  formatPercent as formatDashboardPercent,
   formatPressure,
   formatTemp,
 } from '@riviamigo/ui/lib/utils';
@@ -23,6 +26,182 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
 
   return <CurrentVehicleStatePanel status={status} images={activeVehicle?.images} />;
+}
+
+interface ChargingSummarySnapshot {
+  session_count: number;
+  total_energy_kwh: number | null;
+  total_cost_usd: number | null;
+  home_kwh: number | null;
+  away_kwh: number | null;
+  ac_kwh: number | null;
+  dc_kwh: number | null;
+  charging_cycles: number | null;
+  charging_efficiency_pct: number | null;
+  max_charge_rate_kw: number | null;
+  max_charge_limit_pct: number | null;
+}
+
+interface ChargingConnectedWidgetOptions {
+  forceShow?: boolean;
+}
+
+function ChargingConnectedVehicleWidget({
+  instance,
+  ctx,
+}: {
+  instance: WidgetInstance;
+  ctx: WidgetCtx;
+}) {
+  const { defaultVehicleId } = useAuth();
+  const vehicleId = ctx.vehicleId ?? defaultVehicleId;
+  const { data: status } = useCurrentVehicleStatus(vehicleId);
+  const { data: vehicles } = useVehicles();
+  const { data: summary } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
+  const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
+  const options = (instance.options ?? {}) as ChargingConnectedWidgetOptions;
+  const pluggedIn = isPluggedIn(status);
+  const charging = isActivelyCharging(status);
+  const forceShow = options.forceShow === true;
+  const visible = pluggedIn || forceShow;
+  const snapshot = summary as ChargingSummarySnapshot | undefined;
+  const sideLight = activeVehicle?.images?.side?.light ?? findFirstSideImage(activeVehicle?.images?.all, 'light');
+  const sideDark = activeVehicle?.images?.side?.dark ?? findFirstSideImage(activeVehicle?.images?.all, 'dark');
+  const sideFallback = sideLight ?? sideDark ?? findFirstSideImage(activeVehicle?.images?.all);
+  const chargingOverlayLight = findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');
+  const chargingOverlayDark = findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark');
+  const title = instance.title ?? 'Charging Connection';
+  const rows = [
+    {
+      label: 'Charge Efficiency',
+      value: snapshot ? formatMaybePercent(snapshot.charging_efficiency_pct, 1) : '-',
+    },
+    {
+      label: 'Avg / Session',
+      value:
+        snapshot && snapshot.session_count > 0 && snapshot.total_energy_kwh != null
+          ? formatKwh(snapshot.total_energy_kwh / snapshot.session_count)
+          : '-',
+    },
+    {
+      label: 'Max Charge Rate',
+      value: snapshot?.max_charge_rate_kw == null ? '-' : `${formatNumber(snapshot.max_charge_rate_kw, 1)} kW`,
+    },
+    {
+      label: 'Max Charge Limit',
+      value: formatMaybePercent(snapshot?.max_charge_limit_pct ?? status?.battery_limit ?? null, 0),
+    },
+  ];
+
+  if (!visible) {
+    return (
+      <section
+        data-testid="charging-connection-chip"
+        className="flex h-full min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] p-6 shadow-lg shadow-black/10"
+      >
+        <div className="grid max-w-sm gap-3 text-center">
+          <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-bg-elevated text-fg-tertiary">
+            <PiPlugsFill className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">{title}</p>
+            <p className="mt-1 text-base font-semibold text-fg">Not connected</p>
+            <p className="mt-1 text-sm text-fg-tertiary">Awaiting plugged-in vehicle telemetry.</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      data-testid="charging-connection-chip"
+      className="relative flex h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
+    >
+      <div className="grid h-full min-h-0 w-full grid-cols-[minmax(0,0.94fr)_minmax(0,1.06fr)]">
+        <div className="flex min-h-0 flex-col gap-3 border-r border-border/80 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">{title}</p>
+              <div className="mt-1 flex items-center gap-2">
+                <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border ${charging ? 'border-accent/60 bg-accent/15 text-accent' : 'border-border bg-bg-elevated text-fg'}`}>
+                  {charging ? <BatteryCharging className="h-4 w-4" /> : <PiPlugsFill className="h-4 w-4" />}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-fg">
+                    {charging ? 'Connected & charging' : 'Connected, not charging'}
+                  </p>
+                  <p className="truncate text-xs text-fg-tertiary">
+                    {forceShow && !pluggedIn ? 'Forced preview' : prettifyChargingStatus(status?.charger_status, status?.charger_state)}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <span className={`rounded-lg border px-2 py-1 text-[11px] font-medium ${charging ? 'border-accent/60 bg-accent/15 text-accent' : 'border-border bg-bg-elevated text-fg-secondary'}`}>
+              {charging ? 'Live' : 'Ready'}
+            </span>
+          </div>
+
+          <div className="grid gap-2">
+            {rows.map((row) => (
+              <ChargingSummaryRow key={row.label} label={row.label} value={row.value} />
+            ))}
+          </div>
+
+          <div className="mt-auto grid grid-cols-3 gap-2">
+            <ChargingMiniDatum label="Battery" value={formatPercent(status?.battery_level)} />
+            <ChargingMiniDatum label="Limit" value={formatPercent(status?.battery_limit)} />
+            <ChargingMiniDatum label="Full In" value={formatTimeToFull(status?.time_to_end_of_charge_min)} />
+          </div>
+        </div>
+
+        <div className="relative min-h-0 overflow-hidden bg-bg-surface/50">
+          <div className="absolute inset-y-0 right-0 left-4 flex items-center justify-end">
+            {sideFallback ? (
+              <>
+                <VehicleSideLayers
+                  base={sideLight ?? sideFallback}
+                  overlay={charging ? chargingOverlayLight : undefined}
+                  darkClassName="dark:hidden"
+                />
+                <VehicleSideLayers
+                  base={sideDark ?? sideFallback}
+                  overlay={charging ? chargingOverlayDark : undefined}
+                  darkClassName="hidden dark:block"
+                />
+              </>
+            ) : (
+              <div className="mr-4 flex h-28 w-52 items-center justify-center rounded-2xl border border-dashed border-border bg-bg-elevated text-fg-tertiary">
+                <Car className="h-10 w-10" />
+              </div>
+            )}
+          </div>
+
+          <div className="absolute bottom-4 left-4 right-4 flex items-end justify-between gap-3">
+            <div className="rounded-xl border border-border bg-bg-elevated/90 px-3 py-2 shadow-sm backdrop-blur">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-fg-tertiary">Charge State</p>
+              <p className="mt-1 font-mono text-lg font-semibold tabular-nums text-fg">
+                {formatPercent(status?.battery_level)}
+              </p>
+            </div>
+            <div className={`rounded-xl border px-3 py-2 shadow-sm backdrop-blur ${charging ? 'border-accent/60 bg-accent/15 text-accent' : 'border-border bg-bg-elevated/90 text-fg-secondary'}`}>
+              <div className="flex items-center gap-2">
+                <Zap className={`h-4 w-4 ${charging ? 'text-accent' : 'text-fg-tertiary'}`} />
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.16em]">Charging</p>
+                  <p className="font-mono text-sm font-semibold tabular-nums">
+                    {charging ? formatTimeToFull(status?.time_to_end_of_charge_min) : 'Standby'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {charging ? <ChargingLight /> : null}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function CurrentVehicleStatePanel({
@@ -153,6 +332,42 @@ function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function ChargingSummaryRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-xs">
+      <span className="truncate text-fg-tertiary">{label}</span>
+      <span className="shrink-0 font-mono font-medium tabular-nums text-fg">{value}</span>
+    </div>
+  );
+}
+
+function ChargingMiniDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-bg-elevated/70 px-2.5 py-2">
+      <p className="truncate text-[11px] uppercase tracking-[0.14em] text-fg-tertiary">{label}</p>
+      <p className="mt-1 truncate font-mono text-sm font-semibold tabular-nums text-fg">{value}</p>
+    </div>
+  );
+}
+
+function VehicleSideLayers({ base, overlay, darkClassName }: { base: string; overlay?: string | undefined; darkClassName: string }) {
+  return (
+    <div className={`absolute inset-0 ${darkClassName}`}>
+      <img src={base} alt="" className="absolute bottom-0 right-0 h-full w-auto max-w-none object-contain object-right" />
+      {overlay ? <img src={overlay} alt="" className="absolute bottom-0 right-0 h-full w-auto max-w-none object-contain object-right" /> : null}
+    </div>
+  );
+}
+
+function ChargingLight() {
+  return (
+    <div className="pointer-events-none absolute right-[12%] top-[28%]">
+      <span className="absolute inset-0 h-8 w-8 rounded-full bg-accent/35 blur-md" />
+      <span className="relative inline-flex h-4 w-4 rounded-full border border-accent/80 bg-accent shadow-[0_0_24px_rgba(253,131,4,0.65)]" />
+    </div>
+  );
+}
+
 function ChargingGlyph({ chargerState, chargerStatus }: { chargerState: string | null | undefined; chargerStatus: string | null | undefined }) {
   const charging = chargerState && !['unknown', 'disconnected'].includes(chargerState.toLowerCase()) && chargerStatus !== 'chrgr_sts_not_connected';
   return (
@@ -252,6 +467,27 @@ function formatTimeToFull(minutes: number | null | undefined) {
   return `${hours}h ${mins}m`;
 }
 
+function formatMaybePercent(value: number | null | undefined, digits: number) {
+  return value == null ? '-' : formatDashboardPercent(value, digits);
+}
+
+function isPluggedIn(status: VehicleStatus | null | undefined) {
+  const state = status?.charger_state?.toLowerCase();
+  if (state && !['unknown', 'disconnected'].includes(state)) return true;
+  return Boolean(status?.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
+}
+
+function isActivelyCharging(status: VehicleStatus | null | undefined) {
+  const state = status?.charger_state?.toLowerCase();
+  return state === 'charging' || status?.charger_status === 'chrgr_sts_connected_charging';
+}
+
+function prettifyChargingStatus(chargerStatus: string | null | undefined, chargerState: string | null | undefined) {
+  if (chargerStatus) return prettify(chargerStatus);
+  if (chargerState) return prettify(chargerState);
+  return 'Telemetry pending';
+}
+
 function formatTire(psi: number | null | undefined, status?: string | null) {
   if (psi !== null && psi !== undefined) return formatPressure(psi);
   return status ? prettify(status) : '-';
@@ -262,8 +498,17 @@ function renderDriverMode(driveMode: string | null | undefined, gearStatus: stri
   if (value === 'Unknown') {
     return (
       <Tooltip content="Current sensor status is unknown." align="end">
-        <span className="inline-flex items-center justify-end text-fg-tertiary">Pending</span>
+        <Badge size="sm" className={getDriveModeBadgeClass('unknown')}>
+          Unknown
+        </Badge>
       </Tooltip>
+    );
+  }
+  if (driveMode) {
+    return (
+      <Badge size="sm" className={getDriveModeBadgeClass(driveMode)} title={formatDriveMode(driveMode)}>
+        {formatDriveMode(driveMode)}
+      </Badge>
     );
   }
   return value;
@@ -284,21 +529,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function prettifyDriveMode(value: string) {
-  const map: Record<string, string> = {
-    everyday: 'All-Purpose',
-    all_purpose: 'All-Purpose',
-    sport: 'Sport',
-    distance: 'Conserve',
-    conserve: 'Conserve',
-    winter: 'Snow',
-    towing: 'Towing',
-    off_road_auto: 'All-Terrain',
-    off_road_sand: 'Soft Sand',
-    off_road_rocks: 'Rock Crawl',
-    off_road_sport_auto: 'Rally',
-    off_road_sport_drift: 'Drift',
-  };
-  return map[value] ?? prettify(value);
+  return formatDriveMode(value);
 }
 
 function prettify(value: string | null | undefined) {
@@ -368,6 +599,38 @@ function findFirstOverheadImage(images: VehicleImages['all'] | undefined, design
   return images.find((image) => normalizePlacement(image.placement) === 'overhead')?.url;
 }
 
+function findFirstSideImage(images: VehicleImages['all'] | undefined, design?: 'light' | 'dark'): string | undefined {
+  if (!images) return undefined;
+  if (design) {
+    const preferred = images.find((image) => normalizePlacement(image.placement) === 'side' && designMatches(image.design, design));
+    if (preferred?.url) return preferred.url;
+  }
+  return images.find((image) => normalizePlacement(image.placement) === 'side')?.url;
+}
+
+function findBestChargingSideOverlay(images: VehicleImages['all'] | undefined, designPreference: 'light' | 'dark') {
+  if (!images) return undefined;
+  const sideImages = images.filter((image) => normalizePlacement(image.placement) === 'side');
+  const tokenSets = [
+    ['charging', 'light'],
+    ['charge', 'light'],
+    ['charge', 'port'],
+    ['port', 'open'],
+  ];
+
+  for (const tokens of tokenSets) {
+    const preferred = sideImages.find((image) => designMatches(image.design, designPreference) && tokens.every((token) => imageText(image).includes(token)));
+    if (preferred?.url) return preferred.url;
+  }
+
+  for (const tokens of tokenSets) {
+    const fallback = sideImages.find((image) => tokens.every((token) => imageText(image).includes(token)));
+    if (fallback?.url) return fallback.url;
+  }
+
+  return undefined;
+}
+
 function normalizePlacement(value: string | null | undefined): 'side' | 'overhead' | 'front' | 'rear' | 'unknown' {
   const normalized = (value ?? '').toLowerCase();
   if (normalized.includes('side')) return 'side';
@@ -393,4 +656,14 @@ registerWidget({
   minSize: { w: 8, h: 6 },
   defaultOptions: {},
   component: OverviewVehicleWidget,
+});
+
+registerWidget({
+  componentType: 'custom',
+  definitionId: 'charging.connection',
+  title: 'Charging Connection',
+  defaultSize: { w: 6, h: 6 },
+  minSize: { w: 5, h: 5 },
+  defaultOptions: { forceShow: false },
+  component: ChargingConnectedVehicleWidget,
 });

@@ -10,14 +10,11 @@
   "widgets": [
     { "id": "d4000004-0000-0000-0000-000000000001", "componentType": "charging", "definitionId": "sessions",         "title": "Sessions",         "options": {}, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
     { "id": "d4000004-0000-0000-0000-000000000002", "componentType": "charging", "definitionId": "total_energy",    "title": "Total Energy",     "options": {}, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000003", "componentType": "charging", "definitionId": "total_cost",      "title": "Total Cost",       "options": {}, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000004", "componentType": "charging", "definitionId": "avg_session",     "title": "Avg / Session",    "options": {}, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d4000004-0000-0000-0000-000000000003", "componentType": "charging", "definitionId": "total_cost",      "title": "Total Cost",       "options": {}, "layout": { "x": 3, "y": 2, "w": 3, "h": 2 } },
     { "id": "d4000004-0000-0000-0000-000000000005", "componentType": "charging", "definitionId": "charging_cycles", "title": "Charging Cycles",  "options": {}, "layout": { "x": 0, "y": 2, "w": 3, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000006", "componentType": "charging", "definitionId": "charge_efficiency","title": "Charge Efficiency","options": {}, "layout": { "x": 3, "y": 2, "w": 3, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000007", "componentType": "charging", "definitionId": "max_charge_rate", "title": "Max Charge Rate",  "options": {}, "layout": { "x": 6, "y": 2, "w": 3, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000008", "componentType": "charging", "definitionId": "max_charge_limit","title": "Max Charge Limit", "options": {}, "layout": { "x": 9, "y": 2, "w": 3, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000009", "componentType": "charging", "definitionId": "home_share",      "title": "Home Charging",    "options": {}, "layout": { "x": 0, "y": 4, "w": 6, "h": 2 } },
-    { "id": "d4000004-0000-0000-0000-000000000010", "componentType": "charging", "definitionId": "dc_share",        "title": "DC Fast Charging", "options": {}, "layout": { "x": 6, "y": 4, "w": 6, "h": 2 } },
+    { "id": "d4000004-0000-0000-0000-000000000009", "componentType": "charging", "definitionId": "home_share",      "title": "Home Charging",    "options": {}, "layout": { "x": 0, "y": 4, "w": 3, "h": 2 } },
+    { "id": "d4000004-0000-0000-0000-000000000010", "componentType": "charging", "definitionId": "dc_share",        "title": "DC Fast Charging", "options": {}, "layout": { "x": 3, "y": 4, "w": 3, "h": 2 } },
+    { "id": "d4000004-0000-0000-0000-000000000013", "componentType": "custom",   "definitionId": "charging.connection","title": "Charging Connection","options": { "forceShow": false }, "layout": { "x": 6, "y": 0, "w": 6, "h": 6 } },
     {
       "id": "d4000004-0000-0000-0000-000000000011",
       "componentType": "chart",

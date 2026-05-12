@@ -82,7 +82,6 @@ export function TripMapChart({
   const syncedRouteIdsRef = React.useRef<string[]>([]);
   const lastRouteSignatureRef = React.useRef<string>('');
   const onRouteClickRef = React.useRef(onRouteClick);
-  const styleGenRef = React.useRef(0);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -109,7 +108,7 @@ export function TripMapChart({
     return () => observer.disconnect();
   }, []);
 
-  // Initial map creation
+  // Create or recreate the map when the route set or theme style changes.
   React.useEffect(() => {
     if (!containerRef.current || routeList.length === 0 || mapRef.current) return;
 
@@ -156,31 +155,7 @@ export function TripMapChart({
         mapRef.current = null;
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeList.length]);
-
-  // Swap tile layer when mapStyle changes (after initial load)
-  React.useEffect(() => {
-    if (!mapRef.current || !isLoadedRef.current) return;
-
-    const map = mapRef.current;
-    const gen = ++styleGenRef.current;
-
-    isLoadedRef.current = false;
-    syncedRouteIdsRef.current = [];
-    lastRouteSignatureRef.current = '';
-
-    map.setStyle(buildMapLibreStyle(mapStyle));
-
-    map.on('style.load', () => {
-      if (styleGenRef.current !== gen) return;
-      isLoadedRef.current = true;
-      syncRoutes(map, routeList, selectedRouteIds, onRouteClickRef);
-      requestAnimationFrame(() => { map.resize(); });
-    });
-  // mapStyle is the only real trigger; routeList/selectedRouteIds are handled by the route-sync effect below
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapStyle]);
+  }, [routeList.length, mapStyle]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {

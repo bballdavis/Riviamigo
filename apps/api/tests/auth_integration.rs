@@ -18,7 +18,9 @@ use riviamigo_api::{
     config::Config,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
+    models::cost_profile::compute_cost,
     routes,
+    services::cost::resolve_profile,
     services::geofences::match_geofence,
 };
 
@@ -78,7 +80,10 @@ impl TestApp {
                 s3_endpoint: None,
                 s3_access_key: None,
                 s3_secret_key: None,
-                backup_artifact_dir: std::env::temp_dir().join("riviamigo-auth-test-backups").to_string_lossy().into_owned(),
+                backup_artifact_dir: std::env::temp_dir()
+                    .join("riviamigo-auth-test-backups")
+                    .to_string_lossy()
+                    .into_owned(),
                 backup_driver: "json".into(),
                 backup_poll_interval_seconds: 60,
                 rivian_ws_reconnect_initial_seconds: 10,
@@ -648,7 +653,8 @@ async fn charging_sessions_surface_home_geofence_location() {
     .fetch_one(&app.pool)
     .await
     .expect("user id");
-    let vehicle_id = insert_vehicle(&app.pool, user_id, "charging-home-vehicle", "Home Truck").await;
+    let vehicle_id =
+        insert_vehicle(&app.pool, user_id, "charging-home-vehicle", "Home Truck").await;
 
     let address_id = sqlx::query_scalar!(
         r#"INSERT INTO riviamigo.addresses
@@ -663,10 +669,24 @@ async fn charging_sessions_surface_home_geofence_location() {
     .await
     .expect("address");
 
+    let cost_profile_id = sqlx::query_scalar!(
+        r#"INSERT INTO riviamigo.cost_profiles
+           (user_id, name, billing_type, rate, session_fee, currency, timezone, tou_periods)
+           VALUES ($1, $2, 'per_kwh', $3, $4, 'USD', 'UTC', '[]'::jsonb)
+           RETURNING id"#,
+        user_id,
+        "Home - Test Charging",
+        0.20_f64,
+        0.0_f64,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("cost profile");
+
     let geofence_id = sqlx::query_scalar!(
         r#"INSERT INTO riviamigo.geofences
-           (user_id, name, latitude, longitude, radius_m, address_id, is_home, is_work)
-           VALUES ($1, $2, $3, $4, $5, $6, true, false)
+           (user_id, name, latitude, longitude, radius_m, address_id, is_home, is_work, cost_profile_id)
+           VALUES ($1, $2, $3, $4, $5, $6, true, false, $7)
            RETURNING id"#,
         user_id,
         "Home - Test",
@@ -674,6 +694,7 @@ async fn charging_sessions_surface_home_geofence_location() {
         -95.3881685_f64,
         80.0_f64,
         address_id,
+        cost_profile_id,
     )
     .fetch_one(&app.pool)
     .await
@@ -686,12 +707,30 @@ async fn charging_sessions_surface_home_geofence_location() {
     assert_eq!(matched.id, geofence_id);
     assert!(matched.is_home);
 
+    let resolved_profile = resolve_profile(&app.pool, None, Some(geofence_id), vehicle_id)
+        .await
+        .expect("resolve cost profile")
+        .expect("home geofence cost profile should resolve");
+    assert_eq!(resolved_profile.id, cost_profile_id);
+
+    let resolved_cost = compute_cost(
+        &resolved_profile,
+        Some(24.5_f64),
+        None,
+        120_i32,
+        chrono::Utc::now() - chrono::Duration::days(1),
+        Some(chrono::Utc::now() - chrono::Duration::days(1) + chrono::Duration::hours(2)),
+    )
+    .expect("profile cost");
+    assert!((resolved_cost - 4.9_f64).abs() < 0.001);
+
     sqlx::query!(
         r#"INSERT INTO riviamigo.charge_sessions
            (vehicle_id, started_at, ended_at, location_lat, location_lng,
-            geofence_id, address_id, is_home, kwh_added, duration_minutes)
+            geofence_id, address_id, is_home, kwh_added, duration_minutes,
+            cost_profile_id, cost_method, cost_usd)
            VALUES ($1, now() - interval '1 day', now() - interval '1 day' + interval '2 hours',
-                   $2, $3, $4, $5, true, $6, $7)"#,
+                   $2, $3, $4, $5, true, $6, $7, $8, 'profile', $9)"#,
         vehicle_id,
         29.8185291_f64,
         -95.3882141_f64,
@@ -699,6 +738,8 @@ async fn charging_sessions_surface_home_geofence_location() {
         address_id,
         24.5_f64,
         120_i32,
+        cost_profile_id,
+        resolved_cost,
     )
     .execute(&app.pool)
     .await
@@ -717,4 +758,18 @@ async fn charging_sessions_surface_home_geofence_location() {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(res.body["data"][0]["location_name"], json!("Home - Test"));
     assert_eq!(res.body["data"][0]["is_home"], json!(true));
+    assert_eq!(res.body["data"][0]["cost_usd"], json!(4.9));
+
+    let cost_res = app
+        .request(
+            Method::GET,
+            &format!("/v1/vehicles/{vehicle_id}/costs"),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(cost_res.status, StatusCode::OK);
+    assert_eq!(cost_res.body["total_cost_usd"], json!(4.9));
 }

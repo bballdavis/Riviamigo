@@ -8,6 +8,7 @@
     "./primitives": "./src/primitives/index.ts",
     "./charts": "./src/charts/index.ts",
     "./tables": "./src/tables/index.ts",
+    "./lib/driveMode": "./src/lib/driveMode.ts",
     "./lib/utils": "./src/lib/utils.ts"
   },
   "scripts": {

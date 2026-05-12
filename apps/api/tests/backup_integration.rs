@@ -54,14 +54,14 @@ impl TestApp {
             .run(&pool)
             .await
             .expect("migrate");
-        let backup_dir = std::env::temp_dir().join(format!("riviamigo-backups-{}", Uuid::new_v4().simple()));
+        let backup_dir =
+            std::env::temp_dir().join(format!("riviamigo-backups-{}", Uuid::new_v4().simple()));
 
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
             .expect("bootstrap keys");
-        let jwt_keys = Arc::new(
-            JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"),
-        );
+        let jwt_keys =
+            Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"));
 
         let state = AppState {
             pool: pool.clone(),
@@ -219,7 +219,10 @@ async fn admin_can_read_default_backup_settings() {
     assert_eq!(response.body["settings"]["target_type"], "s3");
     assert_eq!(response.body["settings"]["has_secret_key"], false);
     assert!(response.body["next_run_at"].is_null());
-    assert_eq!(response.body["recent_runs"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        response.body["recent_runs"].as_array().map(Vec::len),
+        Some(0)
+    );
 }
 
 #[tokio::test]
@@ -291,7 +294,13 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
     promote_admin(&app.pool, user_id).await;
 
     let response = app
-        .request(Method::POST, "/v1/admin/backups/run", None, Some(&token), None)
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
         .await;
 
     assert_eq!(response.status, StatusCode::CREATED);
@@ -304,7 +313,10 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
         .await;
 
     assert_eq!(overview.status, StatusCode::OK);
-    assert_eq!(overview.body["recent_runs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        overview.body["recent_runs"].as_array().map(Vec::len),
+        Some(1)
+    );
     assert_eq!(overview.body["artifacts"].as_array().map(Vec::len), Some(1));
 }
 
@@ -317,7 +329,13 @@ async fn admin_can_create_restore_request_for_artifact() {
     promote_admin(&app.pool, user_id).await;
 
     let run = app
-        .request(Method::POST, "/v1/admin/backups/run", None, Some(&token), None)
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
         .await;
     let artifact_id = run.body["artifact"]["id"].as_str().expect("artifact id");
 
@@ -343,5 +361,8 @@ async fn admin_can_create_restore_request_for_artifact() {
         .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
         .await;
 
-    assert_eq!(overview.body["restore_requests"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        overview.body["restore_requests"].as_array().map(Vec::len),
+        Some(1)
+    );
 }

@@ -7,8 +7,7 @@ use riviamigo_api::{
     db::pool::create_pool,
     ingestion, keys,
     middleware::auth::{AppState, JwtKeys},
-    routes,
-    services,
+    routes, services,
 };
 
 #[tokio::main]

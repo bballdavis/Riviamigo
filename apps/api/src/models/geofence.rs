@@ -64,7 +64,7 @@ pub async fn match_geofence(
               ) <= radius_m
         ORDER BY 7 ASC
         LIMIT 1
-        "#
+        "#,
     )
     .bind(user_id)
     .bind(lat)

@@ -1,6 +1,25 @@
 export type PowerState = 'sleep' | 'ready' | 'go' | 'drive' | 'charging' | 'unknown';
 export type ChargerState = 'Disconnected' | 'Connected' | 'Charging' | 'Done' | 'Unknown';
-export type DriveMode = 'sport' | 'everyday' | 'conserve' | 'off_road_auto' | 'unknown';
+export type DriveMode =
+  | 'sport'
+  | 'all_purpose'
+  | 'everyday'
+  | 'conserve'
+  | 'distance'
+  | 'snow'
+  | 'winter'
+  | 'all_terrain'
+  | 'off_road_auto'
+  | 'soft_sand'
+  | 'off_road_sand'
+  | 'rock_crawl'
+  | 'off_road_rocks'
+  | 'rally'
+  | 'off_road_sport_auto'
+  | 'drift'
+  | 'off_road_sport_drift'
+  | 'towing'
+  | 'unknown';
 export type ChargerType = 'ac' | 'dc' | 'dcfc';
 
 export interface LatLng {

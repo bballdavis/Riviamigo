@@ -8,7 +8,7 @@ pub async fn require_vehicle_owned(
     vehicle_id: Uuid,
 ) -> Result<(), AppError> {
     let owns = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id = $1 AND user_id = $2)"
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id = $1 AND user_id = $2)",
     )
     .bind(vehicle_id)
     .bind(user_id)
@@ -26,7 +26,7 @@ pub async fn get_default_vehicle_id(
     user_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
     let row = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT default_vehicle_id FROM riviamigo.users WHERE id = $1"
+        "SELECT default_vehicle_id FROM riviamigo.users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -39,7 +39,7 @@ pub async fn get_vehicle_battery_capacity(
     vehicle_id: Uuid,
 ) -> Result<Option<f64>, AppError> {
     let cap = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1"
+        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1",
     )
     .bind(vehicle_id)
     .fetch_optional(pool)
@@ -52,12 +52,11 @@ pub async fn get_vehicle_owner_id(
     pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Result<Option<Uuid>, AppError> {
-    let owner_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT user_id FROM riviamigo.vehicles WHERE id = $1"
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await?;
+    let owner_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(owner_id)
 }
