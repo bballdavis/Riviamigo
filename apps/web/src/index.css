@@ -35,9 +35,15 @@
   --color-border-accent: var(--rm-border-accent);
 
   /* Status — SOC */
-  --color-soc-high: #10B981;
-  --color-soc-mid:  #F59E0B;
-  --color-soc-low:  #F87171;
+  --color-soc-high: var(--rm-status-positive);
+  --color-soc-mid:  var(--rm-status-warning);
+  --color-soc-low:  var(--rm-status-danger);
+
+  /* Status — semantic */
+  --color-status-positive: var(--rm-status-positive);
+  --color-status-warning:  var(--rm-status-warning);
+  --color-status-danger:   var(--rm-status-danger);
+  --color-status-info:     var(--rm-status-info);
 
   /* Status — charging */
   --color-charging-active:  var(--rm-charging-active);

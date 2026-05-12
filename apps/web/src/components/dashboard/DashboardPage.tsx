@@ -221,7 +221,7 @@ export function CurrentVehicleStatePanel({ status, images }: { status: VehicleSt
 
         <div ref={imageStageRef} className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1">
           <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-full border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
-            {status?.doors_locked ? <BsLockFill className="h-3 w-3" /> : <BsUnlockFill className="h-3 w-3 text-accent" />}
+            {status?.doors_locked ? <BsLockFill className="h-3 w-3 text-status-positive" /> : <BsUnlockFill className="h-3 w-3 text-accent" />}
             {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
           </div>
 
@@ -318,7 +318,7 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
   return (
     <span
       title={title}
-      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${unlocked ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-border bg-bg-elevated/90 text-fg' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
+      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${unlocked ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
     >
       <Icon className="h-3.5 w-3.5" />
     </span>
@@ -432,24 +432,10 @@ function formatDrive(driveMode: string | null | undefined, gearStatus: string | 
 }
 
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  const value = formatDrive(driveMode, gearStatus);
-  if (value === 'Unknown') {
-    return (
-      <Tooltip content="Current sensor status is unknown." align="end">
-        <Badge size="sm" className={getDriveModeBadgeClass('unknown')}>
-          Unknown
-        </Badge>
-      </Tooltip>
-    );
-  }
   if (driveMode) {
-    return (
-      <Badge size="sm" className={getDriveModeBadgeClass(driveMode)} title={formatDriveMode(driveMode)}>
-        {formatDriveMode(driveMode)}
-      </Badge>
-    );
+    return formatDriveMode(driveMode);
   }
-  return value;
+  return formatDrive(driveMode, gearStatus);
 }
 
 function formatSoftware(status: VehicleStatus | null | undefined) {

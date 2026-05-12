@@ -4,12 +4,38 @@ interface ToastPayload {
   title: string;
   message: string;
   code?: string;
-  variant?: 'error';
+  variant?: 'error' | 'warning' | 'success' | 'info';
 }
 
 interface Toast extends ToastPayload {
   id: number;
 }
+
+const TOAST_VARIANT_CLASSNAMES: Record<NonNullable<ToastPayload['variant']> | 'default', {
+  container: string;
+  title: string;
+}> = {
+  default: {
+    container: 'border-border-strong',
+    title: 'text-fg',
+  },
+  error: {
+    container: 'border-status-danger/70 bg-status-danger/10',
+    title: 'text-status-danger',
+  },
+  warning: {
+    container: 'border-status-warning/70 bg-status-warning/10',
+    title: 'text-status-warning',
+  },
+  success: {
+    container: 'border-status-positive/70 bg-status-positive/10',
+    title: 'text-status-positive',
+  },
+  info: {
+    container: 'border-status-info/70 bg-status-info/10',
+    title: 'text-status-info',
+  },
+};
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -41,22 +67,22 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className="rounded-xl border border-[#F87171]/30 bg-[#7F1D1D]/30 px-4 py-3 text-sm text-fg shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-md"
+            className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-[0_12px_40px_rgba(0,0,0,0.2)] backdrop-blur-md ${TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'].container}`}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="font-medium text-[#FCA5A5]">{toast.title}</p>
+                <p className={`text-sm font-semibold leading-6 ${TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'].title}`}>{toast.title}</p>
                 {toast.code && (
-                  <p className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-[#FCA5A5]/70">
+                  <p className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.14em] text-fg-secondary">
                     {toast.code}
                   </p>
                 )}
-                <p className="mt-1 break-words text-xs leading-5 text-fg-secondary">{toast.message}</p>
+                <p className="mt-1 break-words text-sm leading-6 text-fg">{toast.message}</p>
               </div>
               <button
                 type="button"
                 aria-label="Dismiss notification"
-                className="rounded-md px-2 py-1 text-xs text-fg-tertiary hover:bg-bg-elevated hover:text-fg"
+                className="rounded-md px-2 py-1 text-sm font-medium text-fg-secondary hover:bg-bg-elevated hover:text-fg"
                 onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}
               >
                 Close

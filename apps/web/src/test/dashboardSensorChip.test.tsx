@@ -138,7 +138,7 @@ describe('dashboard sensor chips', () => {
     );
 
     expect(screen.queryByTestId('sensor-sprite-layer')).not.toBeInTheDocument();
-    expect(screen.getByTestId('sensor-chip')).toHaveClass('border-orange-400/60');
+    expect(screen.getByTestId('sensor-chip')).toHaveClass('border-accent/60');
   });
 
   it('keeps a visible sprite for sparse live data', () => {

@@ -131,7 +131,7 @@ export function BatteryStatWidget({ instance, ctx }: { instance: WidgetInstance;
       className={cn(
         'relative flex h-full min-h-[72px] flex-col overflow-hidden border p-3',
         accentBorder
-          ? 'border-orange-400/60 shadow-[inset_0_0_0_1px_rgba(251,146,60,0.22)]'
+          ? 'border-accent/60 shadow-[inset_0_0_0_1px_var(--rm-border-accent)]'
           : 'border-border',
       )}
       data-testid="battery-stat-chip"
