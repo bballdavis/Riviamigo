@@ -19,6 +19,7 @@ use riviamigo_api::{
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
     routes,
+    services::geofences::match_geofence,
 };
 
 struct TestResponse {
@@ -634,4 +635,86 @@ async fn stats_summary_returns_aggregated_trip_and_charge_values() {
     assert_eq!(res.body["total_charging_sessions"], json!(1));
     assert_eq!(res.body["lifetime_efficiency_wh_mi"], json!(400.0));
     assert_eq!(res.body["estimated_total_cost_usd"], json!(5.2));
+}
+
+#[tokio::test]
+async fn charging_sessions_surface_home_geofence_location() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "charging-home@example.com").await;
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "charging-home@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+    let vehicle_id = insert_vehicle(&app.pool, user_id, "charging-home-vehicle", "Home Truck").await;
+
+    let address_id = sqlx::query_scalar!(
+        r#"INSERT INTO riviamigo.addresses
+           (display_name, latitude, longitude)
+           VALUES ($1, $2, $3)
+           RETURNING id"#,
+        "123 Home Garage",
+        29.8182846_f64,
+        -95.3881685_f64,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("address");
+
+    let geofence_id = sqlx::query_scalar!(
+        r#"INSERT INTO riviamigo.geofences
+           (user_id, name, latitude, longitude, radius_m, address_id, is_home, is_work)
+           VALUES ($1, $2, $3, $4, $5, $6, true, false)
+           RETURNING id"#,
+        user_id,
+        "Home - Test",
+        29.8182846_f64,
+        -95.3881685_f64,
+        80.0_f64,
+        address_id,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("geofence");
+
+    let matched = match_geofence(&app.pool, user_id, 29.8185291_f64, -95.3882141_f64)
+        .await
+        .expect("geofence match")
+        .expect("home geofence should match");
+    assert_eq!(matched.id, geofence_id);
+    assert!(matched.is_home);
+
+    sqlx::query!(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (vehicle_id, started_at, ended_at, location_lat, location_lng,
+            geofence_id, address_id, is_home, kwh_added, duration_minutes)
+           VALUES ($1, now() - interval '1 day', now() - interval '1 day' + interval '2 hours',
+                   $2, $3, $4, $5, true, $6, $7)"#,
+        vehicle_id,
+        29.8185291_f64,
+        -95.3882141_f64,
+        geofence_id,
+        address_id,
+        24.5_f64,
+        120_i32,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("charge session");
+
+    let res = app
+        .request(
+            Method::GET,
+            &format!("/v1/vehicles/{vehicle_id}/charging-sessions"),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["data"][0]["location_name"], json!("Home - Test"));
+    assert_eq!(res.body["data"][0]["is_home"], json!(true));
 }
