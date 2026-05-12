@@ -494,24 +494,10 @@ function formatTire(psi: number | null | undefined, status?: string | null) {
 }
 
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  const value = driveMode ? prettifyDriveMode(driveMode) : gearStatus ? prettify(gearStatus) : '-';
-  if (value === 'Unknown') {
-    return (
-      <Tooltip content="Current sensor status is unknown." align="end">
-        <Badge size="sm" className={getDriveModeBadgeClass('unknown')}>
-          Unknown
-        </Badge>
-      </Tooltip>
-    );
-  }
   if (driveMode) {
-    return (
-      <Badge size="sm" className={getDriveModeBadgeClass(driveMode)} title={formatDriveMode(driveMode)}>
-        {formatDriveMode(driveMode)}
-      </Badge>
-    );
+    return formatDriveMode(driveMode);
   }
-  return value;
+  return gearStatus ? prettify(gearStatus) : '-';
 }
 
 function formatSoftware(status: VehicleStatus | null | undefined) {

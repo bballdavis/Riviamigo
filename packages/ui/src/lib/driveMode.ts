@@ -19,11 +19,12 @@ export function formatDriveMode(value: string) {
     drift: 'Drift',
     towing: 'Towing',
   };
-  return labels[value] ?? value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  const normalized = normalizeDriveModeValue(value);
+  return labels[normalized] ?? normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export function getDriveModeBadgeClass(value: string) {
-  const normalized = value.toLowerCase();
+  const normalized = normalizeDriveModeValue(value);
   if (normalized === 'unknown') return 'bg-slate-500/12 text-slate-500 border border-slate-500/20';
   if (normalized === 'winter' || normalized === 'snow') return 'bg-white/90 text-slate-700 border border-slate-300';
   if (normalized === 'sport') return 'bg-accent-muted text-accent border border-accent/20';
@@ -36,4 +37,8 @@ export function getDriveModeBadgeClass(value: string) {
   if (normalized === 'drift' || normalized === 'off_road_sport_drift') return 'bg-rose-500/10 text-rose-500 border border-rose-500/20';
   if (normalized === 'towing') return 'bg-orange-500/10 text-orange-500 border border-orange-500/20';
   return 'bg-bg-elevated text-fg-secondary border border-border';
+}
+
+function normalizeDriveModeValue(value: string) {
+  return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
 }
