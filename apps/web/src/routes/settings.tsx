@@ -11,9 +11,10 @@ import {
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
+import { BackupSection } from '../components/settings/BackupSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Car, CircleHelp, Clipboard, Database, KeyRound, LogOut, MapPin, Pencil, Plus, Ruler, ShieldCheck, Trash2,
+  Car, CircleHelp, Clipboard, Database, DatabaseBackup, KeyRound, LogOut, MapPin, Pencil, Plus, Ruler, ShieldCheck, Trash2,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -42,9 +43,9 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'backup' | 'appearance' | 'account';
 
-const sections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
+const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
@@ -129,6 +130,12 @@ export function SettingsContent() {
   const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
   const [customKwh, setCustomKwh] = React.useState('');
   const isAdmin = me.data?.role === 'admin';
+  const sections = React.useMemo(
+    () => isAdmin
+      ? [...baseSections.slice(0, 5), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(5)]
+      : baseSections,
+    [isAdmin],
+  );
 
   const apiKeys = useQuery({
     queryKey: ['api-keys'],
@@ -645,6 +652,8 @@ export function SettingsContent() {
             )}
 
             {activeSection === 'places' && <PlacesSection unitSystem={unitSystem} />}
+
+            {activeSection === 'backup' && isAdmin && <BackupSection />}
 
             {activeSection === 'raw' && (
               <div className="flex flex-col gap-5">

@@ -257,6 +257,69 @@ export interface UpsertPlaceBody {
   charging?: PlaceChargingInput | null;
 }
 
+export type BackupFrequency = 'daily' | 'weekly' | 'monthly';
+
+export type BackupTargetType = 's3';
+
+export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
+
+export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore';
+
+export interface BackupSettings {
+  enabled: boolean;
+  frequency: BackupFrequency;
+  run_at: string;
+  timezone: string;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  retention_count: number;
+  target_type: BackupTargetType;
+  endpoint: string;
+  region: string | null;
+  bucket: string;
+  prefix: string;
+  access_key: string | null;
+  has_secret_key: boolean;
+  updated_at: string | null;
+}
+
+export interface BackupRun {
+  id: string;
+  trigger: BackupRunTrigger;
+  status: BackupRunStatus;
+  artifact_key: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackupOverview {
+  settings: BackupSettings;
+  recent_runs: BackupRun[];
+  latest_successful_run: BackupRun | null;
+  next_run_at: string | null;
+}
+
+export interface UpdateBackupSettingsBody {
+  enabled: boolean;
+  frequency: BackupFrequency;
+  run_at: string;
+  timezone: string;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  retention_count: number;
+  target_type: BackupTargetType;
+  endpoint: string;
+  region: string | null;
+  bucket: string;
+  prefix: string;
+  access_key: string | null;
+  secret_key?: string | null;
+  clear_secret_key?: boolean;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
