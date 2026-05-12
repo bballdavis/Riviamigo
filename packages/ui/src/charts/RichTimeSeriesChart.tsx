@@ -260,7 +260,8 @@ export function RichTimeSeriesChart({
       width,
       height: chartHeight,
       data: alignedDataRef.current,
-      padding: [10, 14, 0, 0],
+      // Keep a small left gutter so y-axis labels are not clipped at narrow widths.
+      padding: [10, 14, 0, 10],
       cursor: {
         drag: { x: true, y: false },
         points: { size: 6 },

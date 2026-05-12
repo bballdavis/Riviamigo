@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
+import { formatSmartNumber } from '../lib/utils';
 
 export interface ChargeSessionDistributionBand {
   label: string;
@@ -20,7 +21,7 @@ function formatCount(value: number) {
 }
 
 function formatRate(value: number | null) {
-  return value == null || !Number.isFinite(value) ? '-' : `${value.toFixed(1)} kW`;
+  return value == null || !Number.isFinite(value) ? '-' : `${formatSmartNumber(value, Math.abs(value) >= 100 ? 0 : 1)} kW`;
 }
 
 export function ChargeSessionDistributionChart({
