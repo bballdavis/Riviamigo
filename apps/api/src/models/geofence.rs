@@ -53,7 +53,7 @@ pub async fn match_geofence(
           earth_distance(
             ll_to_earth($2, $3),
             ll_to_earth(latitude, longitude)
-                    ) AS "distance_m!: f64"
+          ) AS distance_m
         FROM riviamigo.geofences
         WHERE user_id = $1
           AND earth_box(ll_to_earth(latitude, longitude), radius_m)
