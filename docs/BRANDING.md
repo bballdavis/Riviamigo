@@ -36,6 +36,8 @@
 | `accent-muted` | `rgba(245,158,11,0.15)` | Active nav background, subtle chips |
 | `glow-button` | `0 0 20px rgba(245,158,11,0.40)` | Primary button shadow |
 
+Charging indicators use the same branded accent via the shared `charging.active` token, so connected-state plug icons stay visually aligned with the rest of the app instead of introducing a separate orange.
+
 ### Light mode
 
 Same tokens, lighter values. The accent shifts to `#D97706` (darker amber) for contrast on white.

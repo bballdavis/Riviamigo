@@ -17,6 +17,12 @@ pub struct Config {
     pub s3_endpoint: Option<String>,
     pub s3_access_key: Option<String>,
     pub s3_secret_key: Option<String>,
+    #[serde(default = "default_backup_artifact_dir")]
+    pub backup_artifact_dir: String,
+    #[serde(default = "default_backup_driver")]
+    pub backup_driver: String,
+    #[serde(default = "default_backup_poll_interval_seconds")]
+    pub backup_poll_interval_seconds: u64,
     #[serde(default = "default_rivian_ws_reconnect_initial_seconds")]
     pub rivian_ws_reconnect_initial_seconds: u64,
     #[serde(default = "default_rivian_ws_reconnect_max_seconds")]
@@ -32,6 +38,22 @@ pub struct Config {
 fn default_port() -> u16 {
     3001
 }
+
+fn default_backup_artifact_dir() -> String {
+    std::env::temp_dir()
+        .join("riviamigo-backups")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn default_backup_driver() -> String {
+    "pg_dump".into()
+}
+
+fn default_backup_poll_interval_seconds() -> u64 {
+    60
+}
+
 fn default_origins() -> Vec<String> {
     vec!["http://localhost:3000".into()]
 }

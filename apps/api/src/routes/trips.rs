@@ -73,6 +73,34 @@ struct TrackPoint {
     altitude_m: Option<f64>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct TripWindowRow {
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    duration_seconds: Option<i32>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct SpeedProfileRow {
+    elapsed_s: f64,
+    speed_mph: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ElevationPointRow {
+    ts: DateTime<Utc>,
+    value: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct PowerProfileRow {
+    ts: DateTime<Utc>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+    speed_mph: Option<f64>,
+    battery_level: Option<f64>,
+}
+
 async fn list_trips(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -91,15 +119,14 @@ async fn list_trips(
     let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
     let search = p.search.as_deref().map(str::trim).filter(|value| !value.is_empty());
 
-    let rows = sqlx::query_as!(
-        TripRow,
+    let rows = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
                 t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS \"start_place?\", \
-                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS \"end_place?\", \
-                sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\", \
-                t.outside_temp_c AS \"outside_temp_c?\" \
+                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
+                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
+                sa.display_name AS start_address, ea.display_name AS end_address, \
+                t.outside_temp_c AS outside_temp_c \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
          LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
@@ -113,18 +140,18 @@ async fn list_trips(
               COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' OR \
               COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%') \
-         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
-        vid,
-        from,
-        to,
-        limit,
-        offset,
-        search
+         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5"
     )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .bind(limit)
+    .bind(offset)
+    .bind(search)
     .fetch_all(&state.pool)
     .await?;
 
-    let total: i64 = sqlx::query_scalar!(
+    let total: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
@@ -138,9 +165,14 @@ async fn list_trips(
               COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' OR \
               COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%')",
-        vid, from, to, search
-    ).fetch_one(&state.pool).await?.unwrap_or(0);
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%')"
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .bind(search)
+    .fetch_one(&state.pool)
+    .await?;
 
     Ok(Json(serde_json::json!({
         "data": rows,
@@ -164,24 +196,23 @@ async fn get_trip(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let row = sqlx::query_as!(
-        TripRow,
+    let row = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
                 t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
-                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS \"start_place?\", \
-                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS \"end_place?\", \
-                sa.display_name AS \"start_address?\", ea.display_name AS \"end_address?\", \
-                t.outside_temp_c AS \"outside_temp_c?\" \
+                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
+                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
+                sa.display_name AS start_address, ea.display_name AS end_address, \
+                t.outside_temp_c AS outside_temp_c \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
          LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
          LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
          LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
-         WHERE t.id=$1 AND t.vehicle_id=$2",
-        id,
-        vid
+            WHERE t.id=$1 AND t.vehicle_id=$2"
     )
+        .bind(id)
+        .bind(vid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -200,10 +231,14 @@ async fn get_track(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let trip = sqlx::query!(
-        "SELECT started_at, ended_at, duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
-        id, vid
-    ).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    let trip = sqlx::query_as::<_, TripWindowRow>(
+        "SELECT started_at, ended_at, duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
+    )
+    .bind(id)
+    .bind(vid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
 
     let duration_min = trip.duration_seconds.unwrap_or(0) / 60;
     let bucket = if duration_min < 15 {
@@ -216,21 +251,29 @@ async fn get_track(
 
     // Dynamically pick bucket — use 1hr agg for very long trips as fallback
     let points: Vec<TrackPoint> = match bucket {
-        "1 second" => sqlx::query_as!(TrackPoint,
+        "1 second" => sqlx::query_as::<_, TrackPoint>(
             "SELECT ts, latitude AS lat, longitude AS lng, speed_mph, altitude_m \
              FROM timeseries.telemetry \
              WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL \
              ORDER BY ts LIMIT 5000",
-            vid, trip.started_at, trip.ended_at
-        ).fetch_all(&state.pool).await?,
-        _ => sqlx::query_as!(TrackPoint,
-            r#"SELECT time_bucket('15 seconds'::interval, ts) AS "ts!", avg(latitude) AS lat, avg(longitude) AS lng,
+        )
+        .bind(vid)
+        .bind(trip.started_at)
+        .bind(trip.ended_at)
+        .fetch_all(&state.pool)
+        .await?,
+        _ => sqlx::query_as::<_, TrackPoint>(
+            r#"SELECT time_bucket('15 seconds'::interval, ts) AS ts, avg(latitude) AS lat, avg(longitude) AS lng,
                       avg(speed_mph) AS speed_mph, avg(altitude_m) AS altitude_m
                FROM timeseries.telemetry
                WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL
                GROUP BY 1 ORDER BY 1 LIMIT 5000"#,
-            vid, trip.started_at, trip.ended_at
-        ).fetch_all(&state.pool).await?,
+        )
+        .bind(vid)
+        .bind(trip.started_at)
+        .bind(trip.ended_at)
+        .fetch_all(&state.pool)
+        .await?,
     };
 
     Ok(Json(points))
@@ -247,17 +290,17 @@ async fn get_speed_profile(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let trip = sqlx::query!(
-        "SELECT started_at, ended_at FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
-        id,
-        vid
+    let trip = sqlx::query_as::<_, TripWindowRow>(
+        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
     )
+    .bind(id)
+    .bind(vid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let points = sqlx::query!(
-        r#"SELECT EXTRACT(EPOCH FROM (time_bucket('10 seconds'::interval, ts) - $3))::float8 AS "elapsed_s!",
+    let points = sqlx::query_as::<_, SpeedProfileRow>(
+        r#"SELECT EXTRACT(EPOCH FROM (time_bucket('10 seconds'::interval, ts) - $3))::float8 AS elapsed_s,
                   avg(speed_mph) AS speed_mph
            FROM timeseries.telemetry
            WHERE vehicle_id=$1
@@ -265,19 +308,16 @@ async fn get_speed_profile(
              AND ($2::uuid IS NULL OR trip_id=$2 OR trip_id IS NULL)
              AND speed_mph IS NOT NULL
            GROUP BY 1
-           ORDER BY 1"#,
-        vid,
-        id,
-        trip.started_at,
-        trip.ended_at
+           ORDER BY 1"#
     )
+    .bind(vid)
+    .bind(id)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(serde_json::json!(points
-        .iter()
-        .map(|r| serde_json::json!({"elapsed_s": r.elapsed_s, "speed_mph": r.speed_mph.unwrap_or(0.0)}))
-        .collect::<Vec<_>>())))
+    Ok(Json(serde_json::json!(points)))
 }
 
 async fn get_elevation_profile(
@@ -291,31 +331,28 @@ async fn get_elevation_profile(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let trip = sqlx::query!(
-        "SELECT started_at, ended_at FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
-        id,
-        vid
+    let trip = sqlx::query_as::<_, TripWindowRow>(
+        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
     )
+    .bind(id)
+    .bind(vid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let points = sqlx::query!(
-        r#"SELECT time_bucket('10 seconds'::interval, ts) AS "ts!", avg(altitude_m) AS value
+    let points = sqlx::query_as::<_, ElevationPointRow>(
+        r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts, avg(altitude_m) AS value
            FROM timeseries.telemetry
            WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND altitude_m IS NOT NULL
-           GROUP BY 1 ORDER BY 1"#,
-        vid,
-        trip.started_at,
-        trip.ended_at
+           GROUP BY 1 ORDER BY 1"#
     )
+    .bind(vid)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(serde_json::json!(points
-        .iter()
-        .map(|r| serde_json::json!({"ts":r.ts,"value":r.value}))
-        .collect::<Vec<_>>())))
+    Ok(Json(serde_json::json!(points)))
 }
 
 async fn get_power_profile(
@@ -346,40 +383,31 @@ async fn power_profile_response(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
 
-    let trip = sqlx::query!(
-        "SELECT started_at, ended_at FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
-        trip_id,
-        vehicle_id
+    let trip = sqlx::query_as::<_, TripWindowRow>(
+        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
     )
+    .bind(trip_id)
+    .bind(vehicle_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let points = sqlx::query!(
-        r#"SELECT time_bucket('10 seconds'::interval, ts) AS "ts!",
+    let points = sqlx::query_as::<_, PowerProfileRow>(
+        r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts,
                   avg(power_kw) AS power_kw,
                   avg(regen_power_kw) AS regen_power_kw,
                   avg(speed_mph) AS speed_mph,
                   avg(battery_level) AS battery_level
            FROM timeseries.telemetry
            WHERE vehicle_id=$1 AND trip_id=$2 AND ts>=$3 AND ts<=$4
-           GROUP BY 1 ORDER BY 1"#,
-        vehicle_id,
-        trip_id,
-        trip.started_at,
-        trip.ended_at
+           GROUP BY 1 ORDER BY 1"#
     )
+    .bind(vehicle_id)
+    .bind(trip_id)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(serde_json::json!(points
-        .iter()
-        .map(|r| serde_json::json!({
-            "ts": r.ts,
-            "power_kw": r.power_kw,
-            "regen_power_kw": r.regen_power_kw,
-            "speed_mph": r.speed_mph,
-            "battery_level": r.battery_level,
-        }))
-        .collect::<Vec<_>>())))
+    Ok(Json(serde_json::json!(points)))
 }

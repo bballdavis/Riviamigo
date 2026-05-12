@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     body::{to_bytes, Body},
@@ -53,6 +54,7 @@ impl TestApp {
             .run(&pool)
             .await
             .expect("migrate");
+        let backup_dir = std::env::temp_dir().join(format!("riviamigo-backups-{}", Uuid::new_v4().simple()));
 
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
@@ -77,13 +79,16 @@ impl TestApp {
                 s3_endpoint: None,
                 s3_access_key: None,
                 s3_secret_key: None,
+                backup_artifact_dir: backup_dir.to_string_lossy().into_owned(),
+                backup_driver: "json".into(),
+                backup_poll_interval_seconds: 60,
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
                 rivian_persist_raw_events: true,
                 rivian_suppress_duplicate_telemetry: true,
             },
-            nominatim_next_call: Arc::new(tokio::sync::Mutex::new(std::time::Instant::now())),
+            nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         };
 
@@ -275,4 +280,68 @@ async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
 
     assert!(encrypted_secret.is_some());
     assert_ne!(encrypted_secret.unwrap(), b"super-secret-value");
+}
+
+#[tokio::test]
+async fn admin_can_run_backup_and_get_catalog_entry() {
+    let app = TestApp::new().await;
+    let email = "backup-run-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let response = app
+        .request(Method::POST, "/v1/admin/backups/run", None, Some(&token), None)
+        .await;
+
+    assert_eq!(response.status, StatusCode::CREATED);
+    assert_eq!(response.body["run"]["status"], "succeeded");
+    assert_eq!(response.body["artifact"]["storage_type"], "local");
+    assert!(response.body["artifact"]["storage_path"].is_string());
+
+    let overview = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(overview.status, StatusCode::OK);
+    assert_eq!(overview.body["recent_runs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(overview.body["artifacts"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn admin_can_create_restore_request_for_artifact() {
+    let app = TestApp::new().await;
+    let email = "restore-request-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let run = app
+        .request(Method::POST, "/v1/admin/backups/run", None, Some(&token), None)
+        .await;
+    let artifact_id = run.body["artifact"]["id"].as_str().expect("artifact id");
+
+    let restore = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/restore-requests",
+            Some(json!({
+                "artifact_id": artifact_id,
+                "confirmation_phrase": "RESTORE",
+                "notes": "Operator requested maintenance restore"
+            })),
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(restore.status, StatusCode::CREATED);
+    assert_eq!(restore.body["status"], "pending");
+    assert_eq!(restore.body["artifact_id"], artifact_id);
+
+    let overview = app
+        .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
+        .await;
+
+    assert_eq!(overview.body["restore_requests"].as_array().map(Vec::len), Some(1));
 }

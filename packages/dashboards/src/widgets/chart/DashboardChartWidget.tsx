@@ -2,6 +2,8 @@ import React from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import {
   useBatteryMileage,
+  useChargeCurve,
+  useChargeCurveAnalysis,
   useChargeSessions,
   useChargingSummary,
   useDegradation,
@@ -12,7 +14,7 @@ import {
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
-import { RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { ChargeSessionDistributionChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 import {
@@ -24,7 +26,7 @@ import {
   whPerMileToMiPerKwh,
   whPerMileToWhPerKm,
 } from '@riviamigo/ui/lib/utils';
-import type { ChargeSession } from '@riviamigo/types';
+import type { ChargeCurveAnalysisPoint, ChargeCurvePoint, ChargeSession } from '@riviamigo/types';
 import {
   getChartDefinition,
   getChartDefinitions,
@@ -41,6 +43,7 @@ interface DashboardChartOptions {
   chartIds?: string[];
   page?: DashboardChartPage;
   showPicker?: boolean;
+  curveSmoothing?: number | boolean;
 }
 
 interface ResolvedDashboardChartOptions {
@@ -48,6 +51,7 @@ interface ResolvedDashboardChartOptions {
   chartIds: string[];
   page?: DashboardChartPage;
   showPicker: boolean;
+  curveSmoothing: number;
 }
 
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
@@ -68,11 +72,13 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
     chartId,
     chartIds: fallbackIds,
     showPicker: options.showPicker ?? fallbackIds.length > 1,
+    curveSmoothing: normalizeCurveSmoothing(options.curveSmoothing),
     ...(page ? { page } : {}),
   };
 }
 
-const DEFAULT_SMOOTHING = 0.4;
+const DEFAULT_SMOOTHING = 0.2;
+const MIN_ENABLED_SMOOTHING = 0.05;
 
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
@@ -80,18 +86,26 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const [chartId, setChartId] = React.useState(options.chartId);
   const [search, setSearch] = React.useState('');
   // smoothing: 0 = off, >0 = smoothing amount (0–1)
-  const [smoothing, setSmoothing] = React.useState(DEFAULT_SMOOTHING);
+  const [smoothing, setSmoothing] = React.useState(options.curveSmoothing);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const settingsRef = React.useRef<HTMLDivElement>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
 
   const smoothingOn = smoothing > 0;
+  const smoothingTrackPercent = Math.min(
+    100,
+    Math.max(0, ((smoothing - MIN_ENABLED_SMOOTHING) / (1 - MIN_ENABLED_SMOOTHING)) * 100),
+  );
 
   React.useEffect(() => {
     if (!options.chartIds.includes(chartId)) {
       setChartId(options.chartId);
     }
   }, [chartId, options.chartId, options.chartIds]);
+
+  React.useEffect(() => {
+    setSmoothing(options.curveSmoothing);
+  }, [options.curveSmoothing]);
 
   React.useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -128,21 +142,26 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
             <button
               type="button"
               role="switch"
+              aria-label="Toggle smooth curves"
               aria-checked={smoothingOn}
-              onClick={() => setSmoothing((v) => v > 0 ? 0 : DEFAULT_SMOOTHING)}
+              onClick={() => setSmoothing((v) => v > 0 ? 0 : MIN_ENABLED_SMOOTHING)}
               className={cn(
-                'relative inline-flex h-[22px] w-[42px] shrink-0 cursor-pointer rounded-full border-2 border-transparent',
-                'transition-colors duration-200 ease-in-out',
+                'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border px-0.5',
+                'transition-all duration-200 ease-in-out',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2',
-                smoothingOn ? 'bg-accent' : 'bg-border-strong',
+                smoothingOn
+                  ? 'border-accent bg-accent shadow-[0_0_0_1px_var(--rm-accent)]'
+                  : 'border-border-strong bg-bg-elevated',
               )}
             >
               <span
                 aria-hidden="true"
                 className={cn(
-                  'pointer-events-none inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sm',
+                  'pointer-events-none inline-block h-4 w-4 rounded-full border bg-white shadow-sm',
                   'transition-transform duration-200 ease-in-out',
-                  smoothingOn ? 'translate-x-5' : 'translate-x-0',
+                  smoothingOn
+                    ? 'translate-x-5 border-accent'
+                    : 'translate-x-0 border-border-strong',
                 )}
               />
             </button>
@@ -158,12 +177,15 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
               </div>
               <input
                 type="range"
-                min={0.05}
+                min={MIN_ENABLED_SMOOTHING}
                 max={1}
                 step={0.05}
                 value={smoothing}
                 onChange={(e) => setSmoothing(Number(e.target.value))}
-                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border-strong accent-accent"
+                className="rm-accent-range w-full"
+                style={{
+                  background: `linear-gradient(to right, var(--rm-accent) 0%, var(--rm-accent) ${smoothingTrackPercent}%, var(--rm-border-strong) ${smoothingTrackPercent}%, var(--rm-border-strong) 100%)`,
+                }}
               />
             </div>
           ) : null}
@@ -184,7 +206,11 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           className="shrink-0"
           trailing={settingsButton}
         />
-      ) : null}
+      ) : (
+        <div className="mb-3 flex shrink-0 justify-end">
+          {settingsButton}
+        </div>
+      )}
       <div ref={ref} className="min-h-0 flex-1">
         <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothing={smoothing} />
       </div>
@@ -205,6 +231,15 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
     ctx.to,
     1,
     200,
+  );
+  const { data: selectedChargeCurve = [], isLoading: selectedChargeCurveLoading } = useChargeCurve(
+    source === 'charge_session_curve' ? ctx.chargeSessionId ?? null : null,
+    source === 'charge_session_curve' ? ctx.vehicleId : null,
+  );
+  const { data: chargeCurveAnalysis = [], isLoading: chargeCurveAnalysisLoading } = useChargeCurveAnalysis(
+    source === 'charging_curve_analysis' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
   );
   const { data: trend = [], isLoading: trendLoading } = useEfficiencyTrend(source === 'efficiency_trend' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: efficiencyByMode = [], isLoading: efficiencyByModeLoading } = useEfficiencyByMode(source === 'efficiency_mode' ? ctx.vehicleId : null, ctx.from, ctx.to);
@@ -238,7 +273,6 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           sessions={sessions}
           loading={sessionsLoading}
           height={height}
-          smoothing={smoothing}
         />
       );
     case 'charging_weekly_energy':
@@ -247,6 +281,25 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           definition={definition}
           weekly={weekly}
           loading={chargeSummaryLoading}
+          height={height}
+        />
+      );
+    case 'charge_session_curve':
+      return (
+        <ChargeSessionCurveChart
+          definition={definition}
+          data={selectedChargeCurve}
+          loading={selectedChargeCurveLoading}
+          height={height}
+          smoothing={smoothing}
+        />
+      );
+    case 'charging_curve_analysis':
+      return (
+        <ChargingCurveAnalysisChart
+          definition={definition}
+          data={chargeCurveAnalysis}
+          loading={chargeCurveAnalysisLoading}
           height={height}
         />
       );
@@ -299,9 +352,9 @@ function renderSingleChart(
       height={height}
       yUnit={definition.yUnit}
       yRange={definition.yRange}
-      stepInterpolation={definition.stepInterpolation}
+      stepInterpolation={definition.stepInterpolation && smoothing <= 0}
       mode={definition.mode}
-      smoothing={definition.stepInterpolation ? 0 : smoothing}
+      smoothing={smoothing}
     />
   );
 }
@@ -311,27 +364,188 @@ function ChargingSessionsChart({
   sessions,
   loading,
   height,
-  smoothing,
 }: {
   definition: DashboardChartDefinition;
   sessions: ChargeSession[];
   loading: boolean;
   height: number;
-  smoothing?: number;
 }) {
-  const sorted = [...sessions].sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
+  const bands = [
+    { label: '<5', min: 0, max: 5 },
+    { label: '5-10', min: 5, max: 10 },
+    { label: '10-20', min: 10, max: 20 },
+    { label: '20-40', min: 20, max: 40 },
+    { label: '40+', min: 40, max: Number.POSITIVE_INFINITY },
+  ].map((band) => {
+    const matching = sessions.filter((session) => {
+      const energy = session.energy_added_kwh;
+      return energy != null && energy >= band.min && energy < band.max;
+    });
+    const validRates = matching
+      .map((session) => {
+        if (session.energy_added_kwh == null || session.duration_min == null || session.duration_min <= 0) {
+          return null;
+        }
+        return session.energy_added_kwh / (session.duration_min / 60);
+      })
+      .filter((value): value is number => value != null && Number.isFinite(value));
+
+    return {
+      label: `${band.label} kWh`,
+      count: matching.length,
+      averageRateKw: validRates.length > 0
+        ? validRates.reduce((sum, value) => sum + value, 0) / validRates.length
+        : null,
+    };
+  });
+
   return (
-    <RichTimeSeriesChart
-      points={sorted.map((session) => ({ ts: session.started_at }))}
-      series={[{ key: 'energy', label: 'Energy Added', values: sorted.map((session) => session.energy_added_kwh ?? null) }]}
+    <ChargeSessionDistributionChart
+      bands={bands}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      yUnit={definition.yUnit}
-      mode={definition.mode}
+    />
+  );
+}
+
+function ChargeSessionCurveChart({
+  definition,
+  data,
+  loading,
+  height,
+  smoothing,
+}: {
+  definition: DashboardChartDefinition;
+  data: ChargeCurvePoint[];
+  loading: boolean;
+  height: number;
+  smoothing: number;
+}) {
+  const rows = data.filter((point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw));
+
+  return (
+    <RichTimeSeriesChart
+      points={rows.map((point) => ({ ts: point.soc_pct }))}
+      series={[{ key: 'rate', label: 'Charge Rate', values: rows.map((point) => point.power_kw) }]}
+      loading={loading}
+      emptyTitle={definition.emptyTitle}
+      height={height}
+      xTime={false}
+      xUnit="%"
+      yUnit="kW"
+      mode="line"
+      xValueFormatter={(value) => `${Math.round(value)}%`}
+      smoothing={smoothing}
+    />
+  );
+}
+
+function ChargingCurveAnalysisChart({
+  definition,
+  data,
+  loading,
+  height,
+}: {
+  definition: DashboardChartDefinition;
+  data: ChargeCurveAnalysisPoint[];
+  loading: boolean;
+  height: number;
+}) {
+  const rows = data.filter((point) =>
+    Number.isFinite(point.soc_pct) &&
+    Number.isFinite(point.charge_rate_kw) &&
+    point.charge_rate_kw > 0
+  );
+  const typed = rows.map((point) => ({
+    x: point.soc_pct,
+    y: point.charge_rate_kw,
+    bucket: normalizeChargeCurveType(point.charger_type),
+  }));
+  const points = [...typed].sort((a, b) => a.x - b.x);
+  const regressions = {
+    ac: buildRegression(points.filter((point) => point.bucket === 'ac')),
+    dc: buildRegression(points.filter((point) => point.bucket === 'dc')),
+    unknown: buildRegression(points.filter((point) => point.bucket === 'unknown')),
+  };
+
+  return (
+    <RichTimeSeriesChart
+      points={points.map((point) => ({ ts: point.x }))}
+      series={[
+        {
+          key: 'ac-points',
+          label: 'AC Samples',
+          color: '#34d399',
+          mode: 'scatter',
+          values: points.map((point) => point.bucket === 'ac' ? point.y : null),
+        },
+        {
+          key: 'dc-points',
+          label: 'DC Samples',
+          color: '#38bdf8',
+          mode: 'scatter',
+          values: points.map((point) => point.bucket === 'dc' ? point.y : null),
+        },
+        {
+          key: 'unknown-points',
+          label: 'Unclassified Samples',
+          color: '#f59e0b',
+          mode: 'scatter',
+          values: points.map((point) => point.bucket === 'unknown' ? point.y : null),
+        },
+        {
+          key: 'ac-fit',
+          label: 'AC Regression',
+          color: '#10b981',
+          mode: 'line',
+          values: points.map((point) => regressions.ac ? regressions.ac(point.x) : null),
+        },
+        {
+          key: 'dc-fit',
+          label: 'DC Regression',
+          color: '#0ea5e9',
+          mode: 'line',
+          values: points.map((point) => regressions.dc ? regressions.dc(point.x) : null),
+        },
+        {
+          key: 'unknown-fit',
+          label: 'Unclassified Regression',
+          color: '#d97706',
+          mode: 'line',
+          values: points.map((point) => regressions.unknown ? regressions.unknown(point.x) : null),
+        },
+      ]}
+      loading={loading}
+      emptyTitle={definition.emptyTitle}
+      height={height}
+      xTime={false}
+      xUnit="%"
+      yUnit="kW"
+      mode="scatter"
+      xValueFormatter={(value) => `${Math.round(value)}%`}
       smoothing={0}
     />
   );
+}
+
+function normalizeChargeCurveType(chargerType: ChargeCurveAnalysisPoint['charger_type']) {
+  const normalized = chargerType as string | null;
+  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
+  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
+  return 'unknown';
+}
+
+function buildRegression(points: Array<{ x: number; y: number }>) {
+  if (points.length < 2) return null;
+  const meanX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+  const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+  const numerator = points.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0);
+  const denominator = points.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0);
+  if (denominator === 0) return null;
+  const slope = numerator / denominator;
+  const intercept = meanY - slope * meanX;
+  return (x: number) => Math.max(0, intercept + slope * x);
 }
 
 function WeeklyEnergyChart({
@@ -519,6 +733,12 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
   return value === 'overview' || value === 'battery' || value === 'charging' || value === 'efficiency' || value === 'trips';
 }
 
+function normalizeCurveSmoothing(value: unknown) {
+  if (typeof value === 'boolean') return value ? DEFAULT_SMOOTHING : 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.min(1, Math.max(0, value));
+  return DEFAULT_SMOOTHING;
+}
+
 registerWidget({
   componentType: 'chart',
   definitionId: 'catalog',
@@ -529,6 +749,7 @@ registerWidget({
     page: 'overview',
     chartId: 'soc-history',
     showPicker: true,
+    curveSmoothing: DEFAULT_SMOOTHING,
   },
   component: DashboardChartWidget,
 });

@@ -16,8 +16,13 @@ export { MiniSparkline } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
 export { ChargeCurveChart } from './ChargeCurveChart';
 export type { ChargeCurveChartProps, ChargeCurvePoint } from './ChargeCurveChart';
+export { ChargeSessionDistributionChart } from './ChargeSessionDistributionChart';
+export type {
+  ChargeSessionDistributionBand,
+  ChargeSessionDistributionChartProps,
+} from './ChargeSessionDistributionChart';
 export { TripMapChart } from './TripMapChart';
-export type { TripMapChartProps, LatLng, TripMapRoute } from './TripMapChart';
+export type { TripMapChartProps, LatLng, TripMapRoute, MapStyleMode } from './TripMapChart';
 export { SpeedProfileChart } from './SpeedProfileChart';
 export type { SpeedProfileChartProps, SpeedPoint } from './SpeedProfileChart';
 export { ElevationProfileChart } from './ElevationProfileChart';

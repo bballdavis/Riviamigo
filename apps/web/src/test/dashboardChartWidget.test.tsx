@@ -8,8 +8,8 @@
  *   data is present, and shows the empty state when data is absent.
  */
 import React from 'react';
-import { render, screen } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { vi, describe, it, expect } from 'vitest';
 
 // ── uPlot mock ────────────────────────────────────────────────────────────────
 vi.mock('uplot', () => {
@@ -28,6 +28,51 @@ vi.mock('uplot', () => {
   return { default: UPlot };
 });
 
+describe('DashboardChartWidget - smoothing controls', () => {
+  it('shows smoothing settings without a chart picker and reveals the slider after toggle-on', () => {
+    const instance = {
+      ...makeInstance('soc-history', false),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history'],
+        page: undefined,
+        showPicker: false,
+        curveSmoothing: 0,
+      },
+    };
+
+    render(<DashboardChartWidget instance={instance} ctx={CTX} />);
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    const toggle = screen.getByRole('switch');
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByRole('slider')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    const slider = screen.getByRole('slider');
+    expect(slider).toBeTruthy();
+    expect(slider.getAttribute('value')).toBe('0.05');
+  });
+});
+
+describe('DashboardChartRenderer - smoothing data flow', () => {
+  it('passes the smoothing amount through to the chart renderer', () => {
+    mockSoc.mockReturnValueOnce({
+      data: [
+        { ts: '2024-01-01T00:00:00Z', value: 10 },
+        { ts: '2024-01-02T00:00:00Z', value: 40 },
+        { ts: '2024-01-03T00:00:00Z', value: 10 },
+      ],
+      isLoading: false,
+    });
+
+    render(<DashboardChartRenderer chartId="soc-history" ctx={CTX} height={300} smoothing={1} />);
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-smoothing')).toBe('1');
+  });
+});
+
 // ── Hook mocks ────────────────────────────────────────────────────────────────
 const mockSoc = vi.fn(() => ({ data: [{ ts: '2024-01-01T00:00:00Z', value: 79 }], isLoading: false }));
 const mockRange = vi.fn(() => ({ data: [{ ts: '2024-01-01T00:00:00Z', value: 210 }], isLoading: false }));
@@ -41,6 +86,16 @@ const mockChargeSessions = vi.fn(() => ({
     ],
     total: 1, page: 1, per_page: 25, total_pages: 1,
   },
+  isLoading: false,
+}));
+const mockChargeCurve = vi.fn(() => ({ data: [{ minutes_elapsed: 0, soc_pct: 20, power_kw: 11.5 }], isLoading: false }));
+const mockChargeCurveAnalysis = vi.fn(() => ({
+  data: [
+    { soc_pct: 20, charge_rate_kw: 11.5, charger_type: 'ac' },
+    { soc_pct: 70, charge_rate_kw: 6.5, charger_type: 'ac' },
+    { soc_pct: 25, charge_rate_kw: 150, charger_type: 'dc' },
+    { soc_pct: 80, charge_rate_kw: 70, charger_type: 'dc' },
+  ],
   isLoading: false,
 }));
 const mockChargingSummary = vi.fn(() => ({
@@ -79,16 +134,18 @@ const mockBatteryMileage = vi.fn(() => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useSocHistory: (...args: unknown[]) => mockSoc(...args),
-  useRangeHistory: (...args: unknown[]) => mockRange(...args),
-  useChargeSessions: (...args: unknown[]) => mockChargeSessions(...args),
-  useChargingSummary: (...args: unknown[]) => mockChargingSummary(...args),
-  useEfficiencyTrend: (...args: unknown[]) => mockEfficiencyTrend(...args),
-  useEfficiencyByMode: (...args: unknown[]) => mockEfficiencyByMode(...args),
-  useEfficiencyVsTemp: (...args: unknown[]) => mockEfficiencyVsTemp(...args),
-  usePhantomDrain: (...args: unknown[]) => mockPhantomDrain(...args),
-  useDegradation: (...args: unknown[]) => mockDegradation(...args),
-  useBatteryMileage: (...args: unknown[]) => mockBatteryMileage(...args),
+  useSocHistory: () => mockSoc(),
+  useRangeHistory: () => mockRange(),
+  useChargeSessions: () => mockChargeSessions(),
+  useChargeCurve: () => mockChargeCurve(),
+  useChargeCurveAnalysis: () => mockChargeCurveAnalysis(),
+  useChargingSummary: () => mockChargingSummary(),
+  useEfficiencyTrend: () => mockEfficiencyTrend(),
+  useEfficiencyByMode: () => mockEfficiencyByMode(),
+  useEfficiencyVsTemp: () => mockEfficiencyVsTemp(),
+  usePhantomDrain: () => mockPhantomDrain(),
+  useDegradation: () => mockDegradation(),
+  useBatteryMileage: () => mockBatteryMileage(),
 }));
 
 vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
@@ -96,11 +153,40 @@ vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
   return { ...actual };
 });
 
+vi.mock('@riviamigo/ui/charts', () => ({
+  ChargeSessionDistributionChart: ({
+    bands,
+    emptyTitle,
+  }: {
+    bands: Array<{ count: number }>;
+    emptyTitle: string;
+  }) =>
+    bands.some((band) => band.count > 0) ? (
+      <div data-testid="distribution-chart" />
+    ) : (
+      <div>{emptyTitle}</div>
+    ),
+  RichTimeSeriesChart: ({
+    points,
+    emptyTitle,
+    smoothing,
+  }: {
+    points: Array<{ ts: string | number | Date }>;
+    emptyTitle: string;
+    smoothing?: number;
+  }) =>
+    points.length === 0 ? (
+      <div>{emptyTitle}</div>
+    ) : (
+      <div data-testid="rich-chart" data-smoothing={String(smoothing ?? 0)} />
+    ),
+}));
+
 // ── Subject ───────────────────────────────────────────────────────────────────
 // Import after mocks are registered.
 import { DashboardChartWidget, DashboardChartRenderer } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
-const CTX = { vehicleId: 'vehicle-1', from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' };
+const CTX = { vehicleId: 'vehicle-1', from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z', chargeSessionId: 'session-1' };
 
 function makeInstance(chartId: string, showPicker = false) {
   return {
@@ -160,7 +246,7 @@ describe('DashboardChartWidget — charge_level', () => {
   });
 
   it('shows empty state when no sessions', () => {
-    mockChargeSessions.mockReturnValueOnce({ data: { items: [], total: 0, page: 1, per_page: 25, total_pages: 0 }, isLoading: false });
+    mockSoc.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('charge-level');
     expectChartEmpty('No charge level data for this period');
   });
@@ -192,6 +278,32 @@ describe('DashboardChartWidget — charging_weekly_energy', () => {
     });
     renderChart('charging-weekly-energy');
     expectChartEmpty('No charging energy for this period');
+  });
+});
+
+describe('DashboardChartWidget — charge_session_curve', () => {
+  it('renders the selected session charge curve', () => {
+    renderChart('charge-session-curve');
+    expectChartHasData('No charging curve is available for this session');
+  });
+
+  it('shows empty state when the session has no curve data', () => {
+    mockChargeCurve.mockReturnValueOnce({ data: [], isLoading: false });
+    renderChart('charge-session-curve');
+    expectChartEmpty('No charging curve is available for this session');
+  });
+});
+
+describe('DashboardChartWidget — charging_curve_analysis', () => {
+  it('renders cross-session charge curve analysis data', () => {
+    renderChart('charging-curve-analysis');
+    expectChartHasData('No charging curve history is available for this period');
+  });
+
+  it('shows empty state when no curve-analysis data exists', () => {
+    mockChargeCurveAnalysis.mockReturnValueOnce({ data: [], isLoading: false });
+    renderChart('charging-curve-analysis');
+    expectChartEmpty('No charging curve history is available for this period');
   });
 });
 

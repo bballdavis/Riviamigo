@@ -1,0 +1,12 @@
+{
+  "id": "charging-curve-analysis",
+  "title": "Charging Curve Trend",
+  "description": "Scatter of derived charge rate by state of charge with AC and DC regression lines.",
+  "pages": ["charging"],
+  "source": "charging_curve_analysis",
+  "mode": "scatter",
+  "yUnit": "kW",
+  "defaultSize": { "w": 12, "h": 6 },
+  "minSize": { "w": 6, "h": 5 },
+  "emptyTitle": "No charging curve history is available for this period"
+}

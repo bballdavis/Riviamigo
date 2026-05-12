@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     body::{to_bytes, Body},
@@ -76,7 +77,17 @@ impl TestApp {
                 s3_endpoint: None,
                 s3_access_key: None,
                 s3_secret_key: None,
+                backup_artifact_dir: std::env::temp_dir().join("riviamigo-auth-test-backups").to_string_lossy().into_owned(),
+                backup_driver: "json".into(),
+                backup_poll_interval_seconds: 60,
+                rivian_ws_reconnect_initial_seconds: 10,
+                rivian_ws_reconnect_max_seconds: 900,
+                rivian_raw_event_retention_days: 7,
+                rivian_persist_raw_events: true,
+                rivian_suppress_duplicate_telemetry: true,
             },
+            nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
+            nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         };
 
         Self {

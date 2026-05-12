@@ -31,6 +31,16 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
   });
 }
 
+export function useChargeCurveAnalysis(vehicleId: string | null, from: string, to: string) {
+  return useQuery({
+    queryKey: ['charging', 'curve-analysis', vehicleId, from, to],
+    queryFn: () => api.getChargeCurveAnalysis(vehicleId!, from, to),
+    enabled: !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}
+
 export function useChargingSummary(vehicleId: string | null, from: string, to: string) {
   return useQuery({
     queryKey: ['charging', 'summary', vehicleId, from, to],

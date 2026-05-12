@@ -5,11 +5,14 @@
  */
 import React from 'react';
 
-export const PageLayout = ({ children, title, subtitle, actions }: {
-  children: React.ReactNode; title: string; subtitle?: string; actions?: React.ReactNode;
+export const PageLayout = ({ children, title, titleAction, subtitle, actions }: {
+  children: React.ReactNode; title: string; titleAction?: React.ReactNode; subtitle?: string; actions?: React.ReactNode;
 }) => (
   <div data-testid="page-layout">
-    <h1>{title}</h1>
+    <div>
+      {titleAction}
+      <h1>{title}</h1>
+    </div>
     {subtitle && <p>{subtitle}</p>}
     {actions}
     {children}
