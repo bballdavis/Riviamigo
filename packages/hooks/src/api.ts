@@ -10,7 +10,7 @@ import type {
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
-  MetricValueResponse,
+  MetricValueResponse, BackupOverview, UpdateBackupSettingsBody,
 } from '@riviamigo/types';
 
 const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
@@ -206,6 +206,14 @@ class ApiClient {
 
   async getApiCatalog(): Promise<ApiCatalog> {
     return this.request('GET', '/v1/api/catalog');
+  }
+
+  async getBackupOverview(): Promise<BackupOverview> {
+    return this.request('GET', '/v1/admin/backups');
+  }
+
+  async updateBackupSettings(body: UpdateBackupSettingsBody) {
+    return this.request('PUT', '/v1/admin/backups/settings', body);
   }
 
   // ── Battery ───────────────────────────────────────────────────────────────
