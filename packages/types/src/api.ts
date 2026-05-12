@@ -10,7 +10,14 @@ export interface TimeSeriesPoint {
   value: number;
 }
 
-export type MetricValueKind = 'number' | 'percent' | 'distance' | 'energy' | 'temperature' | 'pressure' | 'speed';
+export type MetricValueKind =
+  | 'number'
+  | 'percent'
+  | 'distance'
+  | 'energy'
+  | 'temperature'
+  | 'pressure'
+  | 'speed';
 
 export interface MetricCatalogEntry {
   id: string;
@@ -188,9 +195,38 @@ export interface VehicleHealthSoftwareEntry {
   observed_until: string | null;
 }
 
+export interface VehicleHealthVehicle {
+  name: string | null;
+  model: string;
+  trim: string | null;
+  vin: string | null;
+}
+
+export interface VehicleHealthRuntime {
+  is_online: boolean | null;
+  last_event_at: string | null;
+  worker_health: string | null;
+  worker_health_msg: string | null;
+  updated_at: string;
+}
+
+export interface VehicleHealthLatest {
+  ts: string;
+  twelve_volt_health: string | null;
+  hv_thermal_event: string | null;
+  ota_current_version: string | null;
+  ota_available_version: string | null;
+  ota_status: string | null;
+  ota_current_status: string | null;
+  is_online: boolean | null;
+}
+
 export interface VehicleHealth {
   vehicle_id: string;
+  vehicle: VehicleHealthVehicle;
   generated_at: string;
+  runtime: VehicleHealthRuntime | null;
+  latest: VehicleHealthLatest | null;
   tires: VehicleHealthTires | null;
   closures: VehicleHealthClosures | null;
   current_software_version: string | null;
@@ -273,7 +309,13 @@ export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore';
 
 export type BackupArtifactStorageType = 'local';
 
-export type BackupRestoreRequestStatus = 'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'canceled';
+export type BackupRestoreRequestStatus =
+  | 'pending'
+  | 'approved'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'canceled';
 
 export interface BackupSettings {
   enabled: boolean;
