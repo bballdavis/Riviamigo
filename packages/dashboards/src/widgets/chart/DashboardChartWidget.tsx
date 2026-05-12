@@ -17,6 +17,7 @@ import {
 import { ChargeSessionDistributionChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
+import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import {
   formatMiles,
   formatTemp,
@@ -671,27 +672,7 @@ function EfficiencyModeChart({
 }
 
 function formatDriveModeLabel(value: string) {
-  const labels: Record<string, string> = {
-    everyday: 'All-Purpose',
-    all_purpose: 'All-Purpose',
-    sport: 'Sport',
-    distance: 'Conserve',
-    conserve: 'Conserve',
-    winter: 'Snow',
-    snow: 'Snow',
-    off_road_auto: 'All-Terrain',
-    all_terrain: 'All-Terrain',
-    off_road_sand: 'Soft Sand',
-    soft_sand: 'Soft Sand',
-    off_road_rocks: 'Rock Crawl',
-    rock_crawl: 'Rock Crawl',
-    off_road_sport_auto: 'Rally',
-    rally: 'Rally',
-    off_road_sport_drift: 'Drift',
-    drift: 'Drift',
-    towing: 'Towing',
-  };
-  return labels[value] ?? value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  return formatDriveMode(value);
 }
 
 function MileageChart({

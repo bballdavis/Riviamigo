@@ -16,10 +16,16 @@
   --rm-border-default: rgba(255, 255, 255, 0.08);
   --rm-border-strong:  rgba(255, 255, 255, 0.15);
   --rm-border-accent:  rgba(253, 131, 4, 0.3);
+  /* Semantic status */
+  --rm-status-positive: #10B981;
+  --rm-status-warning:  #F59E0B;
+  --rm-status-danger:   #F87171;
+  --rm-status-info:     #60A5FA;
+
   --rm-charging-active: var(--rm-accent);
-  --rm-charging-done:    #10B981;
-  --rm-charging-limited: #F87171;
-  --rm-charging-ac:      #60A5FA;
+  --rm-charging-done:    var(--rm-status-positive);
+  --rm-charging-limited: var(--rm-status-danger);
+  --rm-charging-ac:      var(--rm-status-info);
   --rm-charging-dc:      #A78BFA;
   --rm-charging-dcfc:    #C084FC;
 
@@ -60,10 +66,16 @@
   --rm-border-default: rgba(20, 20, 24, 0.08);
   --rm-border-strong:  rgba(20, 20, 24, 0.18);
   --rm-border-accent:  rgba(253, 131, 4, 0.35);
+  /* Semantic status */
+  --rm-status-positive: #059669;
+  --rm-status-warning:  #D97706;
+  --rm-status-danger:   #EF4444;
+  --rm-status-info:     #3B82F6;
+
   --rm-charging-active: var(--rm-accent);
-  --rm-charging-done:    #10B981;
-  --rm-charging-limited: #F87171;
-  --rm-charging-ac:      #60A5FA;
+  --rm-charging-done:    var(--rm-status-positive);
+  --rm-charging-limited: var(--rm-status-danger);
+  --rm-charging-ac:      var(--rm-status-info);
   --rm-charging-dc:      #A78BFA;
   --rm-charging-dcfc:    #C084FC;
 
