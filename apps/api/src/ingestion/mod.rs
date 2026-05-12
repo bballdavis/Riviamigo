@@ -21,7 +21,7 @@ pub async fn start_workers(
 
     let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM riviamigo.vehicles v \
-         JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id"
+         JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id",
     )
     .fetch_all(&pool)
     .await?;

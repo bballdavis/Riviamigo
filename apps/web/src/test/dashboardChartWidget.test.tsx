@@ -166,6 +166,18 @@ vi.mock('@riviamigo/ui/charts', () => ({
     ) : (
       <div>{emptyTitle}</div>
     ),
+  EfficiencyPillBarChart: ({
+    data,
+    emptyTitle,
+  }: {
+    data: Array<{ label: string; value: number }>;
+    emptyTitle: string;
+  }) =>
+    data.length === 0 ? (
+      <div>{emptyTitle}</div>
+    ) : (
+      <div data-testid="efficiency-pill-chart" />
+    ),
   RichTimeSeriesChart: ({
     points,
     emptyTitle,

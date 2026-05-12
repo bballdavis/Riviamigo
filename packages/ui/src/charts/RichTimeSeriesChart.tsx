@@ -181,7 +181,7 @@ export function RichTimeSeriesChart({
     const makeUSeries = (): Series[] => [
       {},
       ...seriesRef.current.map((item, index) => {
-        const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.sky);
+        const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
         const seriesMode = item.mode ?? mode;
         const hidden = hiddenKeys.has(item.key);
         const next: Series = {
@@ -374,7 +374,7 @@ export function RichTimeSeriesChart({
       {showLegend ? (
         <div className="flex h-[34px] shrink-0 items-center justify-center gap-3 border-t border-border/60 px-3 text-[11px] text-fg-tertiary">
           {series.map((item, index) => {
-            const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.sky);
+            const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
             const isHidden = hiddenKeys.has(item.key);
             return (
               <button

@@ -23,7 +23,10 @@ pub fn router() -> Router<AppState> {
         .route("/admin/backups", get(get_backup_overview))
         .route("/admin/backups/settings", put(update_backup_settings))
         .route("/admin/backups/run", post(run_backup_now))
-        .route("/admin/backups/restore-requests", post(create_restore_request))
+        .route(
+            "/admin/backups/restore-requests",
+            post(create_restore_request),
+        )
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -79,9 +82,7 @@ impl TryFrom<&str> for BackupTargetType {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "s3" => Ok(Self::S3),
-            _ => Err(AppError::Validation(
-                "target_type must be s3".into(),
-            )),
+            _ => Err(AppError::Validation("target_type must be s3".into())),
         }
     }
 }
@@ -106,9 +107,7 @@ impl TryFrom<&str> for BackupRunStatus {
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
             "canceled" => Ok(Self::Canceled),
-            _ => Err(AppError::Validation(
-                "backup run status is invalid".into(),
-            )),
+            _ => Err(AppError::Validation("backup run status is invalid".into())),
         }
     }
 }
@@ -129,9 +128,7 @@ impl TryFrom<&str> for BackupRunTrigger {
             "manual" => Ok(Self::Manual),
             "scheduled" => Ok(Self::Scheduled),
             "restore" => Ok(Self::Restore),
-            _ => Err(AppError::Validation(
-                "backup run trigger is invalid".into(),
-            )),
+            _ => Err(AppError::Validation("backup run trigger is invalid".into())),
         }
     }
 }
@@ -339,10 +336,20 @@ async fn update_backup_settings(
     };
 
     let normalized_endpoint = body.endpoint.trim().to_string();
-    let normalized_region = body.region.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+    let normalized_region = body
+        .region
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let normalized_bucket = body.bucket.trim().to_string();
     let normalized_prefix = normalize_prefix(&body.prefix);
-    let normalized_access_key = body.access_key.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
+    let normalized_access_key = body
+        .access_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let clear_secret_key = body.clear_secret_key.unwrap_or(false);
     let encrypted_secret = encrypt_secret(state.age_key.as_str(), body.secret_key.as_deref())?;
 
@@ -420,7 +427,10 @@ async fn run_backup_now(
     let run = load_run_by_id(&state, result.run_id).await?;
     let artifact = load_artifact_by_id(&state, result.artifact_id).await?;
 
-    Ok((StatusCode::CREATED, Json(BackupRunExecutionResponse { run, artifact })))
+    Ok((
+        StatusCode::CREATED,
+        Json(BackupRunExecutionResponse { run, artifact }),
+    ))
 }
 
 async fn create_restore_request(
@@ -523,7 +533,10 @@ async fn load_artifacts(state: &AppState) -> Result<Vec<BackupArtifactResponse>,
     Ok(rows.into_iter().map(map_artifact_row).collect())
 }
 
-async fn load_artifact_by_id(state: &AppState, artifact_id: Uuid) -> Result<BackupArtifactResponse, AppError> {
+async fn load_artifact_by_id(
+    state: &AppState,
+    artifact_id: Uuid,
+) -> Result<BackupArtifactResponse, AppError> {
     let row = sqlx::query_as::<_, BackupArtifactRow>(
         r#"
         SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
@@ -541,7 +554,9 @@ async fn load_artifact_by_id(state: &AppState, artifact_id: Uuid) -> Result<Back
     }
 }
 
-async fn load_restore_requests(state: &AppState) -> Result<Vec<BackupRestoreRequestResponse>, AppError> {
+async fn load_restore_requests(
+    state: &AppState,
+) -> Result<Vec<BackupRestoreRequestResponse>, AppError> {
     let rows = sqlx::query_as::<_, BackupRestoreRequestRow>(
         r#"
         SELECT id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
@@ -741,9 +756,9 @@ fn encrypt_secret(age_key: &str, secret_key: Option<&str>) -> Result<Option<Vec<
         return Ok(None);
     };
 
-    let identity = age_key
-        .parse::<age::x25519::Identity>()
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age key for backup secret storage")))?;
+    let identity = age_key.parse::<age::x25519::Identity>().map_err(|_| {
+        AppError::Internal(anyhow::anyhow!("invalid age key for backup secret storage"))
+    })?;
     let ciphertext = encrypt_json(&secret_key.to_string(), &identity)?;
     Ok(Some(ciphertext))
 }
@@ -759,8 +774,12 @@ fn compute_next_run(settings: &BackupSettingsResponse) -> Result<Option<DateTime
 
     let next_local = match settings.frequency {
         BackupFrequency::Daily => next_daily_run(now_local, run_at),
-        BackupFrequency::Weekly => next_weekly_run(now_local, run_at, settings.day_of_week.unwrap_or(0)),
-        BackupFrequency::Monthly => next_monthly_run(now_local, run_at, settings.day_of_month.unwrap_or(1)),
+        BackupFrequency::Weekly => {
+            next_weekly_run(now_local, run_at, settings.day_of_week.unwrap_or(0))
+        }
+        BackupFrequency::Monthly => {
+            next_monthly_run(now_local, run_at, settings.day_of_month.unwrap_or(1))
+        }
     };
 
     Ok(Some(next_local.with_timezone(&Utc)))
@@ -769,7 +788,11 @@ fn compute_next_run(settings: &BackupSettingsResponse) -> Result<Option<DateTime
 fn next_daily_run(now_local: chrono::DateTime<Tz>, run_at: NaiveTime) -> chrono::DateTime<Tz> {
     let candidate = combine_local(now_local.timezone(), now_local.date_naive(), run_at);
     if candidate <= now_local {
-        combine_local(now_local.timezone(), now_local.date_naive() + Duration::days(1), run_at)
+        combine_local(
+            now_local.timezone(),
+            now_local.date_naive() + Duration::days(1),
+            run_at,
+        )
     } else {
         candidate
     }
@@ -800,9 +823,11 @@ fn next_monthly_run(
     day_of_month: i16,
 ) -> chrono::DateTime<Tz> {
     let current_date = now_local.date_naive();
-    let current_month_day = clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
-    let mut candidate_date = NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
-        .unwrap_or(current_date);
+    let current_month_day =
+        clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
+    let mut candidate_date =
+        NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
+            .unwrap_or(current_date);
     let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
 
     if candidate <= now_local {

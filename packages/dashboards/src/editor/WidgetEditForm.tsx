@@ -67,6 +67,7 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
       ? options.chartId
       : selectedChartIds[0] ?? chartDefinitions[0]?.id ?? '';
   const showPicker = options.showPicker !== false;
+  const forceShowChargingConnection = options.forceShow === true;
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedText, setAdvancedText] = useState(() => JSON.stringify(options, null, 2));
@@ -399,6 +400,16 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
                 ))}
               </div>
             </div>
+          </Section>
+        ) : null}
+
+        {customMode && widget.definitionId === 'charging.connection' ? (
+          <Section title="Preview">
+            <ToggleSwitch
+              label="Force show charging connection"
+              checked={forceShowChargingConnection}
+              onChange={(c) => patch({ forceShow: c })}
+            />
           </Section>
         ) : null}
 

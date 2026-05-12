@@ -1,8 +1,5 @@
 use anyhow::Result;
-use riviamigo_api::{
-    db::vehicles::get_vehicle_owner_id,
-    services::geofences::match_geofence,
-};
+use riviamigo_api::{db::vehicles::get_vehicle_owner_id, services::geofences::match_geofence};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tracing::info;
 
@@ -107,7 +104,10 @@ async fn backfill_geofence_matches(pool: &PgPool) -> Result<()> {
     .fetch_all(pool)
     .await?;
 
-    info!(count = sessions.len(), "charge sessions needing geofence backfill");
+    info!(
+        count = sessions.len(),
+        "charge sessions needing geofence backfill"
+    );
 
     let mut session_filled = 0usize;
     let mut session_failed = 0usize;
@@ -156,6 +156,9 @@ async fn backfill_geofence_matches(pool: &PgPool) -> Result<()> {
         }
     }
 
-    info!(session_filled, session_failed, "charge session geofence backfill complete");
+    info!(
+        session_filled,
+        session_failed, "charge session geofence backfill complete"
+    );
     Ok(())
 }

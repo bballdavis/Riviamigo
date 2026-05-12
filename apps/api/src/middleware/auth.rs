@@ -120,7 +120,7 @@ async fn authenticate_api_key(
         WHERE k.key_hash = $1
           AND k.revoked_at IS NULL
           AND (k.expires_at IS NULL OR k.expires_at > now())
-        "#
+        "#,
     )
     .bind(hash.as_slice())
     .fetch_optional(&state.pool)

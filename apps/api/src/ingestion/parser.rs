@@ -200,7 +200,7 @@ fn bar_to_psi(bar: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::telemetry::PowerState;
+    use crate::models::telemetry::{DriveMode, PowerState};
 
     fn vid() -> Uuid {
         Uuid::new_v4()
@@ -286,16 +286,42 @@ mod tests {
         assert_eq!(ev.power_kw, Some(22.1));
         assert_eq!(ev.regen_power_kw, Some(-8.4));
         assert_eq!(ev.heading_deg, Some(182.0));
-        assert_eq!(ev.tire_fl_psi.map(|v| (v * 10.0).round() / 10.0), Some(42.9));
-        assert_eq!(ev.tire_fr_psi.map(|v| (v * 10.0).round() / 10.0), Some(42.8));
-        assert_eq!(ev.tire_rl_psi.map(|v| (v * 10.0).round() / 10.0), Some(43.8));
-        assert_eq!(ev.tire_rr_psi.map(|v| (v * 10.0).round() / 10.0), Some(43.7));
+        assert_eq!(
+            ev.tire_fl_psi.map(|v| (v * 10.0).round() / 10.0),
+            Some(42.9)
+        );
+        assert_eq!(
+            ev.tire_fr_psi.map(|v| (v * 10.0).round() / 10.0),
+            Some(42.8)
+        );
+        assert_eq!(
+            ev.tire_rl_psi.map(|v| (v * 10.0).round() / 10.0),
+            Some(43.8)
+        );
+        assert_eq!(
+            ev.tire_rr_psi.map(|v| (v * 10.0).round() / 10.0),
+            Some(43.7)
+        );
         assert_eq!(ev.tire_fl_status.as_deref(), Some("OK"));
         assert_eq!(ev.door_front_left_locked, Some(true));
         assert_eq!(ev.door_front_left_closed, Some(true));
         assert_eq!(ev.closure_frunk_closed, Some(false));
         assert_eq!(ev.ota_status.as_deref(), Some("up_to_date"));
         assert_eq!(ev.ota_current_version.as_deref(), Some("2024.11.02"));
+    }
+
+    #[test]
+    fn parses_current_drive_mode_values() {
+        let msg = serde_json::json!({
+            "type": "next",
+            "payload": { "data": { "vehicleState": {
+                "driveMode": { "timeStamp": "2024-01-15T10:30:00Z", "value": "everyday" }
+            }}}
+        })
+        .to_string();
+
+        let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
+        assert_eq!(ev.drive_mode, Some(DriveMode::AllPurpose));
     }
 
     #[test]

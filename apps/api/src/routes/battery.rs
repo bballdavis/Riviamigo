@@ -19,13 +19,12 @@ async fn resolve_usable_new_wh(
     pool: &sqlx::PgPool,
     vehicle_id: uuid::Uuid,
 ) -> Result<Option<f64>, crate::errors::AppError> {
-    let stored: Option<f64> = sqlx::query_scalar(
-        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1"
-    )
-    .bind(vehicle_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
+    let stored: Option<f64> =
+        sqlx::query_scalar("SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
 
     if let Some(w) = stored.filter(|&w| w > 10000.0) {
         return Ok(Some(w));
@@ -33,7 +32,7 @@ async fn resolve_usable_new_wh(
 
     let max_ever: Option<f64> = sqlx::query_scalar(
         "SELECT max(battery_capacity_wh) FROM timeseries.telemetry \
-         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000"
+         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000",
     )
     .bind(vehicle_id)
     .fetch_optional(pool)
@@ -200,7 +199,7 @@ async fn get_degradation(
          FROM timeseries.telemetry
          WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
          GROUP BY time_bucket('1 week', ts)
-         ORDER BY 1"
+         ORDER BY 1",
     )
     .bind(vid)
     .bind(usable_new_wh.unwrap_or(0.0))
@@ -231,7 +230,7 @@ async fn get_health(
                AND battery_capacity_wh > 10000
                AND ts >= now() - INTERVAL '30 days'
              GROUP BY date_trunc('day', ts)
-         ) sub"
+         ) sub",
     )
     .bind(vid)
     .fetch_optional(&state.pool)
@@ -298,7 +297,7 @@ async fn get_mileage(
          FROM timeseries.telemetry
          WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
          GROUP BY time_bucket('1 week', ts)
-         ORDER BY max(odometer_miles) NULLS LAST"
+         ORDER BY max(odometer_miles) NULLS LAST",
     )
     .bind(vid)
     .fetch_all(&state.pool)

@@ -143,7 +143,9 @@ pub async fn run_backup_now(
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
     if !acquire_backup_lock(pool).await? {
-        return Err(AppError::Conflict("A backup job is already running.".into()));
+        return Err(AppError::Conflict(
+            "A backup job is already running.".into(),
+        ));
     }
 
     let result = run_backup_inner(pool, config, requested_by, trigger).await;
@@ -167,12 +169,11 @@ pub async fn create_restore_request(
         )));
     }
 
-    let exists: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM riviamigo.backup_artifacts WHERE id = $1",
-    )
-    .bind(artifact_id)
-    .fetch_optional(pool)
-    .await?;
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM riviamigo.backup_artifacts WHERE id = $1")
+            .bind(artifact_id)
+            .fetch_optional(pool)
+            .await?;
 
     if exists.is_none() {
         return Err(AppError::NotFound);
@@ -331,7 +332,10 @@ async fn run_backup_inner(
     execution
 }
 
-async fn maybe_run_scheduled_backup(pool: &PgPool, config: &Config) -> Result<Option<Uuid>, AppError> {
+async fn maybe_run_scheduled_backup(
+    pool: &PgPool,
+    config: &Config,
+) -> Result<Option<Uuid>, AppError> {
     let settings = load_settings(pool).await?;
     if !settings.enabled {
         return Ok(None);
@@ -377,10 +381,9 @@ async fn load_settings(pool: &PgPool) -> Result<BackupSettings, AppError> {
             enabled: row.enabled,
             frequency: BackupFrequency::try_from(row.frequency.as_str())?,
             run_at: row.run_at,
-            timezone: row
-                .timezone
-                .parse::<Tz>()
-                .map_err(|_| AppError::Validation("timezone must be a valid IANA timezone".into()))?,
+            timezone: row.timezone.parse::<Tz>().map_err(|_| {
+                AppError::Validation("timezone must be a valid IANA timezone".into())
+            })?,
             day_of_week: row.day_of_week,
             day_of_month: row.day_of_month,
             retention_count: row.retention_count.max(1),
@@ -557,23 +560,41 @@ fn normalize_prefix(value: &str) -> String {
     }
 }
 
-fn compute_due_run_at(settings: &BackupSettings, now_utc: DateTime<Utc>) -> Result<DateTime<Utc>, AppError> {
+fn compute_due_run_at(
+    settings: &BackupSettings,
+    now_utc: DateTime<Utc>,
+) -> Result<DateTime<Utc>, AppError> {
     let now_local = now_utc.with_timezone(&settings.timezone);
     let due_local = match settings.frequency {
         BackupFrequency::Daily => most_recent_daily_run(now_local, settings.run_at),
-        BackupFrequency::Weekly => most_recent_weekly_run(now_local, settings.run_at, settings.day_of_week.unwrap_or(0)),
-        BackupFrequency::Monthly => most_recent_monthly_run(now_local, settings.run_at, settings.day_of_month.unwrap_or(1)),
+        BackupFrequency::Weekly => most_recent_weekly_run(
+            now_local,
+            settings.run_at,
+            settings.day_of_week.unwrap_or(0),
+        ),
+        BackupFrequency::Monthly => most_recent_monthly_run(
+            now_local,
+            settings.run_at,
+            settings.day_of_month.unwrap_or(1),
+        ),
     };
 
     Ok(due_local.with_timezone(&Utc))
 }
 
-fn most_recent_daily_run(now_local: chrono::DateTime<Tz>, run_at: NaiveTime) -> chrono::DateTime<Tz> {
+fn most_recent_daily_run(
+    now_local: chrono::DateTime<Tz>,
+    run_at: NaiveTime,
+) -> chrono::DateTime<Tz> {
     let candidate = combine_local(now_local.timezone(), now_local.date_naive(), run_at);
     if candidate <= now_local {
         candidate
     } else {
-        combine_local(now_local.timezone(), now_local.date_naive() - Duration::days(1), run_at)
+        combine_local(
+            now_local.timezone(),
+            now_local.date_naive() - Duration::days(1),
+            run_at,
+        )
     }
 }
 
@@ -602,9 +623,11 @@ fn most_recent_monthly_run(
     day_of_month: i16,
 ) -> chrono::DateTime<Tz> {
     let current_date = now_local.date_naive();
-    let current_month_day = clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
-    let mut candidate_date = NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
-        .unwrap_or(current_date);
+    let current_month_day =
+        clamp_day_of_month(current_date.year(), current_date.month(), day_of_month);
+    let mut candidate_date =
+        NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), current_month_day)
+            .unwrap_or(current_date);
     let mut candidate = combine_local(now_local.timezone(), candidate_date, run_at);
 
     if candidate > now_local {

@@ -11,15 +11,12 @@ use uuid::Uuid;
 use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
-    models::cost_profile::{CostProfile, TouPeriod, validate_tou_periods},
+    models::cost_profile::{validate_tou_periods, CostProfile, TouPeriod},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/cost-profiles",
-            get(list_profiles).post(create_profile),
-        )
+        .route("/cost-profiles", get(list_profiles).post(create_profile))
         .route(
             "/cost-profiles/:id",
             get(get_profile).put(update_profile).delete(delete_profile),
@@ -71,14 +68,16 @@ async fn list_profiles(
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
            WHERE user_id = $1
-           ORDER BY name"#
+           ORDER BY name"#,
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
 
-    Ok(Json(ProfileListResponse { cost_profiles: rows }))
+    Ok(Json(ProfileListResponse {
+        cost_profiles: rows,
+    }))
 }
 
 async fn get_profile(
@@ -91,7 +90,7 @@ async fn get_profile(
               timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
-           WHERE id = $1 AND user_id = $2"#
+           WHERE id = $1 AND user_id = $2"#,
     )
     .bind(id)
     .bind(auth.user_id)
@@ -123,7 +122,7 @@ async fn create_profile(
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
                      timezone, tou_periods,
-                     effective_from, effective_to, created_at"#
+                     effective_from, effective_to, created_at"#,
     )
     .bind(auth.user_id)
     .bind(body.name)
@@ -153,7 +152,7 @@ async fn update_profile(
                   timezone, tou_periods,
                   effective_from, effective_to, created_at
            FROM riviamigo.cost_profiles
-           WHERE id = $1 AND user_id = $2"#
+           WHERE id = $1 AND user_id = $2"#,
     )
     .bind(id)
     .bind(auth.user_id)
@@ -162,12 +161,22 @@ async fn update_profile(
     .map_err(AppError::from)?
     .ok_or(AppError::NotFound)?;
 
-    let billing_type = body.billing_type.clone().unwrap_or_else(|| current.billing_type.clone());
+    let billing_type = body
+        .billing_type
+        .clone()
+        .unwrap_or_else(|| current.billing_type.clone());
     let rate = body.rate.unwrap_or(current.rate);
     let session_fee = body.session_fee.unwrap_or(current.session_fee);
-    let currency = body.currency.clone().unwrap_or_else(|| current.currency.clone());
+    let currency = body
+        .currency
+        .clone()
+        .unwrap_or_else(|| current.currency.clone());
     let timezone = body.timezone.clone().or_else(|| current.timezone.clone());
-    let tou_periods = normalize_tou_periods(body.tou_periods.clone().or_else(|| Some(current.tou_periods.clone())))?;
+    let tou_periods = normalize_tou_periods(
+        body.tou_periods
+            .clone()
+            .or_else(|| Some(current.tou_periods.clone())),
+    )?;
 
     validate_profile_details(&billing_type, rate, timezone.as_deref(), &tou_periods)?;
 
@@ -185,7 +194,7 @@ async fn update_profile(
            WHERE id = $1 AND user_id = $2
            RETURNING id, user_id, name, billing_type, rate, session_fee, currency,
                      timezone, tou_periods,
-                     effective_from, effective_to, created_at"#
+                     effective_from, effective_to, created_at"#,
     )
     .bind(id)
     .bind(auth.user_id)
@@ -212,11 +221,11 @@ async fn delete_profile(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = sqlx::query("DELETE FROM riviamigo.cost_profiles WHERE id = $1 AND user_id = $2")
-    .bind(id)
-    .bind(auth.user_id)
-    .execute(&state.pool)
-    .await
-    .map_err(AppError::from)?;
+        .bind(id)
+        .bind(auth.user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(AppError::from)?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
@@ -251,15 +260,25 @@ fn validate_profile_details(
 ) -> Result<(), AppError> {
     validate_billing_type(billing_type)?;
     if !rate.is_finite() || rate < 0.0 {
-        return Err(AppError::Validation("rate must be a non-negative number".into()));
+        return Err(AppError::Validation(
+            "rate must be a non-negative number".into(),
+        ));
     }
 
     if billing_type == "tou" {
-        if timezone.map(str::trim).filter(|value| !value.is_empty()).is_none() {
-            return Err(AppError::Validation("timezone is required for TOU profiles".into()));
+        if timezone
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Err(AppError::Validation(
+                "timezone is required for TOU profiles".into(),
+            ));
         }
-        let periods: Vec<TouPeriod> = serde_json::from_value(tou_periods.clone())
-            .map_err(|_| AppError::Validation("tou_periods must be a JSON array of schedule periods".into()))?;
+        let periods: Vec<TouPeriod> =
+            serde_json::from_value(tou_periods.clone()).map_err(|_| {
+                AppError::Validation("tou_periods must be a JSON array of schedule periods".into())
+            })?;
         validate_tou_periods(&periods).map_err(AppError::Validation)?;
     }
 

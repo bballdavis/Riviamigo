@@ -518,7 +518,7 @@ async fn update_battery_config(
         "UPDATE riviamigo.vehicles
          SET battery_capacity_wh = COALESCE($2, battery_capacity_wh),
              battery_config = COALESCE($3, battery_config)
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(vid)
     .bind(capacity_wh)
@@ -535,7 +535,7 @@ async fn list_vehicles(
     let rows = sqlx::query_as::<_, VehicleListRow>(
         "SELECT id, rivian_vehicle_id, model, trim, vin, color, name, battery_capacity_wh, \
                 created_at \
-         FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at"
+         FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at",
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
@@ -559,19 +559,19 @@ async fn list_vehicles(
             });
         }
         vehicles.push(serde_json::json!({
-                "id":                    r.id,
-                "user_id":               auth.user_id,
-                "rivian_vehicle_id":     r.rivian_vehicle_id,
-                "vin":                   r.vin,
-                "model":                 r.model,
-                "year":                  serde_json::Value::Null,
-                "trim":                  r.trim,
-                "color":                 r.color,
-                "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
-                "display_name":          r.name.as_deref().unwrap_or(&r.model),
-                "created_at":            r.created_at,
-                "images":                images,
-            }));
+            "id":                    r.id,
+            "user_id":               auth.user_id,
+            "rivian_vehicle_id":     r.rivian_vehicle_id,
+            "vin":                   r.vin,
+            "model":                 r.model,
+            "year":                  serde_json::Value::Null,
+            "trim":                  r.trim,
+            "color":                 r.color,
+            "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
+            "display_name":          r.name.as_deref().unwrap_or(&r.model),
+            "created_at":            r.created_at,
+            "images":                images,
+        }));
     }
 
     Ok(Json(serde_json::json!({"vehicles": vehicles})))
@@ -585,7 +585,7 @@ async fn vehicle_status(
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let vehicle = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1"
+        "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1",
     )
     .bind(vid)
     .fetch_optional(&state.pool)
@@ -594,7 +594,7 @@ async fn vehicle_status(
 
     let row = sqlx::query_as::<_, VehicleRuntimeStateRow>(
         "SELECT is_online, last_event_at, worker_health FROM riviamigo.vehicle_runtime_state \
-         WHERE vehicle_id = $1"
+         WHERE vehicle_id = $1",
     )
     .bind(vid)
     .fetch_optional(&state.pool)
@@ -677,7 +677,9 @@ async fn vehicle_status(
     let tire_pressure_status = tire_statuses
         .into_iter()
         .flatten()
-        .find(|status| !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown"))
+        .find(|status| {
+            !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown")
+        })
         .or_else(|| {
             [
                 latest.tire_fl_status.as_deref(),
@@ -793,7 +795,10 @@ mod tests {
     #[test]
     fn converts_implausible_km_value_to_miles() {
         let value = normalize_remaining_range_miles(Some(380.0), Some(71.0), Some(135_000.0));
-        assert_eq!(value.map(|miles| (miles * 10.0).round() / 10.0), Some(236.1));
+        assert_eq!(
+            value.map(|miles| (miles * 10.0).round() / 10.0),
+            Some(236.1)
+        );
     }
 
     #[test]
@@ -822,7 +827,7 @@ async fn cache_vehicle_images(
         Ok(images) => {
             let image_count = images.len();
             for image in images {
-                                let _ = sqlx::query(
+                let _ = sqlx::query(
                     r#"
                     INSERT INTO riviamigo.vehicle_images
                       (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
@@ -863,13 +868,12 @@ async fn cache_vehicle_images(
 }
 
 async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age_key: &str) {
-    let existing: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM riviamigo.vehicle_images WHERE vehicle_id = $1"
-    )
-    .bind(vehicle_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    let existing: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.vehicle_images WHERE vehicle_id = $1")
+            .bind(vehicle_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
 
     if existing > 0 {
         return;
@@ -884,7 +888,7 @@ async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age
     };
 
     let encrypted_tokens = match sqlx::query_scalar::<_, Vec<u8>>(
-        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1"
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
     )
     .bind(vehicle_id)
     .fetch_optional(pool)
@@ -920,9 +924,9 @@ async fn fetch_vehicle_images_json(
           placement,
           design NULLS LAST,
                     created_at
-                "#
+                "#,
     )
-        .bind(vehicle_id)
+    .bind(vehicle_id)
     .fetch_all(pool)
     .await?;
 
@@ -1076,7 +1080,7 @@ async fn raw_vehicle_data(
                count(ota_status) AS software_samples
         FROM timeseries.telemetry
         WHERE vehicle_id = $1
-        "#
+        "#,
     )
     .bind(vid)
     .fetch_one(&state.pool)
