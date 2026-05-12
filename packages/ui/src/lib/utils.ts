@@ -68,6 +68,15 @@ export function formatNumber(value: number | null | undefined, decimals = 1): st
   });
 }
 
+export function formatSmartNumber(value: number | null | undefined, decimals = 1): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: decimals,
+  });
+}
+
 export function formatMiles(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
 
@@ -79,6 +88,10 @@ export function formatMiles(value: number | null | undefined): string {
 
 export function formatPercent(value: number, decimals = 0): string {
   return `${formatNumber(value, decimals)}%`;
+}
+
+export function formatSmartPercent(value: number, decimals = 0): string {
+  return `${formatSmartNumber(value, decimals)}%`;
 }
 
 export function formatKwh(value: number | null | undefined): string {

@@ -115,11 +115,6 @@ impl BackupDriver {
 }
 
 #[derive(Debug, FromRow)]
-struct ExistingRunRow {
-    id: Uuid,
-}
-
-#[derive(Debug, FromRow)]
 struct PrunableArtifactRow {
     id: Uuid,
     run_id: Uuid,
@@ -343,7 +338,7 @@ async fn maybe_run_scheduled_backup(pool: &PgPool, config: &Config) -> Result<Op
     }
 
     let due_at = compute_due_run_at(&settings, Utc::now())?;
-    let existing = sqlx::query_as::<_, ExistingRunRow>(
+    let existing = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id
         FROM riviamigo.backup_runs

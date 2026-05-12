@@ -5,6 +5,7 @@ import 'uplot/dist/uPlot.min.css';
 import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_COLORS, CHART_FONT } from './ChartProvider';
+import { formatSmartNumber } from '../lib/utils';
 
 export interface RichSeries {
   key: string;
@@ -58,12 +59,13 @@ function formatDateFallback(seconds: number) {
 
 function formatValue(value: number | null | undefined, unit?: string) {
   if (value == null || !Number.isFinite(value)) return '-';
-  const formatted = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
+  if (unit === '%') return `${Math.round(value)}%`;
+  const formatted = formatSmartNumber(value, Math.abs(value) >= 100 ? 0 : 1);
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
 function formatNumericAxis(value: number, unit?: string) {
-  const formatted = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
+  const formatted = unit === '%' ? `${Math.round(value)}` : formatSmartNumber(value, Math.abs(value) >= 100 ? 0 : 1);
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
@@ -225,7 +227,7 @@ export function RichTimeSeriesChart({
     const xAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
       grid: { stroke: CHART_COLORS.grid, width: 1 },
-      font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
       size: isBarChart ? 54 : 44,
       gap: 6,
       ...(xSplits
@@ -245,7 +247,7 @@ export function RichTimeSeriesChart({
     const yAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
       grid: { stroke: CHART_COLORS.grid, width: 1 },
-      font: `${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
       size: (_self, values) => {
         if (!values || values.length === 0) return 50;
         return estimateYLabelWidth(values as string[]);
