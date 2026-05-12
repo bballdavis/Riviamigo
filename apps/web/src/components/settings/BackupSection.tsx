@@ -407,7 +407,7 @@ export function BackupSection() {
 
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elevated/30 p-3 text-sm text-fg-tertiary">
             <Clock3 className="h-4 w-4 shrink-0" />
-            <span>Secrets are stored encrypted in the application database. Automatic runs now execute against a local artifact store and reuse the schedule you configure here.</span>
+            <span>Secrets are stored encrypted in the application database. Backup runs create verified database artifacts in the configured artifact store and reuse the schedule you configure here.</span>
           </div>
 
           <label className="flex items-center gap-3 text-sm text-fg">
@@ -434,7 +434,7 @@ export function BackupSection() {
         <CardContent>
           {overview.data.recent_runs.length === 0 ? (
             <p className="text-sm text-fg-tertiary">
-              No backup executions have been recorded yet. This slice wires the persistent settings and admin surface that the backup runner will consume next.
+              No backup executions have been recorded yet. Use Run now to create the first cataloged database artifact.
             </p>
           ) : (
             <div className="divide-y divide-border">
