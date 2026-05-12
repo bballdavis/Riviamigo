@@ -10,7 +10,7 @@ export const CHART_COLORS = {
   success: colors.soc.high,
   warning: colors.soc.mid,
   danger: colors.soc.low,
-  muted: colors.slate[600],
+  muted: colors.slate[400],
   grid: 'rgba(255,255,255,0.06)',
   ...colors.dataViz,
 } as const;
@@ -42,13 +42,14 @@ export const CHART_MARGINS = {
 
 export const CHART_FONT = {
   fontFamily: '"Inter Variable", Inter, system-ui, sans-serif',
-  fontSize: 11,
-  fill: colors.slate[500],
+  fontSize: 12,
+  fontWeight: 600,
+  fill: colors.slate[400],
 } as const;
 
 export const TICK_STYLE = {
   ...CHART_FONT,
-  fill: colors.slate[500],
+  fill: colors.slate[400],
 } as const;
 
 export const TOOLTIP_CURSOR_STYLE = {

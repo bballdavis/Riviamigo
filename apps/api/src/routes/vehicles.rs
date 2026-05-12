@@ -115,8 +115,6 @@ struct VehicleListRow {
     color: Option<String>,
     name: Option<String>,
     battery_capacity_wh: Option<f64>,
-    home_latitude: Option<f64>,
-    home_longitude: Option<f64>,
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -536,7 +534,7 @@ async fn list_vehicles(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query_as::<_, VehicleListRow>(
         "SELECT id, rivian_vehicle_id, model, trim, vin, color, name, battery_capacity_wh, \
-                home_latitude, home_longitude, created_at \
+                created_at \
          FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at"
     )
     .bind(auth.user_id)

@@ -189,7 +189,11 @@ pub async fn run_vehicle_worker(
         }
 
         let trip_id = trip_det.active_trip_id();
-        let session_id = charge_det.active_session_id();
+        let charge_event = charge_det.process(&event);
+        let session_id = match &charge_event {
+            ChargeEvent::SessionEnded(session) => Some(session.session_id),
+            _ => charge_det.active_session_id(),
+        };
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
@@ -272,7 +276,7 @@ pub async fn run_vehicle_worker(
         }
 
         // ── Charge detection ─────────────────────────────────────────────────
-        if let ChargeEvent::SessionEnded(session) = charge_det.process(&event) {
+        if let ChargeEvent::SessionEnded(session) = charge_event {
             let _ = persist_charge_session(&pool, &session).await;
         }
     }
