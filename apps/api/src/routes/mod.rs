@@ -18,6 +18,7 @@ use crate::middleware::auth::AppState;
 
 pub mod api_keys;
 pub mod auth;
+pub mod backups;
 pub mod battery;
 pub mod charging;
 pub mod cost_profiles;
@@ -64,6 +65,7 @@ pub fn build_router(state: AppState) -> Router {
     let protected = Router::new()
         .merge(auth::protected_router())
         .merge(api_keys::router())
+        .merge(backups::router())
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())

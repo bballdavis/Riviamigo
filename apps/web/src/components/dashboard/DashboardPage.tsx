@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import {
   useCreateDashboard,
   useUpdateDashboard,
 } from '@riviamigo/dashboards';
+import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
 import { Battery, Car, Gauge, MapPin, Save, Thermometer, Trash2, Edit2, Cpu } from 'lucide-react';
@@ -25,6 +27,7 @@ export interface DashboardPageProps {
 export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
   const createDashboard = useCreateDashboard();
+  const qc = useQueryClient();
 
   return (
     <DashboardPageShell
@@ -32,7 +35,7 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard })}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc })}
     />
   );
 }
@@ -40,9 +43,10 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
 export interface DashboardEditMutations {
   updateDashboard: ReturnType<typeof useUpdateDashboard>;
   createDashboard: ReturnType<typeof useCreateDashboard>;
+  qc: ReturnType<typeof useQueryClient>;
 }
 
-export function createDefaultDashboardEditActions({ updateDashboard, createDashboard }: DashboardEditMutations) {
+export function createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc }: DashboardEditMutations) {
   return function renderDefaultDashboardEditActions({ isEditMode, localConfig, savedConfig, exitEdit }: DashboardPageShellRenderState) {
     if (!isEditMode) return undefined;
     const isPending = updateDashboard.isPending || createDashboard.isPending;
@@ -50,7 +54,8 @@ export function createDefaultDashboardEditActions({ updateDashboard, createDashb
     async function handleSave() {
       if (!localConfig) { exitEdit(); return; }
       try {
-        // savedConfig is the freshest query result; localConfig flags can be stale if the query resolved after entering edit mode.
+        // Fast path: savedConfig reflects the freshest query result. If it shows
+        // an owned copy, go straight to PUT — avoids an unnecessary POST+422 cycle.
         const ownedCopy = savedConfig?.ownerId != null ? savedConfig : null;
         if (ownedCopy) {
           await updateDashboard.mutateAsync({
@@ -61,12 +66,31 @@ export function createDefaultDashboardEditActions({ updateDashboard, createDashb
             isLocked: false,
           });
         } else {
-          await createDashboard.mutateAsync({
-            ...localConfig,
-            isDefault: false,
-            isLocked: false,
-            ownerId: null,
-          });
+          // No owned copy in cache — try to create one.
+          try {
+            await createDashboard.mutateAsync({
+              ...localConfig,
+              isDefault: false,
+              isLocked: false,
+              ownerId: null,
+            });
+          } catch {
+            // POST failed (e.g. stale cache: user already has a copy). Refetch
+            // and update if we find an owned copy.
+            await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
+            const existing = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
+            if (existing?.ownerId != null) {
+              await updateDashboard.mutateAsync({
+                ...localConfig,
+                id: existing.id,
+                ownerId: existing.ownerId,
+                isDefault: false,
+                isLocked: false,
+              });
+            } else {
+              throw new Error('save failed');
+            }
+          }
         }
         exitEdit();
       } catch {
