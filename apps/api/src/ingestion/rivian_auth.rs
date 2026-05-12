@@ -406,15 +406,15 @@ pub async fn rivian_vehicle_images(
         let mut attempt = 0;
         let status = loop {
             let body = serde_json::json!({
-            "operationName": "getVehicleImages",
-            "query": query,
-            "variables": {
-                "extension": serde_json::Value::Null,
-                "resolution": "@3x",
-                "versionForVehicle": version,
-                "versionForPreOrder": version
-            }
-        });
+                "operationName": "getVehicleImages",
+                "query": query,
+                "variables": {
+                    "extension": serde_json::Value::Null,
+                    "resolution": "@3x",
+                    "versionForVehicle": version,
+                    "versionForPreOrder": version
+                }
+            });
 
             let req = client
                 .post(gateway_url())
@@ -441,7 +441,10 @@ pub async fn rivian_vehicle_images(
                 .json::<VehicleImagesResponse>()
                 .await?;
 
-            if status.errors.as_ref().is_some_and(|errors| has_unauthenticated_error(errors))
+            if status
+                .errors
+                .as_ref()
+                .is_some_and(|errors| has_unauthenticated_error(errors))
                 && !refreshed_app_session
                 && attempt == 0
             {

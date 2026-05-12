@@ -1,7 +1,10 @@
 import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
 import { format, parseISO } from 'date-fns';
+import { PiArrowFatLinesRight } from 'react-icons/pi';
+import { Badge } from '../primitives/Badge';
 import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '../lib/utils';
+import { formatDriveMode, getDriveModeBadgeClass } from '../lib/driveMode';
 import type { Place } from '@riviamigo/types';
 
 export interface TripRow {
@@ -14,6 +17,7 @@ export interface TripRow {
   efficiency_wh_mi: number | null;
   soc_start: number | null;
   soc_end: number | null;
+  drive_mode?: string | null;
   start_lat?: number | null;
   start_lng?: number | null;
   end_lat?: number | null;
@@ -45,17 +49,19 @@ export function createTripColumns(places: Place[] = []) {
       ),
     }),
     col.accessor('soc_start', {
-      header: '% Start',
+      id: 'soc_range',
+      header: 'SoC',
+      enableSorting: false,
       cell: (info) => {
-        const value = info.getValue();
-        return value === null ? <span className="text-fg-tertiary">-</span> : <span className="font-mono text-fg">{formatPercent(value)}</span>;
-      },
-    }),
-    col.accessor('soc_end', {
-      header: '% End',
-      cell: (info) => {
-        const value = info.getValue();
-        return value === null ? <span className="text-fg-tertiary">-</span> : <span className="font-mono text-fg">{formatPercent(value)}</span>;
+        const row = info.row.original;
+        if (row.soc_start === null || row.soc_end === null) return <span className="text-fg-tertiary">-</span>;
+        return (
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-fg">
+            {formatPercent(row.soc_start)}
+            <PiArrowFatLinesRight className="h-3.5 w-3.5 text-fg-tertiary" />
+            {formatPercent(row.soc_end)}
+          </span>
+        );
       },
     }),
     col.accessor('efficiency_wh_mi', {
@@ -66,6 +72,19 @@ export function createTripColumns(places: Place[] = []) {
           <span className="font-mono text-fg whitespace-nowrap">{formatEfficiency(v)}</span>
         ) : (
           <span className="text-fg-tertiary">-</span>
+        );
+      },
+    }),
+    col.accessor('drive_mode', {
+      header: 'Drive Mode',
+      enableSorting: false,
+      cell: (info) => {
+        const mode = info.getValue();
+        if (!mode) return <span className="text-fg-tertiary">-</span>;
+        return (
+          <Badge size="sm" className={getDriveModeBadgeClass(mode)} title={formatDriveMode(mode)}>
+            {formatDriveMode(mode)}
+          </Badge>
         );
       },
     }),

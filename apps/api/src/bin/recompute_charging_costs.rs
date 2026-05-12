@@ -1,8 +1,5 @@
 use anyhow::Result;
-use riviamigo_api::{
-    models::cost_profile::compute_cost,
-    services::cost::resolve_profile,
-};
+use riviamigo_api::{models::cost_profile::compute_cost, services::cost::resolve_profile};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tracing::info;
 
@@ -28,7 +25,13 @@ async fn recompute_charging_costs(pool: &PgPool) -> Result<()> {
     .await?;
 
     for session in sessions {
-        let profile = resolve_profile(pool, session.cost_profile_id, session.geofence_id, session.vehicle_id).await?;
+        let profile = resolve_profile(
+            pool,
+            session.cost_profile_id,
+            session.geofence_id,
+            session.vehicle_id,
+        )
+        .await?;
         let cost_usd = profile.as_ref().and_then(|profile| {
             compute_cost(
                 profile,

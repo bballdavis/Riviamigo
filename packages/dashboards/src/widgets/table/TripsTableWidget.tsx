@@ -31,6 +31,21 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`);
   }, [ctx.vehicleId, ctx.from, ctx.to]);
 
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const html = document.documentElement;
+    const updateMapStyle = () => {
+      setMapStyle(html.classList.contains('light') ? 'light' : 'dark');
+    };
+
+    updateMapStyle();
+    const observer = new MutationObserver(updateMapStyle);
+    observer.observe(html, { attributes: true, attributeFilter: ['class'] });
+
+    return () => observer.disconnect();
+  }, []);
+
   const trackQueries = useQueries({
     queries: trips.map((trip) => ({
       queryKey: ['trips', 'track', trip.id, ctx.vehicleId],

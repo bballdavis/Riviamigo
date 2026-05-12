@@ -11,7 +11,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/vehicles/:vehicle_id/idle-drain", get(idle_drain))
@@ -54,7 +57,9 @@ async fn idle_drain(
 ) -> Result<Json<IdleDrainResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let from = params.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
+    let from = params
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
     let to = params.to.unwrap_or_else(Utc::now);
     let limit = params.limit.min(500);
 
@@ -72,7 +77,7 @@ async fn idle_drain(
                          AND period_start >= $2
                          AND period_start <= $3
                      ORDER BY period_start DESC
-           LIMIT $4"#
+           LIMIT $4"#,
     )
     .bind(vehicle_id)
     .bind(from)
@@ -82,12 +87,19 @@ async fn idle_drain(
     .await
     .map_err(AppError::from)?;
 
-    Ok(Json(IdleDrainResponse { vehicle_id, periods }))
+    Ok(Json(IdleDrainResponse {
+        vehicle_id,
+        periods,
+    }))
 }
 
-async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
+async fn ensure_owned(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
     let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
     )
     .bind(vehicle_id)
     .bind(user_id)
@@ -95,5 +107,9 @@ async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> R
     .await
     .map_err(AppError::from)?;
 
-    if !owned { Err(AppError::NotFound) } else { Ok(()) }
+    if !owned {
+        Err(AppError::NotFound)
+    } else {
+        Ok(())
+    }
 }

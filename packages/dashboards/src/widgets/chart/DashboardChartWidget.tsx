@@ -14,7 +14,7 @@ import {
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
-import { ChargeSessionDistributionChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { ChargeSessionDistributionChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 import {
@@ -624,23 +624,17 @@ function EfficiencyTemperatureChart({
   const points = data
     .filter((point) => point.avg_efficiency_wh_mi != null)
     .map((point) => ({
-      x: (point.temp_c_low + point.temp_c_high) / 2,
-      y: convertEfficiency(point.avg_efficiency_wh_mi),
+      label: `${formatTemp(point.temp_c_low)} to ${formatTemp(point.temp_c_high)}`,
+      value: convertEfficiency(point.avg_efficiency_wh_mi),
     }));
 
   return (
-    <RichTimeSeriesChart
-      points={points.map((point) => ({ ts: point.x }))}
-      series={[{ key: 'efficiency', label: definition.title, values: points.map((point) => point.y) }]}
+    <EfficiencyPillBarChart
+      data={points.filter((point): point is { label: string; value: number } => point.value != null)}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      xTime={false}
-      xUnit={getUnitSystem() === 'metric' ? 'C' : 'F'}
-      yUnit={getEfficiencyUnit()}
-      mode="scatter"
-      xValueFormatter={(value) => formatTemp(value)}
-      smoothing={0}
+      valueUnit={getEfficiencyUnit()}
     />
   );
 }
@@ -652,28 +646,52 @@ function EfficiencyModeChart({
   height,
 }: {
   definition: DashboardChartDefinition;
-  data: Array<{ drive_mode: string; avg_efficiency: number | null }>;
+  data: Array<{ drive_mode: string; avg_efficiency: number | null; trip_count?: number | null }>;
   loading: boolean;
   height: number;
 }) {
-  const rows = data.filter((point) => point.avg_efficiency != null);
-  const splits = rows.map((_, index) => index + 1);
+  const rows = data
+    .filter((point) => point.avg_efficiency != null)
+    .map((point) => ({
+      label: formatDriveModeLabel(point.drive_mode),
+      value: convertEfficiency(point.avg_efficiency),
+      count: typeof point.trip_count === 'number' ? point.trip_count : null,
+    }))
+    .filter((point): point is { label: string; value: number; count: number | null } => point.value != null);
 
   return (
-    <RichTimeSeriesChart
-      points={rows.map((_, index) => ({ ts: index + 1 }))}
-      series={[{ key: 'efficiency', label: 'Avg Efficiency', values: rows.map((point) => convertEfficiency(point.avg_efficiency)) }]}
+    <EfficiencyPillBarChart
+      data={rows}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      xTime={false}
-      yUnit={getEfficiencyUnit()}
-      mode="bar"
-      xSplits={splits}
-      xValueFormatter={(value) => rows[Math.round(value) - 1]?.drive_mode ?? ''}
-      smoothing={0}
+      valueUnit={getEfficiencyUnit()}
     />
   );
+}
+
+function formatDriveModeLabel(value: string) {
+  const labels: Record<string, string> = {
+    everyday: 'All-Purpose',
+    all_purpose: 'All-Purpose',
+    sport: 'Sport',
+    distance: 'Conserve',
+    conserve: 'Conserve',
+    winter: 'Snow',
+    snow: 'Snow',
+    off_road_auto: 'All-Terrain',
+    all_terrain: 'All-Terrain',
+    off_road_sand: 'Soft Sand',
+    soft_sand: 'Soft Sand',
+    off_road_rocks: 'Rock Crawl',
+    rock_crawl: 'Rock Crawl',
+    off_road_sport_auto: 'Rally',
+    rally: 'Rally',
+    off_road_sport_drift: 'Drift',
+    drift: 'Drift',
+    towing: 'Towing',
+  };
+  return labels[value] ?? value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function MileageChart({

@@ -8,8 +8,8 @@
 
 use anyhow::Result;
 use riviamigo_api::{
-    db::vehicles::get_vehicle_owner_id,
-    services::geofences::match_geofence,
+    db::vehicles::get_vehicle_owner_id, models::cost_profile::compute_cost,
+    services::cost::resolve_profile, services::geofences::match_geofence,
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
@@ -25,7 +25,11 @@ async fn main() -> Result<()> {
 
     let repaired = repair_charge_sessions_from_telemetry(&pool).await?;
     let retagged = repair_charge_session_locations(&pool).await?;
-    info!(repaired, retagged, "charge session telemetry repair complete");
+    let recosted = repair_charge_session_costs(&pool).await?;
+    info!(
+        repaired,
+        retagged, recosted, "charge session telemetry repair complete"
+    );
     Ok(())
 }
 
@@ -40,14 +44,6 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
             WHERE t.charger_state = 'charging'
                OR t.charger_status = 'chrgr_sts_connected_charging'
                OR COALESCE(t.time_to_end_of_charge_min, 0) > 0
-               OR (
-                    t.charge_session_id IS NOT NULL
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM riviamigo.charge_sessions existing
-                        WHERE existing.id = t.charge_session_id
-                    )
-               )
         ),
         marked AS (
             SELECT
@@ -109,32 +105,15 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
         updated AS (
             UPDATE riviamigo.charge_sessions cs
             SET
-                started_at = LEAST(cs.started_at, matched_existing.started_at),
-                ended_at = GREATEST(
-                    COALESCE(cs.ended_at, matched_existing.ended_at),
-                    matched_existing.ended_at
-                ),
+                started_at = matched_existing.started_at,
+                ended_at = matched_existing.ended_at,
                 location_lat = COALESCE(cs.location_lat, matched_existing.location_lat),
                 location_lng = COALESCE(cs.location_lng, matched_existing.location_lng),
-                soc_start = CASE
-                    WHEN matched_existing.started_at < cs.started_at
-                    THEN matched_existing.soc_start
-                    ELSE COALESCE(cs.soc_start, matched_existing.soc_start)
-                END,
-                soc_end = CASE
-                    WHEN matched_existing.ended_at > COALESCE(cs.ended_at, cs.started_at)
-                    THEN matched_existing.soc_end
-                    ELSE COALESCE(cs.soc_end, matched_existing.soc_end)
-                END,
+                soc_start = matched_existing.soc_start,
+                soc_end = matched_existing.soc_end,
                 charge_limit = COALESCE(cs.charge_limit, matched_existing.charge_limit),
                 duration_minutes = EXTRACT(
-                    EPOCH FROM (
-                        GREATEST(
-                            COALESCE(cs.ended_at, matched_existing.ended_at),
-                            matched_existing.ended_at
-                        )
-                        - LEAST(cs.started_at, matched_existing.started_at)
-                    )
+                    EPOCH FROM (matched_existing.ended_at - matched_existing.started_at)
                 )::int / 60,
                 kwh_added = matched_existing.energy_added_wh / 1000.0,
                 energy_added_wh = matched_existing.energy_added_wh,
@@ -147,15 +126,15 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
             FROM matched_existing
             WHERE cs.id = matched_existing.existing_id
               AND (
-                  matched_existing.started_at < cs.started_at
-                  OR matched_existing.ended_at > COALESCE(cs.ended_at, cs.started_at)
+                  matched_existing.started_at <> cs.started_at
+                  OR matched_existing.ended_at <> COALESCE(cs.ended_at, cs.started_at)
                   OR cs.soc_start IS NULL
                   OR cs.soc_end IS NULL
                   OR cs.kwh_added IS NULL
                   OR cs.energy_added_wh IS NULL
                   OR cs.duration_minutes IS NULL
               )
-            RETURNING cs.id, cs.vehicle_id, cs.started_at, COALESCE(cs.ended_at, matched_existing.ended_at) AS ended_at
+            RETURNING cs.id, cs.vehicle_id, cs.started_at, cs.ended_at
         ),
         inserted AS (
             INSERT INTO riviamigo.charge_sessions (
@@ -273,6 +252,61 @@ async fn repair_charge_session_locations(pool: &sqlx::PgPool) -> Result<u64> {
         .execute(pool)
         .await?;
 
+        repaired += result.rows_affected();
+    }
+
+    Ok(repaired)
+}
+
+async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {
+    let sessions = sqlx::query!(
+        r#"SELECT id, vehicle_id, geofence_id, cost_profile_id, started_at, ended_at,
+                  duration_minutes, energy_added_wh, energy_used_wh
+           FROM riviamigo.charge_sessions"#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut repaired = 0u64;
+
+    for session in sessions {
+        let profile = resolve_profile(
+            pool,
+            session.cost_profile_id,
+            session.geofence_id,
+            session.vehicle_id,
+        )
+        .await?;
+        let cost_usd = profile.as_ref().and_then(|p| {
+            compute_cost(
+                p,
+                session.energy_added_wh.map(|wh| wh / 1000.0),
+                session.energy_used_wh.map(|wh| wh / 1000.0),
+                session.duration_minutes.unwrap_or(0),
+                session.started_at,
+                session.ended_at,
+            )
+        });
+        let resolved_profile_id = profile.as_ref().map(|p| p.id);
+        let cost_method = if resolved_profile_id.is_some() {
+            Some("profile")
+        } else {
+            Some("unknown")
+        };
+
+        let result = sqlx::query!(
+            r#"UPDATE riviamigo.charge_sessions
+               SET cost_profile_id = $2,
+                   cost_method = $3,
+                   cost_usd = $4
+               WHERE id = $1"#,
+            session.id,
+            resolved_profile_id,
+            cost_method,
+            cost_usd,
+        )
+        .execute(pool)
+        .await?;
         repaired += result.rows_affected();
     }
 

@@ -83,25 +83,196 @@ struct SeriesParams {
 }
 
 const METRICS: &[MetricDef] = &[
-    MetricDef { id: "total_miles", label: "Total Miles", unit: Some("mi"), kind: "distance", source_label: "summary", supports_series: true, default_aggregation: "latest", source: MetricSource::Summary },
-    MetricDef { id: "trip_miles", label: "Trip Miles", unit: Some("mi"), kind: "distance", source_label: "trips", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
-    MetricDef { id: "total_trips", label: "Total Trips", unit: None, kind: "number", source_label: "summary", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
-    MetricDef { id: "energy_charged", label: "Energy Charged", unit: Some("kWh"), kind: "energy", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
-    MetricDef { id: "charging_sessions", label: "Charging Sessions", unit: None, kind: "number", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
-    MetricDef { id: "total_cost", label: "Total Cost", unit: Some("USD"), kind: "currency", source_label: "charging", supports_series: true, default_aggregation: "sum", source: MetricSource::Summary },
-    MetricDef { id: "avg_session_energy", label: "Avg Session Energy", unit: Some("kWh"), kind: "energy", source_label: "charging", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
-    MetricDef { id: "avg_efficiency", label: "Avg Efficiency", unit: Some("Wh/mi"), kind: "number", source_label: "trips", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
-    MetricDef { id: "avg_trip_duration", label: "Avg Trip Duration", unit: Some("min"), kind: "number", source_label: "trips", supports_series: true, default_aggregation: "avg", source: MetricSource::Summary },
-    MetricDef { id: "battery_level", label: "Battery Level", unit: Some("%"), kind: "percent", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("battery_level") },
-    MetricDef { id: "range_miles", label: "Estimated Range", unit: Some("mi"), kind: "distance", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("distance_to_empty_mi") },
-    MetricDef { id: "odometer_miles", label: "Odometer", unit: Some("mi"), kind: "distance", source_label: "telemetry", supports_series: true, default_aggregation: "max", source: MetricSource::Telemetry("odometer_miles") },
-    MetricDef { id: "outside_temp_c", label: "Outside Temp", unit: Some("C"), kind: "temperature", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("outside_temp_c") },
-    MetricDef { id: "speed_mph", label: "Speed", unit: Some("mph"), kind: "speed", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("speed_mph") },
-    MetricDef { id: "power_kw", label: "Power", unit: Some("kW"), kind: "number", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("power_kw") },
-    MetricDef { id: "tire_fl_psi", label: "Front Left Tire", unit: Some("psi"), kind: "pressure", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("tire_fl_psi") },
-    MetricDef { id: "tire_fr_psi", label: "Front Right Tire", unit: Some("psi"), kind: "pressure", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("tire_fr_psi") },
-    MetricDef { id: "tire_rl_psi", label: "Rear Left Tire", unit: Some("psi"), kind: "pressure", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("tire_rl_psi") },
-    MetricDef { id: "tire_rr_psi", label: "Rear Right Tire", unit: Some("psi"), kind: "pressure", source_label: "telemetry", supports_series: true, default_aggregation: "avg", source: MetricSource::Telemetry("tire_rr_psi") },
+    MetricDef {
+        id: "total_miles",
+        label: "Total Miles",
+        unit: Some("mi"),
+        kind: "distance",
+        source_label: "summary",
+        supports_series: true,
+        default_aggregation: "latest",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "trip_miles",
+        label: "Trip Miles",
+        unit: Some("mi"),
+        kind: "distance",
+        source_label: "trips",
+        supports_series: true,
+        default_aggregation: "sum",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "total_trips",
+        label: "Total Trips",
+        unit: None,
+        kind: "number",
+        source_label: "summary",
+        supports_series: true,
+        default_aggregation: "sum",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "energy_charged",
+        label: "Energy Charged",
+        unit: Some("kWh"),
+        kind: "energy",
+        source_label: "charging",
+        supports_series: true,
+        default_aggregation: "sum",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "charging_sessions",
+        label: "Charging Sessions",
+        unit: None,
+        kind: "number",
+        source_label: "charging",
+        supports_series: true,
+        default_aggregation: "sum",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "total_cost",
+        label: "Total Cost",
+        unit: Some("USD"),
+        kind: "currency",
+        source_label: "charging",
+        supports_series: true,
+        default_aggregation: "sum",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "avg_session_energy",
+        label: "Avg Session Energy",
+        unit: Some("kWh"),
+        kind: "energy",
+        source_label: "charging",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "avg_efficiency",
+        label: "Avg Efficiency",
+        unit: Some("Wh/mi"),
+        kind: "number",
+        source_label: "trips",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "avg_trip_duration",
+        label: "Avg Trip Duration",
+        unit: Some("min"),
+        kind: "number",
+        source_label: "trips",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "battery_level",
+        label: "Battery Level",
+        unit: Some("%"),
+        kind: "percent",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("battery_level"),
+    },
+    MetricDef {
+        id: "range_miles",
+        label: "Estimated Range",
+        unit: Some("mi"),
+        kind: "distance",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("distance_to_empty_mi"),
+    },
+    MetricDef {
+        id: "odometer_miles",
+        label: "Odometer",
+        unit: Some("mi"),
+        kind: "distance",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "max",
+        source: MetricSource::Telemetry("odometer_miles"),
+    },
+    MetricDef {
+        id: "outside_temp_c",
+        label: "Outside Temp",
+        unit: Some("C"),
+        kind: "temperature",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("outside_temp_c"),
+    },
+    MetricDef {
+        id: "speed_mph",
+        label: "Speed",
+        unit: Some("mph"),
+        kind: "speed",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("speed_mph"),
+    },
+    MetricDef {
+        id: "power_kw",
+        label: "Power",
+        unit: Some("kW"),
+        kind: "number",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("power_kw"),
+    },
+    MetricDef {
+        id: "tire_fl_psi",
+        label: "Front Left Tire",
+        unit: Some("psi"),
+        kind: "pressure",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("tire_fl_psi"),
+    },
+    MetricDef {
+        id: "tire_fr_psi",
+        label: "Front Right Tire",
+        unit: Some("psi"),
+        kind: "pressure",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("tire_fr_psi"),
+    },
+    MetricDef {
+        id: "tire_rl_psi",
+        label: "Rear Left Tire",
+        unit: Some("psi"),
+        kind: "pressure",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("tire_rl_psi"),
+    },
+    MetricDef {
+        id: "tire_rr_psi",
+        label: "Rear Right Tire",
+        unit: Some("psi"),
+        kind: "pressure",
+        source_label: "telemetry",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Telemetry("tire_rr_psi"),
+    },
 ];
 
 async fn get_catalog(
@@ -169,7 +340,17 @@ async fn get_series(
 
     let points = match metric.source {
         MetricSource::Summary => summary_series(&state.pool, vid, metric.id, from, to).await?,
-        MetricSource::Telemetry(column) => telemetry_daily_series(&state.pool, vid, column, from, to, metric.default_aggregation).await?,
+        MetricSource::Telemetry(column) => {
+            telemetry_daily_series(
+                &state.pool,
+                vid,
+                column,
+                from,
+                to,
+                metric.default_aggregation,
+            )
+            .await?
+        }
     };
 
     Ok(Json(points))
@@ -203,13 +384,12 @@ async fn summary_value(
     vid: Uuid,
     metric: &str,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
-    let latest_ts: Option<DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT max(ts) FROM timeseries.telemetry WHERE vehicle_id = $1",
-    )
-    .bind(vid)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
+    let latest_ts: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT max(ts) FROM timeseries.telemetry WHERE vehicle_id = $1")
+            .bind(vid)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
 
     let value = match metric {
         "total_miles" => sqlx::query_scalar(

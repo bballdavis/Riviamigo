@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/vehicles/:vehicle_id/health", get(health))
@@ -73,7 +76,8 @@ async fn health(
         fetch_thermal_count(&state.pool, vehicle_id),
     )?;
 
-    let current_version = sw_history.iter()
+    let current_version = sw_history
+        .iter()
         .find(|e| e.observed_until.is_none() && e.version.is_some())
         .and_then(|e| e.version.clone());
 
@@ -96,9 +100,9 @@ async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressu
            FROM timeseries.telemetry
            WHERE vehicle_id = $1
              AND (tire_fl_psi IS NOT NULL OR tire_fr_psi IS NOT NULL)
-            ORDER BY ts DESC LIMIT 1"#
+            ORDER BY ts DESC LIMIT 1"#,
     )
-        .bind(vid)
+    .bind(vid)
     .fetch_optional(pool)
     .await
     .map_err(AppError::from)?;
@@ -116,9 +120,9 @@ async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closure
              AND (closure_frunk_closed IS NOT NULL
                   OR door_front_left_closed IS NOT NULL
                   OR door_front_right_closed IS NOT NULL)
-            ORDER BY ts DESC LIMIT 1"#
+            ORDER BY ts DESC LIMIT 1"#,
     )
-        .bind(vid)
+    .bind(vid)
     .fetch_optional(pool)
     .await
     .map_err(AppError::from)?;
@@ -131,7 +135,7 @@ async fn fetch_sw_history(pool: &sqlx::PgPool, vid: Uuid) -> Result<Vec<Software
            FROM riviamigo.software_versions
            WHERE vehicle_id = $1
            ORDER BY installed_at DESC
-           LIMIT 20"#
+           LIMIT 20"#,
     )
     .bind(vid)
     .fetch_all(pool)
@@ -147,7 +151,7 @@ async fn fetch_thermal_count(pool: &sqlx::PgPool, vid: Uuid) -> Result<i64, AppE
            WHERE vehicle_id = $1
              AND hv_thermal_event IS NOT NULL
              AND hv_thermal_event != 'none'
-             AND ts >= now() - interval '30 days'"#
+             AND ts >= now() - interval '30 days'"#,
     )
     .bind(vid)
     .fetch_one(pool)
@@ -156,9 +160,13 @@ async fn fetch_thermal_count(pool: &sqlx::PgPool, vid: Uuid) -> Result<i64, AppE
     Ok(count)
 }
 
-async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
+async fn ensure_owned(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
     let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
     )
     .bind(vehicle_id)
     .bind(user_id)
@@ -166,5 +174,9 @@ async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> R
     .await
     .map_err(AppError::from)?;
 
-    if !owned { Err(AppError::NotFound) } else { Ok(()) }
+    if !owned {
+        Err(AppError::NotFound)
+    } else {
+        Ok(())
+    }
 }

@@ -38,7 +38,11 @@ async fn recompute_trip_energy(pool: &PgPool) -> Result<()> {
             trip.efficiency_wh_per_mile,
         ) {
             Some((wh, strategy)) => {
-                let efficiency = if distance > 0.0 { Some(wh / distance) } else { None };
+                let efficiency = if distance > 0.0 {
+                    Some(wh / distance)
+                } else {
+                    None
+                };
                 (Some(wh), Some(strategy.to_string()), efficiency)
             }
             None => {

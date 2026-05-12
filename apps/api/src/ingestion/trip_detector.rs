@@ -161,7 +161,7 @@ impl TripDetectorState {
             }
 
             if let Some(dm) = &event.drive_mode {
-                self.drive_modes.push(format!("{dm:?}"));
+                self.drive_modes.push(dm.as_str().to_string());
             }
 
             // Power envelope
@@ -272,9 +272,21 @@ impl TripDetectorState {
         } else {
             None
         };
-        let elevation_gain = if self.elevation_gain_acc > 0.0 { Some(self.elevation_gain_acc) } else { None };
-        let elevation_loss = if self.elevation_loss_acc > 0.0 { Some(self.elevation_loss_acc) } else { None };
-        let regen_wh = if self.regen_wh_acc > 0.0 { Some(self.regen_wh_acc) } else { None };
+        let elevation_gain = if self.elevation_gain_acc > 0.0 {
+            Some(self.elevation_gain_acc)
+        } else {
+            None
+        };
+        let elevation_loss = if self.elevation_loss_acc > 0.0 {
+            Some(self.elevation_loss_acc)
+        } else {
+            None
+        };
+        let regen_wh = if self.regen_wh_acc > 0.0 {
+            Some(self.regen_wh_acc)
+        } else {
+            None
+        };
 
         let data = CompletedTripData {
             trip_id,
@@ -536,9 +548,15 @@ mod tests {
     #[test]
     fn energy_strategy_soc_delta() {
         let (wh, strategy) = compute_trip_energy(
-            Some(90.0), Some(70.0), Some(135_000.0),
-            None, None, 50.0, None,
-        ).unwrap();
+            Some(90.0),
+            Some(70.0),
+            Some(135_000.0),
+            None,
+            None,
+            50.0,
+            None,
+        )
+        .unwrap();
         assert_eq!(strategy, "soc_delta");
         assert!((wh - 27_000.0).abs() < 1.0);
     }
@@ -546,19 +564,23 @@ mod tests {
     #[test]
     fn energy_strategy_range_delta_fallback() {
         let (wh, strategy) = compute_trip_energy(
-            Some(80.0), Some(79.5), None, // SOC delta < 1 %
-            Some(250.0), Some(230.0),
-            20.0, Some(400.0),
-        ).unwrap();
+            Some(80.0),
+            Some(79.5),
+            None, // SOC delta < 1 %
+            Some(250.0),
+            Some(230.0),
+            20.0,
+            Some(400.0),
+        )
+        .unwrap();
         assert_eq!(strategy, "range_delta");
         assert!((wh - 8_000.0).abs() < 10.0);
     }
 
     #[test]
     fn energy_strategy_historical_fallback() {
-        let (wh, strategy) = compute_trip_energy(
-            None, None, None, None, None, 10.0, Some(350.0),
-        ).unwrap();
+        let (wh, strategy) =
+            compute_trip_energy(None, None, None, None, None, 10.0, Some(350.0)).unwrap();
         assert_eq!(strategy, "historical");
         assert!((wh - 3_500.0).abs() < 1.0);
     }

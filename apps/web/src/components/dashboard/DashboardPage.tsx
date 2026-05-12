@@ -1,17 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Tooltip } from '@riviamigo/ui/primitives';
+import { Badge, Tooltip } from '@riviamigo/ui/primitives';
 import {
   useCreateDashboard,
   useUpdateDashboard,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
+import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
 import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
 import { Battery, Car, Gauge, MapPin, Save, Thermometer, Trash2, Edit2, Cpu } from 'lucide-react';
 import { BsLockFill, BsUnlockFill } from 'react-icons/bs';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { MdOutlinePendingActions } from 'react-icons/md';
 import { DashboardPageShell } from './DashboardPageShell';
 import type { DashboardPageShellRenderState } from './DashboardPageShell';
 
@@ -427,7 +427,7 @@ function formatCharging(chargerState: string | null | undefined, chargerStatus: 
 }
 
 function formatDrive(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  if (driveMode) return prettifyDriveMode(driveMode);
+  if (driveMode) return driveMode;
   return gearStatus ? prettify(gearStatus) : '-';
 }
 
@@ -436,10 +436,17 @@ function renderDriverMode(driveMode: string | null | undefined, gearStatus: stri
   if (value === 'Unknown') {
     return (
       <Tooltip content="Current sensor status is unknown." align="end">
-        <span className="inline-flex items-center justify-end text-fg-tertiary">
-          <MdOutlinePendingActions className="h-4 w-4" />
-        </span>
+        <Badge size="sm" className={getDriveModeBadgeClass('unknown')}>
+          Unknown
+        </Badge>
       </Tooltip>
+    );
+  }
+  if (driveMode) {
+    return (
+      <Badge size="sm" className={getDriveModeBadgeClass(driveMode)} title={formatDriveMode(driveMode)}>
+        {formatDriveMode(driveMode)}
+      </Badge>
     );
   }
   return value;
@@ -460,21 +467,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function prettifyDriveMode(value: string) {
-  const map: Record<string, string> = {
-    everyday: 'All-Purpose',
-    all_purpose: 'All-Purpose',
-    sport: 'Sport',
-    distance: 'Conserve',
-    conserve: 'Conserve',
-    winter: 'Snow',
-    towing: 'Towing',
-    off_road_auto: 'All-Terrain',
-    off_road_sand: 'Soft Sand',
-    off_road_rocks: 'Rock Crawl',
-    off_road_sport_auto: 'Rally',
-    off_road_sport_drift: 'Drift',
-  };
-  return map[value] ?? prettify(value);
+  return formatDriveMode(value);
 }
 
 function prettify(value: string | null | undefined) {

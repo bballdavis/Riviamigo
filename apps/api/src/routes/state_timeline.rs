@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/vehicles/:vehicle_id/state-timeline", get(state_timeline))
@@ -51,9 +54,9 @@ async fn state_timeline(
 ) -> Result<Json<TimelineResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let from = params.from.unwrap_or_else(|| {
-        Utc::now() - chrono::Duration::days(7)
-    });
+    let from = params
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(7));
     let to = params.to.unwrap_or_else(Utc::now);
     let limit = params.limit.min(2000);
 
@@ -75,10 +78,17 @@ async fn state_timeline(
     .await
     .map_err(AppError::from)?;
 
-    Ok(Json(TimelineResponse { vehicle_id, periods: rows }))
+    Ok(Json(TimelineResponse {
+        vehicle_id,
+        periods: rows,
+    }))
 }
 
-async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
+async fn ensure_owned(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
     let owned: bool = sqlx::query_scalar!(
         "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
         vehicle_id,

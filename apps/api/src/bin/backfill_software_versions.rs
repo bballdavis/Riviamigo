@@ -53,9 +53,13 @@ async fn rebuild_vehicle_versions(pool: &PgPool, vehicle_id: Uuid) -> Result<()>
 
     for row in rows {
         let ts = row.ts;
-        let Some(version) = row.ota_current_version else { continue };
+        let Some(version) = row.ota_current_version else {
+            continue;
+        };
         if current_version.as_deref() != Some(version.as_str()) {
-            if let (Some(prev_version), Some(prev_installed_at)) = (current_version.take(), installed_at.take()) {
+            if let (Some(prev_version), Some(prev_installed_at)) =
+                (current_version.take(), installed_at.take())
+            {
                 sqlx::query!(
                     r#"INSERT INTO riviamigo.software_versions
                        (vehicle_id, version, installed_at, observed_until)

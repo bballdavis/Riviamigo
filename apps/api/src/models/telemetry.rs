@@ -128,8 +128,32 @@ pub enum DriveMode {
     Sport,
     AllPurpose,
     Conserve,
-    OffRoad,
+    Snow,
+    AllTerrain,
+    SoftSand,
+    RockCrawl,
+    Rally,
+    Drift,
+    Towing,
     Unknown,
+}
+
+impl DriveMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DriveMode::Sport => "sport",
+            DriveMode::AllPurpose => "all_purpose",
+            DriveMode::Conserve => "conserve",
+            DriveMode::Snow => "snow",
+            DriveMode::AllTerrain => "all_terrain",
+            DriveMode::SoftSand => "soft_sand",
+            DriveMode::RockCrawl => "rock_crawl",
+            DriveMode::Rally => "rally",
+            DriveMode::Drift => "drift",
+            DriveMode::Towing => "towing",
+            DriveMode::Unknown => "unknown",
+        }
+    }
 }
 
 impl std::str::FromStr for DriveMode {
@@ -137,9 +161,15 @@ impl std::str::FromStr for DriveMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.to_lowercase().as_str() {
             "sport" => DriveMode::Sport,
-            "all_purpose" | "normal" => DriveMode::AllPurpose,
-            "conserve" => DriveMode::Conserve,
-            "off_road" => DriveMode::OffRoad,
+            "all_purpose" | "everyday" | "normal" => DriveMode::AllPurpose,
+            "conserve" | "distance" => DriveMode::Conserve,
+            "snow" | "winter" => DriveMode::Snow,
+            "all_terrain" | "off_road" | "off_road_auto" => DriveMode::AllTerrain,
+            "soft_sand" | "off_road_sand" => DriveMode::SoftSand,
+            "rock_crawl" | "off_road_rocks" => DriveMode::RockCrawl,
+            "rally" | "off_road_sport_auto" => DriveMode::Rally,
+            "drift" | "off_road_sport_drift" => DriveMode::Drift,
+            "tow" | "towing" => DriveMode::Towing,
             _ => DriveMode::Unknown,
         })
     }

@@ -20,8 +20,11 @@ pub fn router() -> Router<AppState> {
         .route("/trips/:id/track", get(get_track))
         .route("/trips/:id/speed", get(get_speed_profile))
         .route("/trips/:id/elevation", get(get_elevation_profile))
-    .route("/trips/:id/power", get(get_power_profile))
-    .route("/vehicles/:vehicle_id/drives/:id/power", get(get_power_profile_path))
+        .route("/trips/:id/power", get(get_power_profile))
+        .route(
+            "/vehicles/:vehicle_id/drives/:id/power",
+            get(get_power_profile_path),
+        )
 }
 
 #[derive(Deserialize)]
@@ -117,7 +120,11 @@ async fn list_trips(
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
     let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
-    let search = p.search.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let search = p
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let rows = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
@@ -140,7 +147,7 @@ async fn list_trips(
               COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' OR \
               COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%') \
-         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5"
+         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
     )
     .bind(vid)
     .bind(from)
@@ -165,7 +172,7 @@ async fn list_trips(
               COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' OR \
               COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%')"
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%')",
     )
     .bind(vid)
     .bind(from)
@@ -209,10 +216,10 @@ async fn get_trip(
          LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
          LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
          LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
-            WHERE t.id=$1 AND t.vehicle_id=$2"
+            WHERE t.id=$1 AND t.vehicle_id=$2",
     )
-        .bind(id)
-        .bind(vid)
+    .bind(id)
+    .bind(vid)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -344,7 +351,7 @@ async fn get_elevation_profile(
         r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts, avg(altitude_m) AS value
            FROM timeseries.telemetry
            WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND altitude_m IS NOT NULL
-           GROUP BY 1 ORDER BY 1"#
+           GROUP BY 1 ORDER BY 1"#,
     )
     .bind(vid)
     .bind(trip.started_at)
@@ -400,7 +407,7 @@ async fn power_profile_response(
                   avg(battery_level) AS battery_level
            FROM timeseries.telemetry
            WHERE vehicle_id=$1 AND trip_id=$2 AND ts>=$3 AND ts<=$4
-           GROUP BY 1 ORDER BY 1"#
+           GROUP BY 1 ORDER BY 1"#,
     )
     .bind(vehicle_id)
     .bind(trip_id)

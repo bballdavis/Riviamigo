@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{errors::AppError, middleware::auth::{AppState, AuthUser}};
+use crate::{
+    errors::AppError,
+    middleware::auth::{AppState, AuthUser},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/vehicles/:vehicle_id/locations", get(locations))
@@ -27,8 +30,12 @@ struct LocationParams {
     limit: i64,
 }
 
-fn default_bucket_secs() -> i64 { 300 }
-fn default_limit() -> i64 { 5_000 }
+fn default_bucket_secs() -> i64 {
+    300
+}
+fn default_limit() -> i64 {
+    5_000
+}
 
 #[derive(Serialize, sqlx::FromRow)]
 struct LocationPoint {
@@ -53,7 +60,9 @@ async fn locations(
 ) -> Result<Json<LocationsResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let from = params.from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
+    let from = params
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
     let to = params.to.unwrap_or_else(Utc::now);
     let bucket_secs = params.bucket_secs.max(60).min(86400);
     let limit = params.limit.min(20_000);
@@ -72,13 +81,13 @@ async fn locations(
              AND longitude IS NOT NULL
            GROUP BY 1
             ORDER BY 1 DESC
-            LIMIT $5"#
+            LIMIT $5"#,
     )
-        .bind(vehicle_id)
-        .bind(bucket_secs as f64)
-        .bind(from)
-        .bind(to)
-        .bind(limit)
+    .bind(vehicle_id)
+    .bind(bucket_secs as f64)
+    .bind(from)
+    .bind(to)
+    .bind(limit)
     .fetch_all(&state.pool)
     .await
     .map_err(AppError::from)?;
@@ -86,9 +95,13 @@ async fn locations(
     Ok(Json(LocationsResponse { vehicle_id, points }))
 }
 
-async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> Result<(), AppError> {
+async fn ensure_owned(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
     let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)"
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
     )
     .bind(vehicle_id)
     .bind(user_id)
@@ -96,5 +109,9 @@ async fn ensure_owned(pool: &sqlx::PgPool, vehicle_id: Uuid, user_id: Uuid) -> R
     .await
     .map_err(AppError::from)?;
 
-    if !owned { Err(AppError::NotFound) } else { Ok(()) }
+    if !owned {
+        Err(AppError::NotFound)
+    } else {
+        Ok(())
+    }
 }

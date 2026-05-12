@@ -124,7 +124,10 @@ async fn backfill_charge_session_addresses(pool: &PgPool, client: &Client) -> Re
     .fetch_all(pool)
     .await?;
 
-    info!(count = sessions.len(), "charge sessions needing address backfill");
+    info!(
+        count = sessions.len(),
+        "charge sessions needing address backfill"
+    );
 
     let mut filled = 0usize;
     let mut failed = 0usize;

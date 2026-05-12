@@ -21,4 +21,24 @@ describe('dashboard component registry', () => {
     expect(registeredNames.some((name) => name.includes('legacy'))).toBe(false);
     expect(registeredNames.some((name) => name.includes('widgetid'))).toBe(false);
   });
+
+  it('reshapes the charging summary around the connected charging custom chip', () => {
+    const charging = DEFAULT_DASHBOARDS.find((dashboard) => dashboard.slug === 'charging');
+    expect(charging).toBeTruthy();
+
+    const widgets = charging?.widgets ?? [];
+    const connectedChip = widgets.find((widget) => widget.definitionId === 'charging.connection');
+    expect(connectedChip).toMatchObject({
+      componentType: 'custom',
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+      options: { forceShow: false },
+    });
+
+    expect(widgets.find((widget) => widget.definitionId === 'home_share')?.layout).toMatchObject({ x: 0, y: 4, w: 3, h: 2 });
+    expect(widgets.find((widget) => widget.definitionId === 'dc_share')?.layout).toMatchObject({ x: 3, y: 4, w: 3, h: 2 });
+    expect(widgets.find((widget) => widget.definitionId === 'total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
+
+    const absorbedIds = new Set(['avg_session', 'charge_efficiency', 'max_charge_rate', 'max_charge_limit']);
+    expect(widgets.some((widget) => absorbedIds.has(widget.definitionId))).toBe(false);
+  });
 });

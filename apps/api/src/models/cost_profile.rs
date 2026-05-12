@@ -90,7 +90,16 @@ pub fn compute_cost(
         "per_minute" => rate * duration_minutes as f64 + session_fee,
         "free" => 0.0,
         "flat" => rate + session_fee,
-        "tou" => compute_tou_cost(profile, energy_added_kwh, energy_used_kwh, duration_minutes, started_at, ended_at)? + session_fee,
+        "tou" => {
+            compute_tou_cost(
+                profile,
+                energy_added_kwh,
+                energy_used_kwh,
+                duration_minutes,
+                started_at,
+                ended_at,
+            )? + session_fee
+        }
         _ => return None,
     };
 
@@ -105,13 +114,17 @@ fn compute_tou_cost(
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
 ) -> Option<f64> {
-    let total_kwh = f64::max(energy_added_kwh.unwrap_or(0.0), energy_used_kwh.unwrap_or(0.0));
+    let total_kwh = f64::max(
+        energy_added_kwh.unwrap_or(0.0),
+        energy_used_kwh.unwrap_or(0.0),
+    );
     if total_kwh <= 0.0 {
         return None;
     }
 
     let tz: Tz = profile.timezone.as_deref().unwrap_or("UTC").parse().ok()?;
-    let end_utc = ended_at.unwrap_or_else(|| started_at + Duration::minutes(duration_minutes.max(0) as i64));
+    let end_utc =
+        ended_at.unwrap_or_else(|| started_at + Duration::minutes(duration_minutes.max(0) as i64));
     if end_utc <= started_at {
         return None;
     }
@@ -130,7 +143,8 @@ fn compute_tou_cost(
 
     while day <= end_day {
         for period in &periods {
-            let Some(period_start_local) = resolve_local_datetime(tz, day, period.start_minute) else {
+            let Some(period_start_local) = resolve_local_datetime(tz, day, period.start_minute)
+            else {
                 continue;
             };
             let Some(period_end_local) = resolve_local_datetime(tz, day, period.end_minute) else {
@@ -161,7 +175,11 @@ fn compute_tou_cost(
     Some(total_kwh * (weighted_rate / overlap_minutes))
 }
 
-fn resolve_local_datetime(tz: Tz, day: NaiveDate, minute_of_day: u16) -> Option<chrono::DateTime<Tz>> {
+fn resolve_local_datetime(
+    tz: Tz,
+    day: NaiveDate,
+    minute_of_day: u16,
+) -> Option<chrono::DateTime<Tz>> {
     let minute_of_day = minute_of_day.min(24 * 60);
     let hour = (minute_of_day / 60) as u32;
     let minute = (minute_of_day % 60) as u32;
@@ -257,5 +275,28 @@ mod tests {
         let cost = compute_cost(&p, Some(10.0), None, 60, start, Some(end)).unwrap();
 
         assert!((cost - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_tou_zero_cost_overnight_in_local_timezone() {
+        let mut p = profile("tou", 0.0, 0.0);
+        p.timezone = Some("America/Chicago".into());
+        p.tou_periods = json!([
+            { "label": "Overnight", "start_minute": 0, "end_minute": 360, "rate": 0.0 },
+            { "label": "Daytime", "start_minute": 360, "end_minute": 1200, "rate": 32.2499 },
+            { "label": "Evening", "start_minute": 1200, "end_minute": 1440, "rate": 0.0 }
+        ]);
+
+        let start = Utc
+            .with_ymd_and_hms(2026, 5, 12, 4, 53, 0)
+            .single()
+            .unwrap();
+        let end = Utc
+            .with_ymd_and_hms(2026, 5, 12, 10, 23, 0)
+            .single()
+            .unwrap();
+        let cost = compute_cost(&p, Some(46.51), None, 330, start, Some(end)).unwrap();
+
+        assert_eq!(cost, 0.0);
     }
 }

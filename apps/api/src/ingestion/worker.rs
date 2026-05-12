@@ -63,7 +63,7 @@ pub async fn run_vehicle_worker(
 
     // Load credentials
     let creds_row = sqlx::query_scalar::<_, Vec<u8>>(
-        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1"
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
     )
     .bind(vehicle_id)
     .fetch_optional(&pool)
@@ -107,14 +107,13 @@ pub async fn run_vehicle_worker(
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
 
     // Get rivian_vehicle_id
-    let riv_id: Option<String> = sqlx::query_scalar(
-        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1"
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
+    let riv_id: Option<String> =
+        sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
 
     let rivian_vehicle_id = match riv_id {
         Some(id) => id,
@@ -949,7 +948,14 @@ async fn write_telemetry(
             hv_thermal_event, twelve_volt_health, is_online,
             trip_id, charge_session_id)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)
-            ON CONFLICT (vehicle_id, ts) DO NOTHING"#,
+            ON CONFLICT (vehicle_id, ts) DO UPDATE
+            SET drive_mode = EXCLUDED.drive_mode
+            WHERE EXCLUDED.drive_mode IS NOT NULL
+              AND EXCLUDED.drive_mode <> 'unknown'
+              AND (
+                timeseries.telemetry.drive_mode IS NULL
+                OR timeseries.telemetry.drive_mode = 'unknown'
+              )"#,
     )
         .bind(e.ts)
         .bind(e.vehicle_id)
@@ -965,7 +971,7 @@ async fn write_telemetry(
         .bind(e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()))
         .bind(&e.charger_status)
         .bind(e.time_to_end_of_charge_min)
-        .bind(e.drive_mode.as_ref().map(|d| format!("{d:?}").to_lowercase()))
+        .bind(e.drive_mode.as_ref().map(|d| d.as_str()))
         .bind(&e.gear_status)
         .bind(e.cabin_temp_c)
         .bind(e.driver_temp_c)
@@ -1270,9 +1276,7 @@ async fn persist_trip(
     // Fetch ambient temperature from Open-Meteo using trip start location/time.
     // Falls back to None gracefully if the request fails.
     let outside_temp_c = match start {
-        Some(pt) => {
-            fetch_ambient_temp_c(http_client, pt.lat, pt.lng, trip.started_at).await
-        }
+        Some(pt) => fetch_ambient_temp_c(http_client, pt.lat, pt.lng, trip.started_at).await,
         None => None,
     };
 

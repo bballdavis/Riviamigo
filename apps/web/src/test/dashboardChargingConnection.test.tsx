@@ -1,0 +1,136 @@
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const chargingMocks = vi.hoisted(() => ({
+  forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
+}));
+
+vi.mock('@riviamigo/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
+  return {
+    ...actual,
+    useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+    useCurrentVehicleStatus: () => ({
+      data: {
+        vehicle_id: 'vehicle-1',
+        battery_level: 64,
+        range_miles: 188,
+        battery_limit: 80,
+        power_state: 'ready',
+        charger_state: chargingMocks.forcePluggedState,
+        charger_status:
+          chargingMocks.forcePluggedState === 'Charging'
+            ? 'chrgr_sts_connected_charging'
+            : chargingMocks.forcePluggedState === 'Connected'
+              ? 'chrgr_sts_connected_no_chrg'
+              : 'chrgr_sts_not_connected',
+        time_to_end_of_charge_min: chargingMocks.forcePluggedState === 'Charging' ? 95 : null,
+        speed_mph: 0,
+        latitude: null,
+        longitude: null,
+        is_online: true,
+        last_updated: '2026-05-12T12:00:00Z',
+      },
+    }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', images: null }] }),
+    useMetricCatalog: () => ({ data: [] }),
+    useChargingSummary: () => ({
+      data: {
+        session_count: 6,
+        total_energy_kwh: 240,
+        total_cost_usd: 48,
+        home_kwh: 180,
+        away_kwh: 60,
+        ac_kwh: 120,
+        dc_kwh: 120,
+        charging_cycles: 4,
+        charging_efficiency_pct: 92.5,
+        max_charge_rate_kw: 164.2,
+        max_charge_limit_pct: 85,
+      },
+    }),
+  };
+});
+
+import { DashboardRenderer } from '@riviamigo/dashboards';
+import type { DashboardConfig } from '@riviamigo/dashboards';
+import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
+
+const baseConfig: DashboardConfig = {
+  schemaVersion: 2,
+  id: 'charging-connection-test',
+  slug: 'charging-connection-test',
+  name: 'Charging Connection Test',
+  isDefault: false,
+  isLocked: false,
+  ownerId: null,
+  controls: { dateRange: true },
+  widgets: [
+    {
+      id: 'charging-connection-widget',
+      componentType: 'custom',
+      definitionId: 'charging.connection',
+      title: 'Charging Connection',
+      options: { forceShow: false },
+      layout: { x: 0, y: 0, w: 6, h: 6 },
+    },
+  ],
+};
+
+describe('charging connection custom widget', () => {
+  beforeEach(() => {
+    chargingMocks.forcePluggedState = 'Disconnected';
+  });
+
+  it('stays in a restrained disconnected state until telemetry or preview enables it', () => {
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.getByText('Not connected')).toBeInTheDocument();
+    expect(screen.queryByText('Connected, not charging')).not.toBeInTheDocument();
+  });
+
+  it('renders the live charging treatment when telemetry says the vehicle is charging', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.getByText('Connected & charging')).toBeInTheDocument();
+    expect(screen.getAllByText('1h 35m')).toHaveLength(2);
+    expect(screen.getByText('92.5%')).toBeInTheDocument();
+  });
+
+  it('exposes a force-show switch in the custom widget editor', () => {
+    const onChange = vi.fn();
+
+    render(
+      <WidgetEditForm
+        widget={baseConfig.widgets[0]!}
+        onChange={onChange}
+        onClose={() => undefined}
+      />
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Force show charging connection' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ forceShow: true }),
+      })
+    );
+  });
+});

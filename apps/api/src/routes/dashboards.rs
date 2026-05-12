@@ -67,7 +67,7 @@ async fn list(
         FROM dashboards
         WHERE owner_id = $1 OR owner_id IS NULL
         ORDER BY is_default DESC, name ASC
-        "#
+        "#,
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
@@ -86,7 +86,7 @@ async fn fetch(
         r#"
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards WHERE id = $1
-        "#
+        "#,
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -111,7 +111,7 @@ async fn by_slug(
         WHERE slug = $1 AND (owner_id = $2 OR owner_id IS NULL)
         ORDER BY (owner_id = $2) DESC
         LIMIT 1
-        "#
+        "#,
     )
     .bind(slug)
     .bind(auth.user_id)
@@ -176,7 +176,7 @@ async fn update(
             updated_at  = NOW()
         WHERE id = $4
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#
+        "#,
     )
     .bind(body.name)
     .bind(body.description)
@@ -262,7 +262,7 @@ async fn admin_update(
             updated_at  = NOW()
         WHERE id = $4
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#
+        "#,
     )
     .bind(body.name)
     .bind(body.description)
@@ -293,7 +293,7 @@ async fn admin_set_lock(
         UPDATE dashboards SET is_locked = $1, updated_at = NOW()
         WHERE id = $2
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
-        "#
+        "#,
     )
     .bind(body.locked)
     .bind(id)
@@ -311,7 +311,7 @@ async fn get_dashboard(state: &AppState, id: Uuid) -> Result<Dashboard, AppError
         r#"
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards WHERE id = $1
-        "#
+        "#,
     )
     .bind(id)
     .fetch_optional(&state.pool)

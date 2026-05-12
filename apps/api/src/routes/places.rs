@@ -6,21 +6,24 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 use std::time::Duration;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
-    models::cost_profile::{TouPeriod, validate_tou_periods},
+    models::cost_profile::{validate_tou_periods, TouPeriod},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/places", get(list_places).post(create_place))
         .route("/places/search", get(search_places))
-        .route("/places/:id", get(get_place).put(update_place).delete(delete_place))
+        .route(
+            "/places/:id",
+            get(get_place).put(update_place).delete(delete_place),
+        )
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +126,8 @@ async fn get_place(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PlaceRecord>, AppError> {
-    fetch_places(&state.pool, auth.user_id, Some(id)).await?
+    fetch_places(&state.pool, auth.user_id, Some(id))
+        .await?
         .into_iter()
         .next()
         .map(Json)
@@ -172,12 +176,17 @@ async fn search_places(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()
-        .map_err(|error| AppError::Internal(anyhow!("address search client build failed: {error}")))?;
+        .map_err(|error| {
+            AppError::Internal(anyhow!("address search client build failed: {error}"))
+        })?;
 
     let limit = params.limit.unwrap_or(5).clamp(1, 10).to_string();
     let response = match client
         .get("https://nominatim.openstreetmap.org/search")
-        .header(reqwest::header::USER_AGENT, "riviamigo-api/0.1 (contact: support@riviamigo.com)")
+        .header(
+            reqwest::header::USER_AGENT,
+            "riviamigo-api/0.1 (contact: support@riviamigo.com)",
+        )
         .query(&[
             ("format", "jsonv2"),
             ("addressdetails", "1"),
@@ -216,7 +225,13 @@ async fn search_places(
         let mut cache = state.nominatim_cache.write().await;
         // Evict expired entries to keep memory bounded
         cache.retain(|_, (cached_at, _)| cached_at.elapsed() < Duration::from_secs(3600));
-        cache.insert(query.clone(), (std::time::Instant::now(), serde_json::Value::Array(rows.clone())));
+        cache.insert(
+            query.clone(),
+            (
+                std::time::Instant::now(),
+                serde_json::Value::Array(rows.clone()),
+            ),
+        );
     }
 
     let suggestions = rows
@@ -236,7 +251,14 @@ async fn create_place(
 
     let mut tx = state.pool.begin().await?;
     let address_id = upsert_address(&mut tx, &body.address).await?;
-    let cost_profile_id = upsert_cost_profile(&mut tx, auth.user_id, None, body.charging.as_ref(), &body.name).await?;
+    let cost_profile_id = upsert_cost_profile(
+        &mut tx,
+        auth.user_id,
+        None,
+        body.charging.as_ref(),
+        &body.name,
+    )
+    .await?;
 
     let place_id = sqlx::query_scalar!(
         r#"INSERT INTO riviamigo.geofences
@@ -280,7 +302,14 @@ async fn update_place(
 
     let mut tx = state.pool.begin().await?;
     let address_id = upsert_address(&mut tx, &body.address).await?;
-    let cost_profile_id = upsert_cost_profile(&mut tx, auth.user_id, existing.cost_profile_id, body.charging.as_ref(), &body.name).await?;
+    let cost_profile_id = upsert_cost_profile(
+        &mut tx,
+        auth.user_id,
+        existing.cost_profile_id,
+        body.charging.as_ref(),
+        &body.name,
+    )
+    .await?;
 
     let updated = sqlx::query!(
         r#"UPDATE riviamigo.geofences
@@ -388,37 +417,47 @@ async fn fetch_places(
             let place_name = row.name;
 
             PlaceRecord {
-            id: row.id,
-            name: place_name.clone(),
-            latitude: row.latitude,
-            longitude: row.longitude,
-            radius_m: row.radius_m,
-            is_home: row.is_home,
-            is_work: row.is_work,
-            address: row.address_display_name.map(|display_name| AddressRecord {
-                id: Some(row.address_id.expect("address id should exist when address details are present")),
-                display_name,
-                osm_id: row.address_osm_id,
-                latitude: row.address_latitude.unwrap_or(row.latitude),
-                longitude: row.address_longitude.unwrap_or(row.longitude),
-                road: row.address_road,
-                city: row.address_city,
-                state: row.address_state,
-                postcode: row.address_postcode,
-                country: row.address_country,
-                raw: row.address_raw,
-            }),
-            charging: row.cost_profile_id.map(|cost_profile_id| ChargingProfileRecord {
-                id: cost_profile_id,
-                name: row.cost_profile_name.unwrap_or_else(|| place_name.clone()),
-                billing_type: row.cost_profile_billing_type.unwrap_or_else(|| "flat".into()),
-                rate: row.cost_profile_rate.unwrap_or(0.0),
-                session_fee: row.cost_profile_session_fee.unwrap_or(0.0),
-                currency: row.cost_profile_currency.unwrap_or_else(|| "USD".into()),
-                timezone: row.cost_profile_timezone,
-                tou_periods: row.cost_profile_tou_periods.unwrap_or_else(|| serde_json::json!([])),
-            }),
-        }} )
+                id: row.id,
+                name: place_name.clone(),
+                latitude: row.latitude,
+                longitude: row.longitude,
+                radius_m: row.radius_m,
+                is_home: row.is_home,
+                is_work: row.is_work,
+                address: row.address_display_name.map(|display_name| AddressRecord {
+                    id: Some(
+                        row.address_id
+                            .expect("address id should exist when address details are present"),
+                    ),
+                    display_name,
+                    osm_id: row.address_osm_id,
+                    latitude: row.address_latitude.unwrap_or(row.latitude),
+                    longitude: row.address_longitude.unwrap_or(row.longitude),
+                    road: row.address_road,
+                    city: row.address_city,
+                    state: row.address_state,
+                    postcode: row.address_postcode,
+                    country: row.address_country,
+                    raw: row.address_raw,
+                }),
+                charging: row
+                    .cost_profile_id
+                    .map(|cost_profile_id| ChargingProfileRecord {
+                        id: cost_profile_id,
+                        name: row.cost_profile_name.unwrap_or_else(|| place_name.clone()),
+                        billing_type: row
+                            .cost_profile_billing_type
+                            .unwrap_or_else(|| "flat".into()),
+                        rate: row.cost_profile_rate.unwrap_or(0.0),
+                        session_fee: row.cost_profile_session_fee.unwrap_or(0.0),
+                        currency: row.cost_profile_currency.unwrap_or_else(|| "USD".into()),
+                        timezone: row.cost_profile_timezone,
+                        tou_periods: row
+                            .cost_profile_tou_periods
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    }),
+            }
+        })
         .collect())
 }
 
@@ -497,7 +536,10 @@ async fn upsert_cost_profile(
         .unwrap_or_else(|| format!("{} charging", place_name.trim()));
     let session_fee = input.session_fee.unwrap_or(0.0);
     let currency = input.currency.clone().unwrap_or_else(|| "USD".into());
-    let tou_periods = input.tou_periods.clone().unwrap_or_else(|| serde_json::json!([]));
+    let tou_periods = input
+        .tou_periods
+        .clone()
+        .unwrap_or_else(|| serde_json::json!([]));
 
     if let Some(profile_id) = existing_profile_id {
         let updated_id = sqlx::query_scalar!(
@@ -554,14 +596,20 @@ fn validate_place_body(body: &PlaceBody) -> Result<(), AppError> {
         return Err(AppError::Validation("place name is required".into()));
     }
     if body.address.display_name.trim().is_empty() {
-        return Err(AppError::Validation("an address selection is required".into()));
+        return Err(AppError::Validation(
+            "an address selection is required".into(),
+        ));
     }
     if !body.address.latitude.is_finite() || !body.address.longitude.is_finite() {
-        return Err(AppError::Validation("address coordinates must be valid numbers".into()));
+        return Err(AppError::Validation(
+            "address coordinates must be valid numbers".into(),
+        ));
     }
     if let Some(radius_m) = body.radius_m {
         if !radius_m.is_finite() || radius_m <= 0.0 {
-            return Err(AppError::Validation("radius_m must be a positive number".into()));
+            return Err(AppError::Validation(
+                "radius_m must be a positive number".into(),
+            ));
         }
     }
     if let Some(charging) = &body.charging {
@@ -581,16 +629,29 @@ fn validate_charging_input(input: &ChargingProfileInput) -> Result<(), AppError>
     }
 
     if !input.rate.is_finite() || input.rate < 0.0 {
-        return Err(AppError::Validation("rate must be a non-negative number".into()));
+        return Err(AppError::Validation(
+            "rate must be a non-negative number".into(),
+        ));
     }
 
     if input.billing_type == "tou" {
-        if input.timezone.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_none() {
-            return Err(AppError::Validation("timezone is required for TOU charging plans".into()));
+        if input
+            .timezone
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Err(AppError::Validation(
+                "timezone is required for TOU charging plans".into(),
+            ));
         }
 
         let periods: Vec<TouPeriod> = serde_json::from_value(
-            input.tou_periods.clone().unwrap_or_else(|| serde_json::json!([])),
+            input
+                .tou_periods
+                .clone()
+                .unwrap_or_else(|| serde_json::json!([])),
         )
         .map_err(|_| AppError::Validation("tou_periods must be a JSON array".into()))?;
 
@@ -612,11 +673,36 @@ fn value_to_address_record(raw: Value) -> Option<AddressRecord> {
         osm_id: raw.get("osm_id").and_then(Value::as_i64),
         latitude,
         longitude,
-        road: address.and_then(|value| value.get("road").or_else(|| value.get("pedestrian")).or_else(|| value.get("footway"))).and_then(Value::as_str).map(str::to_string),
-        city: address.and_then(|value| value.get("city").or_else(|| value.get("town")).or_else(|| value.get("village"))).and_then(Value::as_str).map(str::to_string),
-        state: address.and_then(|value| value.get("state")).and_then(Value::as_str).map(str::to_string),
-        postcode: address.and_then(|value| value.get("postcode")).and_then(Value::as_str).map(str::to_string),
-        country: address.and_then(|value| value.get("country")).and_then(Value::as_str).map(str::to_string),
+        road: address
+            .and_then(|value| {
+                value
+                    .get("road")
+                    .or_else(|| value.get("pedestrian"))
+                    .or_else(|| value.get("footway"))
+            })
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        city: address
+            .and_then(|value| {
+                value
+                    .get("city")
+                    .or_else(|| value.get("town"))
+                    .or_else(|| value.get("village"))
+            })
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        state: address
+            .and_then(|value| value.get("state"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        postcode: address
+            .and_then(|value| value.get("postcode"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        country: address
+            .and_then(|value| value.get("country"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         raw: Some(raw),
     })
 }

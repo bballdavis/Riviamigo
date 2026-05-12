@@ -33,10 +33,15 @@ async fn backfill_charge_session_ids(pool: &PgPool) -> Result<()> {
     .fetch_all(pool)
     .await?;
 
-    info!("Found {} completed charge sessions to backfill", sessions.len());
+    info!(
+        "Found {} completed charge sessions to backfill",
+        sessions.len()
+    );
 
     for session in &sessions {
-        let Some(ended_at) = session.ended_at else { continue };
+        let Some(ended_at) = session.ended_at else {
+            continue;
+        };
         let result = sqlx::query!(
             r#"UPDATE timeseries.telemetry
                SET charge_session_id = $1
