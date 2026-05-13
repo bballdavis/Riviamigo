@@ -47,6 +47,36 @@ A widget should usually:
 
 Do not use one widget to coordinate the rest of a page.
 
+## Sensor Chip Language
+
+Use `componentType: "sensor"` for compact stat chips unless the card owns a genuinely custom interaction or visual. The reusable sensor chip supports:
+
+- Metric catalog values through `metric`, `valueMode`, and optional background graphs.
+- Direct page data through `dataSource`: `batteryHealth`, `chargingSummary`, or `vehicleStatus`.
+- Simple math through formulas such as `([home_kwh] / [total_energy_kwh]) * 100`.
+- Composite display pieces through paths, formulas, and templates such as `/[usable_new_kwh:kWh]` or `Home [home_kwh:kWh] / Away [away_kwh:kWh]`.
+
+For source-backed chips, define the canonical behavior in `packages/dashboards/src/widgets/sensor/sensorDefinitions.ts`. Keep default dashboard JSON minimal when a definition already owns the source, unit, formula, inline secondary, label suffix, icon, value color, and graph defaults. Use widget `options` only for per-instance overrides such as `chargingConnectionVisibility` or an accent border.
+
+The editor exposes the same language under the sensor settings:
+
+- `Data source` chooses the backing object or metric catalog.
+- `Value path`, `Fallback path`, `Formula`, and `Unit` define the primary value.
+- `Label suffix`, inline fields, and `Secondary line` define compact composites while preserving the existing chip layout.
+
+Example usable-capacity definition:
+
+```json
+{
+  "dataSource": "batteryHealth",
+  "valuePath": "usable_now_kwh",
+  "unit": "kWh",
+  "inlineSecondaryTemplate": "/[usable_new_kwh:kWh]",
+  "labelSuffix": "now/new",
+  "valueColor": "default"
+}
+```
+
 ## Adding Page-Level Composition
 
 Page-level composition is for content that should not live inside the dashboard grid.

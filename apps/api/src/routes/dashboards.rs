@@ -422,3 +422,20 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overview_seed_matches_frontend_default_layout() {
+        let api_config: Value =
+            serde_json::from_str(include_str!("../../dashboards/dashboard.json")).unwrap();
+        let frontend_config: Value = serde_json::from_str(include_str!(
+            "../../../../packages/dashboards/src/defaults/dashboard.json"
+        ))
+        .unwrap();
+
+        assert_eq!(api_config["widgets"], frontend_config["widgets"]);
+    }
+}

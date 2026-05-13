@@ -9,14 +9,15 @@ interface PaletteViewProps {
 
 export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
   const [search, setSearch] = useState('');
+  const visibleWidgets = widgets.filter((def) => !isLegacyStatWidget(def));
   const filtered = search.trim()
-    ? widgets.filter(
+    ? visibleWidgets.filter(
         (def) =>
           def.title.toLowerCase().includes(search.toLowerCase()) ||
           def.componentType.toLowerCase().includes(search.toLowerCase()) ||
           def.definitionId.toLowerCase().includes(search.toLowerCase())
       )
-    : widgets;
+    : visibleWidgets;
 
   return (
     <div className="flex h-full flex-col gap-2">
@@ -50,5 +51,13 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function isLegacyStatWidget(def: WidgetDef) {
+  return (
+    def.componentType === 'battery' ||
+    def.componentType === 'charging' ||
+    (def.componentType === 'custom' && def.definitionId === 'trips.stat')
   );
 }

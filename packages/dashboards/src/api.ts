@@ -77,20 +77,30 @@ const CHARGING_SWAP_WIDGET_KEYS = new Set([
   'charging:max_charge_limit',
   'charging:home_share',
   'charging:dc_share',
+  'sensor:charging_sessions_summary',
+  'sensor:charging_total_energy',
+  'sensor:charging_total_cost',
+  'sensor:charging_avg_session',
+  'sensor:charging_cycles_summary',
+  'sensor:charging_efficiency_summary',
+  'sensor:charging_max_rate',
+  'sensor:charging_max_limit',
+  'sensor:charging_home_share',
+  'sensor:charging_dc_share',
   'custom:charging.connection',
 ]);
 
 const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
-  chargingWidget('d4000004-0000-0000-0000-000000000001', 'sessions', 'Sessions', {}, { x: 0, y: 0, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000002', 'total_energy', 'Total Energy', {}, { x: 3, y: 0, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000003', 'total_cost', 'Total Cost', {}, { x: 3, y: 2, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000004', 'avg_session', 'Avg / Session', unpluggedOptions(), { x: 9, y: 2, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000005', 'charging_cycles', 'Charging Cycles', {}, { x: 0, y: 2, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000006', 'charge_efficiency', 'Charge Efficiency', unpluggedOptions(), { x: 9, y: 0, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000007', 'max_charge_rate', 'Max Charge Rate', unpluggedOptions(), { x: 6, y: 2, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000008', 'max_charge_limit', 'Max Charge Limit', unpluggedOptions(), { x: 6, y: 0, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000009', 'home_share', 'Home Charging', {}, { x: 0, y: 4, w: 3, h: 2 }),
-  chargingWidget('d4000004-0000-0000-0000-000000000010', 'dc_share', 'DC Fast Charging', {}, { x: 3, y: 4, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000001', 'charging_sessions_summary', 'Sessions', {}, { x: 0, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000002', 'charging_total_energy', 'Total Energy', {}, { x: 3, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000003', 'charging_total_cost', 'Total Cost', {}, { x: 3, y: 2, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000004', 'charging_avg_session', 'Avg / Session', unpluggedOptions(), { x: 9, y: 2, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000005', 'charging_cycles_summary', 'Charging Cycles', {}, { x: 0, y: 2, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000006', 'charging_efficiency_summary', 'Charge Efficiency', unpluggedOptions(), { x: 9, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000007', 'charging_max_rate', 'Max Charge Rate', unpluggedOptions(), { x: 6, y: 2, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000008', 'charging_max_limit', 'Max Charge Limit', unpluggedOptions(), { x: 6, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000009', 'charging_home_share', 'Home Charging', {}, { x: 0, y: 4, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000010', 'charging_dc_share', 'DC Fast Charging', {}, { x: 3, y: 4, w: 3, h: 2 }),
   customWidget('d4000004-0000-0000-0000-000000000013', 'charging.connection', 'Charging Connection', pluggedOptions(), { x: 6, y: 0, w: 6, h: 6 }),
 ];
 
@@ -99,14 +109,14 @@ function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConf
   return { ...config, widgets: [...CHARGING_SWAP_WIDGETS, ...preserved] };
 }
 
-function chargingWidget(
+function sensorWidget(
   id: string,
   definitionId: string,
   title: string,
   options: Record<string, unknown>,
   layout: WidgetInstance['layout'],
 ): WidgetInstance {
-  return { id, componentType: 'charging', definitionId, title, options, layout };
+  return { id, componentType: 'sensor', definitionId, title, options, layout };
 }
 
 function customWidget(
