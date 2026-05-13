@@ -101,14 +101,26 @@ function expandUnpluggedChargingMixRow(
   if (pluggedIn) return widgets;
 
   return widgets.map((widget) => {
-    if (widget.componentType === 'charging' && widget.definitionId === 'home_share') {
+    if (isChargingMixSensor(widget, 'home')) {
       return { ...widget, layout: { ...widget.layout, x: 0, w: 6 } };
     }
-    if (widget.componentType === 'charging' && widget.definitionId === 'dc_share') {
+    if (isChargingMixSensor(widget, 'dc')) {
       return { ...widget, layout: { ...widget.layout, x: 6, w: 6 } };
     }
     return widget;
   });
+}
+
+function isChargingMixSensor(
+  widget: DashboardConfig['widgets'][number],
+  mix: 'home' | 'dc',
+) {
+  const oldDefinitionId = mix === 'home' ? 'home_share' : 'dc_share';
+  const sensorDefinitionId = mix === 'home' ? 'charging_home_share' : 'charging_dc_share';
+  return (
+    (widget.componentType === 'charging' && widget.definitionId === oldDefinitionId) ||
+    (widget.componentType === 'sensor' && widget.definitionId === sensorDefinitionId)
+  );
 }
 
 function WidgetGrid({

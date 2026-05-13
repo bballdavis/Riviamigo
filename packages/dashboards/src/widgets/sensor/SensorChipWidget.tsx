@@ -1,6 +1,12 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
-import { useMetricSeries, useMetricValue } from '@riviamigo/hooks';
+import {
+  useBatteryHealth,
+  useChargingSummary,
+  useCurrentVehicleStatus,
+  useMetricSeries,
+  useMetricValue,
+} from '@riviamigo/hooks';
 import {
   getChartColor,
   MiniSparkline,
@@ -24,18 +30,33 @@ import {
   getSensorDefinition,
   SENSOR_DEFINITIONS,
   type SensorChartType,
+  type SensorDataSource,
   type SensorIconKey,
+  type SensorValueColor,
 } from './sensorDefinitions';
 
 interface SensorChipOptions {
   metric?: string;
   icon?: SensorIconKey;
-  chartType?: SensorChartType | 'none';
+  chartType?: SensorChartType;
+  dataSource?: SensorDataSource;
+  valuePath?: string;
+  fallbackValuePath?: string;
+  valueFormula?: string;
+  unit?: string | null;
+  inlineSecondaryPath?: string;
+  inlineSecondaryFormula?: string;
+  inlineSecondaryTemplate?: string;
+  inlineSecondaryUnit?: string | null;
+  inlineSecondaryPrefix?: string;
+  secondaryTemplate?: string;
+  labelSuffix?: string;
   showSprite?: boolean;
   showSubtitle?: boolean;
   subtitle?: string;
   accentBorder?: boolean;
   valueSize?: 'sm' | 'md' | 'lg';
+  valueColor?: SensorValueColor;
   valueMode?: 'latest' | 'sum' | 'avg' | 'count';
   curveSmoothing?: number | boolean;
   curveColor?: ChartColorKey;
@@ -51,14 +72,27 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
   const chartType = options.chartType ?? definition.chartType;
 
   return {
-    metric: options.metric ?? definition.metric,
+    metric: options.metric ?? definition.metric ?? '',
     icon: options.icon ?? definition.icon,
     chartType,
+    dataSource: options.dataSource ?? definition.dataSource ?? 'metric',
+    valuePath: options.valuePath ?? definition.valuePath ?? '',
+    fallbackValuePath: options.fallbackValuePath ?? definition.fallbackValuePath ?? '',
+    valueFormula: options.valueFormula ?? definition.valueFormula ?? '',
+    unit: options.unit ?? definition.unit ?? null,
+    inlineSecondaryPath: options.inlineSecondaryPath ?? definition.inlineSecondaryPath ?? '',
+    inlineSecondaryFormula: options.inlineSecondaryFormula ?? definition.inlineSecondaryFormula ?? '',
+    inlineSecondaryTemplate: options.inlineSecondaryTemplate ?? definition.inlineSecondaryTemplate ?? '',
+    inlineSecondaryUnit: options.inlineSecondaryUnit ?? definition.inlineSecondaryUnit ?? null,
+    inlineSecondaryPrefix: options.inlineSecondaryPrefix ?? definition.inlineSecondaryPrefix ?? '',
+    secondaryTemplate: options.secondaryTemplate ?? definition.secondaryTemplate ?? '',
+    labelSuffix: options.labelSuffix ?? definition.labelSuffix ?? '',
     showSprite: options.showSprite ?? true,
     showSubtitle: options.showSubtitle ?? false,
     subtitle: options.subtitle ?? '',
     accentBorder: options.accentBorder ?? definition.accent ?? false,
     valueSize: options.valueSize ?? 'md',
+    valueColor: options.valueColor ?? definition.valueColor ?? 'accent',
     valueMode: options.valueMode ?? definition.valueMode,
     curveColor: options.curveColor ?? 'accent',
     curveSmoothing: normalizeCurveSmoothing(
@@ -75,12 +109,32 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
 export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const definition = getSensorDefinition(instance.definitionId);
   const options = readOptions(instance);
-  const { data: value } = useMetricValue(ctx.vehicleId, options.metric);
-  const { data: series = [] } = useMetricSeries(ctx.vehicleId, options.metric, ctx.from, ctx.to);
+  const metric = options.dataSource === 'metric' ? options.metric : null;
+  const needsHealth = options.dataSource === 'batteryHealth';
+  const needsCharging = options.dataSource === 'chargingSummary';
+  const needsStatus = options.dataSource === 'vehicleStatus' || usesStatus(options);
+  const { data: value } = useMetricValue(ctx.vehicleId, metric);
+  const { data: series = [] } = useMetricSeries(ctx.vehicleId, metric, ctx.from, ctx.to);
+  const { data: health, isLoading: healthLoading } = useBatteryHealth(needsHealth ? ctx.vehicleId : null);
+  const { data: chargingSummary, isLoading: chargingLoading } = useChargingSummary(needsCharging ? ctx.vehicleId : null, ctx.from, ctx.to);
+  const { data: status, isLoading: statusLoading } = useCurrentVehicleStatus(needsStatus ? ctx.vehicleId : null);
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
   const iconId = resolveIconId(options.icon);
-  const metricValue = deriveMetricValue(options.valueMode, value?.value, series);
-  const displayValue = formatMetricValue(metricValue, value?.unit);
+  const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, status);
+  const isLoading = options.dataSource === 'batteryHealth'
+    ? healthLoading || (needsStatus && statusLoading)
+    : options.dataSource === 'chargingSummary'
+      ? chargingLoading
+      : options.dataSource === 'vehicleStatus'
+        ? statusLoading
+        : false;
+  const resolvedValue = options.dataSource === 'metric'
+    ? deriveMetricValue(options.valueMode, value?.value, series)
+    : resolveConfiguredValue(options, sourceValues);
+  const unit = options.dataSource === 'metric' ? value?.unit : options.unit;
+  const displayValue = isLoading ? '...' : formatMetricValue(resolvedValue, unit);
+  const inlineSecondary = isLoading ? '' : resolveInlineSecondary(options, sourceValues);
+  const secondary = isLoading ? '' : resolveTemplate(options.secondaryTemplate, sourceValues);
 
   const isDailyDelta = options.chartType === 'daily_delta';
   const sparklineType: MiniSparklineType = isDailyDelta
@@ -88,7 +142,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     : (options.chartType as MiniSparklineType);
   const spriteData = isDailyDelta
     ? seriesToDailyDeltas(series, options.windowDays)
-    : deriveSpriteData(series, metricValue, value?.ts ?? ctx.to);
+    : deriveSpriteData(series, resolvedValue, value?.ts ?? ctx.to);
   const showSprite = options.showSprite && options.chartType !== 'none';
 
   return (
@@ -125,6 +179,11 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
           <div className="min-w-0">
             <p className="truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
               {title}
+              {options.labelSuffix ? (
+                <span className="ml-1 text-[10px] font-normal normal-case tracking-normal">
+                  ({options.labelSuffix})
+                </span>
+              ) : null}
             </p>
             {options.showSubtitle && options.subtitle ? (
               <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
@@ -136,7 +195,8 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         <div className="mt-1.5 flex items-baseline gap-1">
           <span
             className={cn(
-              'font-mono font-semibold tabular-nums tracking-tight text-accent',
+              'font-mono font-semibold tabular-nums tracking-tight',
+              options.valueColor === 'accent' ? 'text-accent' : 'text-fg',
               options.valueSize === 'sm'
                 ? 'text-xl'
                 : options.valueSize === 'lg'
@@ -147,10 +207,202 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
           >
             {displayValue}
           </span>
+          {inlineSecondary ? (
+            <span className="font-mono text-sm tabular-nums text-fg-tertiary">
+              {inlineSecondary}
+            </span>
+          ) : null}
         </div>
+        {secondary ? (
+          <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p>
+        ) : null}
       </div>
     </Card>
   );
+}
+
+function buildSourceValues(
+  dataSource: SensorDataSource,
+  health: unknown,
+  chargingSummary: unknown,
+  status: unknown
+) {
+  const primary =
+    dataSource === 'batteryHealth'
+      ? health
+      : dataSource === 'chargingSummary'
+        ? chargingSummary
+        : dataSource === 'vehicleStatus'
+          ? status
+          : {};
+
+  return {
+    ...objectValues(primary),
+    health,
+    battery: health,
+    charging: chargingSummary,
+    status,
+  } as Record<string, unknown>;
+}
+
+function objectValues(value: unknown) {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function resolveConfiguredValue(
+  options: Required<SensorChipOptions>,
+  values: Record<string, unknown>
+) {
+  if (options.valueFormula) return resolveFormula(options.valueFormula, values);
+  const value = resolveNumberPath(values, options.valuePath);
+  if (value != null) return value;
+  return resolveNumberPath(values, options.fallbackValuePath);
+}
+
+function resolveInlineSecondary(
+  options: Required<SensorChipOptions>,
+  values: Record<string, unknown>
+) {
+  if (options.inlineSecondaryTemplate) {
+    return resolveTemplate(options.inlineSecondaryTemplate, values);
+  }
+
+  const value = options.inlineSecondaryFormula
+    ? resolveFormula(options.inlineSecondaryFormula, values)
+    : resolveNumberPath(values, options.inlineSecondaryPath);
+
+  if (value == null) return '';
+  return `${options.inlineSecondaryPrefix}${formatMetricValue(value, options.inlineSecondaryUnit)}`;
+}
+
+function resolveTemplate(template: string, values: Record<string, unknown>) {
+  if (!template) return '';
+  let missingValue = false;
+  const resolved = template.replace(/\[([^\]:]+)(?::([^\]]+))?\]/g, (_match, rawPath: string, rawFormat: string | undefined) => {
+    const value = resolveNumberPath(values, rawPath.trim());
+    if (value == null) {
+      missingValue = true;
+      return '';
+    }
+    return formatTemplateValue(value, rawFormat);
+  });
+  return missingValue ? '' : resolved;
+}
+
+function formatTemplateValue(value: number, format: string | undefined) {
+  if (!format) return formatMetricValue(value, undefined);
+  if (format === 'int' || format === 'integer') return value.toFixed(0);
+  return formatMetricValue(value, format);
+}
+
+function resolveNumberPath(values: Record<string, unknown>, path: string) {
+  if (!path) return null;
+  const value = resolvePath(values, path);
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function resolvePath(values: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(values, path)) return values[path];
+  return path.split('.').reduce<unknown>((current, part) => {
+    if (!current || typeof current !== 'object') return undefined;
+    return (current as Record<string, unknown>)[part];
+  }, values);
+}
+
+function resolveFormula(formula: string, values: Record<string, unknown>) {
+  let missingValue = false;
+  const expression = formula.replace(/\[([^\]]+)\]/g, (_match, rawPath: string) => {
+    const value = resolveNumberPath(values, rawPath.trim());
+    if (value == null) {
+      missingValue = true;
+      return '0';
+    }
+    return String(value);
+  });
+  if (missingValue) return null;
+  const parsed = parseMathExpression(expression);
+  return parsed != null && Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseMathExpression(expression: string) {
+  let index = 0;
+
+  function skipSpace() {
+    while (/\s/.test(expression[index] ?? '')) index += 1;
+  }
+
+  function parseNumber() {
+    skipSpace();
+    const match = expression.slice(index).match(/^\d+(?:\.\d+)?/);
+    if (!match) return null;
+    index += match[0].length;
+    return Number(match[0]);
+  }
+
+  function parseFactor(): number | null {
+    skipSpace();
+    const char = expression[index];
+    if (char === '+' || char === '-') {
+      index += 1;
+      const value = parseFactor();
+      return value == null ? null : char === '-' ? -value : value;
+    }
+    if (char === '(') {
+      index += 1;
+      const value = parseExpression();
+      skipSpace();
+      if (expression[index] !== ')') return null;
+      index += 1;
+      return value;
+    }
+    return parseNumber();
+  }
+
+  function parseTerm(): number | null {
+    let value = parseFactor();
+    if (value == null) return null;
+
+    while (true) {
+      skipSpace();
+      const op = expression[index];
+      if (op !== '*' && op !== '/') return value;
+      index += 1;
+      const right = parseFactor();
+      if (right == null || (op === '/' && right === 0)) return null;
+      value = op === '*' ? value * right : value / right;
+    }
+  }
+
+  function parseExpression(): number | null {
+    let value = parseTerm();
+    if (value == null) return null;
+
+    while (true) {
+      skipSpace();
+      const op = expression[index];
+      if (op !== '+' && op !== '-') return value;
+      index += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      value = op === '+' ? value + right : value - right;
+    }
+  }
+
+  const result = parseExpression();
+  skipSpace();
+  return index === expression.length ? result : null;
+}
+
+function usesStatus(options: Required<SensorChipOptions>) {
+  return [
+    options.valuePath,
+    options.fallbackValuePath,
+    options.valueFormula,
+    options.inlineSecondaryPath,
+    options.inlineSecondaryFormula,
+    options.inlineSecondaryTemplate,
+    options.secondaryTemplate,
+  ].some((value) => value.includes('status.'));
 }
 
 function deriveSpriteData(
@@ -222,11 +474,24 @@ for (const definition of SENSOR_DEFINITIONS) {
     defaultSize: { w: 3, h: 2 },
     minSize: { w: 2, h: 2 },
     defaultOptions: {
-      metric: definition.metric,
+      metric: definition.metric ?? '',
       icon: definition.icon,
       chartType: definition.chartType,
+      dataSource: definition.dataSource ?? 'metric',
+      valuePath: definition.valuePath ?? '',
+      fallbackValuePath: definition.fallbackValuePath ?? '',
+      valueFormula: definition.valueFormula ?? '',
+      unit: definition.unit ?? null,
+      inlineSecondaryPath: definition.inlineSecondaryPath ?? '',
+      inlineSecondaryFormula: definition.inlineSecondaryFormula ?? '',
+      inlineSecondaryTemplate: definition.inlineSecondaryTemplate ?? '',
+      inlineSecondaryUnit: definition.inlineSecondaryUnit ?? null,
+      inlineSecondaryPrefix: definition.inlineSecondaryPrefix ?? '',
+      secondaryTemplate: definition.secondaryTemplate ?? '',
+      labelSuffix: definition.labelSuffix ?? '',
       valueMode: definition.valueMode,
-      showSprite: true,
+      valueColor: definition.valueColor ?? 'accent',
+      showSprite: definition.chartType !== 'none',
       curveColor: 'accent',
       curveSmoothing: defaultCurveSmoothing(definition.chartType),
       showSubtitle: false,

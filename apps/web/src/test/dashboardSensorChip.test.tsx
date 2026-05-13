@@ -15,6 +15,17 @@ const metricMocks = vi.hoisted(() => ({
     { ts: '2026-05-02T00:00:00Z', value: 18 },
     { ts: '2026-05-03T00:00:00Z', value: 14 },
   ] as Array<{ ts: string; value: number | null }>,
+  batteryHealth: null as null | {
+    usable_now_kwh: number | null;
+    usable_new_kwh: number | null;
+    battery_health_pct: number | null;
+    estimated_degradation_pct: number | null;
+    charging_cycles: number | null;
+    charge_count: number;
+    total_energy_added_kwh: number | null;
+    total_energy_used_kwh: number | null;
+    charging_efficiency_pct: number | null;
+  },
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -27,6 +38,9 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useMetricSeries: () => ({
       data: metricMocks.series,
     }),
+    useBatteryHealth: () => ({ data: metricMocks.batteryHealth, isLoading: false }),
+    useChargingSummary: () => ({ data: null, isLoading: false }),
+    useCurrentVehicleStatus: () => ({ data: null, isLoading: false }),
     useMetricCatalog: () => ({ data: [] }),
   };
 });
@@ -83,6 +97,7 @@ describe('dashboard sensor chips', () => {
       { ts: '2026-05-02T00:00:00Z', value: 18 },
       { ts: '2026-05-03T00:00:00Z', value: 14 },
     ];
+    metricMocks.batteryHealth = null;
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
@@ -170,5 +185,43 @@ describe('dashboard sensor chips', () => {
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer.querySelector('[data-sparkline-state="empty"]')).not.toBeNull();
     expect(layer.querySelectorAll('path, rect').length).toBeGreaterThan(0);
+  });
+
+  it('renders composite sensor language without changing the compact chip visual', () => {
+    metricMocks.batteryHealth = {
+      usable_now_kwh: 111.6,
+      usable_new_kwh: 109.0,
+      battery_health_pct: 102.4,
+      estimated_degradation_pct: 0,
+      charging_cycles: 18,
+      charge_count: 22,
+      total_energy_added_kwh: 1800,
+      total_energy_used_kwh: 1900,
+      charging_efficiency_pct: 94.4,
+    };
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...config(false),
+          widgets: [
+            {
+              id: 'd9000009-0000-0000-0000-000000000002',
+              componentType: 'sensor',
+              definitionId: 'usable_capacity',
+              title: 'Usable Capacity',
+              options: {},
+              layout: { x: 0, y: 0, w: 3, h: 2 },
+            },
+          ],
+        }}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+      />
+    );
+
+    expect(screen.getByText('Usable Capacity')).toBeInTheDocument();
+    expect(screen.getByText('(now/new)')).toBeInTheDocument();
+    expect(screen.getByText('111.6 kWh')).toHaveClass('text-fg');
+    expect(screen.getByText('/109.0 kWh')).toHaveClass('text-fg-tertiary');
   });
 });

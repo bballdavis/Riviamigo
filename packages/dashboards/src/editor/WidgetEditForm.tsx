@@ -5,7 +5,12 @@ import { CHART_COLOR_OPTIONS, getChartColor, type ChartColorKey } from '@riviami
 import { getWidgetForInstance } from '../registry';
 import type { WidgetInstance } from '../schema';
 import { getChartDefinitions, type DashboardChartPage } from '../charts/catalog';
-import { SENSOR_DEFINITIONS } from '../widgets/sensor/sensorDefinitions';
+import {
+  getSensorDefinition,
+  SENSOR_DEFINITIONS,
+  type SensorDataSource,
+  type SensorValueColor,
+} from '../widgets/sensor/sensorDefinitions';
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
@@ -30,22 +35,38 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
   const sensorMode = widget.componentType === 'sensor';
   const chartMode = widget.componentType === 'chart';
   const customMode = widget.componentType === 'custom';
+  const sensorDefinition = sensorMode ? getSensorDefinition(widget.definitionId) : undefined;
 
   const options = (widget.options ?? {}) as Record<string, unknown>;
   const title = widget.title ?? '';
-  const metric = typeof options.metric === 'string' ? options.metric : 'total_miles';
-  const chartType = typeof options.chartType === 'string' ? options.chartType : 'line';
+  const dataSource = isSensorDataSource(options.dataSource)
+    ? options.dataSource
+    : sensorDefinition?.dataSource ?? 'metric';
+  const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
+  const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
   const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
   const curveSmoothing = normalizeCurveSmoothing(options.curveSmoothing, chartType);
   const curveSmoothingSupported = supportsCurveSmoothing(chartType);
   const curveSmoothingOn = curveSmoothingSupported && curveSmoothing > 0;
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
-  const valueMode = typeof options.valueMode === 'string' ? options.valueMode : 'latest';
-  const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : undefined);
-  const showSprite = options.showSprite !== false;
-  const accentBorder = options.accentBorder === true;
+  const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
+  const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : sensorDefinition?.icon);
+  const showSprite = typeof options.showSprite === 'boolean' ? options.showSprite : chartType !== 'none';
+  const accentBorder = typeof options.accentBorder === 'boolean' ? options.accentBorder : sensorDefinition?.accent === true;
+  const valueColor = isSensorValueColor(options.valueColor) ? options.valueColor : sensorDefinition?.valueColor ?? 'accent';
   const showSubtitle = options.showSubtitle === true;
   const subtitle = typeof options.subtitle === 'string' ? options.subtitle : '';
+  const valuePath = typeof options.valuePath === 'string' ? options.valuePath : sensorDefinition?.valuePath ?? '';
+  const fallbackValuePath = typeof options.fallbackValuePath === 'string' ? options.fallbackValuePath : sensorDefinition?.fallbackValuePath ?? '';
+  const valueFormula = typeof options.valueFormula === 'string' ? options.valueFormula : sensorDefinition?.valueFormula ?? '';
+  const unit = typeof options.unit === 'string' ? options.unit : sensorDefinition?.unit ?? '';
+  const inlineSecondaryPath = typeof options.inlineSecondaryPath === 'string' ? options.inlineSecondaryPath : sensorDefinition?.inlineSecondaryPath ?? '';
+  const inlineSecondaryFormula = typeof options.inlineSecondaryFormula === 'string' ? options.inlineSecondaryFormula : sensorDefinition?.inlineSecondaryFormula ?? '';
+  const inlineSecondaryTemplate = typeof options.inlineSecondaryTemplate === 'string' ? options.inlineSecondaryTemplate : sensorDefinition?.inlineSecondaryTemplate ?? '';
+  const inlineSecondaryUnit = typeof options.inlineSecondaryUnit === 'string' ? options.inlineSecondaryUnit : sensorDefinition?.inlineSecondaryUnit ?? '';
+  const inlineSecondaryPrefix = typeof options.inlineSecondaryPrefix === 'string' ? options.inlineSecondaryPrefix : sensorDefinition?.inlineSecondaryPrefix ?? '';
+  const secondaryTemplate = typeof options.secondaryTemplate === 'string' ? options.secondaryTemplate : sensorDefinition?.secondaryTemplate ?? '';
+  const labelSuffix = typeof options.labelSuffix === 'string' ? options.labelSuffix : sensorDefinition?.labelSuffix ?? '';
   const windowDays =
     typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
       ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
@@ -194,37 +215,165 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
 
         {sensorMode ? (
           <Section title="Sensor">
-            <Field label="Metric">
+            <Field label="Data source">
               <select
-                value={metric}
-                onChange={(e) => patch({ metric: e.target.value })}
+                value={dataSource}
+                onChange={(e) => patch({ dataSource: e.target.value as SensorDataSource })}
                 className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
               >
-                {catalog.length > 0
-                  ? catalog.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.label}
-                      </option>
-                    ))
-                  : SENSOR_DEFINITIONS.map((entry) => (
-                      <option key={entry.id} value={entry.metric}>
-                        {entry.title}
-                      </option>
-                    ))}
+                <option value="metric">Metric catalog</option>
+                <option value="batteryHealth">Battery health</option>
+                <option value="chargingSummary">Charging summary</option>
+                <option value="vehicleStatus">Vehicle status</option>
               </select>
             </Field>
-            <Field label="Aggregation">
-              <select
-                value={valueMode}
-                onChange={(e) => patch({ valueMode: e.target.value })}
+            {dataSource === 'metric' ? (
+              <>
+                <Field label="Metric">
+                  <select
+                    value={metric}
+                    onChange={(e) => patch({ metric: e.target.value })}
+                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                  >
+                    {catalog.length > 0
+                      ? catalog.map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {entry.label}
+                          </option>
+                        ))
+                      : SENSOR_DEFINITIONS.filter((entry) => (entry.dataSource ?? 'metric') === 'metric').map((entry) => (
+                          <option key={entry.id} value={entry.metric ?? entry.id}>
+                            {entry.title}
+                          </option>
+                        ))}
+                  </select>
+                </Field>
+                <Field label="Aggregation">
+                  <select
+                    value={valueMode}
+                    onChange={(e) => patch({ valueMode: e.target.value })}
+                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                  >
+                    <option value="latest">Latest</option>
+                    <option value="sum">Sum</option>
+                    <option value="avg">Average</option>
+                    <option value="count">Count</option>
+                  </select>
+                </Field>
+              </>
+            ) : (
+              <div className="grid gap-2">
+                <Field label="Value path">
+                  <input
+                    value={valuePath}
+                    onChange={(e) => patch({ valuePath: e.target.value })}
+                    placeholder="usable_now_kwh"
+                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                  />
+                </Field>
+                <Field label="Fallback path">
+                  <input
+                    value={fallbackValuePath}
+                    onChange={(e) => patch({ fallbackValuePath: e.target.value })}
+                    placeholder="charge_count"
+                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                  />
+                </Field>
+                <Field label="Formula">
+                  <input
+                    value={valueFormula}
+                    onChange={(e) => patch({ valueFormula: e.target.value })}
+                    placeholder="([home_kwh] / [total_energy_kwh]) * 100"
+                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                  />
+                </Field>
+                <Field label="Unit">
+                  <input
+                    value={unit ?? ''}
+                    onChange={(e) => patch({ unit: e.target.value || null })}
+                    placeholder="%, mi, kWh, USD"
+                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                  />
+                </Field>
+              </div>
+            )}
+          </Section>
+        ) : null}
+
+        {sensorMode ? (
+          <Section title="Display Language">
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Label suffix">
+                <input
+                  value={labelSuffix}
+                  onChange={(e) => patch({ labelSuffix: e.target.value })}
+                  placeholder="now/new"
+                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                />
+              </Field>
+              <Field label="Value color">
+                <select
+                  value={valueColor}
+                  onChange={(e) => patch({ valueColor: e.target.value as SensorValueColor })}
+                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                >
+                  <option value="accent">Accent</option>
+                  <option value="default">Default</option>
+                </select>
+              </Field>
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,5rem)] gap-2">
+              <Field label="Inline path">
+                <input
+                  value={inlineSecondaryPath}
+                  onChange={(e) => patch({ inlineSecondaryPath: e.target.value })}
+                  placeholder="usable_new_kwh"
+                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                />
+              </Field>
+              <Field label="Prefix">
+                <input
+                  value={inlineSecondaryPrefix}
+                  onChange={(e) => patch({ inlineSecondaryPrefix: e.target.value })}
+                  placeholder="/"
+                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                />
+              </Field>
+            </div>
+            <Field label="Inline formula">
+              <input
+                value={inlineSecondaryFormula}
+                onChange={(e) => patch({ inlineSecondaryFormula: e.target.value })}
+                placeholder="([range_miles] / [battery_level]) * 100"
                 className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-              >
-                <option value="latest">Latest</option>
-                <option value="sum">Sum</option>
-                <option value="avg">Average</option>
-                <option value="count">Count</option>
-              </select>
+              />
             </Field>
+            <Field label="Inline template">
+              <input
+                value={inlineSecondaryTemplate}
+                onChange={(e) => patch({ inlineSecondaryTemplate: e.target.value })}
+                placeholder="/[usable_new_kwh:kWh]"
+                className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Inline unit">
+                <input
+                  value={inlineSecondaryUnit ?? ''}
+                  onChange={(e) => patch({ inlineSecondaryUnit: e.target.value || null })}
+                  placeholder="kWh"
+                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                />
+              </Field>
+              <Field label="Secondary line">
+                <input
+                  value={secondaryTemplate}
+                  onChange={(e) => patch({ secondaryTemplate: e.target.value })}
+                  placeholder="Home [home_kwh:kWh] / Away [away_kwh:kWh]"
+                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
+                />
+              </Field>
+            </div>
           </Section>
         ) : null}
 
@@ -508,6 +657,19 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
 
 function isChartColorKey(value: unknown): value is ChartColorKey {
   return typeof value === 'string' && CHART_COLOR_OPTIONS.some((opt) => opt.value === value);
+}
+
+function isSensorDataSource(value: unknown): value is SensorDataSource {
+  return (
+    value === 'metric' ||
+    value === 'batteryHealth' ||
+    value === 'chargingSummary' ||
+    value === 'vehicleStatus'
+  );
+}
+
+function isSensorValueColor(value: unknown): value is SensorValueColor {
+  return value === 'accent' || value === 'default';
 }
 
 function supportsCurveSmoothing(chartType: string) {
