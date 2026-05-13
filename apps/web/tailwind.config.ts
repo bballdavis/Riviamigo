@@ -7,5 +7,6 @@ export default {
     './index.html',
     './src/**/*.{ts,tsx}',
     '../../packages/ui/src/**/*.{ts,tsx}',
+    '../../packages/dashboards/src/**/*.{ts,tsx}',
   ],
 } satisfies Config;

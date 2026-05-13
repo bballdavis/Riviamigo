@@ -21,7 +21,7 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
   const Component = def.component;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {instance.title && instance.componentType !== 'sensor' && instance.componentType !== 'battery' && instance.componentType !== 'charging' ? (
+      {instance.title && shouldShowWidgetTitle(instance) ? (
         <p className="mb-2 shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
           {instance.title}
         </p>
@@ -31,4 +31,10 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
       </div>
     </div>
   );
+}
+
+function shouldShowWidgetTitle(instance: WidgetInstance) {
+  if (instance.componentType === 'sensor' || instance.componentType === 'battery' || instance.componentType === 'charging') return false;
+  if (instance.componentType === 'custom' && instance.definitionId === 'charging.connection') return false;
+  return true;
 }

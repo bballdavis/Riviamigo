@@ -135,6 +135,13 @@ async fn create(
         r#"
         INSERT INTO dashboards (id, owner_id, slug, name, description, is_default, is_locked, config)
         VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, $6)
+        ON CONFLICT (owner_id, slug) DO UPDATE
+        SET name        = EXCLUDED.name,
+            description = EXCLUDED.description,
+            config      = EXCLUDED.config,
+            is_default  = FALSE,
+            is_locked   = FALSE,
+            updated_at  = NOW()
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
         "#
     )
@@ -145,14 +152,7 @@ async fn create(
     .bind(body.description)
     .bind(body.config)
     .fetch_one(&state.pool)
-    .await
-    .map_err(|e: sqlx::Error| {
-        if e.to_string().contains("unique") {
-            AppError::Validation("A dashboard with that slug already exists".into())
-        } else {
-            AppError::Database(e)
-        }
-    })?;
+    .await?;
 
     Ok((StatusCode::CREATED, Json(row)))
 }

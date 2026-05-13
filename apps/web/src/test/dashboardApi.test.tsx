@@ -71,6 +71,42 @@ describe('dashboard API wiring', () => {
     expect(normalized.widgets[0]?.definitionId).toBe('battery_level');
   });
 
+  it('upgrades stale charging dashboard copies to the current connected-charging band', () => {
+    const staleCharging: DashboardConfig = {
+      ...dashboardConfig,
+      id: '00000000-0000-0000-0000-000000000004',
+      slug: 'charging',
+      name: 'Charging',
+      isDefault: false,
+      isLocked: false,
+      ownerId: '11111111-1111-1111-1111-111111111111',
+      widgets: [
+        { id: 'd4000004-0000-0000-0000-000000000003', componentType: 'charging', definitionId: 'total_cost', title: 'Total Cost', options: {}, layout: { x: 6, y: 0, w: 3, h: 2 } },
+        { id: 'd4000004-0000-0000-0000-000000000004', componentType: 'charging', definitionId: 'avg_session', title: 'Avg / Session', options: {}, layout: { x: 9, y: 0, w: 3, h: 2 } },
+        { id: 'd4000004-0000-0000-0000-000000000006', componentType: 'charging', definitionId: 'charge_efficiency', title: 'Charge Efficiency', options: {}, layout: { x: 3, y: 2, w: 3, h: 2 } },
+        { id: 'd4000004-0000-0000-0000-000000000008', componentType: 'charging', definitionId: 'max_charge_limit', title: 'Max Charge Limit', options: {}, layout: { x: 9, y: 2, w: 3, h: 2 } },
+        { id: 'd4000004-0000-0000-0000-000000000009', componentType: 'charging', definitionId: 'home_share', title: 'Home Charging', options: {}, layout: { x: 0, y: 4, w: 6, h: 2 } },
+        { id: 'd4000004-0000-0000-0000-000000000010', componentType: 'charging', definitionId: 'dc_share', title: 'DC Fast Charging', options: {}, layout: { x: 6, y: 4, w: 6, h: 2 } },
+        { id: 'd4000004-0000-0000-0000-000000000011', componentType: 'chart', definitionId: 'catalog', title: 'Charging Charts', options: {}, layout: { x: 0, y: 6, w: 12, h: 10 } },
+      ],
+    };
+
+    const normalized = normalizeDashboardConfig(dashboardRecord(staleCharging));
+    const widgetIds = normalized.widgets.map((widget) => widget.definitionId);
+
+    expect(widgetIds).toContain('charging.connection');
+    expect(widgetIds).not.toContain('avg_session');
+    expect(widgetIds).not.toContain('charge_efficiency');
+    expect(widgetIds).not.toContain('max_charge_limit');
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'total_cost')?.layout).toMatchObject({ x: 3, y: 4, w: 3, h: 2 });
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'home_share')?.layout).toMatchObject({ x: 0, y: 4, w: 3, h: 2 });
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'dc_share')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.connection')).toMatchObject({
+      options: { forceShow: true },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+    });
+  });
+
   it('returns the nested config from by-slug responses', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify(dashboardRecord()), {

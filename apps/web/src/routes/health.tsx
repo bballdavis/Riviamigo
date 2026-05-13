@@ -12,7 +12,11 @@ import {
   Radio,
 } from 'lucide-react';
 import type { BadgeProps } from '@riviamigo/ui/primitives';
-import type { VehicleHealthClosures, VehicleHealthTires } from '@riviamigo/types';
+import type {
+  VehicleHealthClosures,
+  VehicleHealthSoftwareEntry,
+  VehicleHealthTires,
+} from '@riviamigo/types';
 import { rootRoute } from './__root';
 import { useAuth, useVehicleHealth } from '@riviamigo/hooks';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -59,6 +63,11 @@ function VehicleHealthContent() {
   );
   const closures = summarizeClosures(data?.closures ?? null);
   const tireSummary = summarizeTires(data?.tires ?? null);
+  const softwareHistory = normalizeSoftwareHistory(data?.software_history ?? []);
+  const currentSoftwareEntry =
+    softwareHistory.find((entry) => !entry.observed_until) ?? softwareHistory[0];
+  const currentSoftwareVersion =
+    data?.current_software_version ?? currentSoftwareEntry?.version ?? 'Unknown';
   const otaStatus = data?.latest?.ota_available_version
     ? `Update ${data.latest.ota_available_version} available`
     : (data?.latest?.ota_status ?? data?.latest?.ota_current_status ?? 'No update flagged');
@@ -249,37 +258,61 @@ function VehicleHealthContent() {
             <Card>
               <CardHeader>
                 <CardTitle>Software History</CardTitle>
-                <Badge variant="default">{data?.software_history?.length ?? 0} entries</Badge>
+                <Badge variant="info" className="max-w-full truncate font-mono">
+                  {currentSoftwareVersion}
+                </Badge>
               </CardHeader>
-              <CardContent>
-                {(data?.software_history?.length ?? 0) === 0 ? (
+              <CardContent className="space-y-3">
+                {softwareHistory.length === 0 ? (
                   <EmptyPanel text="No software version history yet." />
                 ) : (
-                  <div className="relative space-y-3 before:absolute before:left-[0.42rem] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-border">
-                    {data?.software_history.map((entry, index) => (
-                      <div
-                        key={`${entry.version}-${entry.installed_at}`}
-                        className="relative grid gap-1 pl-6 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1fr)]"
-                      >
-                        <span
-                          className={`absolute left-0 top-1.5 h-3 w-3 rounded-full border ${index === 0 ? 'border-accent bg-accent' : 'border-border-strong bg-bg-elevated'}`}
-                        />
-                        <div>
-                          <p className="font-mono text-sm text-fg">
-                            {entry.version ?? 'Unknown version'}
-                          </p>
-                          <p className="mt-0.5 text-xs text-fg-tertiary">
-                            {index === 0 ? 'Current software' : 'Previous software'}
-                          </p>
-                        </div>
-                        <p className="text-sm text-fg-secondary">
-                          {formatDateTime(entry.installed_at)}
-                          <span className="text-fg-tertiary"> to </span>
-                          {entry.observed_until ? formatDateTime(entry.observed_until) : 'Current'}
+                  <>
+                    {currentSoftwareEntry ? (
+                      <div className="rounded-xl border border-accent/30 bg-accent-muted/40 px-3 py-2">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-fg-tertiary">
+                          Current version
+                        </p>
+                        <p className="mt-1 font-mono text-sm text-fg">
+                          {currentSoftwareEntry.version ?? 'Unknown version'}
+                        </p>
+                        <p className="mt-1 text-xs text-fg-secondary">
+                          Observed since {formatDateTime(currentSoftwareEntry.installed_at)}
                         </p>
                       </div>
-                    ))}
-                  </div>
+                    ) : null}
+
+                    <details className="group rounded-xl border border-border bg-bg-elevated/45 p-3">
+                      <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wider text-fg-tertiary">
+                        <span className="inline-flex items-center gap-2">
+                          Full history ({softwareHistory.length} entries)
+                          <span className="transition-transform group-open:rotate-180">▾</span>
+                        </span>
+                      </summary>
+                      <div className="relative mt-3 space-y-3 before:absolute before:left-[0.42rem] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-border">
+                        {softwareHistory.map((entry, index) => (
+                          <div
+                            key={`${entry.version}-${entry.installed_at}`}
+                            className="relative grid gap-1 pl-6 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1fr)]"
+                          >
+                            <span
+                              className={`absolute left-0 top-1.5 h-3 w-3 rounded-full border ${index === 0 ? 'border-accent bg-accent' : 'border-border-strong bg-bg-elevated'}`}
+                            />
+                            <div>
+                              <p className="font-mono text-sm text-fg">{entry.version}</p>
+                              <p className="mt-0.5 text-xs text-fg-tertiary">
+                                {entry.observed_until ? 'Previous software' : 'Current software'}
+                              </p>
+                            </div>
+                            <p className="text-sm text-fg-secondary">
+                              Observed {formatDateTime(entry.installed_at)}
+                              <span className="text-fg-tertiary"> to </span>
+                              {entry.observed_until ? formatDateTime(entry.observed_until) : 'Current'}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -522,7 +555,17 @@ function getFreshness(ts: string | null) {
 
 function formatDateTime(value?: string | null) {
   if (!value) return 'Unknown';
-  return new Date(value).toLocaleString();
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  }).format(date);
 }
 
 function asOpenClosed(value: boolean | null) {
@@ -532,4 +575,47 @@ function asOpenClosed(value: boolean | null) {
 
 function titleCase(value: string) {
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeSoftwareHistory(entries: VehicleHealthSoftwareEntry[]): VehicleHealthSoftwareEntry[] {
+  if (entries.length <= 1) return entries;
+
+  const deduped: VehicleHealthSoftwareEntry[] = [];
+  const versionIndex = new Map<string, number>();
+
+  for (const entry of entries) {
+    const normalizedVersion = entry.version.trim().toLowerCase();
+
+    const existingIndex = versionIndex.get(normalizedVersion);
+    if (existingIndex === undefined) {
+      versionIndex.set(normalizedVersion, deduped.length);
+      deduped.push(entry);
+      continue;
+    }
+
+    const existing = deduped[existingIndex];
+    if (!existing) continue;
+    const earlierInstalledAt =
+      new Date(entry.installed_at).getTime() < new Date(existing.installed_at).getTime()
+        ? entry.installed_at
+        : existing.installed_at;
+    const observedUntil =
+      entry.observed_until === null || existing.observed_until === null
+        ? null
+        : new Date(entry.observed_until).getTime() > new Date(existing.observed_until).getTime()
+          ? entry.observed_until
+          : existing.observed_until;
+
+    deduped[existingIndex] = {
+      ...existing,
+      installed_at: earlierInstalledAt,
+      observed_until: observedUntil,
+    };
+  }
+
+  return deduped.sort((a, b) => {
+    if (a.observed_until === null && b.observed_until !== null) return -1;
+    if (a.observed_until !== null && b.observed_until === null) return 1;
+    return new Date(b.installed_at).getTime() - new Date(a.installed_at).getTime();
+  });
 }

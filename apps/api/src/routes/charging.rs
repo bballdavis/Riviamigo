@@ -116,6 +116,26 @@ struct CurveAnalysisRow {
     charger_type: Option<String>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct CapacitySourcesRow {
+    snapshot_rated_kwh: Option<f64>,
+    telemetry_capacity_wh: Option<f64>,
+}
+
+fn normalize_capacity_kwh(raw: f64) -> Option<f64> {
+    if !raw.is_finite() || raw <= 0.0 {
+        return None;
+    }
+
+    // Some sources report capacity in Wh while others report kWh.
+    let kwh = if raw > 1_000.0 { raw / 1000.0 } else { raw };
+    if (40.0..=300.0).contains(&kwh) {
+        Some(kwh)
+    } else {
+        None
+    }
+}
+
 async fn list_sessions(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -471,15 +491,30 @@ async fn get_summary_response(
     .fetch_one(&state.pool)
     .await?;
 
-    let capacity_kwh: Option<f64> = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT COALESCE(
-            (SELECT rated_kwh FROM riviamigo.battery_capacity_snapshots WHERE vehicle_id=$1 AND rated_kwh IS NOT NULL ORDER BY snapshotted_at ASC LIMIT 1),
-            (SELECT battery_capacity_wh / 1000.0 FROM timeseries.telemetry WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL ORDER BY ts ASC LIMIT 1)
-        )"
+    let capacity_sources = sqlx::query_as::<_, CapacitySourcesRow>(
+        "SELECT
+            (SELECT rated_kwh
+             FROM riviamigo.battery_capacity_snapshots
+             WHERE vehicle_id=$1 AND rated_kwh IS NOT NULL
+             ORDER BY snapshotted_at DESC
+             LIMIT 1) AS snapshot_rated_kwh,
+            (SELECT battery_capacity_wh
+             FROM timeseries.telemetry
+             WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL
+             ORDER BY ts DESC
+             LIMIT 1) AS telemetry_capacity_wh",
     )
     .bind(vehicle_id)
     .fetch_one(&state.pool)
     .await?;
+    let capacity_kwh = capacity_sources
+        .snapshot_rated_kwh
+        .and_then(normalize_capacity_kwh)
+        .or_else(|| {
+            capacity_sources
+                .telemetry_capacity_wh
+                .and_then(normalize_capacity_kwh)
+        });
 
     let weekly = sqlx::query_as::<_, WeeklySummaryRow>(
         "SELECT date_trunc('week', started_at) AS week_start,
@@ -537,6 +572,24 @@ async fn get_summary_response(
             "sessions":   r.sessions,
         })).collect::<Vec<_>>(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_capacity_kwh;
+
+    #[test]
+    fn normalizes_capacity_values_in_kwh_and_wh() {
+        assert_eq!(normalize_capacity_kwh(135.0), Some(135.0));
+        assert_eq!(normalize_capacity_kwh(135_000.0), Some(135.0));
+    }
+
+    #[test]
+    fn rejects_unrealistic_capacity_values() {
+        assert_eq!(normalize_capacity_kwh(0.13), None);
+        assert_eq!(normalize_capacity_kwh(600.0), None);
+        assert_eq!(normalize_capacity_kwh(-50.0), None);
+    }
 }
 
 async fn load_curve(

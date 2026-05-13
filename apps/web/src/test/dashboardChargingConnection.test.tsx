@@ -107,9 +107,52 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(screen.getByText('Connected & charging')).toBeInTheDocument();
-    expect(screen.getAllByText('1h 35m')).toHaveLength(2);
+    expect(screen.queryByText('Connected & charging')).not.toBeInTheDocument();
+    expect(screen.getByText('1h 35m')).toBeInTheDocument();
+    expect(screen.getByText('Charging')).toBeInTheDocument();
     expect(screen.getByText('92.5%')).toBeInTheDocument();
+
+    const bar = screen.getByTestId('charging-battery-led-bar');
+    expect(bar).toHaveAccessibleName('Battery 64 percent');
+    expect(bar).toHaveStyle({ position: 'absolute', left: '0px', right: '0px', zIndex: '100' });
+    expect(screen.getByTestId('charging-battery-led-segments')).toHaveStyle({
+      gridTemplateColumns: 'repeat(20, calc((100% - 38px) / 20))',
+      gap: '2px',
+    });
+    const segments = screen.getAllByTestId('charging-battery-led-segment');
+    expect(segments).toHaveLength(20);
+    expect(segments.filter((segment) => segment.getAttribute('data-filled') === 'true')).toHaveLength(13);
+    expect(screen.getByTestId('charging-battery-led-sweep')).toHaveStyle({
+      left: '0px',
+      width: 'calc((100% - 38px) / 20)',
+    });
+  });
+
+  it('uses force-show as a connected charging preview even when telemetry is unplugged', () => {
+    render(
+      <DashboardRenderer
+        config={{
+          ...baseConfig,
+          widgets: [{ ...baseConfig.widgets[0]!, options: { forceShow: true } }],
+        }}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.queryByText('Connected & charging')).not.toBeInTheDocument();
+    expect(screen.queryByText('Forced preview')).not.toBeInTheDocument();
+    expect(screen.getByText('1h 35m')).toBeInTheDocument();
+    expect(screen.getByText('Charging')).toBeInTheDocument();
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/vehicle-images/r1s-side-charging-light.png',
+      '/vehicle-images/r1s-side-charging-light.png',
+    ]);
+    expect(screen.getAllByTestId('charging-battery-led-segment')).toHaveLength(20);
+    expect(screen.getByTestId('charging-battery-led-sweep')).toHaveStyle({
+      left: '0px',
+      width: 'calc((100% - 38px) / 20)',
+    });
   });
 
   it('exposes a force-show switch in the custom widget editor', () => {

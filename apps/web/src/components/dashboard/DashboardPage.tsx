@@ -46,6 +46,13 @@ export interface DashboardEditMutations {
   qc: ReturnType<typeof useQueryClient>;
 }
 
+function findOwnedDashboardBySlug(
+  dashboards: DashboardConfig[] | undefined,
+  slug: string,
+): DashboardConfig | undefined {
+  return dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null);
+}
+
 export function createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc }: DashboardEditMutations) {
   return function renderDefaultDashboardEditActions({ isEditMode, localConfig, savedConfig, exitEdit }: DashboardPageShellRenderState) {
     if (!isEditMode) return undefined;
@@ -56,7 +63,9 @@ export function createDefaultDashboardEditActions({ updateDashboard, createDashb
       try {
         // Fast path: savedConfig reflects the freshest query result. If it shows
         // an owned copy, go straight to PUT — avoids an unnecessary POST+422 cycle.
-        const ownedCopy = savedConfig?.ownerId != null ? savedConfig : null;
+        const ownedCopy = savedConfig?.ownerId != null
+          ? savedConfig
+          : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
         if (ownedCopy) {
           await updateDashboard.mutateAsync({
             ...localConfig,
@@ -79,11 +88,14 @@ export function createDefaultDashboardEditActions({ updateDashboard, createDashb
             // and update if we find an owned copy.
             await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
             const existing = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
-            if (existing?.ownerId != null) {
+            const refetchedOwnedCopy = existing?.ownerId != null
+              ? existing
+              : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
+            if (refetchedOwnedCopy) {
               await updateDashboard.mutateAsync({
                 ...localConfig,
-                id: existing.id,
-                ownerId: existing.ownerId,
+                id: refetchedOwnedCopy.id,
+                ownerId: refetchedOwnedCopy.ownerId,
                 isDefault: false,
                 isLocked: false,
               });
@@ -426,16 +438,16 @@ function formatCharging(chargerState: string | null | undefined, chargerStatus: 
   return 'Not charging';
 }
 
-function formatDrive(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  if (driveMode) return driveMode;
-  return gearStatus ? prettify(gearStatus) : '-';
-}
-
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  if (driveMode) {
-    return formatDriveMode(driveMode);
-  }
-  return formatDrive(driveMode, gearStatus);
+  const rawValue = driveMode ?? gearStatus;
+  if (!rawValue) return '-';
+
+  const label = formatDriveMode(rawValue);
+  return (
+    <Badge size="sm" className={getDriveModeBadgeClass(rawValue)} title={label}>
+      {label}
+    </Badge>
+  );
 }
 
 function formatSoftware(status: VehicleStatus | null | undefined) {
@@ -450,10 +462,6 @@ function formatSoftware(status: VehicleStatus | null | undefined) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function prettifyDriveMode(value: string) {
-  return formatDriveMode(value);
 }
 
 function prettify(value: string | null | undefined) {
