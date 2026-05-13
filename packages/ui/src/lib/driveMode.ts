@@ -40,5 +40,23 @@ export function getDriveModeBadgeClass(value: string) {
 }
 
 function normalizeDriveModeValue(value: string) {
-  return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
+  const normalized = value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .toLowerCase();
+
+  const aliases: Record<string, string> = {
+    allpurpose: 'all_purpose',
+    allterrain: 'all_terrain',
+    softsand: 'soft_sand',
+    rockcrawl: 'rock_crawl',
+    offroadauto: 'off_road_auto',
+    offroadsand: 'off_road_sand',
+    offroadrocks: 'off_road_rocks',
+    offroadsportauto: 'off_road_sport_auto',
+    offroadsportdrift: 'off_road_sport_drift',
+  };
+
+  return aliases[normalized] ?? normalized;
 }
