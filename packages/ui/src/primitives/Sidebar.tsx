@@ -68,14 +68,29 @@ export function Sidebar({
         />
       )}
 
-      {/* Mobile toggle button */}
-      <button
-        className="fixed top-4 left-4 z-50 flex items-center justify-center w-8 h-8 rounded-lg bg-bg-elevated border border-border text-fg-secondary hover:text-fg transition-colors lg:hidden"
-        onClick={() => setMobileOpen((o) => !o)}
-        aria-label="Toggle navigation"
-      >
-        {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-      </button>
+      {/* Mobile header bar — full-width solid bar, stays on top while scrolling */}
+      <div className="fixed inset-x-0 top-0 z-50 flex h-14 items-center gap-3 border-b border-border bg-bg-surface px-4 lg:hidden">
+        <button
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-bg-elevated border border-border text-fg-secondary hover:text-fg transition-colors"
+          onClick={() => setMobileOpen((o) => !o)}
+          aria-label="Toggle navigation"
+        >
+          {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('/')}
+          className="flex items-center"
+          aria-label="Go to home"
+        >
+          <img
+            src={isDark ? '/text_white.svg' : '/text_black.svg'}
+            alt="Riviamigo"
+            className="h-[1.5625rem] w-auto"
+            style={{ transform: 'translateY(10%)' }}
+          />
+        </button>
+      </div>
 
       {/* Sidebar panel */}
       <aside
@@ -86,14 +101,16 @@ export function Sidebar({
           // Desktop
           'hidden lg:flex',
           collapsed ? 'w-[72px]' : 'w-64',
-          // Mobile drawer
-          mobileOpen && '!flex w-64',
+          // Mobile drawer — capped at 85vw; pt-14 clears the fixed mobile header bar
+          'max-w-[85vw] pt-14 lg:pt-0',
+          mobileOpen && '!flex',
           className
         )}
       >
-        {/* Logo / brand */}
+        {/* Logo / brand — desktop only; mobile uses the fixed header bar above */}
         <div className={cn(
-          'flex items-center h-14 px-4 border-b border-border shrink-0',
+          'items-center h-14 px-4 border-b border-border shrink-0',
+          'hidden lg:flex',
           collapsed ? 'justify-center' : 'justify-start relative'
         )}>
           {collapsed ? (

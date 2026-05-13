@@ -14,7 +14,31 @@ import type {
   CreateBackupRestoreRequestBody, BackupRestoreRequest,
 } from '@riviamigo/types';
 
-const BASE = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '';
+function isLoopbackHostname(hostname: string) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
+export function resolveApiBaseUrl(
+  configuredBaseUrl = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '',
+  location: Pick<Location, 'hostname' | 'origin'> | undefined = typeof window === 'undefined' ? undefined : window.location,
+) {
+  if (!configuredBaseUrl || !location) {
+    return configuredBaseUrl;
+  }
+
+  try {
+    const url = new URL(configuredBaseUrl, location.origin);
+    if (isLoopbackHostname(url.hostname) && !isLoopbackHostname(location.hostname)) {
+      return '';
+    }
+  } catch {
+    return configuredBaseUrl;
+  }
+
+  return configuredBaseUrl;
+}
+
+const BASE = resolveApiBaseUrl();
 
 interface ApiFailureDetail {
   status: number;
@@ -23,6 +47,12 @@ interface ApiFailureDetail {
   method: string;
   path: string;
 }
+
+const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
+  '/v1/auth/login',
+  '/v1/auth/register',
+  '/v1/auth/refresh',
+]);
 
 type AuthChangeHandler = (tokens: AuthTokens | null) => void;
 
@@ -78,7 +108,7 @@ class ApiClient {
     });
 
     if (!res.ok) {
-      if (res.status === 401 && retryOnUnauthorized && path !== '/v1/auth/refresh') {
+      if (res.status === 401 && retryOnUnauthorized && !AUTH_REFRESH_EXCLUDED_PATHS.has(path)) {
         try {
           const tokens = await this.request<AuthTokens>('POST', '/v1/auth/refresh', undefined, undefined, false, false);
           this.applyTokens(tokens);

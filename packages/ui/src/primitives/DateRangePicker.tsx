@@ -82,7 +82,7 @@ export function DateRangePicker({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 min-w-[240px]">
+        <div className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1 z-50 bg-bg-elevated border border-border rounded-xl shadow-lg py-1 min-w-[240px] max-w-[calc(100vw-2rem)]">
           {PRESETS.map((p) => (
             <button
               key={p.key}

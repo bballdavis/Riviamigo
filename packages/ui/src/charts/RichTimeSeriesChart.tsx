@@ -77,21 +77,177 @@ function estimateYLabelWidth(labels: string[]): number {
   return Math.min(maxLen * 7 + 16, 110);
 }
 
-function smoothSeries(values: Array<number | null>, alpha: number): Array<number | null> {
-  if (alpha <= 0) return values;
-  const window = Math.max(2, Math.round(2 + alpha * 10));
-  const result: Array<number | null> = [];
-  for (let i = 0; i < values.length; i++) {
-    if (values[i] == null) { result.push(null); continue; }
-    let sum = 0;
-    let count = 0;
-    const half = Math.floor(window / 2);
-    for (let j = Math.max(0, i - half); j <= Math.min(values.length - 1, i + half); j++) {
-      if (values[j] != null) { sum += values[j]!; count++; }
-    }
-    result.push(count > 0 ? sum / count : null);
+function createVariableSplinePathBuilder(smoothingAmount: number): uPlot.Series.PathBuilder {
+  const blend = Math.max(0, Math.min(1, smoothingAmount));
+
+  return (self, seriesIdx, idx0, idx1) =>
+    uPlot.orient(
+      self,
+      seriesIdx,
+      (series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim, moveTo, lineTo, _rect, _arc, bezierCurveTo) => {
+        const stroke = new Path2D();
+        const fill = series.fill != null ? new Path2D() : null;
+        const baselineValue =
+          typeof series.fillTo === 'function'
+            ? series.fillTo(self, seriesIdx, series.min ?? 0, series.max ?? 0)
+            : (series.fillTo ?? 0);
+        const baselineY = valToPosY(baselineValue, scaleY, yDim, yOff);
+
+        const segments: Array<Array<{ x: number; y: number }>> = [];
+        let currentSegment: Array<{ x: number; y: number }> = [];
+
+        for (let index = idx0; index <= idx1; index += 1) {
+          const yValue = dataY[index];
+          if (yValue == null) {
+            if (currentSegment.length > 0) {
+              segments.push(currentSegment);
+              currentSegment = [];
+            }
+            continue;
+          }
+
+          currentSegment.push({
+            x: valToPosX(dataX[index]!, scaleX, xDim, xOff),
+            y: valToPosY(yValue, scaleY, yDim, yOff),
+          });
+        }
+
+        if (currentSegment.length > 0) {
+          segments.push(currentSegment);
+        }
+
+        for (const segment of segments) {
+          drawSmoothedSegment(stroke, segment, blend, moveTo, lineTo, bezierCurveTo);
+
+          if (fill) {
+            drawSmoothedSegment(fill, segment, blend, moveTo, lineTo, bezierCurveTo);
+            lineTo(fill, segment[segment.length - 1]!.x, baselineY);
+            lineTo(fill, segment[0]!.x, baselineY);
+            fill.closePath();
+          }
+        }
+
+        return {
+          stroke,
+          fill,
+          clip: null,
+          band: null,
+          gaps: null,
+          flags: 0,
+        };
+      },
+    );
+}
+
+function drawSmoothedSegment(
+  path: Path2D,
+  points: Array<{ x: number; y: number }>,
+  blend: number,
+  moveTo: uPlot.MoveToH | uPlot.MoveToV,
+  lineTo: uPlot.LineToH | uPlot.LineToV,
+  bezierCurveTo: uPlot.BezierCurveToH | uPlot.BezierCurveToV,
+) {
+  if (points.length === 0) return;
+
+  moveTo(path, points[0]!.x, points[0]!.y);
+
+  if (points.length === 1) {
+    lineTo(path, points[0]!.x, points[0]!.y);
+    return;
   }
-  return result;
+
+  if (points.length === 2 || blend <= 0) {
+    for (let index = 1; index < points.length; index += 1) {
+      lineTo(path, points[index]!.x, points[index]!.y);
+    }
+    return;
+  }
+
+  const tangents = computeMonotoneTangents(points);
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index]!;
+    const next = points[index + 1]!;
+    const dx = next.x - current.x;
+
+    if (!Number.isFinite(dx) || Math.abs(dx) < 1e-6) {
+      lineTo(path, next.x, next.y);
+      continue;
+    }
+
+    const linearCp1 = {
+      x: current.x + dx / 3,
+      y: current.y + (next.y - current.y) / 3,
+    };
+    const linearCp2 = {
+      x: next.x - dx / 3,
+      y: next.y - (next.y - current.y) / 3,
+    };
+    const monotoneCp1 = {
+      x: current.x + dx / 3,
+      y: current.y + (tangents[index]! * dx) / 3,
+    };
+    const monotoneCp2 = {
+      x: next.x - dx / 3,
+      y: next.y - (tangents[index + 1]! * dx) / 3,
+    };
+
+    bezierCurveTo(
+      path,
+      lerp(linearCp1.x, monotoneCp1.x, blend),
+      lerp(linearCp1.y, monotoneCp1.y, blend),
+      lerp(linearCp2.x, monotoneCp2.x, blend),
+      lerp(linearCp2.y, monotoneCp2.y, blend),
+      next.x,
+      next.y,
+    );
+  }
+}
+
+function computeMonotoneTangents(points: Array<{ x: number; y: number }>) {
+  const tangents = new Array<number>(points.length).fill(0);
+
+  if (points.length < 2) return tangents;
+
+  const secants = new Array<number>(points.length - 1).fill(0);
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const dx = points[index + 1]!.x - points[index]!.x;
+    secants[index] = Math.abs(dx) < 1e-6 ? 0 : (points[index + 1]!.y - points[index]!.y) / dx;
+  }
+
+  tangents[0] = secants[0]!;
+  tangents[points.length - 1] = secants[secants.length - 1]!;
+
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = secants[index - 1]!;
+    const next = secants[index]!;
+    tangents[index] = previous === 0 || next === 0 || previous * next < 0 ? 0 : (previous + next) / 2;
+  }
+
+  for (let index = 0; index < secants.length; index += 1) {
+    const secant = secants[index]!;
+    if (secant === 0) {
+      tangents[index] = 0;
+      tangents[index + 1] = 0;
+      continue;
+    }
+
+    const alpha = tangents[index]! / secant;
+    const beta = tangents[index + 1]! / secant;
+    const magnitude = alpha * alpha + beta * beta;
+
+    if (magnitude > 9) {
+      const scale = 3 / Math.sqrt(magnitude);
+      tangents[index] = scale * alpha * secant;
+      tangents[index + 1] = scale * beta * secant;
+    }
+  }
+
+  return tangents;
+}
+
+function lerp(start: number, end: number, amount: number) {
+  return start + (end - start) * amount;
 }
 
 export function RichTimeSeriesChart({
@@ -135,14 +291,7 @@ export function RichTimeSeriesChart({
 
   const alignedData = React.useMemo<AlignedData>(() => {
     const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
-    const seriesData = series.map((item) => {
-      const raw = item.values.map((value) => value ?? null);
-      const seriesMode = item.mode ?? mode;
-      if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
-        return smoothSeries(raw, smoothingAmount);
-      }
-      return raw;
-    });
+    const seriesData = series.map((item) => item.values.map((value) => value ?? null));
     return [x, ...seriesData] as AlignedData;
   }, [points, series, xTime, smoothingAmount, mode]);
   alignedDataRef.current = alignedData;
@@ -206,8 +355,7 @@ export function RichTimeSeriesChart({
         if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
           next.paths = uPlot.paths.stepped!({ align: 1 });
         } else if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
-          const spline = uPlot.paths.spline?.();
-          if (spline) next.paths = spline;
+          next.paths = createVariableSplinePathBuilder(smoothingAmount);
         }
         return next;
       }),

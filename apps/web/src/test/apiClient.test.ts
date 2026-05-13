@@ -149,4 +149,26 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[2]?.[0]).toContain('/v1/admin/backups/run');
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST' });
   });
+
+  it('preserves login 401 responses instead of rewriting them as auth-expired', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        error: {
+          code: 'INVALID_CREDENTIALS',
+          message: 'Invalid email or password',
+        },
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await expect(api.login('driver@example.com', 'wrong-password')).rejects.toMatchObject({
+      status: 401,
+      code: 'INVALID_CREDENTIALS',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/login');
+  });
 });

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
-import type { DashboardConfig, WidgetInstance } from './schema';
+import type { DashboardConfig } from './schema';
 
 const BASE = '/v1/dashboards';
 
@@ -61,58 +61,7 @@ export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
     widgets: Array.isArray(config.widgets) ? config.widgets : [],
   });
 
-  return upgradeDashboardConfig(parsed);
-}
-
-function upgradeDashboardConfig(config: DashboardConfig): DashboardConfig {
-  if (config.slug !== 'charging') return config;
-
-  const widgets = upgradeChargingSummaryBand(config.widgets);
-  if (widgets === config.widgets) return config;
-  return { ...config, widgets };
-}
-
-function upgradeChargingSummaryBand(widgets: WidgetInstance[]): WidgetInstance[] {
-  const absorbedRightSideStats = new Set(['avg_session', 'charge_efficiency', 'max_charge_rate', 'max_charge_limit']);
-  const next = widgets
-    .filter((widget) => !(widget.componentType === 'charging' && absorbedRightSideStats.has(widget.definitionId) && widget.layout.y < 6))
-    .map((widget) => {
-      if (widget.componentType === 'charging' && widget.definitionId === 'total_cost' && widget.layout.y < 6) {
-        return { ...widget, layout: { x: 3, y: 4, w: 3, h: 2 } };
-      }
-      if (widget.componentType === 'charging' && widget.definitionId === 'home_share' && widget.layout.y < 6) {
-        return { ...widget, layout: { x: 0, y: 4, w: 3, h: 2 } };
-      }
-      if (widget.componentType === 'charging' && widget.definitionId === 'dc_share' && widget.layout.y < 6) {
-        return { ...widget, layout: { x: 3, y: 2, w: 3, h: 2 } };
-      }
-      if (widget.componentType === 'custom' && widget.definitionId === 'charging.connection') {
-        return {
-          ...widget,
-          title: widget.title ?? 'Charging Connection',
-          options: { ...(widget.options ?? {}), forceShow: true },
-          layout: { x: 6, y: 0, w: 6, h: 6 },
-        };
-      }
-      return widget;
-    });
-
-  if (!next.some((widget) => widget.componentType === 'custom' && widget.definitionId === 'charging.connection')) {
-    next.push({
-      id: 'd4000004-0000-0000-0000-000000000013',
-      componentType: 'custom',
-      definitionId: 'charging.connection',
-      title: 'Charging Connection',
-      options: { forceShow: true },
-      layout: { x: 6, y: 0, w: 6, h: 6 },
-    });
-  }
-
-  return sameWidgetShape(widgets, next) ? widgets : next;
-}
-
-function sameWidgetShape(left: WidgetInstance[], right: WidgetInstance[]) {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return parsed;
 }
 
 function dashboardMutationBody(config: DashboardConfig) {
@@ -171,6 +120,22 @@ export function useUpdateDashboard() {
       apiFetch<unknown>(`${BASE}/${config.id}`, accessToken, {
         method: 'PUT',
         body: JSON.stringify(dashboardMutationBody(config)),
+      }).then(normalizeDashboardConfig),
+    onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
+      qc.invalidateQueries({ queryKey: ['dashboards'] });
+      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
+    },
+  });
+}
+
+export function useUpdateAdminDashboard() {
+  const { accessToken } = useAuth();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (config: DashboardConfig) =>
+      apiFetch<unknown>(`/v1/admin/dashboards/${config.id}`, accessToken, {
+        method: 'PUT',
+        body: JSON.stringify({ name: config.name, description: config.description, config }),
       }).then(normalizeDashboardConfig),
     onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
       qc.invalidateQueries({ queryKey: ['dashboards'] });

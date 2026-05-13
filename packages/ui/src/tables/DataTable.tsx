@@ -49,7 +49,7 @@ export function DataTable<TData>({
   });
 
   return (
-    <div className={cn('w-full overflow-auto', className)}>
+    <div className={cn('w-full overflow-x-auto', className)}>
       <table className="w-full text-sm">
         <thead>
           {table.getHeaderGroups().map((headerGroup) => (

@@ -225,8 +225,8 @@ function ChargingBatteryLedBar({
                   display: 'block',
                   height: '100%',
                   borderRadius: 4,
-                  backgroundColor: filled ? '#16a34a' : 'rgba(161, 161, 170, 0.82)',
-                  boxShadow: filled ? '0 0 10px rgba(22, 163, 74, 0.72)' : 'none',
+                  backgroundColor: filled ? 'var(--rm-status-positive)' : 'var(--rm-text-tertiary)',
+                  boxShadow: filled ? '0 0 10px color-mix(in oklab, var(--rm-status-positive) 72%, transparent)' : 'none',
                 }}
               />
             );
@@ -251,8 +251,8 @@ function ChargingBatteryLedBar({
                 height: '100%',
                 width: '100%',
                 borderRadius: 4,
-                backgroundColor: '#22c55e',
-                boxShadow: '0 0 16px rgba(34, 197, 94, 0.82)',
+                backgroundColor: 'var(--rm-charging-done)',
+                boxShadow: '0 0 16px color-mix(in oklab, var(--rm-charging-done) 82%, transparent)',
               }}
             />
           </div>
@@ -281,7 +281,7 @@ function VehicleSideImage({
   mode: 'side' | 'charging';
   darkClassName: string;
 }) {
-  const transform = mode === 'charging' ? 'translateX(-12%) scale(1.05)' : 'translateX(-5%) scale(1.15)';
+  const transform = mode === 'charging' ? 'translateX(-12%) scale(1.12)' : 'translateX(-5%) scale(1.15)';
   const objectPosition = mode === 'charging' ? 'left center' : 'right center';
 
   return (
@@ -292,7 +292,7 @@ function VehicleSideImage({
         data-testid="charging-side-image"
         data-image-mode={mode}
         className="h-full w-auto max-w-none object-contain"
-        style={{ objectPosition, transform, transformOrigin: mode === 'charging' ? 'left center' : 'right center' }}
+        style={{ objectPosition, transform, transformOrigin: mode === 'charging' ? 'left top' : 'right center' }}
       />
     </div>
   );

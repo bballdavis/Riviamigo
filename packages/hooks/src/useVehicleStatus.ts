@@ -296,12 +296,27 @@ function statusTimestampMs(status: VehicleStatus): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-function getWebSocketBaseUrl() {
-  if (typeof window === 'undefined') return 'ws://localhost:3001';
+export function getWebSocketBaseUrl(
+  configuredBaseUrl = (() => {
+    const env = import.meta as { env?: { VITE_WS_URL?: string; VITE_API_URL?: string } };
+    return env.env?.VITE_WS_URL ?? env.env?.VITE_API_URL;
+  })(),
+  location: Pick<Location, 'hostname' | 'origin'> | undefined = typeof window === 'undefined' ? undefined : window.location,
+) {
+  if (!location) return 'ws://localhost:3001';
 
-  const env = import.meta as { env?: { VITE_WS_URL?: string; VITE_API_URL?: string } };
-  const configured = env.env?.VITE_WS_URL ?? env.env?.VITE_API_URL;
-  if (configured) return configured.replace(/^http/, 'ws').replace(/\/$/, '');
+  if (configuredBaseUrl) {
+    try {
+      const url = new URL(configuredBaseUrl, location.origin);
+      const isLoopbackTarget = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
+      const isLoopbackViewer = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1';
+      if (!isLoopbackTarget || isLoopbackViewer) {
+        return url.toString().replace(/^http/, 'ws').replace(/\/$/, '');
+      }
+    } catch {
+      return configuredBaseUrl.replace(/^http/, 'ws').replace(/\/$/, '');
+    }
+  }
 
-  return window.location.origin.replace(/^http/, 'ws');
+  return location.origin.replace(/^http/, 'ws');
 }

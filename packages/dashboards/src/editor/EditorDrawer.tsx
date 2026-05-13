@@ -35,13 +35,13 @@ export function EditorDrawer({
       `}</style>
       <aside
         className="fixed right-0 top-0 z-50 flex h-screen w-96 flex-col border-l border-border shadow-2xl"
-        style={{ backgroundColor: 'var(--rm-bg, #141414)' }}
+        style={{ backgroundColor: 'var(--rm-bg-page)' }}
         role="complementary"
         aria-label="Dashboard editor"
       >
         <header
           className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2.5"
-          style={{ backgroundColor: 'var(--rm-bg-elevated, #1e1e1e)' }}
+          style={{ backgroundColor: 'var(--rm-bg-elevated)' }}
         >
           {mode === 'edit' ? (
             <button
@@ -62,8 +62,7 @@ export function EditorDrawer({
           ) : null}
         </header>
 
-        {/* Content — the child component is responsible for its own internal scroll */}
-        <div className="flex min-h-0 flex-1 overflow-hidden p-3">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
           {mode === 'edit' && editContent ? editContent : paletteContent}
         </div>
       </aside>

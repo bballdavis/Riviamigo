@@ -71,8 +71,7 @@ export function DashboardPageShell({
 
   const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
   const localDefault = getDefaultBySlug(slug);
-  const savedConfig: DashboardConfig | undefined =
-    shouldUseBundledDefault(apiConfig, localDefault) ? localDefault : apiConfig ?? localDefault;
+  const savedConfig: DashboardConfig | undefined = apiConfig ?? localDefault;
 
   const [localConfig, setLocalConfig] = useState<DashboardConfig | null>(null);
   const currentEditMode = controlledEditMode ?? internalEditMode;
@@ -215,25 +214,3 @@ export function DashboardPageShell({
   );
 }
 
-function shouldUseBundledDefault(
-  apiConfig: DashboardConfig | undefined,
-  bundledDefault: DashboardConfig | undefined,
-) {
-  if (!apiConfig || !bundledDefault) return false;
-  if (!apiConfig.isDefault || !apiConfig.isLocked || apiConfig.ownerId) return false;
-
-  return getDefaultSignature(apiConfig) !== getDefaultSignature(bundledDefault);
-}
-
-function getDefaultSignature(config: DashboardConfig) {
-  return JSON.stringify({
-    controls: config.controls,
-    widgets: config.widgets.map((widget) => ({
-      componentType: widget.componentType,
-      definitionId: widget.definitionId,
-      title: widget.title ?? null,
-      options: widget.options ?? null,
-      layout: widget.layout,
-    })),
-  });
-}

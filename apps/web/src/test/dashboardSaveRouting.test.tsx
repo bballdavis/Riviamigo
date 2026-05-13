@@ -75,15 +75,19 @@ function setup(
   mutations: {
     updateMock: ReturnType<typeof vi.fn>;
     createMock: ReturnType<typeof vi.fn>;
+    adminUpdateMock?: ReturnType<typeof vi.fn>;
     qcMock: QcMock;
+    isAdmin?: boolean;
   },
 ) {
-  const { updateMock, createMock, qcMock } = mutations;
+  const { updateMock, createMock, adminUpdateMock, qcMock, isAdmin = false } = mutations;
 
   const renderFn = createDefaultDashboardEditActions({
     updateDashboard: { mutateAsync: updateMock, isPending: false } as never,
+    updateAdminDashboard: { mutateAsync: adminUpdateMock ?? vi.fn(), isPending: false } as never,
     createDashboard: { mutateAsync: createMock, isPending: false } as never,
     qc: qcMock as never,
+    isAdmin,
   });
 
   render(<>{renderFn(shellState)}</>);
@@ -247,6 +251,42 @@ describe('createDefaultDashboardEditActions — save routing', () => {
     await userEvent.click(screen.getByTitle('Save changes'));
 
     expect(updateMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(exitEdit).toHaveBeenCalledOnce();
+  });
+
+  it('admin editing a system default calls updateAdminDashboard, not create', async () => {
+    const adminUpdateMock = vi.fn().mockResolvedValue(systemDefault);
+    const exitEdit = vi.fn();
+    setup(
+      makeShellState({ savedConfig: systemDefault, localConfig: { ...systemDefault, widgets: [] }, exitEdit }),
+      { updateMock, createMock, adminUpdateMock, qcMock, isAdmin: true },
+    );
+
+    await userEvent.click(screen.getByTitle('Save changes'));
+
+    expect(adminUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SYSTEM_DEFAULT_ID, isDefault: true }),
+    );
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(exitEdit).toHaveBeenCalledOnce();
+  });
+
+  it('admin editing a user-owned copy uses the regular update path', async () => {
+    const adminUpdateMock = vi.fn().mockResolvedValue(userCopy);
+    const exitEdit = vi.fn();
+    setup(
+      makeShellState({ savedConfig: userCopy, localConfig: { ...userCopy, widgets: [] }, exitEdit }),
+      { updateMock, createMock, adminUpdateMock, qcMock, isAdmin: true },
+    );
+
+    await userEvent.click(screen.getByTitle('Save changes'));
+
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER_COPY_ID, ownerId: USER_ID }),
+    );
+    expect(adminUpdateMock).not.toHaveBeenCalled();
     expect(createMock).not.toHaveBeenCalled();
     expect(exitEdit).toHaveBeenCalledOnce();
   });

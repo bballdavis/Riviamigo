@@ -59,13 +59,13 @@ const config: DashboardConfig = {
   ],
 };
 
-describe('overview driver mode chip', () => {
+describe('overview driver mode label', () => {
   beforeEach(() => {
     statusMocks.driveMode = 'all_purpose';
     statusMocks.gearStatus = 'drive';
   });
 
-  it('shows a friendly chip label instead of the raw drive-mode token', () => {
+  it('shows a friendly text label instead of the raw drive-mode token', () => {
     render(
       <DashboardRenderer
         config={config}
@@ -73,7 +73,9 @@ describe('overview driver mode chip', () => {
       />
     );
 
-    expect(screen.getByText('All-Purpose')).toBeInTheDocument();
+    const driverMode = screen.getByText('All-Purpose');
+    expect(driverMode).toHaveClass('font-mono');
+    expect(driverMode).not.toHaveClass('inline-flex');
     expect(screen.queryByText('all_purpose')).not.toBeInTheDocument();
   });
 

@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Badge, Tooltip } from '@riviamigo/ui/primitives';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '@riviamigo/hooks';
 import {
   useCreateDashboard,
   useUpdateDashboard,
+  useUpdateAdminDashboard,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
-import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
+import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
 import { Battery, Car, Gauge, MapPin, Save, Thermometer, Trash2, Edit2, Cpu } from 'lucide-react';
 import { BsLockFill, BsUnlockFill } from 'react-icons/bs';
@@ -26,8 +27,11 @@ export interface DashboardPageProps {
 
 export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
+  const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me() });
+  const isAdmin = me.data?.role === 'admin';
 
   return (
     <DashboardPageShell
@@ -35,15 +39,17 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc })}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin })}
     />
   );
 }
 
 export interface DashboardEditMutations {
   updateDashboard: ReturnType<typeof useUpdateDashboard>;
+  updateAdminDashboard: ReturnType<typeof useUpdateAdminDashboard>;
   createDashboard: ReturnType<typeof useCreateDashboard>;
   qc: ReturnType<typeof useQueryClient>;
+  isAdmin: boolean;
 }
 
 function findOwnedDashboardBySlug(
@@ -53,55 +59,43 @@ function findOwnedDashboardBySlug(
   return dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null);
 }
 
-export function createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc }: DashboardEditMutations) {
+export function createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin }: DashboardEditMutations) {
   return function renderDefaultDashboardEditActions({ isEditMode, localConfig, savedConfig, exitEdit }: DashboardPageShellRenderState) {
     if (!isEditMode) return undefined;
-    const isPending = updateDashboard.isPending || createDashboard.isPending;
+    const isPending = updateDashboard.isPending || updateAdminDashboard.isPending || createDashboard.isPending;
 
     async function handleSave() {
       if (!localConfig) { exitEdit(); return; }
       try {
-        // Fast path: savedConfig reflects the freshest query result. If it shows
-        // an owned copy, go straight to PUT — avoids an unnecessary POST+422 cycle.
-        const ownedCopy = savedConfig?.ownerId != null
-          ? savedConfig
-          : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
-        if (ownedCopy) {
-          await updateDashboard.mutateAsync({
+        const isSystemDefault = savedConfig?.isDefault && !savedConfig?.ownerId;
+
+        if (isSystemDefault && isAdmin) {
+          await updateAdminDashboard.mutateAsync({
             ...localConfig,
-            id: ownedCopy.id,
-            ownerId: ownedCopy.ownerId,
-            isDefault: false,
-            isLocked: false,
+            id: savedConfig!.id,
+            ownerId: savedConfig!.ownerId,
+            isDefault: true,
+            isLocked: savedConfig!.isLocked,
           });
         } else {
-          // No owned copy in cache — try to create one.
-          try {
+          const ownedCopy = savedConfig?.ownerId != null
+            ? savedConfig
+            : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
+          if (ownedCopy) {
+            await updateDashboard.mutateAsync({
+              ...localConfig,
+              id: ownedCopy.id,
+              ownerId: ownedCopy.ownerId,
+              isDefault: false,
+              isLocked: false,
+            });
+          } else {
             await createDashboard.mutateAsync({
               ...localConfig,
               isDefault: false,
               isLocked: false,
               ownerId: null,
             });
-          } catch {
-            // POST failed (e.g. stale cache: user already has a copy). Refetch
-            // and update if we find an owned copy.
-            await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
-            const existing = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
-            const refetchedOwnedCopy = existing?.ownerId != null
-              ? existing
-              : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
-            if (refetchedOwnedCopy) {
-              await updateDashboard.mutateAsync({
-                ...localConfig,
-                id: refetchedOwnedCopy.id,
-                ownerId: refetchedOwnedCopy.ownerId,
-                isDefault: false,
-                isLocked: false,
-              });
-            } else {
-              throw new Error('save failed');
-            }
           }
         }
         exitEdit();
@@ -197,14 +191,14 @@ export function CurrentVehicleStatePanel({ status, images }: { status: VehicleSt
           {status?.last_updated ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Awaiting telemetry'}
         </span>
       </div>
-      <div className="grid gap-4 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
         <div className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border border-accent/25 bg-accent/10 p-4">
           <div className="relative h-full min-h-48 overflow-hidden rounded-2xl border border-accent/40 bg-bg-surface">
             <div
               className="absolute inset-x-1 bottom-1 rounded-xl transition-all"
               style={{
                 height: `${batteryLevel}%`,
-                background: `linear-gradient(to top, var(--rm-accent) 0%, color-mix(in oklab, var(--rm-accent) ${100 - batteryLevel}%, #10B981 ${batteryLevel}%) 100%)`,
+                background: `linear-gradient(to top, var(--rm-accent) 0%, color-mix(in oklab, var(--rm-accent) ${100 - batteryLevel}%, var(--rm-status-positive) ${batteryLevel}%) 100%)`,
               }}
             />
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />
@@ -273,7 +267,7 @@ export function CurrentVehicleStatePanel({ status, images }: { status: VehicleSt
           </div>
         </div>
 
-        <div className="grid gap-2">
+        <div className="md:col-span-2 xl:col-span-1 grid gap-2 md:grid-cols-2 xl:grid-cols-1">
           {stats.map((stat) => (
             <div key={stat.label} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-xs">
               <span className="inline-flex items-center gap-2 text-fg-tertiary">{stat.icon}{stat.label}</span>
