@@ -45,6 +45,9 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', images: chargingMocks.images }] }),
     useMetricCatalog: () => ({ data: [] }),
+    useMetricValue: () => ({ data: null }),
+    useMetricSeries: () => ({ data: [] }),
+    useBatteryHealth: () => ({ data: null, isLoading: false }),
     useChargingSummary: () => ({
       data: {
         session_count: 6,
@@ -90,6 +93,7 @@ const baseConfig: DashboardConfig = {
 
 const swappedConfig: DashboardConfig = {
   ...baseConfig,
+  slug: 'charging',
   widgets: [
     {
       id: 'd4000004-0000-0000-0000-000000000013',
@@ -101,8 +105,8 @@ const swappedConfig: DashboardConfig = {
     },
     {
       id: 'd4000004-0000-0000-0000-000000000004',
-      componentType: 'charging',
-      definitionId: 'avg_session',
+      componentType: 'sensor',
+      definitionId: 'charging_avg_session',
       title: 'Avg / Session',
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 9, y: 2, w: 3, h: 2 },
@@ -124,16 +128,16 @@ const mixRowConfig: DashboardConfig = {
     },
     {
       id: 'd4000004-0000-0000-0000-000000000009',
-      componentType: 'charging',
-      definitionId: 'home_share',
+      componentType: 'sensor',
+      definitionId: 'charging_home_share',
       title: 'Home Charging',
       options: {},
       layout: { x: 0, y: 4, w: 3, h: 2 },
     },
     {
       id: 'd4000004-0000-0000-0000-000000000010',
-      componentType: 'charging',
-      definitionId: 'dc_share',
+      componentType: 'sensor',
+      definitionId: 'charging_dc_share',
       title: 'DC Fast Charging',
       options: {},
       layout: { x: 3, y: 4, w: 3, h: 2 },
@@ -193,7 +197,7 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
-    expect(screen.getByTestId('charging-stat-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('sensor-chip')).toBeInTheDocument();
     expect(screen.getByText('Avg / Session')).toBeInTheDocument();
   });
 
@@ -208,7 +212,7 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(screen.queryByTestId('charging-stat-chip')).toBeNull();
+    expect(screen.queryByTestId('sensor-chip')).toBeNull();
   });
 
   it('expands the home and DC mix chips when the connection chip is hidden', () => {
@@ -220,10 +224,10 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
-    expect(document.querySelector('[data-widget-definition="home_share"]')).toHaveStyle({
+    expect(document.querySelector('[data-widget-definition="charging_home_share"]')).toHaveStyle({
       gridColumn: '1 / span 6',
     });
-    expect(document.querySelector('[data-widget-definition="dc_share"]')).toHaveStyle({
+    expect(document.querySelector('[data-widget-definition="charging_dc_share"]')).toHaveStyle({
       gridColumn: '7 / span 6',
     });
   });
@@ -239,10 +243,10 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(document.querySelector('[data-widget-definition="home_share"]')).toHaveStyle({
+    expect(document.querySelector('[data-widget-definition="charging_home_share"]')).toHaveStyle({
       gridColumn: '1 / span 3',
     });
-    expect(document.querySelector('[data-widget-definition="dc_share"]')).toHaveStyle({
+    expect(document.querySelector('[data-widget-definition="charging_dc_share"]')).toHaveStyle({
       gridColumn: '4 / span 3',
     });
   });
