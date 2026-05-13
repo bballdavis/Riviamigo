@@ -22,12 +22,44 @@ pub fn router() -> Router<AppState> {
 #[derive(Serialize)]
 struct HealthResponse {
     vehicle_id: Uuid,
+    vehicle: HealthVehicle,
     generated_at: DateTime<Utc>,
+    runtime: Option<RuntimeHealth>,
+    latest: Option<LatestHealthTelemetry>,
     tires: Option<TirePressures>,
     closures: Option<Closures>,
     current_software_version: Option<String>,
     software_history: Vec<SoftwareEntry>,
     thermal_events_30d: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct HealthVehicle {
+    name: Option<String>,
+    model: String,
+    trim: Option<String>,
+    vin: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct RuntimeHealth {
+    is_online: Option<bool>,
+    last_event_at: Option<DateTime<Utc>>,
+    worker_health: Option<String>,
+    worker_health_msg: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct LatestHealthTelemetry {
+    ts: DateTime<Utc>,
+    twelve_volt_health: Option<String>,
+    hv_thermal_event: Option<String>,
+    ota_current_version: Option<String>,
+    ota_available_version: Option<String>,
+    ota_status: Option<String>,
+    ota_current_status: Option<String>,
+    is_online: Option<bool>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -69,7 +101,10 @@ async fn health(
 ) -> Result<Json<HealthResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let (tires, closures, sw_history, thermal_count) = tokio::try_join!(
+    let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count) = tokio::try_join!(
+        fetch_vehicle(&state.pool, vehicle_id),
+        fetch_runtime(&state.pool, vehicle_id),
+        fetch_latest(&state.pool, vehicle_id),
         fetch_tires(&state.pool, vehicle_id),
         fetch_closures(&state.pool, vehicle_id),
         fetch_sw_history(&state.pool, vehicle_id),
@@ -79,17 +114,72 @@ async fn health(
     let current_version = sw_history
         .iter()
         .find(|e| e.observed_until.is_none() && e.version.is_some())
-        .and_then(|e| e.version.clone());
+        .and_then(|e| e.version.clone())
+        .or_else(|| latest.as_ref().and_then(|e| e.ota_current_version.clone()));
 
     Ok(Json(HealthResponse {
         vehicle_id,
+        vehicle,
         generated_at: Utc::now(),
+        runtime,
+        latest,
         tires,
         closures,
         current_software_version: current_version,
         software_history: sw_history,
         thermal_events_30d: thermal_count,
     }))
+}
+
+async fn fetch_vehicle(pool: &sqlx::PgPool, vid: Uuid) -> Result<HealthVehicle, AppError> {
+    let row = sqlx::query_as::<_, HealthVehicle>(
+        r#"SELECT name, model, trim, vin
+           FROM riviamigo.vehicles
+           WHERE id = $1"#
+    )
+    .bind(vid)
+    .fetch_one(pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(row)
+}
+
+async fn fetch_runtime(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<RuntimeHealth>, AppError> {
+    let row = sqlx::query_as::<_, RuntimeHealth>(
+        r#"SELECT is_online, last_event_at, worker_health, worker_health_msg, updated_at
+           FROM riviamigo.vehicle_runtime_state
+           WHERE vehicle_id = $1"#
+    )
+    .bind(vid)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(row)
+}
+
+async fn fetch_latest(
+    pool: &sqlx::PgPool,
+    vid: Uuid,
+) -> Result<Option<LatestHealthTelemetry>, AppError> {
+    let row = sqlx::query_as::<_, LatestHealthTelemetry>(
+        r#"SELECT ts, twelve_volt_health, hv_thermal_event, ota_current_version,
+                  ota_available_version, ota_status, ota_current_status, is_online
+           FROM timeseries.telemetry
+           WHERE vehicle_id = $1
+             AND (twelve_volt_health IS NOT NULL
+                  OR hv_thermal_event IS NOT NULL
+                  OR ota_current_version IS NOT NULL
+                  OR ota_available_version IS NOT NULL
+                  OR ota_status IS NOT NULL
+                  OR ota_current_status IS NOT NULL
+                  OR is_online IS NOT NULL)
+           ORDER BY ts DESC LIMIT 1"#
+    )
+    .bind(vid)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::from)?;
+    Ok(row)
 }
 
 async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressures>, AppError> {
@@ -99,8 +189,11 @@ async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressu
                   tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status
            FROM timeseries.telemetry
            WHERE vehicle_id = $1
-             AND (tire_fl_psi IS NOT NULL OR tire_fr_psi IS NOT NULL)
-            ORDER BY ts DESC LIMIT 1"#,
+             AND (tire_fl_psi IS NOT NULL
+                  OR tire_fr_psi IS NOT NULL
+                  OR tire_rl_psi IS NOT NULL
+                  OR tire_rr_psi IS NOT NULL)
+           ORDER BY ts DESC LIMIT 1"#
     )
     .bind(vid)
     .fetch_optional(pool)
@@ -118,9 +211,13 @@ async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closure
            FROM timeseries.telemetry
            WHERE vehicle_id = $1
              AND (closure_frunk_closed IS NOT NULL
+                  OR closure_liftgate_closed IS NOT NULL
+                  OR closure_tailgate_closed IS NOT NULL
                   OR door_front_left_closed IS NOT NULL
-                  OR door_front_right_closed IS NOT NULL)
-            ORDER BY ts DESC LIMIT 1"#,
+                  OR door_front_right_closed IS NOT NULL
+                  OR door_rear_left_closed IS NOT NULL
+                  OR door_rear_right_closed IS NOT NULL)
+           ORDER BY ts DESC LIMIT 1"#
     )
     .bind(vid)
     .fetch_optional(pool)
