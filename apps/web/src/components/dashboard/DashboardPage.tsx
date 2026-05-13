@@ -438,16 +438,16 @@ function formatCharging(chargerState: string | null | undefined, chargerStatus: 
   return 'Not charging';
 }
 
-function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
-  const rawValue = driveMode ?? gearStatus;
-  if (!rawValue) return '-';
+function formatDrive(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
+  if (driveMode) return driveMode;
+  return gearStatus ? prettify(gearStatus) : '-';
+}
 
-  const label = formatDriveMode(rawValue);
-  return (
-    <Badge size="sm" className={getDriveModeBadgeClass(rawValue)} title={label}>
-      {label}
-    </Badge>
-  );
+function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
+  if (driveMode) {
+    return formatDriveMode(driveMode);
+  }
+  return formatDrive(driveMode, gearStatus);
 }
 
 function formatSoftware(status: VehicleStatus | null | undefined) {

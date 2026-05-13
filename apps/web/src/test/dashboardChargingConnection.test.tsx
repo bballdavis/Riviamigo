@@ -4,6 +4,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
   forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
+  images: null as null | {
+    all: Array<{
+      placement: string;
+      design: string | null;
+      size: string | null;
+      resolution: string | null;
+      url: string;
+    }>;
+    side?: { light?: string | null; dark?: string | null } | null;
+  },
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -33,7 +43,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         last_updated: '2026-05-12T12:00:00Z',
       },
     }),
-    useVehicles: () => ({ data: [{ id: 'vehicle-1', images: null }] }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', images: chargingMocks.images }] }),
     useMetricCatalog: () => ({ data: [] }),
     useChargingSummary: () => ({
       data: {
@@ -78,9 +88,36 @@ const baseConfig: DashboardConfig = {
   ],
 };
 
+const vehicleImageFixtures = {
+  all: [
+    { placement: 'side', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/side-light.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/side-dark.webp' },
+    { placement: 'side-charging', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/side-charging-light.webp' },
+    { placement: 'side-charging', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/side-charging-dark.webp' },
+  ],
+  side: {
+    light: '/rivian/side-light.webp',
+    dark: '/rivian/side-dark.webp',
+  },
+};
+
+const vehicleImageUrlOnlyChargingFixtures = {
+  all: [
+    { placement: 'side', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/side-light.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/side-dark.webp' },
+    { placement: 'side', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/r1s_side-charging_light_large.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/r1s_side-charging_dark_large.webp' },
+  ],
+  side: {
+    light: '/rivian/side-light.webp',
+    dark: '/rivian/side-dark.webp',
+  },
+};
+
 describe('charging connection custom widget', () => {
   beforeEach(() => {
     chargingMocks.forcePluggedState = 'Disconnected';
+    chargingMocks.images = null;
   });
 
   it('stays in a restrained disconnected state until telemetry or preview enables it', () => {
@@ -96,8 +133,30 @@ describe('charging connection custom widget', () => {
     expect(screen.queryByText('Connected, not charging')).not.toBeInTheDocument();
   });
 
+  it('uses normal side art and disables the runner when connected but not charging', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByText('Standby')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/side-light.webp',
+      '/rivian/side-dark.webp',
+    ]);
+    expect(screen.queryByTestId('charging-battery-led-sweep')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('charging-battery-led-segment')).toHaveLength(20);
+  });
+
   it('renders the live charging treatment when telemetry says the vehicle is charging', () => {
     chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.images = vehicleImageFixtures;
 
     render(
       <DashboardRenderer
@@ -111,6 +170,11 @@ describe('charging connection custom widget', () => {
     expect(screen.getByText('1h 35m')).toBeInTheDocument();
     expect(screen.getByText('Charging')).toBeInTheDocument();
     expect(screen.getByText('92.5%')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/side-charging-light.webp',
+      '/rivian/side-charging-dark.webp',
+    ]);
 
     const bar = screen.getByTestId('charging-battery-led-bar');
     expect(bar).toHaveAccessibleName('Battery 64 percent');
@@ -153,6 +217,52 @@ describe('charging connection custom widget', () => {
       left: '0px',
       width: 'calc((100% - 38px) / 20)',
     });
+  });
+
+  it('lets force-show override connected-but-idle telemetry for charging previews', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...baseConfig,
+          widgets: [{ ...baseConfig.widgets[0]!, options: { forceShow: true } }],
+        }}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByText('Charging')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/side-charging-light.webp',
+      '/rivian/side-charging-dark.webp',
+    ]);
+    expect(screen.getByTestId('charging-battery-led-sweep')).toBeInTheDocument();
+  });
+
+  it('finds side-charging art even when Rivian metadata stores it as a side placement', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.images = vehicleImageUrlOnlyChargingFixtures;
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...baseConfig,
+          widgets: [{ ...baseConfig.widgets[0]!, options: { forceShow: true } }],
+        }}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    const images = screen.getAllByTestId('charging-side-image');
+    expect(images.map((image) => image.getAttribute('src'))).toEqual([
+      '/rivian/r1s_side-charging_light_large.webp',
+      '/rivian/r1s_side-charging_dark_large.webp',
+    ]);
+    expect(images.map((image) => image.getAttribute('data-image-mode'))).toEqual(['charging', 'charging']);
   });
 
   it('exposes a force-show switch in the custom widget editor', () => {
