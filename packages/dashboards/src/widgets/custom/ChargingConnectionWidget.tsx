@@ -6,7 +6,7 @@ import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
-import { findBestChargingSideOverlay, findFirstSideImage } from './imageUtils';
+import { findBestChargingSideOverlay, findFirstSideImage, findSideChargingImage } from './imageUtils';
 
 const CHARGING_SIDE_LIGHT_IMAGE_URL = '/vehicle-images/r1s-side-charging-light.png';
 
@@ -45,18 +45,25 @@ function ChargingConnectionWidget({
   const pluggedIn = isPluggedIn(status);
   const forceShow = options.forceShow === true;
   const visible = pluggedIn || forceShow;
-  const charging = isActivelyCharging(status) || (forceShow && !pluggedIn);
-  const timeToFull = forceShow && !pluggedIn ? 95 : status?.time_to_end_of_charge_min;
+  const charging = forceShow || isActivelyCharging(status);
+  const timeToFull = forceShow ? 95 : status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
   const sideLight = activeVehicle?.images?.side?.light ?? findFirstSideImage(activeVehicle?.images?.all, 'light');
   const sideDark = activeVehicle?.images?.side?.dark ?? findFirstSideImage(activeVehicle?.images?.all, 'dark');
   const sideFallback = sideLight ?? sideDark ?? findFirstSideImage(activeVehicle?.images?.all);
-  const chargingOverlayLight = findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');
-  const chargingOverlayDark = findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark');
-  const chargingSideLight = chargingOverlayLight ?? CHARGING_SIDE_LIGHT_IMAGE_URL;
-  const chargingSideDark = chargingOverlayDark ?? chargingSideLight;
+  const chargingSideLight =
+    findSideChargingImage(activeVehicle?.images?.all, 'light') ??
+    findBestChargingSideOverlay(activeVehicle?.images?.all, 'light') ??
+    CHARGING_SIDE_LIGHT_IMAGE_URL;
+  const chargingSideDark =
+    findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
+    findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
+    chargingSideLight;
   const idleSideLight = sideLight ?? sideFallback;
   const idleSideDark = sideDark ?? idleSideLight;
+  const activeSideLight = charging ? chargingSideLight : idleSideLight;
+  const activeSideDark = charging ? chargingSideDark : idleSideDark;
+  const activeImageMode = charging ? 'side-charging' : 'side';
   const rows = [
     {
       label: 'Status',
@@ -110,18 +117,22 @@ function ChargingConnectionWidget({
   return (
     <section
       data-testid="charging-connection-chip"
+      data-charging-state={charging ? 'charging' : 'standby'}
+      data-image-mode={activeImageMode}
+      data-image-light={activeSideLight ?? ''}
+      data-image-dark={activeSideDark ?? ''}
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
         {charging ? (
           <>
-            <VehicleSideImage source={chargingSideLight} darkClassName="dark:hidden" />
-            <VehicleSideImage source={chargingSideDark} darkClassName="hidden dark:block" />
+            <VehicleSideImage source={chargingSideLight} mode="charging" darkClassName="dark:hidden" />
+            <VehicleSideImage source={chargingSideDark} mode="charging" darkClassName="hidden dark:block" />
           </>
         ) : idleSideLight ? (
           <>
-            <VehicleSideImage source={idleSideLight} darkClassName="dark:hidden" />
-            <VehicleSideImage source={idleSideDark ?? idleSideLight} darkClassName="hidden dark:block" />
+            <VehicleSideImage source={idleSideLight} mode="side" darkClassName="dark:hidden" />
+            <VehicleSideImage source={idleSideDark ?? idleSideLight} mode="side" darkClassName="hidden dark:block" />
           </>
         ) : (
           <div className="mr-4 flex h-full w-2/3 items-center justify-center rounded-2xl border border-dashed border-border bg-bg-elevated text-fg-tertiary">
@@ -261,15 +272,27 @@ function ChargingBatteryLedBar({
   );
 }
 
-function VehicleSideImage({ source, darkClassName }: { source: string; darkClassName: string }) {
+function VehicleSideImage({
+  source,
+  mode,
+  darkClassName,
+}: {
+  source: string;
+  mode: 'side' | 'charging';
+  darkClassName: string;
+}) {
+  const transform = mode === 'charging' ? 'translateX(-12%) scale(1.05)' : 'translateX(-5%) scale(1.15)';
+  const objectPosition = mode === 'charging' ? 'left center' : 'right center';
+
   return (
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <img
         src={source}
         alt=""
         data-testid="charging-side-image"
-        className="h-full w-auto max-w-none origin-right object-contain object-right"
-        style={{ transform: 'translateX(-5%) scale(1.15)' }}
+        data-image-mode={mode}
+        className="h-full w-auto max-w-none object-contain"
+        style={{ objectPosition, transform, transformOrigin: mode === 'charging' ? 'left center' : 'right center' }}
       />
     </div>
   );

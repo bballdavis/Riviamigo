@@ -118,8 +118,9 @@ struct CurveAnalysisRow {
 
 #[derive(Debug, sqlx::FromRow)]
 struct CapacitySourcesRow {
-    snapshot_rated_kwh: Option<f64>,
-    telemetry_capacity_wh: Option<f64>,
+    vehicle_capacity_wh: Option<f64>,
+    telemetry_latest_capacity_wh: Option<f64>,
+    telemetry_max_capacity_wh: Option<f64>,
 }
 
 fn normalize_capacity_kwh(raw: f64) -> Option<f64> {
@@ -493,26 +494,33 @@ async fn get_summary_response(
 
     let capacity_sources = sqlx::query_as::<_, CapacitySourcesRow>(
         "SELECT
-            (SELECT rated_kwh
-             FROM riviamigo.battery_capacity_snapshots
-             WHERE vehicle_id=$1 AND rated_kwh IS NOT NULL
-             ORDER BY snapshotted_at DESC
-             LIMIT 1) AS snapshot_rated_kwh,
+            (SELECT battery_capacity_wh
+             FROM riviamigo.vehicles
+             WHERE id=$1 AND battery_capacity_wh IS NOT NULL
+             LIMIT 1) AS vehicle_capacity_wh,
             (SELECT battery_capacity_wh
              FROM timeseries.telemetry
              WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL
              ORDER BY ts DESC
-             LIMIT 1) AS telemetry_capacity_wh",
+             LIMIT 1) AS telemetry_latest_capacity_wh,
+            (SELECT max(battery_capacity_wh)
+             FROM timeseries.telemetry
+             WHERE vehicle_id=$1 AND battery_capacity_wh IS NOT NULL) AS telemetry_max_capacity_wh",
     )
     .bind(vehicle_id)
     .fetch_one(&state.pool)
     .await?;
     let capacity_kwh = capacity_sources
-        .snapshot_rated_kwh
+        .vehicle_capacity_wh
         .and_then(normalize_capacity_kwh)
         .or_else(|| {
             capacity_sources
-                .telemetry_capacity_wh
+                .telemetry_latest_capacity_wh
+                .and_then(normalize_capacity_kwh)
+        })
+        .or_else(|| {
+            capacity_sources
+                .telemetry_max_capacity_wh
                 .and_then(normalize_capacity_kwh)
         });
 
@@ -540,6 +548,17 @@ async fn get_summary_response(
             None
         }
     });
+    if let (Some(cycles), Some(cap)) = (charging_cycles, capacity_kwh) {
+        if cycles >= 500.0 {
+            tracing::warn!(
+                %vehicle_id,
+                total_kwh,
+                capacity_kwh = cap,
+                charging_cycles = cycles,
+                "charging summary cycles unusually high"
+            );
+        }
+    }
     let charging_efficiency_pct = if total_energy_used_kwh > 0.0 {
         Some(total_kwh / total_energy_used_kwh * 100.0)
     } else {
