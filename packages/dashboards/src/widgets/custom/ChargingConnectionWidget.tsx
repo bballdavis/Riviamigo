@@ -1,6 +1,5 @@
 import React from 'react';
 import { Car, Zap } from 'lucide-react';
-import { PiPlugsFill } from 'react-icons/pi';
 import { useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
@@ -24,12 +23,8 @@ interface ChargingSummarySnapshot {
   max_charge_limit_pct: number | null;
 }
 
-interface ChargingConnectedWidgetOptions {
-  forceShow?: boolean;
-}
-
 function ChargingConnectionWidget({
-  instance,
+  instance: _instance,
   ctx,
 }: {
   instance: WidgetInstance;
@@ -41,12 +36,9 @@ function ChargingConnectionWidget({
   const { data: vehicles } = useVehicles();
   const { data: summary } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
-  const options = (instance.options ?? {}) as ChargingConnectedWidgetOptions;
   const pluggedIn = isPluggedIn(status);
-  const forceShow = options.forceShow === true;
-  const visible = pluggedIn || forceShow;
-  const charging = forceShow || isActivelyCharging(status);
-  const timeToFull = forceShow ? 95 : status?.time_to_end_of_charge_min;
+  const charging = isActivelyCharging(status);
+  const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
   const sideLight = activeVehicle?.images?.side?.light ?? findFirstSideImage(activeVehicle?.images?.all, 'light');
   const sideDark = activeVehicle?.images?.side?.dark ?? findFirstSideImage(activeVehicle?.images?.all, 'dark');
@@ -95,24 +87,7 @@ function ChargingConnectionWidget({
     },
   ];
 
-  if (!visible) {
-    return (
-      <section
-        data-testid="charging-connection-chip"
-        className="flex h-full min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] p-6 shadow-lg shadow-black/10"
-      >
-        <div className="grid max-w-sm gap-3 text-center">
-          <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-bg-elevated text-fg-tertiary">
-            <PiPlugsFill className="h-6 w-6" />
-          </span>
-          <div>
-            <p className="mt-1 text-base font-semibold text-fg">Not connected</p>
-            <p className="mt-1 text-sm text-fg-tertiary">Awaiting plugged-in vehicle telemetry.</p>
-          </div>
-        </div>
-      </section>
-    );
-  }
+  if (!pluggedIn) return null;
 
   return (
     <section
@@ -332,6 +307,6 @@ registerWidget({
   title: 'Charging Connection',
   defaultSize: { w: 6, h: 6 },
   minSize: { w: 5, h: 5 },
-  defaultOptions: { forceShow: false },
+  defaultOptions: {},
   component: ChargingConnectionWidget,
 });

@@ -106,16 +106,5 @@ describe('StatusBar', () => {
     expect(screen.getByLabelText('Battery status: 42%')).toBeInTheDocument();
     expect(screen.queryByText('42%')).not.toBeInTheDocument();
     expect(container.querySelector('svg')).toBeInTheDocument();
-    expect(container.querySelector('[data-battery-variant="medium"]')).toBeInTheDocument();
-  });
-
-  it('uses a more descriptive battery icon by state of charge', () => {
-    const { rerender, container } = render(<StatusBar onlineState="online" socPercent={91} />);
-
-    expect(container.querySelector('[data-battery-variant="full"]')).toBeInTheDocument();
-
-    rerender(<StatusBar onlineState="online" socPercent={18} />);
-
-    expect(container.querySelector('[data-battery-variant="low"]')).toBeInTheDocument();
   });
 });

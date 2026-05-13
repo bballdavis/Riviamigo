@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Wifi, WifiOff, Battery, BatteryCharging, BatteryFull, BatteryMedium, BatteryLow, Loader2 } from 'lucide-react';
+import { Wifi, WifiOff, Battery, BatteryCharging, Loader2 } from 'lucide-react';
 import { cn, formatMiles } from '../lib/utils';
 
 export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'error';
@@ -12,14 +12,6 @@ export interface StatusBarProps {
   rangeEstimateMi?: number | undefined;
   compact?: boolean | undefined;
   className?: string | undefined;
-}
-
-function getBatteryIcon(socPercent?: number | undefined, isCharging?: boolean | undefined) {
-  if (isCharging) return { Icon: BatteryCharging, variant: 'charging' as const };
-  if (socPercent === undefined) return { Icon: Battery, variant: 'unknown' as const };
-  if (socPercent >= 80) return { Icon: BatteryFull, variant: 'full' as const };
-  if (socPercent >= 30) return { Icon: BatteryMedium, variant: 'medium' as const };
-  return { Icon: BatteryLow, variant: 'low' as const };
 }
 
 export function StatusBar({
@@ -38,7 +30,6 @@ export function StatusBar({
     : onlineState === 'error'
     ? 'Connection failed'
     : 'Offline';
-  const { Icon: BatteryIcon, variant: batteryVariant } = getBatteryIcon(socPercent, isCharging);
 
   return (
     <div
@@ -89,20 +80,17 @@ export function StatusBar({
           className={cn('flex items-center gap-1 ml-auto', compact && 'gap-0')}
           title={`Battery status: ${Math.round(socPercent)}%`}
           aria-label={`Battery status: ${Math.round(socPercent)}%`}
-          data-battery-variant={batteryVariant}
         >
-          <BatteryIcon
-            className={cn(
-              'h-3.5 w-3.5',
-              isCharging
-                ? 'text-accent'
-                : socPercent > 50
-                ? 'text-[#10B981]'
-                : socPercent > 20
-                ? 'text-[#F59E0B]'
-                : 'text-[#F87171]'
-            )}
-          />
+          {isCharging ? (
+            <BatteryCharging className="h-3.5 w-3.5 text-accent" />
+          ) : (
+            <Battery
+              className={cn(
+                'h-3.5 w-3.5',
+                socPercent > 50 ? 'text-[#10B981]' : socPercent > 20 ? 'text-[#F59E0B]' : 'text-[#F87171]'
+              )}
+            />
+          )}
           {!compact && <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>}
           {!compact && rangeEstimateMi !== undefined && (
             <span className="text-xs text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>

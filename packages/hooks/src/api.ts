@@ -147,11 +147,11 @@ class ApiClient {
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   async login(email: string, password: string): Promise<AuthTokens> {
-    return this.request('POST', '/v1/auth/login', { email, password });
+    return this.request('POST', '/v1/auth/login', { email, password }, undefined, true, false);
   }
 
   async register(email: string, password: string): Promise<AuthTokens> {
-    return this.request('POST', '/v1/auth/register', { email, password });
+    return this.request('POST', '/v1/auth/register', { email, password }, undefined, true, false);
   }
 
   async logout(): Promise<void> {
@@ -535,7 +535,6 @@ class ApiClient {
   }
 
   private reportFailure(detail: ApiFailureDetail) {
-    const message = formatApiError(detail);
     console.warn('[Riviamigo API] request failed', {
       status: detail.status,
       code: detail.code,
@@ -545,9 +544,10 @@ class ApiClient {
     });
 
     if (typeof window !== 'undefined') {
+      const { title, message } = friendlyApiError(detail);
       window.dispatchEvent(new CustomEvent('riviamigo:toast', {
         detail: {
-          title: 'Request failed',
+          title,
           message,
           variant: 'error',
           code: detail.code,
@@ -655,6 +655,17 @@ function finiteNumber(value: unknown): number | undefined {
 
 function formatApiError(detail: ApiFailureDetail) {
   return `${detail.status} ${detail.code}: ${truncate(detail.message, 160)}`;
+}
+
+function friendlyApiError(detail: ApiFailureDetail): { title: string; message: string } {
+  const { status, code } = detail;
+  if (code === 'AUTH_EXPIRED') return { title: 'Session expired', message: 'Please sign in again to continue.' };
+  if (status === 401) return { title: 'Session expired', message: 'Please sign in again to continue.' };
+  if (status === 403) return { title: 'Access denied', message: 'You don\'t have permission to do that.' };
+  if (status === 404) return { title: 'Not found', message: 'The requested resource could not be found.' };
+  if (status === 429) return { title: 'Too many requests', message: 'Please wait a moment and try again.' };
+  if (status != null && status >= 500) return { title: 'Server error', message: 'Something went wrong on our end. Please try again later.' };
+  return { title: 'Something went wrong', message: truncate(detail.message, 120) || 'An unexpected error occurred.' };
 }
 
 function truncate(value: string, maxLength: number) {

@@ -31,14 +31,37 @@ describe('dashboard component registry', () => {
     expect(connectedChip).toMatchObject({
       componentType: 'custom',
       layout: { x: 6, y: 0, w: 6, h: 6 },
-      options: { forceShow: true },
+      options: { chargingConnectionVisibility: 'plugged' },
     });
 
-    expect(widgets.find((widget) => widget.definitionId === 'home_share')?.layout).toMatchObject({ x: 0, y: 4, w: 3, h: 2 });
-    expect(widgets.find((widget) => widget.definitionId === 'dc_share')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
-    expect(widgets.find((widget) => widget.definitionId === 'total_cost')?.layout).toMatchObject({ x: 3, y: 4, w: 3, h: 2 });
+    expect(widgets.find((widget) => widget.definitionId === 'total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
 
-    const absorbedIds = new Set(['avg_session', 'charge_efficiency', 'max_charge_rate', 'max_charge_limit']);
-    expect(widgets.some((widget) => absorbedIds.has(widget.definitionId))).toBe(false);
+    expect(widgets.find((widget) => widget.definitionId === 'max_charge_limit')).toMatchObject({
+      options: { chargingConnectionVisibility: 'unplugged' },
+      layout: { x: 6, y: 0, w: 3, h: 2 },
+    });
+    expect(widgets.find((widget) => widget.definitionId === 'charge_efficiency')).toMatchObject({
+      options: { chargingConnectionVisibility: 'unplugged' },
+      layout: { x: 9, y: 0, w: 3, h: 2 },
+    });
+    expect(widgets.find((widget) => widget.definitionId === 'max_charge_rate')).toMatchObject({
+      options: { chargingConnectionVisibility: 'unplugged' },
+      layout: { x: 6, y: 2, w: 3, h: 2 },
+    });
+    expect(widgets.find((widget) => widget.definitionId === 'avg_session')).toMatchObject({
+      options: { chargingConnectionVisibility: 'unplugged' },
+      layout: { x: 9, y: 2, w: 3, h: 2 },
+    });
+
+    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000009')).toMatchObject({
+      options: {},
+      layout: { x: 0, y: 4, w: 3, h: 2 },
+    });
+    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000010')).toMatchObject({
+      options: {},
+      layout: { x: 3, y: 4, w: 3, h: 2 },
+    });
+    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000014')).toBeUndefined();
+    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000015')).toBeUndefined();
   });
 });
