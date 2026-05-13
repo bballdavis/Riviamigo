@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
@@ -78,12 +78,65 @@ const baseConfig: DashboardConfig = {
   controls: { dateRange: true },
   widgets: [
     {
-      id: 'charging-connection-widget',
+      id: 'd4000004-0000-0000-0000-000000000013',
       componentType: 'custom',
       definitionId: 'charging.connection',
       title: 'Charging Connection',
-      options: { forceShow: false },
+      options: {},
       layout: { x: 0, y: 0, w: 6, h: 6 },
+    },
+  ],
+};
+
+const swappedConfig: DashboardConfig = {
+  ...baseConfig,
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000013',
+      componentType: 'custom',
+      definitionId: 'charging.connection',
+      title: 'Charging Connection',
+      options: { chargingConnectionVisibility: 'plugged' },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+    },
+    {
+      id: 'd4000004-0000-0000-0000-000000000004',
+      componentType: 'charging',
+      definitionId: 'avg_session',
+      title: 'Avg / Session',
+      options: { chargingConnectionVisibility: 'unplugged' },
+      layout: { x: 9, y: 2, w: 3, h: 2 },
+    },
+  ],
+};
+
+const mixRowConfig: DashboardConfig = {
+  ...baseConfig,
+  slug: 'charging',
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000013',
+      componentType: 'custom',
+      definitionId: 'charging.connection',
+      title: 'Charging Connection',
+      options: { chargingConnectionVisibility: 'plugged' },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+    },
+    {
+      id: 'd4000004-0000-0000-0000-000000000009',
+      componentType: 'charging',
+      definitionId: 'home_share',
+      title: 'Home Charging',
+      options: {},
+      layout: { x: 0, y: 4, w: 3, h: 2 },
+    },
+    {
+      id: 'd4000004-0000-0000-0000-000000000010',
+      componentType: 'charging',
+      definitionId: 'dc_share',
+      title: 'DC Fast Charging',
+      options: {},
+      layout: { x: 3, y: 4, w: 3, h: 2 },
     },
   ],
 };
@@ -120,7 +173,7 @@ describe('charging connection custom widget', () => {
     chargingMocks.images = null;
   });
 
-  it('stays in a restrained disconnected state until telemetry or preview enables it', () => {
+  it('does not render until the vehicle is plugged in', () => {
     render(
       <DashboardRenderer
         config={baseConfig}
@@ -128,9 +181,70 @@ describe('charging connection custom widget', () => {
       />
     );
 
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+  });
+
+  it('swaps to fallback charging stats when the connection chip is hidden', () => {
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+    expect(screen.getByTestId('charging-stat-chip')).toBeInTheDocument();
+    expect(screen.getByText('Avg / Session')).toBeInTheDocument();
+  });
+
+  it('swaps to the connection chip when the vehicle is plugged in', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(screen.getByText('Not connected')).toBeInTheDocument();
-    expect(screen.queryByText('Connected, not charging')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('charging-stat-chip')).toBeNull();
+  });
+
+  it('expands the home and DC mix chips when the connection chip is hidden', () => {
+    render(
+      <DashboardRenderer
+        config={mixRowConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+    expect(document.querySelector('[data-widget-definition="home_share"]')).toHaveStyle({
+      gridColumn: '1 / span 6',
+    });
+    expect(document.querySelector('[data-widget-definition="dc_share"]')).toHaveStyle({
+      gridColumn: '7 / span 6',
+    });
+  });
+
+  it('keeps the home and DC mix chips on the left when the connection chip is visible', () => {
+    chargingMocks.forcePluggedState = 'Connected';
+
+    render(
+      <DashboardRenderer
+        config={mixRowConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(document.querySelector('[data-widget-definition="home_share"]')).toHaveStyle({
+      gridColumn: '1 / span 3',
+    });
+    expect(document.querySelector('[data-widget-definition="dc_share"]')).toHaveStyle({
+      gridColumn: '4 / span 3',
+    });
   });
 
   it('uses normal side art and disables the runner when connected but not charging', () => {
@@ -196,65 +310,15 @@ describe('charging connection custom widget', () => {
     });
   });
 
-  it('uses force-show as a connected charging preview even when telemetry is unplugged', () => {
-    render(
-      <DashboardRenderer
-        config={{
-          ...baseConfig,
-          widgets: [{ ...baseConfig.widgets[0]!, options: { forceShow: true } }],
-        }}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
-      />
-    );
-
-    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(screen.queryByText('Connected & charging')).not.toBeInTheDocument();
-    expect(screen.queryByText('Forced preview')).not.toBeInTheDocument();
-    expect(screen.getByText('1h 35m')).toBeInTheDocument();
-    expect(screen.getByText('Charging')).toBeInTheDocument();
-    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
-      '/vehicle-images/r1s-side-charging-light.png',
-      '/vehicle-images/r1s-side-charging-light.png',
-    ]);
-    expect(screen.getAllByTestId('charging-battery-led-segment')).toHaveLength(20);
-    expect(screen.getByTestId('charging-battery-led-sweep')).toHaveStyle({
-      left: '0px',
-      width: 'calc((100% - 38px) / 20)',
-    });
-  });
-
-  it('lets force-show override connected-but-idle telemetry for charging previews', () => {
-    chargingMocks.forcePluggedState = 'Connected';
-    chargingMocks.images = vehicleImageFixtures;
-
-    render(
-      <DashboardRenderer
-        config={{
-          ...baseConfig,
-          widgets: [{ ...baseConfig.widgets[0]!, options: { forceShow: true } }],
-        }}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
-      />
-    );
-
-    expect(screen.getByText('Charging')).toBeInTheDocument();
-    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
-    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
-      '/rivian/side-charging-light.webp',
-      '/rivian/side-charging-dark.webp',
-    ]);
-    expect(screen.getByTestId('charging-battery-led-sweep')).toBeInTheDocument();
-  });
-
   it('finds side-charging art even when Rivian metadata stores it as a side placement', () => {
-    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.forcePluggedState = 'Charging';
     chargingMocks.images = vehicleImageUrlOnlyChargingFixtures;
 
     render(
       <DashboardRenderer
         config={{
           ...baseConfig,
-          widgets: [{ ...baseConfig.widgets[0]!, options: { forceShow: true } }],
+          widgets: [{ ...baseConfig.widgets[0]!, options: {} }],
         }}
         ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
       />
@@ -269,25 +333,15 @@ describe('charging connection custom widget', () => {
     expect(images.map((image) => image.getAttribute('data-image-mode'))).toEqual(['charging', 'charging']);
   });
 
-  it('exposes a force-show switch in the custom widget editor', () => {
-    const onChange = vi.fn();
-
+  it('does not expose a force-show switch in the custom widget editor', () => {
     render(
       <WidgetEditForm
         widget={baseConfig.widgets[0]!}
-        onChange={onChange}
+        onChange={() => undefined}
         onClose={() => undefined}
       />
     );
 
-    const toggle = screen.getByRole('switch', { name: 'Force show charging connection' });
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
-
-    fireEvent.click(toggle);
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.objectContaining({ forceShow: true }),
-      })
-    );
+    expect(screen.queryByRole('switch', { name: 'Force show charging connection' })).toBeNull();
   });
 });
