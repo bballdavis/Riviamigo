@@ -14,7 +14,7 @@ const MIN_CURVE_SMOOTHING = 0.05;
 const DEFAULT_WINDOW_DAYS = 30;
 
 /** Drawer background color — matches EditorDrawer's --rm-bg. Fields stack on top. */
-const FIELD_BG = 'bg-[color:var(--rm-bg-elevated,#1e1e1e)]';
+const FIELD_BG = 'bg-bg-elevated';
 const SECTION_BG = 'bg-white/[0.03]';
 
 interface WidgetEditFormProps {
@@ -148,8 +148,7 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
         </button>
       </div>
 
-      {/* Scrollable form body */}
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-0.5">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
         <Section title="Identity">
           <Field label="Title">
             <input
@@ -294,7 +293,7 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
                       step={0.05}
                       value={curveSmoothing}
                       onChange={(e) => patch({ curveSmoothing: Number(e.target.value) })}
-                      className="w-full cursor-pointer accent-[var(--rm-accent)]"
+                      className="rm-accent-range w-full"
                     />
                   </Field>
                 ) : null}

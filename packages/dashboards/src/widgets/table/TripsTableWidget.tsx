@@ -1,12 +1,84 @@
 import React, { useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
+import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { api, useTrips } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
+import { Badge } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
+import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '@riviamigo/ui/lib/utils';
+import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
+import { format, parseISO } from 'date-fns';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 640
+  );
+  React.useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)');
+    setIsMobile(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isMobile;
+}
+
+function TripCard({ trip, isSelected, onClick }: { trip: TripRow; isSelected: boolean; onClick: () => void }) {
+  const startLabel = (trip as unknown as Record<string, unknown>)['start_place'] as string | undefined
+    ?? (trip as unknown as Record<string, unknown>)['start_address'] as string | undefined;
+  const endLabel = (trip as unknown as Record<string, unknown>)['end_place'] as string | undefined
+    ?? (trip as unknown as Record<string, unknown>)['end_address'] as string | undefined;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full text-left rounded-xl border px-3 py-2.5 transition-colors ${
+        isSelected
+          ? 'border-accent/50 bg-accent/10 ring-1 ring-inset ring-accent/30'
+          : 'border-border bg-bg-elevated/60 hover:bg-bg-elevated'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <span className="text-xs text-fg-tertiary">
+          {format(parseISO(trip.started_at), 'MMM d, h:mm a')}
+        </span>
+        {trip.drive_mode && (
+          <Badge size="sm" className={getDriveModeBadgeClass(trip.drive_mode)}>
+            {formatDriveMode(trip.drive_mode)}
+          </Badge>
+        )}
+      </div>
+      {(startLabel || endLabel) && (
+        <div className="flex min-w-0 items-center gap-1 mb-2 text-sm font-medium text-fg">
+          {startLabel && <span className="truncate">{startLabel}</span>}
+          {startLabel && endLabel && <PiArrowFatLinesRight className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />}
+          {endLabel && <span className="truncate">{endLabel}</span>}
+        </div>
+      )}
+      <div className="flex items-center gap-3 text-xs text-fg-secondary flex-wrap">
+        <span className="font-mono font-medium text-fg">{formatMiles(trip.distance_mi)}</span>
+        <span className="text-fg-tertiary">·</span>
+        <span>{formatDuration(trip.duration_min)}</span>
+        {trip.efficiency_wh_mi != null && (
+          <>
+            <span className="text-fg-tertiary">·</span>
+            <span className="font-mono">{formatEfficiency(trip.efficiency_wh_mi)}</span>
+          </>
+        )}
+        {trip.soc_start != null && trip.soc_end != null && (
+          <span className="ml-auto font-mono text-fg-tertiary">
+            {formatPercent(trip.soc_start)} <PiArrowFatLinesRight className="inline h-3 w-3" /> {formatPercent(trip.soc_end)}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
 import {
   useTripSelection,
   toggleTripSelection,
@@ -74,7 +146,7 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div ref={ref} className="relative min-h-0 flex-1">
-        <div className="relative overflow-hidden rounded-lg border border-border bg-[#12121A]" style={{ height }}>
+        <div className="relative overflow-hidden rounded-lg border border-border bg-bg-surface" style={{ height }}>
           <TripMapChart
             track={[]}
             routes={routes}
@@ -87,7 +159,7 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
           <button
             onClick={() => setMapStyle((style: MapStyleMode) => style === 'dark' ? 'light' : 'dark')}
             aria-label={mapStyle === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
-            className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-[#FD8304] bg-[#12121A] text-[#FD8304] shadow-lg transition-colors hover:bg-[#1A1A24]"
+            className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent shadow-lg transition-colors hover:bg-bg-elevated"
           >
             {mapStyle === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
@@ -112,6 +184,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
   const [search, setSearch] = useState('');
   const deferredSearch = React.useDeferredValue(search);
   const { selectedIds } = useTripSelection();
+  const isMobile = useIsMobile();
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch);
   const placesQuery = useQuery({
     queryKey: ['places'],
@@ -133,10 +206,34 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
     if (trips.length > 0) registerTripsInStore(trips);
   }, [trips]);
 
+  const pagination = data ? (
+    <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
+      <p className="text-xs text-fg-tertiary">
+        Page {page} of {Math.max(totalPages, 1)} · {data.total} trip{data.total === 1 ? '' : 's'}
+      </p>
+      <div className="flex gap-2">
+        <button
+          disabled={page <= 1}
+          onClick={() => setPage((p) => p - 1)}
+          className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
+        >
+          Prev
+        </button>
+        <button
+          disabled={page >= totalPages || totalPages <= 1}
+          onClick={() => setPage((p) => p + 1)}
+          className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="flex !h-auto min-h-full flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <label className="relative min-w-[16rem] flex-1 max-w-md">
+        <label className="relative flex-1 min-w-0 sm:min-w-[14rem] max-w-md">
           <span className="sr-only">Search trips</span>
           <input
             type="search"
@@ -155,55 +252,57 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
               </button>
             </div>
           ) : null}
-          <label className="flex items-center gap-2 text-xs text-fg-tertiary">
-            Rows
-            <select
-              value={pageSize}
-              onChange={(event) => setPageSize(Number(event.target.value))}
-              className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
-            >
-              <option value={15}>15</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
-          </label>
+          {!isMobile && (
+            <label className="flex items-center gap-2 text-xs text-fg-tertiary">
+              Rows
+              <select
+                value={pageSize}
+                onChange={(event) => setPageSize(Number(event.target.value))}
+                className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
+              >
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+          )}
         </div>
       </div>
-      <DataTable
-        data={trips}
-        columns={columns}
-        loading={isLoading}
-        loadingRows={pageSize}
-        onRowClick={(row) => toggleTripSelection(row.original.id)}
-        getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
-        emptyTitle="No trips found"
-        emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
-        className="overflow-visible"
-      />
-      {data ? (
-        <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
-          <p className="text-xs text-fg-tertiary">
-            Page {page} of {Math.max(totalPages, 1)} · {data.total} trip{data.total === 1 ? '' : 's'}
-          </p>
-          <div className="flex gap-2">
-            <button
-              disabled={page <= 1}
-              onClick={() => setPage((p) => p - 1)}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <button
-              disabled={page >= totalPages || totalPages <= 1}
-              onClick={() => setPage((p) => p + 1)}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
-            >
-              Next
-            </button>
-          </div>
+
+      {isMobile ? (
+        <div className="flex flex-col gap-2">
+          {isLoading
+            ? Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-20 animate-pulse rounded-xl border border-border bg-bg-elevated/60" />
+              ))
+            : trips.length === 0
+            ? <p className="py-8 text-center text-sm text-fg-tertiary">No trips found</p>
+            : trips.map((trip) => (
+                <TripCard
+                  key={trip.id}
+                  trip={trip}
+                  isSelected={selectedIds.includes(trip.id)}
+                  onClick={() => toggleTripSelection(trip.id)}
+                />
+              ))
+          }
         </div>
-      ) : null}
+      ) : (
+        <DataTable
+          data={trips}
+          columns={columns}
+          loading={isLoading}
+          loadingRows={pageSize}
+          onRowClick={(row) => toggleTripSelection(row.original.id)}
+          getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
+          emptyTitle="No trips found"
+          emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
+          className="overflow-x-auto"
+        />
+      )}
+
+      {pagination}
     </div>
   );
 }

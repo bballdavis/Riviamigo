@@ -68,8 +68,8 @@ export function ChartPicker<TValue extends string = string>({
   }
 
   return (
-    <div ref={rootRef} className={cn('relative mb-3 grid w-full grid-cols-1 gap-2', trailing ? 'sm:grid-cols-[1fr_minmax(0,3fr)_auto]' : 'sm:grid-cols-4', className)}>
-      <label className="relative sm:col-span-1">
+    <div ref={rootRef} className={cn('relative mb-3 grid w-full gap-2', trailing ? 'grid-cols-[1fr_auto] sm:grid-cols-[1fr_minmax(0,3fr)_auto]' : 'grid-cols-1 sm:grid-cols-4', className)}>
+      <label className={cn('relative', trailing ? 'col-span-2 sm:col-span-1' : '')}>
         <span className="sr-only">Search charts</span>
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" />
         <input

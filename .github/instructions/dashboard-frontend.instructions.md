@@ -22,3 +22,13 @@ applyTo:
 - Use explicit page composition for hero panels, tabs, summary strips, and CTA banners. Do not hide these behind `if (slug === ...)` branches in shared infrastructure.
 - When a change affects default dashboards and user dashboards, prefer updating the shared shell or framework so both paths remain aligned.
 - Before adding a new abstraction, check whether a reusable hook or page-local composition component is sufficient.
+
+## Color Tokens — Mandatory
+
+All colors in component code must use the design token system. Never write a hex literal (`#1a1a1a`), `rgb()`/`rgba()`, named CSS color, or arbitrary Tailwind value (`accent-[#fb923c]`) in component or style code.
+
+- **Tailwind utilities**: Use semantic Tailwind classes (`bg-bg-elevated`, `text-fg-tertiary`, `border-accent`, `text-status-positive`, etc.) that resolve through the `@theme inline` bridge in `apps/web/src/index.css`.
+- **CSS custom properties**: When writing inline `style={}` or `<style>` blocks, use `var(--rm-*)` tokens directly (e.g. `var(--rm-accent)`, `var(--rm-bg-elevated)`). Use `color-mix()` for opacity variants: `color-mix(in oklab, var(--rm-accent) 50%, transparent)`.
+- **Form controls** (range sliders, checkboxes): Set `accent-color: var(--rm-accent)` and provide explicit track/thumb styling using token values — never rely on the browser default blue.
+- **Missing shades**: If a needed color isn't in the token set, add a new `--rm-*` token to `packages/ui/src/tokens/globals.css` and bridge it in `index.css` rather than inlining.
+- **Pre-PR check**: Grep for `#[0-9a-fA-F]{3,8}`, `rgb(`, `rgba(`, and Tailwind `*-blue-*`/`*-indigo-*`/`*-sky-*`/`*-violet-*` classes in changed files. Any hit is a bug.

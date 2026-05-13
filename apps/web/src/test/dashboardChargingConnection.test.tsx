@@ -175,6 +175,10 @@ describe('charging connection custom widget', () => {
       '/rivian/side-charging-light.webp',
       '/rivian/side-charging-dark.webp',
     ]);
+    expect(screen.getAllByTestId('charging-side-image')[0]).toHaveStyle({
+      transform: 'translateX(-12%) scale(1.12)',
+      transformOrigin: 'left top',
+    });
 
     const bar = screen.getByTestId('charging-battery-led-bar');
     expect(bar).toHaveAccessibleName('Battery 64 percent');
