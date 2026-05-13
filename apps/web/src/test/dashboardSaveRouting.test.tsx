@@ -134,6 +134,24 @@ describe('createDefaultDashboardEditActions — save routing', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it('uses the dashboard list cache to avoid a stale by-slug POST+422 save', async () => {
+    qcMock.getQueryData.mockImplementation((queryKey) => {
+      return JSON.stringify(queryKey) === JSON.stringify(['dashboards']) ? [userCopy] : undefined;
+    });
+
+    setup(
+      makeShellState({ savedConfig: systemDefault, localConfig: systemDefault }),
+      { updateMock, createMock, qcMock },
+    );
+
+    await userEvent.click(screen.getByTitle('Save changes'));
+
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER_COPY_ID, ownerId: USER_ID, isDefault: false, isLocked: false }),
+    );
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it('calls createDashboard for a genuine first-time save (no owned copy in cache)', async () => {
     const exitEdit = vi.fn();
     setup(
@@ -152,7 +170,9 @@ describe('createDefaultDashboardEditActions — save routing', () => {
 
   it('falls back to updateDashboard via refetch when createDashboard fails (stale cache scenario)', async () => {
     createMock.mockRejectedValue(new Error('A dashboard with that slug already exists'));
-    qcMock.getQueryData.mockReturnValue(userCopy);
+    qcMock.getQueryData.mockImplementation((queryKey) => {
+      return JSON.stringify(queryKey) === JSON.stringify(['dashboards', 'slug', 'battery']) ? userCopy : undefined;
+    });
 
     const exitEdit = vi.fn();
     // savedConfig shows system default (stale) even though user already has a copy
@@ -167,6 +187,35 @@ describe('createDefaultDashboardEditActions — save routing', () => {
     expect(qcMock.refetchQueries).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: ['dashboards', 'slug', 'battery'] }),
     );
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER_COPY_ID, ownerId: USER_ID }),
+    );
+    expect(exitEdit).toHaveBeenCalledOnce();
+  });
+
+  it('falls back through the dashboard list when a failed create leaves by-slug stale', async () => {
+    createMock.mockRejectedValue(new Error('A dashboard with that slug already exists'));
+    let dashboardListReads = 0;
+    qcMock.getQueryData.mockImplementation((queryKey) => {
+      if (JSON.stringify(queryKey) === JSON.stringify(['dashboards'])) {
+        dashboardListReads += 1;
+        return dashboardListReads > 1 ? [userCopy] : undefined;
+      }
+      if (JSON.stringify(queryKey) === JSON.stringify(['dashboards', 'slug', 'battery'])) {
+        return systemDefault;
+      }
+      return undefined;
+    });
+
+    const exitEdit = vi.fn();
+    setup(
+      makeShellState({ savedConfig: systemDefault, localConfig: systemDefault, exitEdit }),
+      { updateMock, createMock, qcMock },
+    );
+
+    await userEvent.click(screen.getByTitle('Save changes'));
+
+    expect(createMock).toHaveBeenCalled();
     expect(updateMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: USER_COPY_ID, ownerId: USER_ID }),
     );
