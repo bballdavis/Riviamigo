@@ -2,8 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, Cpu, Gauge, Lock, MapPin, Thermometer, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { useAuth, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
-import { Badge, Tooltip } from '@riviamigo/ui/primitives';
-import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
+import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatKwh, formatMiles, formatMph, formatPressure, formatTemp } from '@riviamigo/ui/lib/utils';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -79,10 +78,10 @@ function CurrentVehicleStatePanel({
           {status?.last_updated ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Awaiting telemetry'}
         </span>
       </div>
-      <div className="grid flex-1 min-h-0 content-stretch gap-4 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
-        <div className="grid h-full min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border border-accent/25 bg-accent/10 p-4">
+      <div className="grid flex-1 min-h-0 content-stretch gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
+        <div className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border border-accent/25 bg-accent/10 p-4">
           <div className="relative h-full min-h-48 overflow-hidden rounded-2xl border border-accent/40 bg-bg-surface">
-            <div className="absolute inset-x-1 bottom-1 rounded-xl transition-all" style={{ height: `${batteryLevel}%`, background: 'linear-gradient(to top, var(--rm-accent), #10B981)' }} />
+            <div className="absolute inset-x-1 bottom-1 rounded-xl transition-all" style={{ height: `${batteryLevel}%`, background: 'linear-gradient(to top, var(--rm-accent), var(--rm-status-positive))' }} />
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />
           </div>
           <div className="flex min-w-0 flex-col justify-between gap-4">
@@ -98,7 +97,7 @@ function CurrentVehicleStatePanel({
             </div>
           </div>
         </div>
-        <div ref={imageStageRef} className="relative h-full min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1">
+        <div ref={imageStageRef} className="relative min-h-60 overflow-hidden rounded-2xl border border-border bg-bg-surface/70 p-1">
           <div className="absolute right-3 top-3 z-30 inline-flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm backdrop-blur">
             {status?.doors_locked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3 text-accent" />}
             {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
@@ -126,7 +125,7 @@ function CurrentVehicleStatePanel({
             )}
           </div>
         </div>
-        <div className="grid h-full auto-rows-fr gap-2">
+        <div className="md:col-span-2 xl:col-span-1 grid auto-rows-fr gap-2 md:grid-cols-2 xl:grid-cols-1">
           {stats.map((stat) => (
             <div key={stat.label} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-xs">
               <span className="inline-flex items-center gap-2 text-fg-tertiary">{stat.icon}{stat.label}</span>
@@ -256,22 +255,7 @@ function renderDriverMode(driveMode: string | null | undefined, gearStatus: stri
   const rawValue = driveMode ?? gearStatus;
   if (!rawValue) return '-';
 
-  const label = formatDriveMode(rawValue);
-  if (label === 'Unknown') {
-    return (
-      <Tooltip content="Current sensor status is unknown." align="end">
-        <Badge size="sm" className={getDriveModeBadgeClass('unknown')}>
-          Unknown
-        </Badge>
-      </Tooltip>
-    );
-  }
-
-  return (
-    <Badge size="sm" className={getDriveModeBadgeClass(rawValue)} title={label}>
-      {label}
-    </Badge>
-  );
+  return formatDriveMode(rawValue);
 }
 
 function formatSoftware(status: VehicleStatus | null | undefined) {

@@ -139,8 +139,8 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
         right: popoverPos.right,
         width: '23rem',
         zIndex: 9999,
-        backgroundColor: 'var(--rm-bg-elevated, #1e1e1e)',
-        border: '1px solid var(--rm-border, #2a2a2a)',
+        backgroundColor: 'var(--rm-bg-elevated)',
+        border: '1px solid var(--rm-border-default)',
         borderRadius: '12px',
         boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
         display: 'flex',
@@ -151,7 +151,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
     >
       {/* Search bar */}
       <div
-        style={{ backgroundColor: 'var(--rm-bg-surface, #252525)', borderRadius: '12px 12px 0 0' }}
+        style={{ backgroundColor: 'var(--rm-bg-surface)', borderRadius: '12px 12px 0 0' }}
         className="flex shrink-0 items-center gap-2 border-b border-border p-2.5"
       >
         <div className="relative flex-1">

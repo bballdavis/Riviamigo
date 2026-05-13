@@ -16,11 +16,11 @@ export interface PageLayoutProps {
 export function PageLayout({ title, titleAction, subtitle, actions, children, className }: PageLayoutProps) {
   return (
     <div className={cn('flex flex-col gap-6', className)}>
-      <div className="flex items-start justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-y-2">
         <div>
           <div className="flex items-center gap-2">
-            {titleAction}
             <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
+            {titleAction}
           </div>
           {subtitle && <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>}
         </div>
@@ -41,7 +41,7 @@ export function StatCardGrid({
   className?: string;
 }) {
   return (
-    <div className={cn('grid grid-cols-2 gap-4 sm:grid-cols-4', className)}>
+    <div className={cn('grid grid-cols-2 gap-4 md:grid-cols-4', className)}>
       {children}
     </div>
   );

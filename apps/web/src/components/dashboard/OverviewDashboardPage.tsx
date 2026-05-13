@@ -1,6 +1,7 @@
 import React from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { useCreateDashboard, useUpdateDashboard } from '@riviamigo/dashboards';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '@riviamigo/hooks';
+import { useCreateDashboard, useUpdateDashboard, useUpdateAdminDashboard } from '@riviamigo/dashboards';
 import {
   createDefaultDashboardEditActions,
   renderDefaultDashboardTitleAction,
@@ -10,8 +11,11 @@ import { DashboardPageShell } from './DashboardPageShell';
 
 export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
+  const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me() });
+  const isAdmin = me.data?.role === 'admin';
 
   return (
     <DashboardPageShell
@@ -19,7 +23,7 @@ export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProp
       slug={slug}
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions({ updateDashboard, createDashboard, qc })}
+      renderActions={createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin })}
       showEfficiencyDisplayToggle
     />
   );

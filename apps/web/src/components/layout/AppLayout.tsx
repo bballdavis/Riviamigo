@@ -91,7 +91,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
 
       {/* Main content: offset by sidebar width on lg+ */}
       <main className="lg:pl-64 transition-all duration-200">
-        <div className="p-4 sm:p-6 max-w-7xl mx-auto">
+        <div className="p-4 pt-14 sm:p-6 sm:pt-14 lg:p-6 max-w-7xl mx-auto">
           {children}
         </div>
       </main>

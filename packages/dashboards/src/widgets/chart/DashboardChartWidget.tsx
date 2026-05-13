@@ -135,7 +135,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         <SlidersHorizontal className="h-4 w-4" />
       </button>
       {settingsOpen ? (
-        <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 w-52 rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
+        <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 w-52 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
           {/* Smooth curves toggle row */}
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm text-fg">Smooth curves</span>
@@ -477,42 +477,42 @@ function ChargingCurveAnalysisChart({
         {
           key: 'ac-points',
           label: 'AC Samples',
-          color: '#34d399',
+          color: 'var(--rm-charging-ac)',
           mode: 'scatter',
           values: points.map((point) => point.bucket === 'ac' ? point.y : null),
         },
         {
           key: 'dc-points',
           label: 'DC Samples',
-          color: '#38bdf8',
+          color: 'var(--rm-charging-dc)',
           mode: 'scatter',
           values: points.map((point) => point.bucket === 'dc' ? point.y : null),
         },
         {
           key: 'unknown-points',
           label: 'Unclassified Samples',
-          color: '#f59e0b',
+          color: 'var(--rm-status-warning)',
           mode: 'scatter',
           values: points.map((point) => point.bucket === 'unknown' ? point.y : null),
         },
         {
           key: 'ac-fit',
           label: 'AC Regression',
-          color: '#10b981',
+          color: 'var(--rm-status-positive)',
           mode: 'line',
           values: points.map((point) => regressions.ac ? regressions.ac(point.x) : null),
         },
         {
           key: 'dc-fit',
           label: 'DC Regression',
-          color: '#0ea5e9',
+          color: 'var(--rm-status-info)',
           mode: 'line',
           values: points.map((point) => regressions.dc ? regressions.dc(point.x) : null),
         },
         {
           key: 'unknown-fit',
           label: 'Unclassified Regression',
-          color: '#d97706',
+          color: 'var(--rm-status-warning)',
           mode: 'line',
           values: points.map((point) => regressions.unknown ? regressions.unknown(point.x) : null),
         },

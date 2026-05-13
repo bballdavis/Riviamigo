@@ -26,6 +26,15 @@
 - When changing a shared dashboard flow, update the shared shell or framework layer rather than patching only one route.
 - Favor behavior-preserving extraction over broad redesign when cleaning up dashboard code.
 
+## Color Tokens — Mandatory
+
+All colors in component code must come from the design token system defined in `packages/ui/src/tokens/globals.css` and bridged via `apps/web/src/index.css`. Never write hex literals, `rgb()`/`rgba()`, named CSS colors, or arbitrary Tailwind color values (e.g. `accent-[#fb923c]`, `bg-[#1a1a1a]`).
+
+- Use semantic Tailwind classes: `bg-bg-elevated`, `text-fg-tertiary`, `border-accent`, `text-status-positive`, etc.
+- In inline styles or `<style>` blocks, use `var(--rm-*)` tokens. For opacity, use `color-mix(in oklab, var(--rm-accent) 50%, transparent)`.
+- Form controls (range, checkbox) must use `accent-color: var(--rm-accent)` plus explicit track styling — never rely on browser default blue.
+- If a color is missing from the token set, add a `--rm-*` token rather than inlining.
+
 ## References
 
 - `docs/frontend/dashboard-architecture.md`
