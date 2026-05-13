@@ -135,7 +135,7 @@ async fn fetch_vehicle(pool: &sqlx::PgPool, vid: Uuid) -> Result<HealthVehicle, 
     let row = sqlx::query_as::<_, HealthVehicle>(
         r#"SELECT name, model, trim, vin
            FROM riviamigo.vehicles
-           WHERE id = $1"#
+           WHERE id = $1"#,
     )
     .bind(vid)
     .fetch_one(pool)
@@ -148,7 +148,7 @@ async fn fetch_runtime(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<RuntimeH
     let row = sqlx::query_as::<_, RuntimeHealth>(
         r#"SELECT is_online, last_event_at, worker_health, worker_health_msg, updated_at
            FROM riviamigo.vehicle_runtime_state
-           WHERE vehicle_id = $1"#
+           WHERE vehicle_id = $1"#,
     )
     .bind(vid)
     .fetch_optional(pool)
@@ -173,7 +173,7 @@ async fn fetch_latest(
                   OR ota_status IS NOT NULL
                   OR ota_current_status IS NOT NULL
                   OR is_online IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#
+           ORDER BY ts DESC LIMIT 1"#,
     )
     .bind(vid)
     .fetch_optional(pool)
@@ -193,7 +193,7 @@ async fn fetch_tires(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<TirePressu
                   OR tire_fr_psi IS NOT NULL
                   OR tire_rl_psi IS NOT NULL
                   OR tire_rr_psi IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#
+           ORDER BY ts DESC LIMIT 1"#,
     )
     .bind(vid)
     .fetch_optional(pool)
@@ -217,7 +217,7 @@ async fn fetch_closures(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<Closure
                   OR door_front_right_closed IS NOT NULL
                   OR door_rear_left_closed IS NOT NULL
                   OR door_rear_right_closed IS NOT NULL)
-           ORDER BY ts DESC LIMIT 1"#
+           ORDER BY ts DESC LIMIT 1"#,
     )
     .bind(vid)
     .fetch_optional(pool)

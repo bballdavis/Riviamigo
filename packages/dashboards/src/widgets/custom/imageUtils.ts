@@ -33,10 +33,19 @@ export function findFirstOverheadImage(images: VehicleImages['all'] | undefined,
 export function findFirstSideImage(images: VehicleImages['all'] | undefined, design?: 'light' | 'dark'): string | undefined {
   if (!images) return undefined;
   if (design) {
-    const preferred = images.find((image) => normalizePlacement(image.placement) === 'side' && designMatches(image.design, design));
+    const preferred = images.find((image) => normalizePlacement(image.placement) === 'side' && !isChargingSidePlacement(image.placement) && designMatches(image.design, design));
     if (preferred?.url) return preferred.url;
   }
-  return images.find((image) => normalizePlacement(image.placement) === 'side')?.url;
+  return images.find((image) => normalizePlacement(image.placement) === 'side' && !isChargingSidePlacement(image.placement))?.url;
+}
+
+export function findSideChargingImage(images: VehicleImages['all'] | undefined, design?: 'light' | 'dark'): string | undefined {
+  if (!images) return undefined;
+  if (design) {
+    const preferred = images.find((image) => isChargingSideImage(image) && designMatches(image.design, design));
+    if (preferred?.url) return preferred.url;
+  }
+  return images.find((image) => isChargingSideImage(image))?.url;
 }
 
 export function findBestChargingSideOverlay(images: VehicleImages['all'] | undefined, designPreference: 'light' | 'dark') {
@@ -103,10 +112,20 @@ function normalizePlacement(value: string | null | undefined): 'side' | 'overhea
   return 'unknown';
 }
 
+function isChargingSidePlacement(value: string | null | undefined) {
+  const normalized = (value ?? '').toLowerCase();
+  return normalized.includes('side') && (normalized.includes('charging') || normalized.includes('charge'));
+}
+
+function isChargingSideImage(image: VehicleImages['all'][number]) {
+  const text = imageText(image);
+  return isChargingSidePlacement(image.placement) || text.includes('side-charging') || text.includes('side_charging');
+}
+
 function designMatches(value: string | null | undefined, expected: 'light' | 'dark') {
   return (value ?? '').toLowerCase().includes(expected);
 }
 
 function imageText(image: VehicleImages['all'][number]) {
-  return `${image.placement ?? ''} ${image.design ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
+  return `${image.placement ?? ''} ${image.design ?? ''} ${image.url ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
 }
