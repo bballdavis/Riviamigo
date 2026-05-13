@@ -48,7 +48,16 @@ export function LoginPage() {
       }
       navigate({ to: '/' });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      const status = (err as { status?: number }).status;
+      if (status === 401) {
+        setError('Incorrect email or password. Please try again.');
+      } else if (status === 429) {
+        setError('Too many sign-in attempts. Please wait a moment and try again.');
+      } else if (status != null && status >= 500) {
+        setError('Something went wrong on our end. Please try again later.');
+      } else {
+        setError('Unable to sign in. Please check your connection and try again.');
+      }
     } finally {
       setLoading(false);
     }

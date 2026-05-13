@@ -30,7 +30,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             id={inputId}
             className={cn(
-              'w-full h-9 rounded-lg border bg-bg-elevated text-fg text-sm',
+              'w-full h-9 rounded-lg border bg-bg-elevated text-fg text-base sm:text-sm',
               'placeholder:text-fg-tertiary',
               'transition-colors duration-150',
               'focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent',
