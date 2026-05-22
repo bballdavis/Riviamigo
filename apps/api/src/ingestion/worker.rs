@@ -946,8 +946,20 @@ async fn write_telemetry(
             closure_tailgate_locked, closure_tailgate_closed,
             ota_current_version, ota_available_version, ota_status, ota_current_status,
             hv_thermal_event, twelve_volt_health, is_online,
-            trip_id, charge_session_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)
+            trip_id, charge_session_id,
+            charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+            pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+            seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat,
+            seat_fl_vent, seat_fr_vent,
+            tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+            window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+            gear_guard_locked, gear_guard_video_status,
+            wiper_fluid_low, brake_fluid_low, alarm_active, service_mode)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+                    $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
+                    $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,
+                    $56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,
+                    $76,$77,$78,$79,$80,$81,$82,$83)
             ON CONFLICT (vehicle_id, ts) DO UPDATE
             SET drive_mode = EXCLUDED.drive_mode
             WHERE EXCLUDED.drive_mode IS NOT NULL
@@ -1012,6 +1024,35 @@ async fn write_telemetry(
         .bind(e.is_online)
         .bind(trip_id)
         .bind(charge_session_id)
+        // Extended fields
+        .bind(e.charge_port_open)
+        .bind(e.charger_derate_active)
+        .bind(&e.cabin_precon_status)
+        .bind(&e.cabin_precon_type)
+        .bind(e.pet_mode_active)
+        .bind(e.pet_mode_temp_ok)
+        .bind(e.defrost_active)
+        .bind(e.steering_wheel_heat)
+        .bind(e.seat_fl_heat)
+        .bind(e.seat_fr_heat)
+        .bind(e.seat_rl_heat)
+        .bind(e.seat_rr_heat)
+        .bind(e.seat_fl_vent)
+        .bind(e.seat_fr_vent)
+        .bind(e.tonneau_locked)
+        .bind(e.tonneau_closed)
+        .bind(e.side_bin_left_locked)
+        .bind(e.side_bin_right_locked)
+        .bind(e.window_fl_closed)
+        .bind(e.window_fr_closed)
+        .bind(e.window_rl_closed)
+        .bind(e.window_rr_closed)
+        .bind(e.gear_guard_locked)
+        .bind(&e.gear_guard_video_status)
+        .bind(e.wiper_fluid_low)
+        .bind(e.brake_fluid_low)
+        .bind(e.alarm_active)
+        .bind(e.service_mode)
     .execute(pool)
     .await?;
     Ok(())
@@ -1108,6 +1149,36 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
         "software_update_status",
         e.ota_status.as_deref().or(e.ota_current_status.as_deref())
     );
+
+    // Extended vehicle state fields
+    set_opt!("charge_port_open", e.charge_port_open);
+    set_opt!("charger_derate_active", e.charger_derate_active);
+    set_opt!("cabin_precon_status", e.cabin_precon_status.as_deref());
+    set_opt!("cabin_precon_type", e.cabin_precon_type.as_deref());
+    set_opt!("pet_mode_active", e.pet_mode_active);
+    set_opt!("pet_mode_temp_ok", e.pet_mode_temp_ok);
+    set_opt!("defrost_active", e.defrost_active);
+    set_opt!("steering_wheel_heat", e.steering_wheel_heat);
+    set_opt!("seat_fl_heat", e.seat_fl_heat);
+    set_opt!("seat_fr_heat", e.seat_fr_heat);
+    set_opt!("seat_rl_heat", e.seat_rl_heat);
+    set_opt!("seat_rr_heat", e.seat_rr_heat);
+    set_opt!("seat_fl_vent", e.seat_fl_vent);
+    set_opt!("seat_fr_vent", e.seat_fr_vent);
+    set_opt!("tonneau_locked", e.tonneau_locked);
+    set_opt!("tonneau_closed", e.tonneau_closed);
+    set_opt!("side_bin_left_locked", e.side_bin_left_locked);
+    set_opt!("side_bin_right_locked", e.side_bin_right_locked);
+    set_opt!("window_fl_closed", e.window_fl_closed);
+    set_opt!("window_fr_closed", e.window_fr_closed);
+    set_opt!("window_rl_closed", e.window_rl_closed);
+    set_opt!("window_rr_closed", e.window_rr_closed);
+    set_opt!("gear_guard_locked", e.gear_guard_locked);
+    set_opt!("gear_guard_video_status", e.gear_guard_video_status.as_deref());
+    set_opt!("wiper_fluid_low", e.wiper_fluid_low);
+    set_opt!("brake_fluid_low", e.brake_fluid_low);
+    set_opt!("alarm_active", e.alarm_active);
+    set_opt!("service_mode", e.service_mode);
 
     // Location composite — only when both coordinates are present.
     if let Some((lat, lng)) = e.latitude.zip(e.longitude) {

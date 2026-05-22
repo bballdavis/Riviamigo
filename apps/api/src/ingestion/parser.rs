@@ -105,6 +105,47 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         hv_thermal_event: extract_str(state, "/batteryHvThermalEvent/value").map(String::from),
         twelve_volt_health: extract_str(state, "/twelveVoltBatteryHealth/value").map(String::from),
         is_online,
+
+        charge_port_open: extract_str(state, "/chargePortState/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "open" | "ajar")),
+        charger_derate_active: extract_bool(state, "/chargerDerateStatus/value")
+            .or_else(|| extract_str(state, "/chargerDerateStatus/value")
+                .map(|s| !matches!(s.to_lowercase().as_str(), "inactive" | "none" | "off"))),
+        cabin_precon_status: extract_str(state, "/cabinPreconditioningStatus/value")
+            .map(String::from),
+        cabin_precon_type: extract_str(state, "/cabinPreconditioningType/value")
+            .map(String::from),
+        pet_mode_active: extract_str(state, "/petModeStatus/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "on" | "active")),
+        pet_mode_temp_ok: extract_str(state, "/petModeTemperatureStatus/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "ok" | "safe")),
+        defrost_active: extract_str(state, "/defrostDefogStatus/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "on" | "active")),
+        steering_wheel_heat: extract_i32(state, "/steeringWheelHeat/value"),
+        seat_fl_heat: extract_i32(state, "/seatFrontLeftHeat/value"),
+        seat_fr_heat: extract_i32(state, "/seatFrontRightHeat/value"),
+        seat_rl_heat: extract_i32(state, "/seatRearLeftHeat/value"),
+        seat_rr_heat: extract_i32(state, "/seatRearRightHeat/value"),
+        seat_fl_vent: extract_i32(state, "/seatFrontLeftVent/value"),
+        seat_fr_vent: extract_i32(state, "/seatFrontRightVent/value"),
+        tonneau_locked: extract_locked(state, "/closureTonneauLocked/value"),
+        tonneau_closed: extract_closed(state, "/closureTonneauClosed/value"),
+        side_bin_left_locked: extract_locked(state, "/closureSideBinLeftLocked/value"),
+        side_bin_right_locked: extract_locked(state, "/closureSideBinRightLocked/value"),
+        window_fl_closed: extract_closed(state, "/windowFrontLeftClosed/value"),
+        window_fr_closed: extract_closed(state, "/windowFrontRightClosed/value"),
+        window_rl_closed: extract_closed(state, "/windowRearLeftClosed/value"),
+        window_rr_closed: extract_closed(state, "/windowRearRightClosed/value"),
+        gear_guard_locked: extract_bool(state, "/gearGuardLocked/value"),
+        gear_guard_video_status: extract_str(state, "/gearGuardVideoStatus/value")
+            .map(String::from),
+        wiper_fluid_low: extract_str(state, "/wiperFluidState/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "low" | "empty" | "critical")),
+        brake_fluid_low: extract_bool(state, "/brakeFluidLow/value"),
+        alarm_active: extract_str(state, "/alarmSoundStatus/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "active" | "on" | "sounding")),
+        service_mode: extract_str(state, "/vehicleInServiceMode/value")
+            .map(|s| matches!(s.to_lowercase().as_str(), "on" | "active" | "true")),
     }))
 }
 

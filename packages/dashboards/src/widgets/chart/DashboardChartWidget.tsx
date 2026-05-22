@@ -618,20 +618,22 @@ function EfficiencyTemperatureChart({
   height,
 }: {
   definition: DashboardChartDefinition;
-  data: Array<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null }>;
+  data: Array<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; total_miles?: number | null; avg_speed_mph?: number | null }>;
   loading: boolean;
   height: number;
 }) {
   const points = data
     .filter((point) => point.avg_efficiency_wh_mi != null)
     .map((point) => ({
-      label: `${formatTemp(point.temp_c_low)} to ${formatTemp(point.temp_c_high)}`,
+      label: formatTemp(point.temp_c_low),
       value: convertEfficiency(point.avg_efficiency_wh_mi),
+      distance: typeof point.total_miles === 'number' ? Math.round(point.total_miles) : null,
+      speed: typeof point.avg_speed_mph === 'number' ? point.avg_speed_mph : null,
     }));
 
   return (
     <EfficiencyPillBarChart
-      data={points.filter((point): point is { label: string; value: number } => point.value != null)}
+      data={points.filter((point): point is typeof points[number] & { value: number } => point.value != null)}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}

@@ -164,6 +164,26 @@ const METRICS: &[MetricDef] = &[
         source: MetricSource::Summary,
     },
     MetricDef {
+        id: "avg_gross_efficiency",
+        label: "Avg Gross Efficiency",
+        unit: Some("Wh/mi"),
+        kind: "number",
+        source_label: "trips",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
+        id: "avg_outside_temp_c",
+        label: "Avg Outside Temp",
+        unit: Some("C"),
+        kind: "temperature",
+        source_label: "trips",
+        supports_series: true,
+        default_aggregation: "avg",
+        source: MetricSource::Summary,
+    },
+    MetricDef {
         id: "avg_trip_duration",
         label: "Avg Trip Duration",
         unit: Some("min"),
@@ -451,6 +471,20 @@ async fn summary_value(
         .fetch_optional(pool)
         .await?
         .flatten(),
+        "avg_gross_efficiency" => sqlx::query_scalar(
+            "SELECT CASE WHEN SUM(distance_miles) > 0 THEN SUM(energy_wh + COALESCE(regen_wh, 0)) / SUM(distance_miles) ELSE NULL END FROM riviamigo.trips WHERE vehicle_id=$1 AND energy_wh IS NOT NULL AND distance_miles > 0",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
+        "avg_outside_temp_c" => sqlx::query_scalar(
+            "SELECT AVG(outside_temp_c)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND outside_temp_c IS NOT NULL",
+        )
+        .bind(vid)
+        .fetch_optional(pool)
+        .await?
+        .flatten(),
         "avg_trip_duration" => sqlx::query_scalar(
             "SELECT AVG(duration_seconds / 60.0)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND duration_seconds IS NOT NULL",
         )
@@ -528,6 +562,21 @@ async fn summary_series(
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND efficiency_wh_per_mile IS NOT NULL
+             GROUP BY 1 ORDER BY 1"
+        }
+        "avg_gross_efficiency" => {
+            "SELECT started_at::date::timestamptz AS ts,
+                    (SUM(energy_wh + COALESCE(regen_wh, 0)) / NULLIF(SUM(distance_miles), 0))::float8 AS value
+             FROM riviamigo.trips
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             AND energy_wh IS NOT NULL AND distance_miles > 0
+             GROUP BY 1 ORDER BY 1"
+        }
+        "avg_outside_temp_c" => {
+            "SELECT started_at::date::timestamptz AS ts, AVG(outside_temp_c)::float8 AS value
+             FROM riviamigo.trips
+             WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+             AND outside_temp_c IS NOT NULL
              GROUP BY 1 ORDER BY 1"
         }
         "avg_trip_duration" => {
