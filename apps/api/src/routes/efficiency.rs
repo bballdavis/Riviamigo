@@ -31,10 +31,12 @@ struct Params {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct VsTempPoint {
-    temp_c_low: i32,
-    temp_c_high: i32,
+    temp_c_low: f64,
+    temp_c_high: f64,
     avg_efficiency_wh_mi: Option<f64>,
     trip_count: i64,
+    total_miles: Option<f64>,
+    avg_speed_mph: Option<f64>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -137,15 +139,18 @@ async fn get_vs_temp_binned(
 
     let rows = sqlx::query_as::<_, VsTempPoint>(
         "SELECT
-           width_bucket(t.outside_temp_c, -20, 45, 13) AS bucket,
-           round(((-20 + (width_bucket(t.outside_temp_c, -20, 45, 13) - 1) * 5))::numeric, 0)::int AS temp_c_low,
-           round(((-20 + (width_bucket(t.outside_temp_c, -20, 45, 13)) * 5))::numeric, 0)::int      AS temp_c_high,
+           (floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) * 10 - 32) * 5.0/9.0        AS temp_c_low,
+           ((floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) + 1) * 10 - 32) * 5.0/9.0  AS temp_c_high,
            avg(t.efficiency_wh_per_mile) AS avg_efficiency_wh_mi,
-           count(*) AS trip_count
+           count(*) AS trip_count,
+           sum(t.distance_miles) AS total_miles,
+           CASE WHEN sum(t.duration_seconds) > 0
+                THEN sum(t.distance_miles) / (sum(t.duration_seconds) / 3600.0)
+                END AS avg_speed_mph
          FROM riviamigo.trips t
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.outside_temp_c IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL
-         GROUP BY 1, 2, 3 ORDER BY 2",
+         GROUP BY 1, 2 ORDER BY 1",
     )
     .bind(vid)
     .bind(from)
