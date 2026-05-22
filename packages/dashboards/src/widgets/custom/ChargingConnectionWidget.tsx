@@ -1,11 +1,11 @@
 import React from 'react';
-import { Car, Zap } from 'lucide-react';
+import { Zap } from 'lucide-react';
 import { useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
-import { findBestChargingSideOverlay, findFirstSideImage, findSideChargingImage } from './imageUtils';
+import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
 const CHARGING_SIDE_LIGHT_IMAGE_URL = '/vehicle-images/r1s-side-charging-light.png';
 
@@ -36,13 +36,9 @@ function ChargingConnectionWidget({
   const { data: vehicles } = useVehicles();
   const { data: summary } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
-  const pluggedIn = isPluggedIn(status);
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
-  const sideLight = activeVehicle?.images?.side?.light ?? findFirstSideImage(activeVehicle?.images?.all, 'light');
-  const sideDark = activeVehicle?.images?.side?.dark ?? findFirstSideImage(activeVehicle?.images?.all, 'dark');
-  const sideFallback = sideLight ?? sideDark ?? findFirstSideImage(activeVehicle?.images?.all);
   const chargingSideLight =
     findSideChargingImage(activeVehicle?.images?.all, 'light') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'light') ??
@@ -51,11 +47,6 @@ function ChargingConnectionWidget({
     findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
     chargingSideLight;
-  const idleSideLight = sideLight ?? sideFallback;
-  const idleSideDark = sideDark ?? idleSideLight;
-  const activeSideLight = charging ? chargingSideLight : idleSideLight;
-  const activeSideDark = charging ? chargingSideDark : idleSideDark;
-  const activeImageMode = charging ? 'side-charging' : 'side';
   const rows = [
     {
       label: 'Status',
@@ -87,33 +78,20 @@ function ChargingConnectionWidget({
     },
   ];
 
-  if (!pluggedIn) return null;
+  if (!charging) return null;
 
   return (
     <section
       data-testid="charging-connection-chip"
-      data-charging-state={charging ? 'charging' : 'standby'}
-      data-image-mode={activeImageMode}
-      data-image-light={activeSideLight ?? ''}
-      data-image-dark={activeSideDark ?? ''}
+      data-charging-state="charging"
+      data-image-mode="side-charging"
+      data-image-light={chargingSideLight}
+      data-image-dark={chargingSideDark}
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        {charging ? (
-          <>
-            <VehicleSideImage source={chargingSideLight} mode="charging" darkClassName="dark:hidden" />
-            <VehicleSideImage source={chargingSideDark} mode="charging" darkClassName="hidden dark:block" />
-          </>
-        ) : idleSideLight ? (
-          <>
-            <VehicleSideImage source={idleSideLight} mode="side" darkClassName="dark:hidden" />
-            <VehicleSideImage source={idleSideDark ?? idleSideLight} mode="side" darkClassName="hidden dark:block" />
-          </>
-        ) : (
-          <div className="mr-4 flex h-full w-2/3 items-center justify-center rounded-2xl border border-dashed border-border bg-bg-elevated text-fg-tertiary">
-            <Car className="h-10 w-10" />
-          </div>
-        )}
+        <VehicleSideImage source={chargingSideLight} mode="charging" darkClassName="dark:hidden" />
+        <VehicleSideImage source={chargingSideDark} mode="charging" darkClassName="hidden dark:block" />
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/82 to-transparent" />
@@ -289,12 +267,6 @@ function formatTimeToFull(minutes: number | null | undefined) {
 
 function formatMaybePercent(value: number | null | undefined, digits: number) {
   return value == null ? '-' : formatDashboardPercent(value, digits);
-}
-
-function isPluggedIn(status: VehicleStatus | null | undefined) {
-  const state = status?.charger_state?.toLowerCase();
-  if (state && !['unknown', 'disconnected'].includes(state)) return true;
-  return Boolean(status?.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
 }
 
 function isActivelyCharging(status: VehicleStatus | null | undefined) {
