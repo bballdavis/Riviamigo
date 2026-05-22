@@ -35,6 +35,7 @@ pub mod metrics;
 pub mod overview;
 pub mod places;
 pub mod rivian_stewardship;
+pub mod schedules;
 pub mod state_timeline;
 pub mod stats;
 pub mod trips;
@@ -80,6 +81,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(geofences::router())
         .merge(places::router())
         .merge(rivian_stewardship::router())
+        .merge(schedules::router())
         .merge(overview::router())
         .merge(state_timeline::router())
         .merge(health::router())

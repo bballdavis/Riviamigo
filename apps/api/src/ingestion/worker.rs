@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use sqlx::{pool::PoolConnection, PgPool, Postgres};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
 use crate::{
@@ -11,6 +11,7 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ChargeDetectorState, ChargeEvent},
+        rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
@@ -123,6 +124,16 @@ pub async fn run_vehicle_worker(
         }
     };
 
+    // Fetch owner user_id (needed for wallbox enrichment).
+    let user_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM riviamigo.vehicles WHERE id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+
     let ws_shutdown = shutdown.resubscribe();
     let ev_tx_ws = ev_tx.clone();
     let tokens_clone = tokens.clone();
@@ -145,6 +156,47 @@ pub async fn run_vehicle_worker(
         .build()
         .unwrap_or_default();
 
+    // ── Poll tasks ───────────────────────────────────────────────────────────
+    // Channel to push PowerState changes from the main event loop to the poll loop.
+    let (power_state_tx, power_state_rx) =
+        watch::channel::<Option<PowerState>>(None);
+
+    // Fire-and-forget startup enrichment (runs once; errors are non-fatal).
+    {
+        let riv_id = rivian_vehicle_id.clone();
+        let uid = user_id.unwrap_or(Uuid::nil());
+        let pool2 = pool.clone();
+        let client2 = http_client.clone();
+        let tok2 = tokens.clone();
+        tokio::spawn(async move {
+            rivian_poll::run_startup_polls(riv_id, vehicle_id, uid, tok2, pool2, client2).await;
+        });
+    }
+
+    // Adaptive periodic poll loop (live session data while charging, etc.).
+    {
+        let riv_id = rivian_vehicle_id.clone();
+        let pool2 = pool.clone();
+        let client2 = http_client.clone();
+        let tok2 = tokens.clone();
+        let redis2 = redis.clone();
+        let poll_shutdown = shutdown.resubscribe();
+        tokio::spawn(async move {
+            rivian_poll::run_poll_loop(
+                riv_id,
+                vehicle_id,
+                tok2,
+                pool2,
+                client2,
+                power_state_rx,
+                poll_shutdown,
+                redis2,
+            )
+            .await;
+        });
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     let mut trip_det = TripDetectorState::new(vehicle_id);
     let mut charge_det = ChargeDetectorState::new(vehicle_id);
     let mut redis_conn = match redis.get_multiplexed_async_connection().await {
@@ -161,6 +213,8 @@ pub async fn run_vehicle_worker(
     // Software version tracking
     let mut last_software_version: Option<String> = None;
     let mut sw_version_start: Option<chrono::DateTime<Utc>> = None;
+    // OTA available version tracking (triggers release notes fetch on change).
+    let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
     let mut raw_cleanup_tick: u64 = 0;
 
@@ -243,6 +297,11 @@ pub async fn run_vehicle_worker(
             last_vehicle_state = Some(current_state);
         }
 
+        // Keep the poll loop informed of the latest power state so it can
+        // adapt its cadence (e.g. switch to 30-second live-session polling
+        // while Charging).
+        let _ = power_state_tx.send(event.power_state.clone());
+
         // ── Software version tracking ────────────────────────────────────────
         if let Some(ver) = &event.ota_current_version {
             if Some(ver) != last_software_version.as_ref() {
@@ -256,6 +315,22 @@ pub async fn run_vehicle_worker(
                 let _ = open_software_version(&pool, vehicle_id, ver, event.ts).await;
                 sw_version_start = Some(event.ts);
                 last_software_version = Some(ver.clone());
+            }
+        }
+
+        // ── OTA available version change → fetch release notes ───────────────
+        if let Some(avail_ver) = &event.ota_available_version {
+            if Some(avail_ver) != last_ota_available_version.as_ref() {
+                last_ota_available_version = Some(avail_ver.clone());
+                let riv_id = rivian_vehicle_id.clone();
+                let pool2 = pool.clone();
+                let client2 = http_client.clone();
+                let tok2 = tokens.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = rivian_poll::fetch_ota_details(&riv_id, vehicle_id, &pool2, &client2, &tok2).await {
+                        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_ota_details failed");
+                    }
+                });
             }
         }
 
@@ -277,6 +352,17 @@ pub async fn run_vehicle_worker(
         // ── Charge detection ─────────────────────────────────────────────────
         if let ChargeEvent::SessionEnded(session) = charge_event {
             let _ = persist_charge_session(&pool, &session).await;
+            // Trigger incremental charge history sync to enrich the new session
+            // with Rivian API fields (network vendor, range added, etc.).
+            let riv_id = rivian_vehicle_id.clone();
+            let pool2 = pool.clone();
+            let client2 = http_client.clone();
+            let tok2 = tokens.clone();
+            tokio::spawn(async move {
+                if let Err(e) = rivian_poll::fetch_charge_history(&riv_id, vehicle_id, &pool2, &client2, &tok2).await {
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%e, "post-session charge history sync failed");
+                }
+            });
         }
     }
 
@@ -521,6 +607,35 @@ fn blank_event(vehicle_id: Uuid, ts: DateTime<Utc>) -> TelemetryEvent {
         hv_thermal_event: None,
         twelve_volt_health: None,
         is_online: None,
+        // Extended vehicle state fields
+        charge_port_open: None,
+        charger_derate_active: None,
+        cabin_precon_status: None,
+        cabin_precon_type: None,
+        pet_mode_active: None,
+        pet_mode_temp_ok: None,
+        defrost_active: None,
+        steering_wheel_heat: None,
+        seat_fl_heat: None,
+        seat_fr_heat: None,
+        seat_rl_heat: None,
+        seat_rr_heat: None,
+        seat_fl_vent: None,
+        seat_fr_vent: None,
+        tonneau_locked: None,
+        tonneau_closed: None,
+        side_bin_left_locked: None,
+        side_bin_right_locked: None,
+        window_fl_closed: None,
+        window_fr_closed: None,
+        window_rl_closed: None,
+        window_rr_closed: None,
+        gear_guard_locked: None,
+        gear_guard_video_status: None,
+        wiper_fluid_low: None,
+        brake_fluid_low: None,
+        alarm_active: None,
+        service_mode: None,
     }
 }
 
@@ -585,6 +700,35 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, hv_thermal_event);
     patch_opt!(target, source, twelve_volt_health);
     patch_opt!(target, source, is_online);
+    // Extended vehicle state fields
+    patch_opt!(target, source, charge_port_open);
+    patch_opt!(target, source, charger_derate_active);
+    patch_opt!(target, source, cabin_precon_status);
+    patch_opt!(target, source, cabin_precon_type);
+    patch_opt!(target, source, pet_mode_active);
+    patch_opt!(target, source, pet_mode_temp_ok);
+    patch_opt!(target, source, defrost_active);
+    patch_opt!(target, source, steering_wheel_heat);
+    patch_opt!(target, source, seat_fl_heat);
+    patch_opt!(target, source, seat_fr_heat);
+    patch_opt!(target, source, seat_rl_heat);
+    patch_opt!(target, source, seat_rr_heat);
+    patch_opt!(target, source, seat_fl_vent);
+    patch_opt!(target, source, seat_fr_vent);
+    patch_opt!(target, source, tonneau_locked);
+    patch_opt!(target, source, tonneau_closed);
+    patch_opt!(target, source, side_bin_left_locked);
+    patch_opt!(target, source, side_bin_right_locked);
+    patch_opt!(target, source, window_fl_closed);
+    patch_opt!(target, source, window_fr_closed);
+    patch_opt!(target, source, window_rl_closed);
+    patch_opt!(target, source, window_rr_closed);
+    patch_opt!(target, source, gear_guard_locked);
+    patch_opt!(target, source, gear_guard_video_status);
+    patch_opt!(target, source, wiper_fluid_low);
+    patch_opt!(target, source, brake_fluid_low);
+    patch_opt!(target, source, alarm_active);
+    patch_opt!(target, source, service_mode);
 }
 
 macro_rules! duplicate_field {
@@ -645,6 +789,34 @@ fn event_is_duplicate_patch(event: &TelemetryEvent, state: &TelemetryEvent) -> b
         && duplicate_field!(event, state, hv_thermal_event)
         && duplicate_field!(event, state, twelve_volt_health)
         && duplicate_field!(event, state, is_online)
+        && duplicate_field!(event, state, charge_port_open)
+        && duplicate_field!(event, state, charger_derate_active)
+        && duplicate_field!(event, state, cabin_precon_status)
+        && duplicate_field!(event, state, cabin_precon_type)
+        && duplicate_field!(event, state, pet_mode_active)
+        && duplicate_field!(event, state, pet_mode_temp_ok)
+        && duplicate_field!(event, state, defrost_active)
+        && duplicate_field!(event, state, steering_wheel_heat)
+        && duplicate_field!(event, state, seat_fl_heat)
+        && duplicate_field!(event, state, seat_fr_heat)
+        && duplicate_field!(event, state, seat_rl_heat)
+        && duplicate_field!(event, state, seat_rr_heat)
+        && duplicate_field!(event, state, seat_fl_vent)
+        && duplicate_field!(event, state, seat_fr_vent)
+        && duplicate_field!(event, state, tonneau_locked)
+        && duplicate_field!(event, state, tonneau_closed)
+        && duplicate_field!(event, state, side_bin_left_locked)
+        && duplicate_field!(event, state, side_bin_right_locked)
+        && duplicate_field!(event, state, window_fl_closed)
+        && duplicate_field!(event, state, window_fr_closed)
+        && duplicate_field!(event, state, window_rl_closed)
+        && duplicate_field!(event, state, window_rr_closed)
+        && duplicate_field!(event, state, gear_guard_locked)
+        && duplicate_field!(event, state, gear_guard_video_status)
+        && duplicate_field!(event, state, wiper_fluid_low)
+        && duplicate_field!(event, state, brake_fluid_low)
+        && duplicate_field!(event, state, alarm_active)
+        && duplicate_field!(event, state, service_mode)
 }
 
 fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {

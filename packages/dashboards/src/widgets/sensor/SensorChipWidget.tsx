@@ -21,6 +21,7 @@ import {
   formatEfficiency,
   formatKwh,
   formatMiles,
+  formatTemp,
 } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
@@ -448,7 +449,7 @@ function formatMetricValue(value: number | null | undefined, unit: string | null
   if (unit === 'psi') return `${value.toFixed(1)} psi`;
   if (unit === 'mph') return `${value.toFixed(0)} mph`;
   if (unit === 'kW') return `${value.toFixed(1)} kW`;
-  if (unit === 'C') return `${value.toFixed(1)} C`;
+  if (unit === 'C') return formatTemp(value);
   if (!unit && Number.isInteger(value)) return value.toFixed(0);
   return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
 }

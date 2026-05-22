@@ -2,6 +2,7 @@ pub mod charge_detector;
 pub mod parser;
 pub mod poller;
 pub mod rivian_auth;
+pub mod rivian_poll;
 pub mod session_store;
 pub mod supervisor;
 pub mod trip_detector;
