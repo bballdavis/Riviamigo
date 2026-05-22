@@ -99,8 +99,61 @@ subscription vehicleState($vehicleID: String!) {
     otaCurrentStatus    { timeStamp value }
     cabinClimateInteriorTemperature { timeStamp value }
     cabinClimateDriverTemperature   { timeStamp value }
+    cabinClimateExteriorTemperature { timeStamp value }
+    cabinClimateRunning             { timeStamp value }
     batteryHvThermalEvent           { timeStamp value }
     twelveVoltBatteryHealth         { timeStamp value }
+    chargePortState                 { timeStamp value }
+    chargerDerateStatus             { timeStamp value }
+    cabinPreconditioningStatus      { timeStamp value }
+    cabinPreconditioningType        { timeStamp value }
+    petModeStatus                   { timeStamp value }
+    petModeTemperatureStatus        { timeStamp value }
+    defrostDefogStatus              { timeStamp value }
+    steeringWheelHeat               { timeStamp value }
+    seatFrontLeftHeat               { timeStamp value }
+    seatFrontRightHeat              { timeStamp value }
+    seatRearLeftHeat                { timeStamp value }
+    seatRearRightHeat               { timeStamp value }
+    seatFrontLeftVent               { timeStamp value }
+    seatFrontRightVent              { timeStamp value }
+    closureTonneauLocked            { timeStamp value }
+    closureTonneauClosed            { timeStamp value }
+    closureSideBinLeftLocked        { timeStamp value }
+    closureSideBinRightLocked       { timeStamp value }
+    windowFrontLeftClosed           { timeStamp value }
+    windowFrontRightClosed          { timeStamp value }
+    windowRearLeftClosed            { timeStamp value }
+    windowRearRightClosed           { timeStamp value }
+    gearGuardLocked                 { timeStamp value }
+    gearGuardVideoStatus            { timeStamp value }
+    wiperFluidState                 { timeStamp value }
+    brakeFluidLow                   { timeStamp value }
+    alarmSoundStatus                { timeStamp value }
+    vehicleInServiceMode            { timeStamp value }
+    vehiclePowerOutput              { timeStamp value }
+    regenerativeBrakingPower        { timeStamp value }
+  }
+}
+"#;
+
+pub(crate) const DEPARTURE_SCHEDULE_SUBSCRIPTION: &str = r#"
+subscription vehicleDepartureSchedules($vehicleID: String!) {
+  vehicleDepartureSchedules(vehicleId: $vehicleID) {
+    id
+    name
+    enabled
+    occurrence {
+      type
+      weekDays
+      timeOfDayMinutes
+    }
+    comfortSettings {
+      seatFrontLeftHeat
+      seatFrontRightHeat
+      cabinClimateSetTemp
+      defrost
+    }
   }
 }
 "#;

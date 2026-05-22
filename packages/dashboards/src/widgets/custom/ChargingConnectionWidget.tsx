@@ -226,8 +226,9 @@ function ChargingBatteryLedBar({
                 height: '100%',
                 width: '100%',
                 borderRadius: 4,
-                backgroundColor: 'var(--rm-charging-done)',
-                boxShadow: '0 0 16px color-mix(in oklab, var(--rm-charging-done) 82%, transparent)',
+                backgroundColor: 'color-mix(in oklab, var(--rm-charging-done) 100%, white 15%)',
+                boxShadow: '0 0 8px 2px color-mix(in oklab, var(--rm-charging-done) 100%, transparent), 0 0 24px 4px color-mix(in oklab, var(--rm-charging-done) 70%, transparent)',
+                filter: 'brightness(1.35)',
               }}
             />
           </div>

@@ -474,7 +474,7 @@ class ApiClient {
   }
 
   async getEfficiencyVsTemp(vehicleId: string, from: string, to: string) {
-    return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number }[]>(
+    return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number; total_miles: number | null; avg_speed_mph: number | null }[]>(
       'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
     );
   }
