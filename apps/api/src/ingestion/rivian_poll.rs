@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::ingestion::session_store::RivianTokenBundle;
+use crate::ingestion::rivian_auth::rivian_refresh_tokens;
+use crate::ingestion::session_store::{encrypt_tokens, RivianTokenBundle};
 
 // ── URL constants ────────────────────────────────────────────────────────────
 
@@ -116,6 +117,72 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
 
     envelope.data.ok_or_else(|| anyhow!("Rivian API: empty data for {operation}"))
 }
+
+// ── Token-refresh helpers ────────────────────────────────────────────────────
+
+/// Returns `true` when an error looks like an expired / revoked access token.
+fn is_auth_error(e: &anyhow::Error) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("unauthenticated") || msg.contains("unauthorized")
+}
+
+/// Attempt to refresh Rivian tokens, persist the new bundle to DB, and return
+/// it.  On any failure the error is logged and `Err` is returned — callers
+/// should fall back to marking the vehicle as `needs_reauth`.
+async fn try_refresh_tokens(
+    vehicle_id: Uuid,
+    current_tokens: &RivianTokenBundle,
+    client: &reqwest::Client,
+    pool: &PgPool,
+    age_key: &str,
+) -> Result<RivianTokenBundle> {
+    tracing::info!(vehicle_id=%vehicle_id, "attempting Rivian token refresh");
+
+    let new_tokens = rivian_refresh_tokens(client, current_tokens)
+        .await
+        .map_err(|e| anyhow!("token refresh failed: {e}"))?;
+
+    // Encrypt and persist so future worker restarts use valid credentials.
+    let identity = age_key
+        .parse::<age::x25519::Identity>()
+        .map_err(|e| anyhow!("bad age key: {e}"))?;
+
+    let encrypted = encrypt_tokens(&new_tokens, &identity)?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET encrypted_tokens = EXCLUDED.encrypted_tokens,
+             updated_at       = now()",
+    )
+    .bind(vehicle_id)
+    .bind(&encrypted)
+    .execute(pool)
+    .await?;
+
+    tracing::info!(vehicle_id=%vehicle_id, "Rivian token refresh persisted");
+    Ok(new_tokens)
+}
+
+/// Write `needs_reauth` into `vehicle_runtime_state` so the frontend can
+/// surface a toast.
+async fn mark_needs_reauth(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
+    let _ = sqlx::query(
+        r#"INSERT INTO riviamigo.vehicle_runtime_state
+           (vehicle_id, is_online, worker_health, worker_health_msg, updated_at)
+           VALUES ($1, false, 'needs_reauth', $2, now())
+           ON CONFLICT (vehicle_id) DO UPDATE
+           SET worker_health = 'needs_reauth',
+               worker_health_msg = $2,
+               updated_at = now()"#,
+    )
+    .bind(vehicle_id)
+    .bind(reason)
+    .execute(pool)
+    .await;
+}
+
 
 // ── Stewardship counter ──────────────────────────────────────────────────────
 
@@ -1227,18 +1294,43 @@ pub async fn run_startup_polls(
     tokens: RivianTokenBundle,
     pool: PgPool,
     client: reqwest::Client,
+    age_key: String,
 ) {
     tracing::info!(vehicle_id=%vehicle_id, "startup polls begin");
 
-    if let Err(e) = fetch_vehicle_enrichment(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
+    // Active token set — may be replaced below if a refresh succeeds.
+    let mut active_tokens = tokens;
+
+    match fetch_vehicle_enrichment(&rivian_vehicle_id, vehicle_id, &pool, &client, &active_tokens).await {
+        Ok(_) => {}
+        Err(e) if is_auth_error(&e) => {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment: token expired, attempting refresh");
+            match try_refresh_tokens(vehicle_id, &active_tokens, &client, &pool, &age_key).await {
+                Ok(new_tokens) => {
+                    active_tokens = new_tokens;
+                    // Retry enrichment with fresh tokens.
+                    if let Err(e2) = fetch_vehicle_enrichment(
+                        &rivian_vehicle_id, vehicle_id, &pool, &client, &active_tokens,
+                    ).await {
+                        tracing::warn!(vehicle_id=%vehicle_id, err=%e2, "fetch_vehicle_enrichment failed after refresh");
+                    }
+                }
+                Err(refresh_err) => {
+                    tracing::error!(vehicle_id=%vehicle_id, err=%refresh_err, "token refresh failed; marking needs_reauth");
+                    mark_needs_reauth(&pool, vehicle_id, &refresh_err.to_string()).await;
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
+        }
     }
 
-    if let Err(e) = fetch_battery_static(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
+    if let Err(e) = fetch_battery_static(&rivian_vehicle_id, vehicle_id, &pool, &client, &active_tokens).await {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static failed");
     }
 
-    if let Err(e) = fetch_wallboxes(user_id, vehicle_id, &pool, &client, &tokens).await {
+    if let Err(e) = fetch_wallboxes(user_id, vehicle_id, &pool, &client, &active_tokens).await {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
     }
 
@@ -1263,7 +1355,7 @@ pub async fn run_startup_polls(
         .execute(&pool)
         .await;
 
-        match fetch_charge_history_full(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
+        match fetch_charge_history_full(&rivian_vehicle_id, vehicle_id, &pool, &client, &active_tokens).await {
             Ok(count) => {
                 let _ = sqlx::query(
                     "UPDATE riviamigo.vehicles
@@ -1290,19 +1382,18 @@ pub async fn run_startup_polls(
         }
     } else {
         // Incremental enrich: just reconcile any sessions that appeared since last run.
-        match fetch_charge_history(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
+        match fetch_charge_history(&rivian_vehicle_id, vehicle_id, &pool, &client, &active_tokens).await {
             Ok(n) => tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete"),
             Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed"),
         }
     }
 
-    if let Err(e) = fetch_charging_schedule(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
+    if let Err(e) = fetch_charging_schedule(&rivian_vehicle_id, vehicle_id, &pool, &client, &active_tokens).await {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
     }
 
-    if let Err(e) = fetch_departure_schedules(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_departure_schedules failed");
-    }
+    // NOTE: `getDepartureSchedules` does not exist in Rivian's schema — departure
+    // schedules are subscription-only.  The call has been intentionally removed.
 
     tracing::info!(vehicle_id=%vehicle_id, "startup polls complete");
 }

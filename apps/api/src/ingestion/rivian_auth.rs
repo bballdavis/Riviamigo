@@ -73,6 +73,101 @@ struct LoginData {
     create_csrf_token: Option<CreateCsrfTokenPayload>,
 }
 
+// ── Token exchange (refresh) ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct TokenExchangeResponse {
+    data: Option<TokenExchangeData>,
+    errors: Option<Vec<GqlError>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenExchangeData {
+    token_exchange: Option<LoginPayload>,
+}
+
+/// Silently refresh Rivian tokens using the `tokenExchange` mutation.
+///
+/// A new CSRF session is created first (required by Rivian's API), then the
+/// existing `refresh_token` is exchanged for a fresh set of credentials.
+/// Returns a new [`RivianTokenBundle`] with `created_at` set to now.
+pub async fn rivian_refresh_tokens(
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<RivianTokenBundle, RivianAuthError> {
+    let session = create_csrf_session(client).await?;
+
+    let query = r#"
+      mutation TokenExchange($appSessionToken: String!, $refreshToken: String!) {
+        tokenExchange(
+          tokenType: USER
+          appSessionToken: $appSessionToken
+          refreshToken: $refreshToken
+        ) {
+          __typename
+          ... on MobileLoginResponse {
+            accessToken
+            refreshToken
+            userSessionToken
+          }
+        }
+      }
+    "#;
+
+    let body = serde_json::json!({
+        "operationName": "TokenExchange",
+        "query": query,
+        "variables": {
+            "appSessionToken": session.app_session_token,
+            "refreshToken": tokens.refresh_token,
+        }
+    });
+
+    let req = client
+        .post(gateway_url())
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
+        .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
+        .header("Csrf-Token", &session.csrf_token)
+        .header("A-Sess", &session.app_session_token)
+        .json(&body);
+
+    let response = req.send().await?;
+    let http_status = response.status();
+    if http_status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(RivianAuthError::InvalidCredentials);
+    }
+
+    let parsed = response.json::<TokenExchangeResponse>().await?;
+
+    if let Some(errors) = parsed.errors {
+        if !errors.is_empty() {
+            return Err(RivianAuthError::UnexpectedResponse(format_gql_error(
+                &errors,
+            )));
+        }
+    }
+
+    let payload = parsed
+        .data
+        .and_then(|d| d.token_exchange)
+        .ok_or_else(|| {
+            RivianAuthError::UnexpectedResponse("empty tokenExchange payload".into())
+        })?;
+
+    Ok(RivianTokenBundle {
+        access_token: payload.access_token.unwrap_or_default(),
+        refresh_token: payload.refresh_token.unwrap_or_default(),
+        app_session_token: session.app_session_token,
+        user_session_token: payload.user_session_token.unwrap_or_default(),
+        csrf_token: session.csrf_token,
+        created_at: chrono::Utc::now(),
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LoginPayload {
