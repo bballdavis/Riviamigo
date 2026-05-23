@@ -48,9 +48,12 @@ async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterBody>,
 ) -> Result<Response, AppError> {
-    if body.email.is_empty() || body.password.len() < 8 {
+    if body.email.len() > 254 {
+        return Err(AppError::Validation("email too long".into()));
+    }
+    if body.email.is_empty() || !body.email.contains('@') || body.password.len() < 12 {
         return Err(AppError::Validation(
-            "email required, password min 8 chars".into(),
+            "valid email required, password min 12 chars".into(),
         ));
     }
 
@@ -121,10 +124,25 @@ async fn login(
     .await?
     .ok_or(AppError::Unauthorized)?;
 
-    verify_password(&body.password, &row.password_hash)?;
+    if let Err(e) = verify_password(&body.password, &row.password_hash) {
+        audit_log(
+            state.pool.clone(),
+            "login_failure",
+            None,
+            format!("failed login for {}", email),
+        );
+        return Err(e);
+    }
 
     let token = issue_access_token(row.id, row.default_vehicle_id, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, row.id).await?;
+
+    audit_log(
+        state.pool.clone(),
+        "login_success",
+        Some(row.id),
+        format!("user logged in"),
+    );
 
     let cookie = refresh_cookie(&refresh, 2_592_000);
     Ok((
@@ -252,7 +270,7 @@ fn sha2_hash(token: &str) -> Vec<u8> {
 }
 
 fn refresh_cookie(value: &str, max_age: u64) -> String {
-    let secure = if cfg!(debug_assertions) {
+    let secure = if std::env::var("COOKIE_INSECURE").is_ok() {
         ""
     } else {
         "; Secure"
@@ -260,6 +278,25 @@ fn refresh_cookie(value: &str, max_age: u64) -> String {
     format!(
         "refresh_token={value}; HttpOnly{secure}; SameSite=Lax; Path=/v1/auth; Max-Age={max_age}"
     )
+}
+
+fn audit_log(
+    pool: sqlx::PgPool,
+    event: &'static str,
+    user_id: Option<uuid::Uuid>,
+    detail: String,
+) {
+    tokio::spawn(async move {
+        let _ = sqlx::query!(
+            "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) \
+             VALUES ($1, $2, $3, now())",
+            event,
+            user_id,
+            detail,
+        )
+        .execute(&pool)
+        .await;
+    });
 }
 
 async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<String, AppError> {
