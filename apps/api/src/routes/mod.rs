@@ -8,7 +8,7 @@ use http::{
     },
     HeaderValue,
 };
-use tower_governor::{GovernorConfigBuilder, GovernorLayer};
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::{
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -22,6 +22,7 @@ use crate::middleware::auth::AppState;
 
 pub mod api_keys;
 pub mod auth;
+pub mod backfill;
 pub mod backups;
 pub mod battery;
 pub mod charging;
@@ -89,6 +90,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(api_keys::router())
         .merge(backups::router())
         .merge(vehicles::router())
+        .merge(backfill::router())
         .merge(battery::router())
         .merge(trips::router())
         .merge(charging::router())

@@ -89,15 +89,14 @@ async fn ensure_owned(
     vehicle_id: Uuid,
     user_id: Uuid,
 ) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar!(
+    let owned: bool = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-        vehicle_id,
-        user_id
     )
+    .bind(vehicle_id)
+    .bind(user_id)
     .fetch_one(pool)
     .await
-    .map_err(AppError::from)?
-    .unwrap_or(false);
+    .map_err(AppError::from)?;
 
     if !owned {
         Err(AppError::NotFound)

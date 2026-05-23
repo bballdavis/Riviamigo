@@ -287,13 +287,13 @@ fn audit_log(
     detail: String,
 ) {
     tokio::spawn(async move {
-        let _ = sqlx::query!(
+        let _ = sqlx::query(
             "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) \
              VALUES ($1, $2, $3, now())",
-            event,
-            user_id,
-            detail,
         )
+        .bind(event)
+        .bind(user_id)
+        .bind(detail)
         .execute(&pool)
         .await;
     });
