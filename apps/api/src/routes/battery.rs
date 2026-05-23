@@ -329,3 +329,141 @@ async fn get_phantom_drain(
         vid, from_day, to_day).fetch_all(&state.pool).await?;
     Ok(Json(points))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    // Run with: cargo test -- --ignored
+
+    async fn make_app() -> axum::Router {
+        use std::sync::Arc;
+        use crate::middleware::auth::{AppState, JwtKeys};
+        use rsa::{
+            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+            RsaPrivateKey,
+        };
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for integration tests");
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let redis = redis::Client::open(redis_url).expect("redis client");
+
+        let mut rng = rand::thread_rng();
+        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
+        let pub_key = priv_key.to_public_key();
+        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
+        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
+
+        let config = crate::config::Config {
+            database_url: database_url.clone(),
+            redis_url: "redis://127.0.0.1/".into(),
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec!["http://localhost:3000".into()],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+        };
+
+        let state = AppState {
+            pool,
+            redis,
+            jwt_keys,
+            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+                .to_string(),
+            config,
+        };
+
+        crate::routes::build_router(state)
+    }
+
+    async fn get_status(app: axum::Router, uri: &str) -> http::StatusCode {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn battery_soc_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(get_status(app, "/v1/battery/soc").await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn battery_range_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(get_status(app, "/v1/battery/range").await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn battery_capacity_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(
+            get_status(app, "/v1/battery/capacity").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn battery_phantom_drain_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(
+            get_status(app, "/v1/battery/phantom-drain").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn battery_degradation_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(
+            get_status(app, "/v1/battery/degradation").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // ── pure unit tests (no DB needed) ───────────────────────────────────────
+
+    #[test]
+    fn resolution_returns_1min_for_short_range() {
+        use super::resolution;
+        let from = chrono::Utc::now() - chrono::Duration::hours(24);
+        let to = chrono::Utc::now();
+        assert_eq!(resolution(from, to), "1min");
+    }
+
+    #[test]
+    fn resolution_returns_1hr_for_medium_range() {
+        use super::resolution;
+        let from = chrono::Utc::now() - chrono::Duration::days(30);
+        let to = chrono::Utc::now();
+        assert_eq!(resolution(from, to), "1hr");
+    }
+
+    #[test]
+    fn resolution_returns_1day_for_long_range() {
+        use super::resolution;
+        let from = chrono::Utc::now() - chrono::Duration::days(180);
+        let to = chrono::Utc::now();
+        assert_eq!(resolution(from, to), "1day");
+    }
+}
