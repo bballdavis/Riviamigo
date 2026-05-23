@@ -18,6 +18,30 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const status = currentStatus ?? liveStatus;
   const [unitSystem, setUnitSystem] = React.useState(() => getUnitSystem());
 
+  // Fire a single reauth warning toast when the vehicle worker signals it needs
+  // re-authentication.  The ref prevents the same toast firing more than once
+  // per page session even if the status keeps polling.
+  const reauthToastFired = React.useRef(false);
+  React.useEffect(() => {
+    if (currentStatus?.worker_health === 'needs_reauth' && !reauthToastFired.current) {
+      reauthToastFired.current = true;
+      window.dispatchEvent(
+        new CustomEvent('riviamigo:toast', {
+          detail: {
+            title: 'Rivian re-authentication required',
+            message:
+              'Your Rivian session has expired. Go to Settings → Vehicle to reconnect.',
+            variant: 'warning',
+          },
+        })
+      );
+    }
+    // Reset so the toast can refire if the vehicle recovers and expires again.
+    if (currentStatus?.worker_health !== 'needs_reauth') {
+      reauthToastFired.current = false;
+    }
+  }, [currentStatus?.worker_health]);
+
   React.useEffect(() => {
     const handleUnitsChange = () => setUnitSystem(getUnitSystem());
     window.addEventListener('rm-units-change', handleUnitsChange as EventListener);

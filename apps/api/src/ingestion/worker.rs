@@ -168,8 +168,9 @@ pub async fn run_vehicle_worker(
         let pool2 = pool.clone();
         let client2 = http_client.clone();
         let tok2 = tokens.clone();
+        let age_key2 = age_key.clone();
         tokio::spawn(async move {
-            rivian_poll::run_startup_polls(riv_id, vehicle_id, uid, tok2, pool2, client2).await;
+            rivian_poll::run_startup_polls(riv_id, vehicle_id, uid, tok2, pool2, client2, age_key2).await;
         });
     }
 
@@ -318,19 +319,14 @@ pub async fn run_vehicle_worker(
             }
         }
 
-        // ── OTA available version change → fetch release notes ───────────────
+        // ── OTA available version change ─────────────────────────────────────
+        // OTA version arrives via WS telemetry; the getOTAUpdateDetails query
+        // does not exist in Rivian's schema so we only track version changes
+        // for logging purposes.
         if let Some(avail_ver) = &event.ota_available_version {
             if Some(avail_ver) != last_ota_available_version.as_ref() {
+                tracing::info!(vehicle_id=%vehicle_id, version=%avail_ver, "OTA available version changed");
                 last_ota_available_version = Some(avail_ver.clone());
-                let riv_id = rivian_vehicle_id.clone();
-                let pool2 = pool.clone();
-                let client2 = http_client.clone();
-                let tok2 = tokens.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = rivian_poll::fetch_ota_details(&riv_id, vehicle_id, &pool2, &client2, &tok2).await {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_ota_details failed");
-                    }
-                });
             }
         }
 
