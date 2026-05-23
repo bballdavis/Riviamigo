@@ -424,59 +424,13 @@ mod tests {
         let base: DateTime<Utc> = "2024-01-15T08:00:00Z".parse().unwrap();
         let ts = base + chrono::Duration::seconds(offset_secs);
         TelemetryEvent {
-            vehicle_id: Uuid::nil(),
-            ts,
             latitude: Some(30.267),
             longitude: Some(-97.743),
-            altitude_m: None,
             speed_mph: Some(speed),
             battery_level: Some(80.0),
             battery_capacity_wh: Some(135_000.0),
-            distance_to_empty_mi: None,
-            battery_limit: None,
             power_state: Some(power),
-            charger_state: None,
-            charger_status: None,
-            time_to_end_of_charge_min: None,
-            drive_mode: None,
-            gear_status: None,
-            cabin_temp_c: None,
-            driver_temp_c: None,
-            outside_temp_c: None,
-            hvac_active: None,
-            power_kw: None,
-            regen_power_kw: None,
-            heading_deg: None,
-            odometer_miles: None,
-            tire_fl_psi: None,
-            tire_fr_psi: None,
-            tire_rl_psi: None,
-            tire_rr_psi: None,
-            tire_fl_status: None,
-            tire_fr_status: None,
-            tire_rl_status: None,
-            tire_rr_status: None,
-            door_front_left_locked: None,
-            door_front_right_locked: None,
-            door_rear_left_locked: None,
-            door_rear_right_locked: None,
-            door_front_left_closed: None,
-            door_front_right_closed: None,
-            door_rear_left_closed: None,
-            door_rear_right_closed: None,
-            closure_frunk_locked: None,
-            closure_frunk_closed: None,
-            closure_liftgate_locked: None,
-            closure_liftgate_closed: None,
-            closure_tailgate_locked: None,
-            closure_tailgate_closed: None,
-            ota_current_version: None,
-            ota_available_version: None,
-            ota_status: None,
-            ota_current_status: None,
-            hv_thermal_event: None,
-            twelve_volt_health: None,
-            is_online: None,
+            ..TelemetryEvent::empty(Uuid::nil(), ts)
         }
     }
 
@@ -588,6 +542,6 @@ mod tests {
     #[test]
     fn haversine_austin_san_antonio() {
         let d = haversine_miles(30.267_153, -97.743_061, 29.424_122, -98.493_629);
-        assert!((d - 79.0).abs() < 3.0, "Expected ~79 miles, got {d}");
+        assert!((d - 73.6).abs() < 1.0, "Expected ~73.6 straight-line miles, got {d}");
     }
 }
