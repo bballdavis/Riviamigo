@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "id": "00000000-0000-0000-0000-000000000006",
+  "slug": "health",
+  "name": "Health",
+  "isDefault": true,
+  "isLocked": true,
+  "ownerId": null,
+  "controls": { "dateRange": false },
+  "widgets": [
+    { "id": "d6000006-0000-0000-0000-000000000001", "componentType": "sensor", "definitionId": "battery_health_pct",        "title": "Battery Health",        "options": {}, "layout": { "x": 0,  "y": 0, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000002", "componentType": "sensor", "definitionId": "estimated_degradation_pct","title": "Degradation",           "options": {}, "layout": { "x": 3,  "y": 0, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000003", "componentType": "sensor", "definitionId": "usable_capacity",          "title": "Usable Capacity",       "options": {}, "layout": { "x": 6,  "y": 0, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000004", "componentType": "sensor", "definitionId": "max_range",               "title": "Max Range",             "options": {}, "layout": { "x": 9,  "y": 0, "w": 3, "h": 2 } },
+
+    { "id": "d6000006-0000-0000-0000-000000000005", "componentType": "sensor", "definitionId": "brake_fluid_warning",     "title": "Brake Fluid",           "options": {}, "layout": { "x": 0,  "y": 2, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000006", "componentType": "sensor", "definitionId": "wiper_fluid_warning",     "title": "Wiper Fluid",           "options": {}, "layout": { "x": 2,  "y": 2, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000007", "componentType": "sensor", "definitionId": "charger_derate_active",   "title": "Charger Derate",        "options": {}, "layout": { "x": 4,  "y": 2, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000008", "componentType": "sensor", "definitionId": "hv_thermal",             "title": "HV Thermal",            "options": {}, "layout": { "x": 6,  "y": 2, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000009", "componentType": "sensor", "definitionId": "twelve_volt_health",     "title": "12V Health",            "options": {}, "layout": { "x": 8,  "y": 2, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000010", "componentType": "sensor", "definitionId": "service_mode",           "title": "Service Mode",          "options": {}, "layout": { "x": 10, "y": 2, "w": 2, "h": 2 } },
+
+    { "id": "d6000006-0000-0000-0000-000000000011", "componentType": "sensor", "definitionId": "gear_guard_locked",      "title": "Gear Guard",            "options": {}, "layout": { "x": 0,  "y": 4, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000012", "componentType": "sensor", "definitionId": "alarm_status",           "title": "Alarm",                 "options": {}, "layout": { "x": 3,  "y": 4, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000013", "componentType": "sensor", "definitionId": "charge_port_open",       "title": "Charge Port",           "options": {}, "layout": { "x": 6,  "y": 4, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000014", "componentType": "sensor", "definitionId": "tonneau_status",         "title": "Tonneau",               "options": {}, "layout": { "x": 9,  "y": 4, "w": 3, "h": 2 } },
+
+    { "id": "d6000006-0000-0000-0000-000000000015", "componentType": "sensor", "definitionId": "window_status",          "title": "Windows",               "options": {}, "layout": { "x": 0,  "y": 6, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000016", "componentType": "sensor", "definitionId": "defrost_active",         "title": "Defrost",               "options": {}, "layout": { "x": 3,  "y": 6, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000017", "componentType": "sensor", "definitionId": "cabin_precon",           "title": "Cabin Precon",          "options": {}, "layout": { "x": 6,  "y": 6, "w": 3, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000018", "componentType": "sensor", "definitionId": "pet_mode",               "title": "Pet Mode",              "options": {}, "layout": { "x": 9,  "y": 6, "w": 3, "h": 2 } },
+
+    { "id": "d6000006-0000-0000-0000-000000000019", "componentType": "sensor", "definitionId": "seat_fl_heat",           "title": "Seat FL Heat",          "options": {}, "layout": { "x": 0,  "y": 8, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000020", "componentType": "sensor", "definitionId": "seat_fr_heat",           "title": "Seat FR Heat",          "options": {}, "layout": { "x": 2,  "y": 8, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000021", "componentType": "sensor", "definitionId": "seat_rl_heat",           "title": "Seat RL Heat",          "options": {}, "layout": { "x": 4,  "y": 8, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000022", "componentType": "sensor", "definitionId": "seat_rr_heat",           "title": "Seat RR Heat",          "options": {}, "layout": { "x": 6,  "y": 8, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000023", "componentType": "sensor", "definitionId": "seat_fl_vent",           "title": "Seat FL Vent",          "options": {}, "layout": { "x": 8,  "y": 8, "w": 2, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000024", "componentType": "sensor", "definitionId": "steering_wheel_heat",    "title": "Wheel Heat",            "options": {}, "layout": { "x": 10, "y": 8, "w": 2, "h": 2 } },
+
+    { "id": "d6000006-0000-0000-0000-000000000025", "componentType": "sensor", "definitionId": "ota_current_version",    "title": "Current Software",      "options": {}, "layout": { "x": 0,  "y": 10, "w": 6, "h": 2 } },
+    { "id": "d6000006-0000-0000-0000-000000000026", "componentType": "sensor", "definitionId": "ota_available_version",  "title": "Available Update",      "options": {}, "layout": { "x": 6,  "y": 10, "w": 6, "h": 2 } }
+  ]
+}
