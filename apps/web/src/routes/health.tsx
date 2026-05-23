@@ -2,14 +2,21 @@ import React from 'react';
 import { createRoute } from '@tanstack/react-router';
 import {
   Activity,
+  AlertTriangle,
   BatteryWarning,
+  Bell,
   CheckCircle2,
   CircleAlert,
   Cpu,
   DoorOpen,
+  Droplets,
   Gauge,
   HeartPulse,
+  Plug,
   Radio,
+  Shield,
+  Snowflake,
+  Wrench,
 } from 'lucide-react';
 import type { BadgeProps } from '@riviamigo/ui/primitives';
 import type {
@@ -18,7 +25,7 @@ import type {
   VehicleHealthTires,
 } from '@riviamigo/types';
 import { rootRoute } from './__root';
-import { useAuth, useVehicleHealth } from '@riviamigo/hooks';
+import { useAuth, useCurrentVehicleStatus, useVehicleHealth } from '@riviamigo/hooks';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { NoVehicleState } from '../components/layout/NoVehicleState';
@@ -52,6 +59,8 @@ function VehicleHealthPage() {
 function VehicleHealthContent() {
   const { defaultVehicleId } = useAuth();
   const { data, isLoading } = useVehicleHealth(defaultVehicleId);
+  const { data: status } = useCurrentVehicleStatus(defaultVehicleId);
+  const diagnostics = summarizeDiagnostics(status);
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
   const displayModel = [data?.vehicle?.model, data?.vehicle?.trim].filter(Boolean).join(' ');
   const freshness = getFreshness(data?.runtime?.last_event_at ?? data?.latest?.ts ?? null);
@@ -177,6 +186,64 @@ function VehicleHealthContent() {
                 isLoading={isLoading}
               />
             </section>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Diagnostics</CardTitle>
+                <Badge variant={diagnostics.overall.variant} dot>
+                  {diagnostics.overall.label}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <DiagnosticRow
+                    icon={<Droplets className="h-4 w-4" />}
+                    label="Brake Fluid"
+                    state={diagnostics.brake}
+                  />
+                  <DiagnosticRow
+                    icon={<Droplets className="h-4 w-4" />}
+                    label="Wiper Fluid"
+                    state={diagnostics.wiper}
+                  />
+                  <DiagnosticRow
+                    icon={<Wrench className="h-4 w-4" />}
+                    label="Service Mode"
+                    state={diagnostics.service}
+                  />
+                  <DiagnosticRow
+                    icon={<Bell className="h-4 w-4" />}
+                    label="Alarm"
+                    state={diagnostics.alarm}
+                  />
+                  <DiagnosticRow
+                    icon={<Shield className="h-4 w-4" />}
+                    label="Gear Guard"
+                    state={diagnostics.gearGuard}
+                  />
+                  <DiagnosticRow
+                    icon={<Plug className="h-4 w-4" />}
+                    label="Charge Port"
+                    state={diagnostics.chargePort}
+                  />
+                  <DiagnosticRow
+                    icon={<AlertTriangle className="h-4 w-4" />}
+                    label="Charger Derate"
+                    state={diagnostics.charger}
+                  />
+                  <DiagnosticRow
+                    icon={<Snowflake className="h-4 w-4" />}
+                    label="Defrost"
+                    state={diagnostics.defrost}
+                  />
+                  <DiagnosticRow
+                    icon={<Activity className="h-4 w-4" />}
+                    label="Cabin Precondition"
+                    state={diagnostics.precon}
+                  />
+                </div>
+              </CardContent>
+            </Card>
 
             <section className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
               <Card>
@@ -433,6 +500,30 @@ function TireGauge({
   );
 }
 
+type DiagnosticState = { label: string; variant: BadgeVariant };
+
+function DiagnosticRow({
+  icon,
+  label,
+  state,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  state: DiagnosticState;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/55 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="text-fg-tertiary">{icon}</span>
+        <span className="truncate text-sm text-fg-secondary">{label}</span>
+      </div>
+      <Badge variant={state.variant} size="sm">
+        {state.label}
+      </Badge>
+    </div>
+  );
+}
+
 function ClosureRow({ label, value }: { label: string; value: boolean | null }) {
   const Icon = value === false ? DoorOpen : value === true ? CheckCircle2 : CircleAlert;
   const variant = value === false ? 'warning' : value === true ? 'success' : 'default';
@@ -541,6 +632,65 @@ function getTireState(status: string | null) {
   if (/critical|fault/i.test(status))
     return { label: titleCase(status), variant: 'danger' as const };
   return { label: titleCase(status), variant: 'warning' as const };
+}
+
+function summarizeDiagnostics(status: import('@riviamigo/types').VehicleStatus | null | undefined) {
+  const fromBool = (v: boolean | null | undefined, dangerWhenTrue: boolean): DiagnosticState => {
+    if (v === null || v === undefined) return { label: 'Unknown', variant: 'default' };
+    if (v === dangerWhenTrue) return { label: dangerWhenTrue ? 'Warning' : 'OK', variant: 'warning' };
+    return { label: dangerWhenTrue ? 'OK' : 'Active', variant: dangerWhenTrue ? 'success' : 'info' };
+  };
+  const fromStr = (v: boolean | string | null | undefined, activeWhen: (s: string) => boolean): DiagnosticState => {
+    if (v === null || v === undefined) return { label: 'Unknown', variant: 'default' };
+    if (typeof v === 'boolean') {
+      return v ? { label: 'Active', variant: 'info' } : { label: 'Off', variant: 'success' };
+    }
+    const s = String(v);
+    if (/^(off|none|inactive|closed|disabled)$/i.test(s)) return { label: titleCase(s), variant: 'success' };
+    if (activeWhen(s)) return { label: titleCase(s), variant: 'info' };
+    return { label: titleCase(s), variant: 'default' };
+  };
+  const brake = fromBool(status?.brake_fluid_low ?? null, true);
+  const wiper = fromBool(status?.wiper_fluid_low ?? null, true);
+  const service: DiagnosticState =
+    status?.service_mode === true
+      ? { label: 'In Service', variant: 'warning' }
+      : status?.service_mode === false
+        ? { label: 'OK', variant: 'success' }
+        : { label: 'Unknown', variant: 'default' };
+  const alarm: DiagnosticState =
+    status?.alarm_active === true
+      ? { label: 'Triggered', variant: 'danger' }
+      : status?.alarm_active === false
+        ? { label: 'Armed', variant: 'success' }
+        : { label: 'Unknown', variant: 'default' };
+  const gearGuard: DiagnosticState =
+    status?.gear_guard_locked === true
+      ? { label: 'Locked', variant: 'success' }
+      : status?.gear_guard_locked === false
+        ? { label: 'Unlocked', variant: 'warning' }
+        : { label: 'Unknown', variant: 'default' };
+  const chargePort = fromStr(status?.charge_port_open ?? null, (s) => /open/i.test(s));
+  const charger = fromStr(status?.charger_derate_active ?? null, (s) => /active|true|on/i.test(s));
+  const defrost = fromStr(status?.defrost_active ?? null, (s) => /active|true|on/i.test(s));
+  const precon: DiagnosticState = (() => {
+    const v = status?.cabin_precon_status;
+    if (!v) return { label: 'Off', variant: 'success' };
+    return /off|none|inactive/i.test(v)
+      ? { label: titleCase(v), variant: 'success' }
+      : { label: titleCase(v), variant: 'info' };
+  })();
+  const all = [brake, wiper, service, alarm, gearGuard, chargePort, charger, defrost, precon];
+  const overall: DiagnosticState = all.some((s) => s.variant === 'danger')
+    ? { label: 'Attention', variant: 'danger' }
+    : all.some((s) => s.variant === 'warning')
+      ? { label: 'Check', variant: 'warning' }
+      : all.some((s) => s.variant === 'info')
+        ? { label: 'Active', variant: 'info' }
+        : all.some((s) => s.variant === 'success')
+          ? { label: 'All clear', variant: 'success' }
+          : { label: 'No data', variant: 'default' };
+  return { brake, wiper, service, alarm, gearGuard, chargePort, charger, defrost, precon, overall };
 }
 
 function getFreshness(ts: string | null) {

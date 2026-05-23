@@ -553,90 +553,7 @@ fn inferred_activity(event: &TelemetryEvent) -> ActivityMode {
 }
 
 fn blank_event(vehicle_id: Uuid, ts: DateTime<Utc>) -> TelemetryEvent {
-    TelemetryEvent {
-        vehicle_id,
-        ts,
-        latitude: None,
-        longitude: None,
-        altitude_m: None,
-        speed_mph: None,
-        battery_level: None,
-        battery_capacity_wh: None,
-        distance_to_empty_mi: None,
-        battery_limit: None,
-        power_state: None,
-        charger_state: None,
-        charger_status: None,
-        time_to_end_of_charge_min: None,
-        drive_mode: None,
-        gear_status: None,
-        cabin_temp_c: None,
-        driver_temp_c: None,
-        outside_temp_c: None,
-        hvac_active: None,
-        power_kw: None,
-        regen_power_kw: None,
-        heading_deg: None,
-        odometer_miles: None,
-        tire_fl_psi: None,
-        tire_fr_psi: None,
-        tire_rl_psi: None,
-        tire_rr_psi: None,
-        tire_fl_status: None,
-        tire_fr_status: None,
-        tire_rl_status: None,
-        tire_rr_status: None,
-        door_front_left_locked: None,
-        door_front_right_locked: None,
-        door_rear_left_locked: None,
-        door_rear_right_locked: None,
-        closure_frunk_locked: None,
-        closure_frunk_closed: None,
-        closure_liftgate_locked: None,
-        closure_liftgate_closed: None,
-        closure_tailgate_locked: None,
-        closure_tailgate_closed: None,
-        door_front_left_closed: None,
-        door_front_right_closed: None,
-        door_rear_left_closed: None,
-        door_rear_right_closed: None,
-        ota_current_version: None,
-        ota_available_version: None,
-        ota_status: None,
-        ota_current_status: None,
-        hv_thermal_event: None,
-        twelve_volt_health: None,
-        is_online: None,
-        // Extended vehicle state fields
-        charge_port_open: None,
-        charger_derate_active: None,
-        cabin_precon_status: None,
-        cabin_precon_type: None,
-        pet_mode_active: None,
-        pet_mode_temp_ok: None,
-        defrost_active: None,
-        steering_wheel_heat: None,
-        seat_fl_heat: None,
-        seat_fr_heat: None,
-        seat_rl_heat: None,
-        seat_rr_heat: None,
-        seat_fl_vent: None,
-        seat_fr_vent: None,
-        tonneau_locked: None,
-        tonneau_closed: None,
-        side_bin_left_locked: None,
-        side_bin_right_locked: None,
-        window_fl_closed: None,
-        window_fr_closed: None,
-        window_rl_closed: None,
-        window_rr_closed: None,
-        gear_guard_locked: None,
-        gear_guard_video_status: None,
-        wiper_fluid_low: None,
-        brake_fluid_low: None,
-        alarm_active: None,
-        service_mode: None,
-    }
+    TelemetryEvent::empty(vehicle_id, ts)
 }
 
 macro_rules! patch_opt {
@@ -864,6 +781,43 @@ fn closure_or_lock_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool
         || changed_bool(event.closure_liftgate_closed, prev.closure_liftgate_closed)
         || changed_bool(event.closure_tailgate_locked, prev.closure_tailgate_locked)
         || changed_bool(event.closure_tailgate_closed, prev.closure_tailgate_closed)
+        || changed_bool(event.tonneau_locked, prev.tonneau_locked)
+        || changed_bool(event.tonneau_closed, prev.tonneau_closed)
+        || changed_bool(event.side_bin_left_locked, prev.side_bin_left_locked)
+        || changed_bool(event.side_bin_right_locked, prev.side_bin_right_locked)
+        || changed_bool(event.window_fl_closed, prev.window_fl_closed)
+        || changed_bool(event.window_fr_closed, prev.window_fr_closed)
+        || changed_bool(event.window_rl_closed, prev.window_rl_closed)
+        || changed_bool(event.window_rr_closed, prev.window_rr_closed)
+        || changed_bool(event.gear_guard_locked, prev.gear_guard_locked)
+        || changed_bool(event.charge_port_open, prev.charge_port_open)
+        || changed_bool(event.charger_derate_active, prev.charger_derate_active)
+        || changed_bool(event.pet_mode_active, prev.pet_mode_active)
+        || changed_bool(event.pet_mode_temp_ok, prev.pet_mode_temp_ok)
+        || changed_bool(event.defrost_active, prev.defrost_active)
+        || changed_bool(event.wiper_fluid_low, prev.wiper_fluid_low)
+        || changed_bool(event.brake_fluid_low, prev.brake_fluid_low)
+        || changed_bool(event.alarm_active, prev.alarm_active)
+        || changed_bool(event.service_mode, prev.service_mode)
+        || changed_string(
+            event.cabin_precon_status.as_deref(),
+            prev.cabin_precon_status.as_deref(),
+        )
+        || changed_string(
+            event.cabin_precon_type.as_deref(),
+            prev.cabin_precon_type.as_deref(),
+        )
+        || changed_string(
+            event.gear_guard_video_status.as_deref(),
+            prev.gear_guard_video_status.as_deref(),
+        )
+        || changed_i32(event.steering_wheel_heat, prev.steering_wheel_heat)
+        || changed_i32(event.seat_fl_heat, prev.seat_fl_heat)
+        || changed_i32(event.seat_fr_heat, prev.seat_fr_heat)
+        || changed_i32(event.seat_rl_heat, prev.seat_rl_heat)
+        || changed_i32(event.seat_rr_heat, prev.seat_rr_heat)
+        || changed_i32(event.seat_fl_vent, prev.seat_fl_vent)
+        || changed_i32(event.seat_fr_vent, prev.seat_fr_vent)
 }
 
 fn software_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool {
@@ -912,6 +866,10 @@ fn changed_f64(current: Option<f64>, previous: Option<f64>, threshold: f64) -> b
 }
 
 fn changed_bool(current: Option<bool>, previous: Option<bool>) -> bool {
+    matches!(current, Some(_)) && current != previous
+}
+
+fn changed_i32(current: Option<i32>, previous: Option<i32>) -> bool {
     matches!(current, Some(_)) && current != previous
 }
 
@@ -1374,59 +1332,12 @@ mod snapshot_tests {
 
     fn event_with_partial_fields() -> TelemetryEvent {
         TelemetryEvent {
-            vehicle_id: Uuid::new_v4(),
-            ts: Utc::now(),
-            latitude: None,
-            longitude: None,
-            altitude_m: None,
-            speed_mph: None,
             battery_level: Some(79.0),
             battery_capacity_wh: Some(135_000.0),
-            distance_to_empty_mi: None,
             battery_limit: Some(70.0),
-            power_state: None,
             charger_state: Some(ChargerState::Disconnected),
-            charger_status: None,
-            time_to_end_of_charge_min: None,
-            drive_mode: None,
-            gear_status: None,
-            cabin_temp_c: None,
-            driver_temp_c: None,
-            outside_temp_c: None,
-            hvac_active: None,
-            power_kw: None,
-            regen_power_kw: None,
-            heading_deg: None,
-            odometer_miles: None,
             tire_fl_psi: Some(36.5),
-            tire_fr_psi: None,
-            tire_rl_psi: None,
-            tire_rr_psi: None,
-            tire_fl_status: None,
-            tire_fr_status: None,
-            tire_rl_status: None,
-            tire_rr_status: None,
-            door_front_left_locked: None,
-            door_front_right_locked: None,
-            door_rear_left_locked: None,
-            door_rear_right_locked: None,
-            door_front_left_closed: None,
-            door_front_right_closed: None,
-            door_rear_left_closed: None,
-            door_rear_right_closed: None,
-            closure_frunk_locked: None,
-            closure_frunk_closed: None,
-            closure_liftgate_locked: None,
-            closure_liftgate_closed: None,
-            closure_tailgate_locked: None,
-            closure_tailgate_closed: None,
-            ota_current_version: None,
-            ota_available_version: None,
-            ota_status: None,
-            ota_current_status: None,
-            hv_thermal_event: None,
-            twelve_volt_health: None,
-            is_online: None,
+            ..TelemetryEvent::empty(Uuid::new_v4(), Utc::now())
         }
     }
 

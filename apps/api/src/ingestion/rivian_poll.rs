@@ -45,6 +45,14 @@ fn fmt_errors(errors: &[GqlError]) -> String {
         .join("; ")
 }
 
+fn json_number_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
+    match value {
+        Some(serde_json::Value::Number(n)) => n.as_f64(),
+        Some(serde_json::Value::String(s)) => s.parse().ok(),
+        _ => None,
+    }
+}
+
 /// Send a single GraphQL request and deserialize the `data` object.
 ///
 /// Returns `Err` on HTTP failure, non-200 status, GQL error list, or parse
@@ -146,17 +154,37 @@ struct CurrentUserEnrichment {
 struct VehicleEnrichmentItem {
     id: String,
     vehicle: Option<VehicleEnrichmentDetails>,
-    #[serde(rename = "supportedFeatures")]
-    supported_features: Option<Vec<SupportedFeature>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VehicleEnrichmentDetails {
-    interior_color: Option<String>,
-    wheel_option: Option<String>,
-    max_vehicle_power: Option<f64>,
-    charge_port_type: Option<String>,
+    mobile_configuration: Option<MobileConfiguration>,
+    vehicle_state: Option<VehicleStateEnrichment>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileConfiguration {
+    trim_option: Option<MobileConfigOption>,
+    #[allow(dead_code)]
+    exterior_color_option: Option<MobileConfigOption>,
+    interior_color_option: Option<MobileConfigOption>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct MobileConfigOption {
+    option_id: Option<String>,
+    option_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleStateEnrichment {
+    #[serde(rename = "supportedFeatures")]
+    supported_features: Option<Vec<SupportedFeature>>,
 }
 
 /// API response shape — `status` field is received from Rivian but not used locally.
@@ -181,15 +209,18 @@ pub async fn fetch_vehicle_enrichment(
           currentUser {
             vehicles {
               id
-              supportedFeatures {
-                name
-                status
-              }
               vehicle {
-                interiorColor
-                wheelOption
-                maxVehiclePower
-                chargingPortType
+                mobileConfiguration {
+                  trimOption          { optionId optionName }
+                  exteriorColorOption { optionId optionName }
+                  interiorColorOption { optionId optionName }
+                }
+                vehicleState {
+                  supportedFeatures {
+                    name
+                    status
+                  }
+                }
               }
             }
           }
@@ -211,36 +242,38 @@ pub async fn fetch_vehicle_enrichment(
     };
 
     let details = item.vehicle;
-    let interior_color = details.as_ref().and_then(|d| d.interior_color.clone());
-    let wheel_option = details.as_ref().and_then(|d| d.wheel_option.clone());
-    let max_vehicle_power_kw = details.as_ref().and_then(|d| d.max_vehicle_power);
-    let charge_port_type = details.as_ref().and_then(|d| d.charge_port_type.clone());
+    let mobile_config = details.as_ref().and_then(|d| d.mobile_configuration.as_ref());
+    let interior_color = mobile_config
+        .and_then(|m| m.interior_color_option.as_ref())
+        .and_then(|o| o.option_name.clone());
+    let trim = mobile_config
+        .and_then(|m| m.trim_option.as_ref())
+        .and_then(|o| o.option_name.clone());
 
-    let features_json: Option<serde_json::Value> = item.supported_features.map(|feats| {
-        serde_json::Value::Array(
-            feats
-                .into_iter()
-                .filter_map(|f| f.name)
-                .map(serde_json::Value::String)
-                .collect(),
-        )
-    });
+    let features_json: Option<serde_json::Value> = details
+        .and_then(|d| d.vehicle_state)
+        .and_then(|state| state.supported_features)
+        .map(|feats| {
+            serde_json::Value::Array(
+                feats
+                    .into_iter()
+                    .filter_map(|f| f.name)
+                    .map(serde_json::Value::String)
+                    .collect(),
+            )
+        });
 
     sqlx::query(
         "UPDATE riviamigo.vehicles
-         SET interior_color        = COALESCE($2, interior_color),
-             wheel_option          = COALESCE($3, wheel_option),
-             max_vehicle_power_kw  = COALESCE($4, max_vehicle_power_kw),
-             charge_port_type      = COALESCE($5, charge_port_type),
-             supported_features    = COALESCE($6, supported_features),
-             updated_at            = now()
+         SET interior_color     = COALESCE($2, interior_color),
+             trim               = COALESCE($3, trim),
+             supported_features = COALESCE($4, supported_features),
+             updated_at         = now()
          WHERE id = $1",
     )
     .bind(vehicle_id)
     .bind(interior_color)
-    .bind(wheel_option)
-    .bind(max_vehicle_power_kw)
-    .bind(charge_port_type)
+    .bind(trim)
     .bind(features_json)
     .execute(pool)
     .await?;
@@ -315,7 +348,7 @@ pub async fn fetch_battery_static(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WallboxesData {
-    registered_wallboxes: Option<Vec<WallboxItem>>,
+    get_registered_wallboxes: Option<Vec<WallboxItem>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,9 +358,10 @@ struct WallboxItem {
     name: Option<String>,
     latitude: Option<f64>,
     longitude: Option<f64>,
-    max_power: Option<f64>,
+    max_power: Option<serde_json::Value>,
     model: Option<String>,
     serial_number: Option<String>,
+    #[serde(rename = "softwareVersion")]
     firmware_version: Option<String>,
     linked: Option<bool>,
 }
@@ -342,7 +376,7 @@ pub async fn fetch_wallboxes(
 ) -> Result<()> {
     const Q: &str = r#"
         query getRegisteredWallboxes {
-          registeredWallboxes {
+          getRegisteredWallboxes {
             wallboxId
             name
             latitude
@@ -350,16 +384,16 @@ pub async fn fetch_wallboxes(
             maxPower
             model
             serialNumber
-            firmwareVersion
+            softwareVersion
             linked
           }
         }
     "#;
 
     let data: WallboxesData =
-        gql_request(client, GATEWAY_URL, tokens, "getRegisteredWallboxes", Q, serde_json::Value::Null).await?;
+        gql_request(client, CHRG_URL, tokens, "getRegisteredWallboxes", Q, serde_json::Value::Null).await?;
 
-    let boxes = data.registered_wallboxes.unwrap_or_default();
+    let boxes = data.get_registered_wallboxes.unwrap_or_default();
     for wb in &boxes {
         let Some(wb_id) = &wb.wallbox_id else { continue };
         sqlx::query(
@@ -383,7 +417,7 @@ pub async fn fetch_wallboxes(
         .bind(&wb.name)
         .bind(wb.latitude)
         .bind(wb.longitude)
-        .bind(wb.max_power)
+        .bind(json_number_as_f64(wb.max_power.as_ref()))
         .bind(&wb.model)
         .bind(&wb.serial_number)
         .bind(&wb.firmware_version)
@@ -402,44 +436,28 @@ pub async fn fetch_wallboxes(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CompletedSessionsData {
-    get_completed_session_summaries: Option<CompletedSessionsPayload>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CompletedSessionsPayload {
-    data: Option<Vec<CompletedSessionItem>>,
+    get_completed_session_summaries: Option<Vec<CompletedSessionItem>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CompletedSessionItem {
     /// Rivian's own session identifier
-    id: Option<String>,
-    start_time: Option<DateTime<Utc>>,
-    end_time: Option<DateTime<Utc>>,
+    transaction_id: Option<String>,
+    start_instant: Option<DateTime<Utc>>,
+    end_instant: Option<DateTime<Utc>>,
     /// kWh added during the session
-    energy_added: Option<f64>,
+    total_energy_kwh: Option<f64>,
     /// km of range added
-    range_added: Option<f64>,
+    range_added_km: Option<f64>,
     /// e.g. "Rivian", "Electrify America"
-    network_name: Option<String>,
-    is_free_session: Option<bool>,
-    rivian_energy: Option<bool>,
+    vendor: Option<String>,
     /// Total billed amount in USD (Rivian network only)
     paid_total: Option<f64>,
     /// SoC at session start (0–100)
-    starting_soc: Option<f64>,
+    is_home_charger: Option<bool>,
     /// SoC at session end (0–100)
-    ending_soc: Option<f64>,
-    location: Option<ChargingLocation>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChargingLocation {
-    latitude: Option<f64>,
-    longitude: Option<f64>,
+    is_roaming_network: Option<bool>,
 }
 
 /// Fetch completed charge sessions from Rivian's charging endpoint.
@@ -474,65 +492,47 @@ pub async fn fetch_charge_history_full(
 }
 
 async fn fetch_charge_history_inner(
-    rivian_vehicle_id: &str,
+    _rivian_vehicle_id: &str,
     vehicle_id: Uuid,
     full_backfill: bool,
     pool: &PgPool,
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    const PAGE_SIZE: i64 = 200;
-    const MAX_PAGES: usize = 50;
-
     const Q: &str = r#"
-        query getCompletedSessionSummaries($vehicleId: String!, $limit: Int, $offset: Int) {
-          getCompletedSessionSummaries(vehicleId: $vehicleId, limit: $limit, offset: $offset) {
-            data {
-              id
-              startTime
-              endTime
-              energyAdded
-              rangeAdded
-              networkName
-              isFreeSession
-              rivianEnergy
-              paidTotal
-              startingSoc
-              endingSoc
-              location {
-                latitude
-                longitude
-              }
-            }
+        query getCompletedSessionSummaries {
+          getCompletedSessionSummaries {
+            transactionId
+            startInstant
+            endInstant
+            totalEnergyKwh
+            rangeAddedKm
+            vendor
+            paidTotal
+            isHomeCharger
+            isRoamingNetwork
           }
         }
     "#;
 
     let mut total_processed = 0usize;
     let mut total_inserted = 0usize;
-    let mut offset = 0i64;
+    let data: CompletedSessionsData =
+        gql_request(client, CHRG_URL, tokens, "getCompletedSessionSummaries", Q, serde_json::Value::Null).await?;
 
-    for _page in 0..MAX_PAGES {
-        let vars = serde_json::json!({
-            "vehicleId": rivian_vehicle_id,
-            "limit": PAGE_SIZE,
-            "offset": offset,
-        });
+    increment_poll_counter(pool, vehicle_id).await;
 
-        let data: CompletedSessionsData =
-            gql_request(client, CHRG_URL, tokens, "getCompletedSessionSummaries", Q, vars.clone()).await?;
-
-        increment_poll_counter(pool, vehicle_id).await;
-
-        let sessions = data
-            .get_completed_session_summaries
-            .and_then(|p| p.data)
-            .unwrap_or_default();
-
-        let page_len = sessions.len();
-
-        for s in &sessions {
-            let Some(rivian_id) = &s.id else { continue };
+    for s in &data.get_completed_session_summaries.unwrap_or_default() {
+        let Some(rivian_id) = &s.transaction_id else { continue };
+        let is_free_session = s.paid_total.map(|total| total == 0.0);
+        let is_rivian_network = s
+            .vendor
+            .as_deref()
+            .map(|vendor| vendor.eq_ignore_ascii_case("rivian"))
+            .or_else(|| {
+                s.is_roaming_network
+                    .map(|roaming| !roaming && !s.is_home_charger.unwrap_or(false))
+            });
 
             // Try to enrich an existing row matched by rivian_session_id.
             let affected = sqlx::query(
@@ -548,10 +548,10 @@ async fn fetch_charge_history_inner(
             )
             .bind(vehicle_id)
             .bind(rivian_id)
-            .bind(&s.network_name)
-            .bind(s.range_added)
-            .bind(s.is_free_session)
-            .bind(s.rivian_energy)
+            .bind(&s.vendor)
+            .bind(s.range_added_km)
+            .bind(is_free_session)
+            .bind(is_rivian_network)
             .bind(s.paid_total)
             .execute(pool)
             .await?
@@ -559,7 +559,7 @@ async fn fetch_charge_history_inner(
 
             if affected == 0 {
                 // Try to match by start-time window (±5 min).
-                let time_matched = if let Some(start) = s.start_time {
+                let time_matched = if let Some(start) = s.start_instant {
                     let window_start = start - chrono::Duration::minutes(5);
                     let window_end = start + chrono::Duration::minutes(5);
 
@@ -577,10 +577,10 @@ async fn fetch_charge_history_inner(
                     )
                     .bind(vehicle_id)
                     .bind(rivian_id)
-                    .bind(&s.network_name)
-                    .bind(s.range_added)
-                    .bind(s.is_free_session)
-                    .bind(s.rivian_energy)
+                    .bind(&s.vendor)
+                    .bind(s.range_added_km)
+                    .bind(is_free_session)
+                    .bind(is_rivian_network)
                     .bind(s.paid_total)
                     .bind(window_start)
                     .bind(window_end)
@@ -593,31 +593,25 @@ async fn fetch_charge_history_inner(
 
                 // Full backfill: insert sessions that have no local counterpart.
                 if full_backfill && time_matched == 0 {
-                    if let Some(start) = s.start_time {
-                        let loc = s.location.as_ref();
+                    if let Some(start) = s.start_instant {
                         let result = sqlx::query(
                             "INSERT INTO riviamigo.charge_sessions
                                  (vehicle_id, started_at, ended_at, kwh_added,
-                                  soc_start, soc_end, location_lat, location_lng,
                                   rivian_session_id, network_vendor, range_added_km,
                                   is_free_session, is_rivian_network, rivian_paid_total,
                                   source)
-                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'rivian_api')
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'rivian_api')
                              ON CONFLICT DO NOTHING",
                         )
                         .bind(vehicle_id)
                         .bind(start)
-                        .bind(s.end_time)
-                        .bind(s.energy_added)
-                        .bind(s.starting_soc)
-                        .bind(s.ending_soc)
-                        .bind(loc.and_then(|l| l.latitude))
-                        .bind(loc.and_then(|l| l.longitude))
+                        .bind(s.end_instant)
+                        .bind(s.total_energy_kwh)
                         .bind(rivian_id)
-                        .bind(&s.network_name)
-                        .bind(s.range_added)
-                        .bind(s.is_free_session)
-                        .bind(s.rivian_energy)
+                        .bind(&s.vendor)
+                        .bind(s.range_added_km)
+                        .bind(is_free_session)
+                        .bind(is_rivian_network)
                         .bind(s.paid_total)
                         .execute(pool)
                         .await;
@@ -631,13 +625,6 @@ async fn fetch_charge_history_inner(
 
             total_processed += 1;
         }
-
-        // Stop paginating when the page is smaller than the page size.
-        if page_len < PAGE_SIZE as usize {
-            break;
-        }
-        offset += PAGE_SIZE;
-    }
 
     tracing::debug!(
         vehicle_id=%vehicle_id,
@@ -745,13 +732,13 @@ pub async fn fetch_live_session(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChargingScheduleData {
-    get_vehicle_charging_settings: Option<VehicleChargingSettings>,
+    get_vehicle: Option<VehicleChargingSchedules>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct VehicleChargingSettings {
-    charge_policy: Option<ChargePolicyItem>,
+struct VehicleChargingSchedules {
+    charging_schedules: Option<Vec<ChargePolicyItem>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -761,10 +748,15 @@ struct ChargePolicyItem {
     start_time: Option<i32>,
     duration: Option<i32>,
     amperage: Option<f64>,
+    location: Option<ChargingScheduleLocation>,
+    week_days: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChargingScheduleLocation {
     latitude: Option<f64>,
     longitude: Option<f64>,
-    week_days: Option<Vec<String>>,
-    updated_at: Option<DateTime<Utc>>,
 }
 
 /// Fetch the vehicle's charging schedule and upsert into `charging_schedules`.
@@ -776,17 +768,18 @@ pub async fn fetch_charging_schedule(
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
     const Q: &str = r#"
-        query getVehicleChargingSettings($vehicleId: String!) {
-          getVehicleChargingSettings(vehicleId: $vehicleId) {
-            chargePolicy {
+        query GetChargingSchedule($vehicleId: String!) {
+          getVehicle(id: $vehicleId) {
+            chargingSchedules {
               enabled
               startTime
               duration
               amperage
-              latitude
-              longitude
+              location {
+                latitude
+                longitude
+              }
               weekDays
-              updatedAt
             }
           }
         }
@@ -794,11 +787,12 @@ pub async fn fetch_charging_schedule(
 
     let vars = serde_json::json!({ "vehicleId": rivian_vehicle_id });
     let data: ChargingScheduleData =
-        gql_request(client, GATEWAY_URL, tokens, "getVehicleChargingSettings", Q, vars).await?;
+        gql_request(client, GATEWAY_URL, tokens, "GetChargingSchedule", Q, vars).await?;
 
     let policy = data
-        .get_vehicle_charging_settings
-        .and_then(|s| s.charge_policy);
+        .get_vehicle
+        .and_then(|s| s.charging_schedules)
+        .and_then(|mut schedules| schedules.pop());
 
     if let Some(p) = policy {
         let week_days: Option<Vec<String>> = p.week_days;
@@ -823,10 +817,10 @@ pub async fn fetch_charging_schedule(
         .bind(p.start_time)
         .bind(p.duration)
         .bind(p.amperage)
-        .bind(p.latitude)
-        .bind(p.longitude)
+        .bind(p.location.as_ref().and_then(|l| l.latitude))
+        .bind(p.location.as_ref().and_then(|l| l.longitude))
         .bind(week_days.as_deref())
-        .bind(p.updated_at)
+        .bind(Option::<DateTime<Utc>>::None)
         .execute(pool)
         .await?;
     }

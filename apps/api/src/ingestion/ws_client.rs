@@ -19,8 +19,9 @@ use crate::{
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const RIVIAN_CONNECTION_TTL_EXPIRED_CODE: u16 = 4420;
 const RIVIAN_CONNECTION_TTL_EXPIRED_REASON: &str = "Connection TTL expired";
+const RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE: u16 = 4410;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum WsLoopEnd {
     Shutdown,
     ConnectionTtlExpired,
@@ -128,7 +129,7 @@ subscription vehicleState($vehicleID: String!) {
     wiperFluidState                 { timeStamp value }
     brakeFluidLow                   { timeStamp value }
     alarmSoundStatus                { timeStamp value }
-        serviceMode                     { timeStamp value }
+    serviceMode                     { timeStamp value }
   }
 }
 "#;
@@ -323,12 +324,17 @@ async fn connect_and_subscribe(
                         let value: Value = serde_json::from_str(&text).unwrap_or_default();
                         let message_type = message_type(&value);
                         if matches!(message_type.as_deref(), Some("error") | Some("complete")) {
-                            tracing::warn!(
+                            // Rivian sometimes rejects a single field by name in the error body.
+                            // Surface the full message so we can diagnose which field is at fault
+                            // rather than silently downgrading to a degraded subscription.
+                            let reason = truncate_ws_message(&text);
+                            tracing::error!(
                                 vehicle_id = %vehicle_id,
                                 message_type = message_type.as_deref().unwrap_or("unknown"),
-                                message = %truncate_ws_message(&text),
-                                "Rivian WS control message"
+                                message = %reason,
+                                "Rivian WS subscription rejected — verify VEHICLE_STATE_SUBSCRIPTION fields against Rivian schema; reconnecting"
                             );
+                            anyhow::bail!("Rivian WS subscription rejected: {reason}");
                         }
                         match classify_text_message(&text, *vehicle_id) {
                             Ok(inbound) => {
@@ -365,6 +371,19 @@ async fn connect_and_subscribe(
                             );
                             return Ok(WsLoopEnd::ConnectionTtlExpired);
                         }
+                        if is_rivian_no_active_subscriptions(frame.as_ref()) {
+                            let reason = frame
+                                .as_ref()
+                                .map(|f| f.reason.to_string())
+                                .unwrap_or_else(|| "no active subscriptions".into());
+                            tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                close_code = frame.as_ref().map(|f| f.code.to_string()),
+                                close_reason = %reason,
+                                "Rivian WS subscription closed (4410) — reconnecting"
+                            );
+                            anyhow::bail!("Rivian WS subscription closed: {reason}");
+                        }
                         tracing::warn!(
                             vehicle_id = %vehicle_id,
                             close_code = frame.as_ref().map(|f| f.code.to_string()),
@@ -388,6 +407,10 @@ fn is_rivian_connection_ttl_expired(frame: Option<&CloseFrame<'_>>) -> bool {
         u16::from(f.code) == RIVIAN_CONNECTION_TTL_EXPIRED_CODE
             && f.reason.as_ref() == RIVIAN_CONNECTION_TTL_EXPIRED_REASON
     })
+}
+
+fn is_rivian_no_active_subscriptions(frame: Option<&CloseFrame<'_>>) -> bool {
+    frame.is_some_and(|f| u16::from(f.code) == RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE)
 }
 
 fn build_rivian_ws_request(
@@ -477,6 +500,34 @@ fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
         || event.ota_current_status.is_some()
         || event.hv_thermal_event.is_some()
         || event.twelve_volt_health.is_some()
+        || event.charge_port_open.is_some()
+        || event.charger_derate_active.is_some()
+        || event.cabin_precon_status.is_some()
+        || event.cabin_precon_type.is_some()
+        || event.pet_mode_active.is_some()
+        || event.pet_mode_temp_ok.is_some()
+        || event.defrost_active.is_some()
+        || event.steering_wheel_heat.is_some()
+        || event.seat_fl_heat.is_some()
+        || event.seat_fr_heat.is_some()
+        || event.seat_rl_heat.is_some()
+        || event.seat_rr_heat.is_some()
+        || event.seat_fl_vent.is_some()
+        || event.seat_fr_vent.is_some()
+        || event.tonneau_locked.is_some()
+        || event.tonneau_closed.is_some()
+        || event.side_bin_left_locked.is_some()
+        || event.side_bin_right_locked.is_some()
+        || event.window_fl_closed.is_some()
+        || event.window_fr_closed.is_some()
+        || event.window_rl_closed.is_some()
+        || event.window_rr_closed.is_some()
+        || event.gear_guard_locked.is_some()
+        || event.gear_guard_video_status.is_some()
+        || event.wiper_fluid_low.is_some()
+        || event.brake_fluid_low.is_some()
+        || event.alarm_active.is_some()
+        || event.service_mode.is_some()
 }
 
 pub(crate) fn next_backoff_secs(current: u64, max: u64) -> u64 {
@@ -549,6 +600,17 @@ mod tests {
         )));
         assert!(!is_rivian_connection_ttl_expired(Some(&wrong_reason_frame)));
         assert!(!is_rivian_connection_ttl_expired(None));
+    }
+
+    #[test]
+    fn classifies_no_active_subscription_close() {
+        let frame = CloseFrame {
+            code: CloseCode::Library(RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE),
+            reason: Cow::Borrowed("Socket with no active subscriptions, disconnecting"),
+        };
+
+        assert!(is_rivian_no_active_subscriptions(Some(&frame)));
+        assert!(!is_rivian_no_active_subscriptions(None));
     }
 
     #[test]

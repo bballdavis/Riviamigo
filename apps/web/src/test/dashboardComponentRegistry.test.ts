@@ -53,20 +53,22 @@ describe('dashboard component registry', () => {
 
     const widgets = charging?.widgets ?? [];
     const connectedChip = widgets.find((widget) => widget.definitionId === 'charging.connection');
+    // Connection chip lives in the top-right of the top three rows. When plugged in
+    // it replaces the hide-when-unplugged sensor chips that share the same coordinates.
     expect(connectedChip).toMatchObject({
       componentType: 'custom',
-      layout: { x: 0, y: 6, w: 8, h: 8 },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
       options: { chargingConnectionVisibility: 'plugged' },
     });
 
     expect(widgets.find((widget) => widget.definitionId === 'charging_total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
 
-    expect(widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
+    expect(widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
       componentType: 'sensor',
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 6, y: 0, w: 3, h: 2 },
     });
-    expect(widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
+    expect(widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
       componentType: 'sensor',
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 9, y: 0, w: 3, h: 2 },
@@ -97,11 +99,13 @@ describe('dashboard component registry', () => {
     expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000014')).toMatchObject({
       componentType: 'sensor',
       definitionId: 'charging_free_sessions',
+      options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 6, y: 4, w: 3, h: 2 },
     });
     expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000015')).toMatchObject({
       componentType: 'sensor',
       definitionId: 'charging_range_added',
+      options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 9, y: 4, w: 3, h: 2 },
     });
   });
