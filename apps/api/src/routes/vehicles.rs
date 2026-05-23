@@ -3,7 +3,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -54,6 +54,15 @@ struct AddVehicleBody {
     model: Option<String>,
     trim: Option<String>,
     vin: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingOtpChallenge {
+    email: String,
+    otp_token: String,
+    csrf_token: String,
+    app_session_token: String,
+    user_id: Uuid,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -395,6 +404,45 @@ struct ConnectResponse {
     vehicles: Vec<RivianVehicleSummary>,
 }
 
+fn age_identity(state: &AppState) -> Result<age::x25519::Identity, AppError> {
+    state
+        .age_key
+        .parse::<age::x25519::Identity>()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))
+}
+
+async fn store_encrypted_redis<T: Serialize>(
+    state: &AppState,
+    conn: &mut redis::aio::MultiplexedConnection,
+    key: &str,
+    value: &T,
+    ttl_secs: u64,
+) -> Result<(), AppError> {
+    let identity = age_identity(state)?;
+    let ciphertext = crate::ingestion::session_store::encrypt_json(value, &identity)
+        .map_err(AppError::Internal)?;
+
+    let _: () = redis::AsyncCommands::set_ex(conn, key, ciphertext, ttl_secs).await?;
+    Ok(())
+}
+
+async fn load_encrypted_redis<T: DeserializeOwned>(
+    state: &AppState,
+    conn: &mut redis::aio::MultiplexedConnection,
+    key: &str,
+) -> Result<Option<T>, AppError> {
+    let ciphertext: Option<Vec<u8>> = redis::AsyncCommands::get(conn, key).await?;
+    let Some(ciphertext) = ciphertext else {
+        return Ok(None);
+    };
+
+    let identity = age_identity(state)?;
+    let value = crate::ingestion::session_store::decrypt_json::<T>(&ciphertext, &identity)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt encrypted session")))?;
+
+    Ok(Some(value))
+}
+
 async fn connect(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -411,7 +459,7 @@ async fn connect(
         .await
         .map_err(|e| {
             warn!(user_id = %auth.user_id, error = %e, "vehicle.connect.login_failed");
-            AppError::RivianApi(e.to_string())
+            AppError::RivianApi("Rivian authentication failed".into())
         })? {
         crate::ingestion::rivian_auth::LoginResult::Authenticated(tokens) => {
             let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
@@ -422,12 +470,11 @@ async fn connect(
                         error = %e,
                         "vehicle.connect.fetch_user_vehicles_failed"
                     );
-                    AppError::RivianApi(e.to_string())
+                    AppError::RivianApi("Unable to fetch vehicles from Rivian".into())
                 })?;
             let mut conn = state.redis.get_multiplexed_async_connection().await?;
             let key = format!("rivian:connect:{}", auth.user_id);
-            let json = serde_json::to_string(&tokens).unwrap_or_default();
-            let _: () = redis::AsyncCommands::set_ex(&mut conn, &key, json, 300).await?;
+            store_encrypted_redis(&state, &mut conn, &key, &tokens, 300).await?;
             info!(
                 user_id = %auth.user_id,
                 vehicle_count = vehicles.len(),
@@ -449,15 +496,14 @@ async fn connect(
             let challenge_id = Uuid::new_v4().to_string();
             let mut conn = state.redis.get_multiplexed_async_connection().await?;
             let key = format!("rivian:otp:{challenge_id}");
-            let val = serde_json::to_string(&serde_json::json!({
-                "email":             challenge.email,
-                "otp_token":         challenge.otp_token,
-                "csrf_token":        challenge.csrf_token,
-                "app_session_token": challenge.app_session_token,
-                "user_id":           auth.user_id,
-            }))
-            .unwrap_or_default();
-            let _: () = redis::AsyncCommands::set_ex(&mut conn, &key, val, 300).await?;
+            let pending = PendingOtpChallenge {
+                email: challenge.email,
+                otp_token: challenge.otp_token,
+                csrf_token: challenge.csrf_token,
+                app_session_token: challenge.app_session_token,
+                user_id: auth.user_id,
+            };
+            store_encrypted_redis(&state, &mut conn, &key, &pending, 300).await?;
             info!(
                 user_id = %auth.user_id,
                 challenge_id = %challenge_id,
@@ -491,8 +537,8 @@ async fn connect_otp(
 
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:otp:{}", body.challenge_id);
-    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
-    let raw = raw.ok_or_else(|| {
+    let pending = load_encrypted_redis::<PendingOtpChallenge>(&state, &mut conn, &key).await?;
+    let pending = pending.ok_or_else(|| {
         warn!(
             user_id = %auth.user_id,
             challenge_id = %body.challenge_id,
@@ -501,14 +547,21 @@ async fn connect_otp(
         AppError::Validation("challenge_id expired or invalid".into())
     })?;
 
-    let data: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt challenge")))?;
+    if pending.user_id != auth.user_id {
+        warn!(
+            user_id = %auth.user_id,
+            challenge_id = %body.challenge_id,
+            stored_user_id = %pending.user_id,
+            "vehicle.connect_otp.challenge_user_mismatch"
+        );
+        return Err(AppError::Validation("challenge_id expired or invalid".into()));
+    }
 
     let challenge = crate::ingestion::rivian_auth::RivianOtpChallenge {
-        email: data["email"].as_str().unwrap_or("").to_string(),
-        otp_token: data["otp_token"].as_str().unwrap_or("").to_string(),
-        csrf_token: data["csrf_token"].as_str().unwrap_or("").to_string(),
-        app_session_token: data["app_session_token"].as_str().unwrap_or("").to_string(),
+        email: pending.email,
+        otp_token: pending.otp_token,
+        csrf_token: pending.csrf_token,
+        app_session_token: pending.app_session_token,
     };
 
     let client = reqwest::Client::new();
@@ -522,7 +575,7 @@ async fn connect_otp(
                     error = %e,
                     "vehicle.connect_otp.login_failed"
                 );
-                AppError::RivianApi(e.to_string())
+                AppError::RivianApi("Rivian OTP verification failed".into())
             })?;
     let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
         .await
@@ -533,12 +586,11 @@ async fn connect_otp(
                 error = %e,
                 "vehicle.connect_otp.fetch_user_vehicles_failed"
             );
-            AppError::RivianApi(e.to_string())
+            AppError::RivianApi("Unable to fetch vehicles from Rivian".into())
         })?;
 
     let connect_key = format!("rivian:connect:{}", auth.user_id);
-    let json = serde_json::to_string(&tokens).unwrap_or_default();
-    let _: () = redis::AsyncCommands::set_ex(&mut conn, &connect_key, json, 300).await?;
+    store_encrypted_redis(&state, &mut conn, &connect_key, &tokens, 300).await?;
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
     info!(
         user_id = %auth.user_id,
@@ -576,8 +628,13 @@ async fn add_vehicle(
     // Retrieve tokens from Redis
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:connect:{}", auth.user_id);
-    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
-    let raw = raw.ok_or_else(|| {
+    let tokens = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
+        &state,
+        &mut conn,
+        &key,
+    )
+    .await?;
+    let tokens = tokens.ok_or_else(|| {
         warn!(
             user_id = %auth.user_id,
             connect_key = %key,
@@ -586,13 +643,7 @@ async fn add_vehicle(
         AppError::Validation("complete /vehicles/connect first".into())
     })?;
 
-    let tokens: crate::ingestion::session_store::RivianTokenBundle = serde_json::from_str(&raw)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt token")))?;
-
-    let identity = state
-        .age_key
-        .parse::<age::x25519::Identity>()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
+    let identity = age_identity(&state)?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(|e| AppError::Internal(e))?;
 
@@ -699,24 +750,26 @@ async fn refresh_vehicle_credentials(
 
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:connect:{}", auth.user_id);
-    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
-    let raw = raw.ok_or_else(|| AppError::Validation("complete /vehicles/connect first".into()))?;
-
-    let tokens: crate::ingestion::session_store::RivianTokenBundle = serde_json::from_str(&raw)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt token")))?;
+    let tokens = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
+        &state,
+        &mut conn,
+        &key,
+    )
+    .await?
+    .ok_or_else(|| AppError::Validation("complete /vehicles/connect first".into()))?;
 
     let client = reqwest::Client::new();
     let account_vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
         .await
-        .map_err(|e| AppError::RivianApi(e.to_string()))?;
+        .map_err(|e| {
+            warn!(vehicle_id = %vid, user_id = %auth.user_id, error = %e, "vehicle.refresh_credentials.fetch_user_vehicles_failed");
+            AppError::RivianApi("Unable to verify Rivian vehicle access".into())
+        })?;
     if !account_vehicles.iter().any(|vehicle| vehicle.id == rivian_vehicle_id) {
         return Err(AppError::Validation("Rivian account does not include this vehicle".into()));
     }
 
-    let identity = state
-        .age_key
-        .parse::<age::x25519::Identity>()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
+    let identity = age_identity(&state)?;
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(AppError::Internal)?;
 
@@ -1544,11 +1597,71 @@ async fn raw_vehicle_data(
 
 #[cfg(test)]
 mod tests {
+    use super::{connect_otp, load_encrypted_redis, store_encrypted_redis, OtpBody, PendingOtpChallenge};
     use axum::body::Body;
+    use axum::extract::State;
+    use axum::Json;
     use http::{Request, StatusCode};
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     // Run with: cargo test -- --ignored
+
+    fn make_helper_state(redis_url: String) -> crate::middleware::auth::AppState {
+        use std::sync::Arc;
+
+        use crate::middleware::auth::{AppState, JwtKeys};
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo")
+            .expect("lazy pool");
+        let redis = redis::Client::open(redis_url.clone()).expect("redis client");
+
+        let generated = crate::keys::generate_keys().expect("keys");
+        let jwt_keys = Arc::new(
+            JwtKeys::new(&generated.jwt_private_pem, &generated.jwt_public_pem)
+                .expect("jwt keys"),
+        );
+
+        let config = crate::config::Config {
+            database_url: "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into(),
+            redis_url,
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec!["http://localhost:3000".into()],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+            backup_artifact_dir: std::env::temp_dir()
+                .join("riviamigo-route-test-backups")
+                .to_string_lossy()
+                .into_owned(),
+            backup_driver: "json".into(),
+            backup_poll_interval_seconds: 60,
+            rivian_ws_reconnect_initial_seconds: 10,
+            rivian_ws_reconnect_max_seconds: 900,
+            rivian_raw_event_retention_days: 7,
+            rivian_persist_raw_events: true,
+            rivian_suppress_duplicate_telemetry: true,
+        };
+
+        AppState {
+            pool,
+            redis,
+            jwt_keys,
+            age_key: generated.age_key,
+            config,
+            nominatim_next_call: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::time::Instant::now(),
+            )),
+            nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+        }
+    }
 
     async fn make_app() -> axum::Router {
         use std::sync::Arc;
@@ -1679,5 +1792,114 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires REDIS_URL"]
+    async fn encrypted_redis_round_trips_connect_tokens_without_plaintext_storage() {
+        let redis_url = std::env::var("REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+        let state = make_helper_state(redis_url);
+        let mut conn = state
+            .redis
+            .get_multiplexed_async_connection()
+            .await
+            .expect("redis connection");
+        let key = format!("test:rivian:connect:{}", Uuid::new_v4());
+        let tokens = crate::ingestion::session_store::RivianTokenBundle {
+            access_token: "access-token".into(),
+            refresh_token: "refresh-token".into(),
+            app_session_token: "app-session-token".into(),
+            user_session_token: "user-session-token".into(),
+            csrf_token: "csrf-token".into(),
+            created_at: chrono::Utc::now(),
+        };
+
+        store_encrypted_redis(&state, &mut conn, &key, &tokens, 60)
+            .await
+            .expect("store encrypted connect session");
+
+        let raw: Vec<u8> = redis::AsyncCommands::get(&mut conn, &key)
+            .await
+            .expect("redis get ciphertext");
+        assert_ne!(raw, serde_json::to_vec(&tokens).expect("plain json"));
+
+        let round_trip = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
+            &state,
+            &mut conn,
+            &key,
+        )
+        .await
+        .expect("load encrypted connect session")
+        .expect("stored connect session");
+
+        assert_eq!(round_trip.access_token, tokens.access_token);
+        assert_eq!(round_trip.refresh_token, tokens.refresh_token);
+        assert_eq!(round_trip.app_session_token, tokens.app_session_token);
+        assert_eq!(round_trip.user_session_token, tokens.user_session_token);
+        assert_eq!(round_trip.csrf_token, tokens.csrf_token);
+
+        let _: () = redis::AsyncCommands::del(&mut conn, &key)
+            .await
+            .expect("cleanup redis key");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires REDIS_URL"]
+    async fn connect_otp_rejects_challenges_staged_for_other_users() {
+        let redis_url = std::env::var("REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+        let state = make_helper_state(redis_url);
+        let owner_id = Uuid::new_v4();
+        let other_user_id = Uuid::new_v4();
+        let challenge_id = Uuid::new_v4().to_string();
+        let key = format!("rivian:otp:{challenge_id}");
+        let pending = PendingOtpChallenge {
+            email: "driver@example.com".into(),
+            otp_token: "otp-token".into(),
+            csrf_token: "csrf-token".into(),
+            app_session_token: "app-session-token".into(),
+            user_id: owner_id,
+        };
+
+        let mut conn = state
+            .redis
+            .get_multiplexed_async_connection()
+            .await
+            .expect("redis connection");
+        store_encrypted_redis(&state, &mut conn, &key, &pending, 60)
+            .await
+            .expect("store encrypted otp challenge");
+        drop(conn);
+
+        let result = connect_otp(
+            State(state.clone()),
+            crate::middleware::auth::AuthUser {
+                user_id: other_user_id,
+                default_vehicle_id: None,
+                api_access_level: None,
+            },
+            Json(OtpBody {
+                challenge_id: challenge_id.clone(),
+                otp_code: "123456".into(),
+            }),
+        )
+        .await;
+
+        match result {
+            Err(crate::errors::AppError::Validation(message)) => {
+                assert_eq!(message, "challenge_id expired or invalid");
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+
+        let mut conn = state
+            .redis
+            .get_multiplexed_async_connection()
+            .await
+            .expect("redis connection");
+        let _: () = redis::AsyncCommands::del(&mut conn, &key)
+            .await
+            .expect("cleanup redis key");
     }
 }
