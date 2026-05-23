@@ -135,6 +135,14 @@ const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
 
 type AuthChangeHandler = (tokens: AuthTokens | null) => void;
 
+interface ApiFailureDetail {
+  status: number;
+  code: string;
+  message: string;
+  method: string;
+  path: string;
+}
+
 class ApiClient {
   private accessToken: string | null = null;
   private authChangeHandler: AuthChangeHandler | null = null;
@@ -417,6 +425,12 @@ class ApiClient {
     );
   }
 
+  async getElevationProfile(tripId: string, vehicleId: string) {
+    return this.request<{ ts: string; value: number | null }[]>(
+      'GET', `/v1/trips/${tripId}/elevation`, undefined, { vehicle_id: vehicleId }
+    );
+  }
+
   // ── Charging ──────────────────────────────────────────────────────────────
 
   async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
@@ -596,6 +610,18 @@ class ApiClient {
     );
   }
 
+  async getEfficiencyTrend(vehicleId: string, from: string, to: string) {
+    return this.request<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }[]>(
+      'GET', '/v1/efficiency/trend', undefined, { vehicle_id: vehicleId, from, to }
+    );
+  }
+
+  async getEfficiencyVsTemp(vehicleId: string, from: string, to: string) {
+    return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number }[]>(
+      'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
+    );
+  }
+
   // ── Stats ─────────────────────────────────────────────────────────────────
 
   async getStats(vehicleId: string) {
@@ -665,6 +691,32 @@ class ApiClient {
       window.dispatchEvent(new CustomEvent('riviamigo:toast', {
         detail: {
           title,
+          message,
+          variant: 'error',
+          code: detail.code,
+        },
+      }));
+
+      if (detail.code === 'AUTH_EXPIRED') {
+        window.dispatchEvent(new CustomEvent('riviamigo:auth-expired', { detail }));
+      }
+    }
+  }
+
+  private reportFailure(detail: ApiFailureDetail) {
+    const message = formatApiError(detail);
+    console.warn('[Riviamigo API] request failed', {
+      status: detail.status,
+      code: detail.code,
+      method: detail.method,
+      path: detail.path,
+      message: truncate(detail.message, 240),
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('riviamigo:toast', {
+        detail: {
+          title: 'Request failed',
           message,
           variant: 'error',
           code: detail.code,
