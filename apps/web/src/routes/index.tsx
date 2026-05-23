@@ -35,7 +35,7 @@ function DashboardPage() {
   );
 }
 
-function DashboardContent() {
+export function DashboardContent() {
   const { defaultVehicleId } = useAuth();
   const navigate = useNavigate();
   const [tab, setTab] = useState('soc');
