@@ -40,6 +40,12 @@ vi.mock('@riviamigo/hooks', () => ({
   useChargeCurve: () => ({ data: [], isLoading: false }),
 }));
 
+vi.mock('@riviamigo/dashboards', () => ({
+  DashboardChartWidget: ({ title }: { title?: string }) => (
+    <div data-testid="dashboard-chart-widget">{title}</div>
+  ),
+}));
+
 vi.mock('../../components/layout/AppLayout',  () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../components/layout/AuthGuard',  () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../components/layout/NoVehicleState', () => ({
@@ -66,9 +72,9 @@ describe('Charge Session Detail page', () => {
     expect(screen.getByText('Cost')).toBeInTheDocument();
   });
 
-  it('renders the charge curve chart', () => {
+  it('renders the charge curve chart widget', () => {
     render(<ChargeSessionContent />);
-    expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-chart-widget')).toBeInTheDocument();
   });
 
   it('renders session stat values', () => {
@@ -89,12 +95,12 @@ describe('Charge Session Detail page', () => {
 
   it('renders Back button', () => {
     render(<ChargeSessionContent />);
-    expect(screen.getByText('Back')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /back to charging/i })).toBeInTheDocument();
   });
 
   it('navigates to /charging when Back is clicked', () => {
     render(<ChargeSessionContent />);
-    fireEvent.click(screen.getByText('Back'));
+    fireEvent.click(screen.getByRole('button', { name: /back to charging/i }));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
   });
 
