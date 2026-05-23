@@ -703,31 +703,6 @@ class ApiClient {
     }
   }
 
-  private reportFailure(detail: ApiFailureDetail) {
-    const message = formatApiError(detail);
-    console.warn('[Riviamigo API] request failed', {
-      status: detail.status,
-      code: detail.code,
-      method: detail.method,
-      path: detail.path,
-      message: truncate(detail.message, 240),
-    });
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('riviamigo:toast', {
-        detail: {
-          title: 'Request failed',
-          message,
-          variant: 'error',
-          code: detail.code,
-        },
-      }));
-
-      if (detail.code === 'AUTH_EXPIRED') {
-        window.dispatchEvent(new CustomEvent('riviamigo:auth-expired', { detail }));
-      }
-    }
-  }
 }
 
 export const api = new ApiClient();

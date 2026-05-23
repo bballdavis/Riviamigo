@@ -46,18 +46,23 @@ vi.mock('../../components/layout/NoVehicleState', () => ({
   NoVehicleState: ({ title }: { title?: string }) => <div data-testid="no-vehicle">{title ?? 'No vehicle'}</div>,
 }));
 vi.mock('@riviamigo/ui/lib/utils', () => ({
-  formatMiles:    (v: number) => `${v} mi`,
-  formatKwh:      (v: number) => `${v} kWh`,
-  formatCurrency: (v: number) => `$${v}`,
-  formatPercent:  (v: number) => `${v}%`,
-  formatDuration: (v: number) => `${v} min`,
+  formatMiles:      (v: number) => `${v} mi`,
+  formatKwh:        (v: number) => `${v} kWh`,
+  formatCurrency:   (v: number) => `$${v}`,
+  formatPercent:    (v: number) => `${v}%`,
+  formatDuration:   (v: number) => `${v} min`,
+  formatEfficiency: (v: number) => `${v} Wh/mi`,
 }));
-vi.mock('lucide-react', () => ({
-  ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
-  Map:       () => <svg data-testid="icon-map" />,
-  Gauge:     () => <svg data-testid="icon-gauge" />,
-  Mountain:  () => <svg data-testid="icon-mountain" />,
-}));
+vi.mock('lucide-react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('lucide-react')>();
+  return {
+    ...actual,
+    ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
+    Map:       () => <svg data-testid="icon-map" />,
+    Gauge:     () => <svg data-testid="icon-gauge" />,
+    Mountain:  () => <svg data-testid="icon-mountain" />,
+  };
+});
 
 import { TripDetailContent } from '../trips.$tripId';
 

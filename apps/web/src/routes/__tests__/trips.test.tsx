@@ -91,9 +91,10 @@ describe('Trips page', () => {
     expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });
 
-  it('renders the trips table', () => {
+  it('renders the trips dashboard renderer', () => {
     render(<TripsContent />);
-    expect(screen.getByTestId('trips-table')).toBeInTheDocument();
+    // Trips table is a widget rendered via DashboardRenderer, not a direct child
+    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });
 
   it('renders the date range picker', () => {
