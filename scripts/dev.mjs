@@ -337,6 +337,11 @@ async function ensureSchema() {
     resolve(apiDir, 'migrations/0003_dashboards.sql'),
     '0003_dashboards.sql',
   );
+  await applyMigrationIfMissing(
+    "to_regclass('riviamigo.security_events')",
+    resolve(apiDir, 'migrations/0003_security_events.sql'),
+    '0003_security_events.sql',
+  );
   log('');
 }
 

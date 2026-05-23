@@ -167,7 +167,7 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-y-contain" style={{ scrollbarGutter: 'stable' }}>
         <Section title="Identity">
           <Field label="Title">
             <input
