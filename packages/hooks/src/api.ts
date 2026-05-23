@@ -425,12 +425,6 @@ class ApiClient {
     );
   }
 
-  async getElevationProfile(tripId: string, vehicleId: string) {
-    return this.request<{ ts: string; value: number | null }[]>(
-      'GET', `/v1/trips/${tripId}/elevation`, undefined, { vehicle_id: vehicleId }
-    );
-  }
-
   // ── Charging ──────────────────────────────────────────────────────────────
 
   async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
@@ -606,18 +600,6 @@ class ApiClient {
 
   async getEfficiencyVsTemp(vehicleId: string, from: string, to: string) {
     return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number; total_miles: number | null; avg_speed_mph: number | null }[]>(
-      'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
-    );
-  }
-
-  async getEfficiencyTrend(vehicleId: string, from: string, to: string) {
-    return this.request<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }[]>(
-      'GET', '/v1/efficiency/trend', undefined, { vehicle_id: vehicleId, from, to }
-    );
-  }
-
-  async getEfficiencyVsTemp(vehicleId: string, from: string, to: string) {
-    return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number }[]>(
       'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
     );
   }
