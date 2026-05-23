@@ -3,7 +3,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Query, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     response::IntoResponse,
     routing::get,
@@ -17,11 +17,13 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, Claims},
+    middleware::auth::{AppState, AuthUser, Claims},
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/live", get(live_handler))
+    Router::new()
+        .route("/vehicles/live", get(live_handler))
+        .route("/vehicles/:id/live-session", get(live_session_handler))
 }
 
 #[derive(Deserialize)]
@@ -156,6 +158,37 @@ mod tests {
         let claims = extract_jwt_from_headers(&headers_with_proto(&proto), &keys)
             .expect("should find bearer. among multiple protocols");
         assert_eq!(claims.sub, user_id);
+    }
+}
+
+/// GET /v1/vehicles/:id/live-session
+/// Returns the latest live charging session data from Redis (written by run_poll_loop).
+/// Returns 204 No Content when no live session is active.
+async fn live_session_handler(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+
+    let key = format!("vehicle:{}:live_session", vehicle_id);
+    let mut conn = state.redis.get_multiplexed_async_connection().await?;
+    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
+
+    match raw {
+        Some(json) => {
+            let value: serde_json::Value = serde_json::from_str(&json)
+                .unwrap_or(serde_json::Value::Null);
+            Ok(axum::response::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(serde_json::to_string(&value).unwrap_or_default()))
+                .unwrap())
+        }
+        None => Ok(axum::response::Response::builder()
+            .status(204)
+            .body(axum::body::Body::empty())
+            .unwrap()),
     }
 }
 

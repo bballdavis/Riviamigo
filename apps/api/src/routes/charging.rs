@@ -70,6 +70,21 @@ struct SessionRow {
     max_charge_rate_kw: Option<f64>,
     duration_minutes: Option<i32>,
     cost_usd: Option<f64>,
+    // Enrichment fields (migration 0024)
+    network_vendor: Option<String>,
+    range_added_km: Option<f64>,
+    is_free_session: Option<bool>,
+    is_rivian_network: Option<bool>,
+    rivian_paid_total: Option<f64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct NetworkBreakdownRow {
+    network_vendor: Option<String>,
+    session_count: i64,
+    energy_kwh: Option<f64>,
+    cost_usd: Option<f64>,
+    free_sessions: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -92,6 +107,10 @@ struct SummaryAggRow {
     max_charge_rate_kw: Option<f64>,
     total_energy_used_kwh: Option<f64>,
     total_cost_usd: Option<f64>,
+    // Enrichment fields (migration 0024)
+    free_session_count: i64,
+    total_range_added_km: Option<f64>,
+    rivian_paid_total_usd: Option<f64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -325,7 +344,8 @@ async fn list_sessions_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                cs.cost_usd \
+                cs.cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                cs.is_rivian_network, cs.rivian_paid_total \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
@@ -382,7 +402,9 @@ async fn get_session_response(
                     END \
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd, \
+                cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                cs.is_rivian_network, cs.rivian_paid_total \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
@@ -457,6 +479,9 @@ async fn get_summary_response(
                 charge_limit,
                 cost_usd,
                 energy_used_wh,
+                is_free_session,
+                range_added_km,
+                rivian_paid_total,
                 COALESCE(max_charge_rate_kw, avg_charge_rate_kw,
                     CASE WHEN duration_minutes > 0 THEN COALESCE(kwh_added, energy_added_wh / 1000.0) / (duration_minutes::float8 / 60.0) END
                 ) AS rate_kw
@@ -483,7 +508,10 @@ async fn get_summary_response(
             MAX(charge_limit) AS max_charge_limit_pct,
             MAX(rate_kw) AS max_charge_rate_kw,
             SUM(GREATEST(energy_kwh, COALESCE(energy_used_wh / 1000.0, 0))) AS total_energy_used_kwh,
-            COALESCE(SUM(cost_usd),0) AS total_cost_usd
+            COALESCE(SUM(cost_usd),0) AS total_cost_usd,
+            COUNT(*) FILTER (WHERE is_free_session) AS free_session_count,
+            SUM(range_added_km) AS total_range_added_km,
+            SUM(rivian_paid_total) AS rivian_paid_total_usd
          FROM typed"
     )
     .bind(vehicle_id)
@@ -539,6 +567,25 @@ async fn get_summary_response(
     .fetch_all(&state.pool)
     .await?;
 
+    let network_breakdown = sqlx::query_as::<_, NetworkBreakdownRow>(
+        "SELECT network_vendor,
+                COUNT(*) AS session_count,
+                SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS energy_kwh,
+                SUM(cost_usd) AS cost_usd,
+                COUNT(*) FILTER (WHERE is_free_session) AS free_sessions
+         FROM riviamigo.charge_sessions
+         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
+           AND network_vendor IS NOT NULL
+         GROUP BY network_vendor
+         ORDER BY energy_kwh DESC NULLS LAST",
+    )
+    .bind(vehicle_id)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
     let total_kwh = agg.total_kwh.unwrap_or(0.0);
     let total_energy_used_kwh = agg.total_energy_used_kwh.unwrap_or(0.0);
     let charging_cycles = capacity_kwh.and_then(|cap| {
@@ -583,6 +630,16 @@ async fn get_summary_response(
         "max_charge_limit_pct": agg.max_charge_limit_pct,
         "max_charge_rate_kw": agg.max_charge_rate_kw,
         "typed_session_count": agg.typed_session_count,
+        "free_session_count": agg.free_session_count,
+        "total_range_added_km": agg.total_range_added_km,
+        "rivian_paid_total_usd": agg.rivian_paid_total_usd,
+        "network_breakdown": network_breakdown.iter().map(|r| serde_json::json!({
+            "network_vendor": r.network_vendor,
+            "session_count":  r.session_count,
+            "energy_kwh":     r.energy_kwh,
+            "cost_usd":       r.cost_usd,
+            "free_sessions":  r.free_sessions,
+        })).collect::<Vec<_>>(),
         "weekly": weekly.iter().map(|r| serde_json::json!({
             "week_start": r.week_start,
             "kwh":        r.kwh,

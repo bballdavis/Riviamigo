@@ -3,6 +3,9 @@
 import './sensor/SensorChipWidget';
 import './battery/BatteryStatWidget';
 import './charging/ChargingStatWidget';
+import './charging/NetworkBreakdownWidget';
+import './charging/ChargingScheduleEditorWidget';
+import './charging/DepartureSchedulesWidget';
 import './chart/DashboardChartWidget';
 import './table/ChargingTableWidget';
 import './table/TripsTableWidget';

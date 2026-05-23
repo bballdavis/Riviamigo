@@ -95,6 +95,10 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
   { id: 'charging_efficiency_summary', title: 'Charge Efficiency', dataSource: 'chargingSummary', valuePath: 'charging_efficiency_pct', unit: '%', icon: 'lucide:activity', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
   { id: 'charging_max_rate', title: 'Max Charge Rate', dataSource: 'chargingSummary', valuePath: 'max_charge_rate_kw', unit: 'kW', icon: 'lucide:gauge', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
   { id: 'charging_max_limit', title: 'Max Charge Limit', dataSource: 'chargingSummary', valuePath: 'max_charge_limit_pct', unit: '%', icon: 'lucide:battery', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  // Enrichment sensors (require Rivian API backfill — from migration 0024)
+  { id: 'charging_free_sessions', title: 'Free Sessions', dataSource: 'chargingSummary', valuePath: 'free_session_count', icon: 'lucide:gift', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'charging_range_added', title: 'Range Added', dataSource: 'chargingSummary', valuePath: 'total_range_added_km', unit: 'km', icon: 'lucide:route', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'charging_rivian_billed', title: 'Rivian Billed', dataSource: 'chargingSummary', valuePath: 'rivian_paid_total_usd', unit: 'USD', icon: 'lucide:receipt', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
   {
     id: 'charging_home_share',
     title: 'Home Charging',
@@ -119,6 +123,12 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
     valueMode: 'latest',
     valueColor: 'default',
   },
+
+  // ── Vehicle status sensors sourced from telemetry (warnings / OTA) ─────────
+  { id: 'hv_thermal', title: 'HV Thermal', dataSource: 'vehicleStatus', valuePath: 'hv_thermal_event', icon: 'lucide:flame', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'twelve_volt_health', title: '12V Health', dataSource: 'vehicleStatus', valuePath: 'twelve_volt_health', icon: 'lucide:battery-low', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'ota_current_version', title: 'Current SW', dataSource: 'vehicleStatus', valuePath: 'ota_current_version', icon: 'lucide:cpu', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'ota_available_version', title: 'Available Update', dataSource: 'vehicleStatus', valuePath: 'ota_available_version', icon: 'lucide:download', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
 
   // ── Extended vehicle state sensors (all dataSource: 'vehicleStatus') ──────
   { id: 'charge_port_open', title: 'Charge Port', dataSource: 'vehicleStatus', valuePath: 'charge_port_open', icon: 'lucide:plug', chartType: 'none', valueMode: 'latest', valueColor: 'default' },

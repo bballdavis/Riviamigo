@@ -95,24 +95,24 @@ describe('dashboard API wiring', () => {
     const widgetIds = normalized.widgets.map((widget) => widget.definitionId);
 
     expect(widgetIds).toContain('charging.connection');
-    expect(widgetIds).toContain('avg_session');
-    expect(widgetIds).toContain('charge_efficiency');
-    expect(widgetIds).toContain('max_charge_rate');
-    expect(widgetIds).toContain('max_charge_limit');
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'avg_session')).toMatchObject({
+    expect(widgetIds).toContain('charging_avg_session');
+    expect(widgetIds).toContain('charging_efficiency_summary');
+    expect(widgetIds).toContain('charging_max_rate');
+    expect(widgetIds).toContain('charging_max_limit');
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_avg_session')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 9, y: 2, w: 3, h: 2 },
     });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charge_efficiency')).toMatchObject({
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 9, y: 0, w: 3, h: 2 },
     });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'max_charge_rate')).toMatchObject({
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_max_rate')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 6, y: 2, w: 3, h: 2 },
     });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'max_charge_limit')).toMatchObject({
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
       layout: { x: 6, y: 0, w: 3, h: 2 },
     });
@@ -126,7 +126,7 @@ describe('dashboard API wiring', () => {
     });
     expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.connection')).toMatchObject({
       options: { chargingConnectionVisibility: 'plugged' },
-      layout: { x: 6, y: 0, w: 6, h: 6 },
+      layout: { x: 0, y: 6, w: 8, h: 8 },
     });
   });
 
