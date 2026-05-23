@@ -86,4 +86,14 @@ describe('Trips page', () => {
     expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
     expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });
+
+  it('renders the trips table', () => {
+    render(<TripsContent />);
+    expect(screen.getByTestId('trips-table')).toBeInTheDocument();
+  });
+
+  it('renders the date range picker', () => {
+    render(<TripsContent />);
+    expect(screen.getByTestId('date-range-picker')).toBeInTheDocument();
+  });
 });
