@@ -253,3 +253,113 @@ async fn get_elevation_profile(
         .map(|r| serde_json::json!({"ts":r.ts,"value":r.value}))
         .collect::<Vec<_>>())))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    // Run with: cargo test -- --ignored
+
+    async fn make_app() -> axum::Router {
+        use std::sync::Arc;
+        use crate::middleware::auth::{AppState, JwtKeys};
+        use rsa::{
+            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+            RsaPrivateKey,
+        };
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for integration tests");
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let redis = redis::Client::open(redis_url).expect("redis client");
+
+        let mut rng = rand::thread_rng();
+        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
+        let pub_key = priv_key.to_public_key();
+        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
+        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
+
+        let config = crate::config::Config {
+            database_url: database_url.clone(),
+            redis_url: "redis://127.0.0.1/".into(),
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec!["http://localhost:3000".into()],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+        };
+
+        let state = AppState {
+            pool,
+            redis,
+            jwt_keys,
+            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+                .to_string(),
+            config,
+        };
+
+        crate::routes::build_router(state)
+    }
+
+    async fn get_status(app: axum::Router, uri: &str) -> http::StatusCode {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn list_trips_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(get_status(app, "/v1/trips").await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn trip_detail_requires_auth() {
+        let app = make_app().await;
+        let status = get_status(app, &format!("/v1/trips/{}", uuid::Uuid::new_v4())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn trip_track_requires_auth() {
+        let app = make_app().await;
+        let status =
+            get_status(app, &format!("/v1/trips/{}/track", uuid::Uuid::new_v4())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn trip_speed_requires_auth() {
+        let app = make_app().await;
+        let status =
+            get_status(app, &format!("/v1/trips/{}/speed", uuid::Uuid::new_v4())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn trip_elevation_requires_auth() {
+        let app = make_app().await;
+        let status =
+            get_status(app, &format!("/v1/trips/{}/elevation", uuid::Uuid::new_v4())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+}
