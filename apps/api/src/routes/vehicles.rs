@@ -25,7 +25,6 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
         .route("/vehicles/:id/battery-config", put(update_battery_config))
         .route("/vehicles/:id/name", put(update_vehicle_name))
-        .route("/vehicles/:id/charging-backfill", post(trigger_charging_backfill))
 }
 
 #[derive(Deserialize)]
@@ -1681,109 +1680,4 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
-}
-
-/// POST /vehicles/:id/charging-backfill
-///
-/// Enqueues a full charge history backfill for the vehicle.  Idempotent: if
-/// one is already running, returns 409.  Otherwise resets the tracking columns
-/// and spawns the backfill task in the background.
-async fn trigger_charging_backfill(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    axum::extract::Path(vid): axum::extract::Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-
-    // Reject if a backfill is already in progress.
-    let current_status: Option<String> = sqlx::query_scalar(
-        "SELECT history_backfill_status FROM riviamigo.vehicles WHERE id = $1",
-    )
-    .bind(vid)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
-
-    if current_status.as_deref() == Some("running") {
-        return Err(AppError::Conflict("backfill already running".into()));
-    }
-
-    // Fetch the vehicle's Rivian ID and decrypt its stored credentials.
-    let (rivian_vehicle_id, encrypted_tokens): (String, Vec<u8>) = sqlx::query_as(
-        "SELECT v.rivian_vehicle_id, vc.encrypted_tokens \
-         FROM riviamigo.vehicles v \
-         JOIN riviamigo.vehicle_credentials vc ON vc.vehicle_id = v.id \
-         WHERE v.id = $1",
-    )
-    .bind(vid)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    let identity = state
-        .age_key
-        .parse::<age::x25519::Identity>()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
-
-    let tokens = crate::ingestion::session_store::decrypt_tokens(&encrypted_tokens, &identity)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("decrypt failed: {e}")))?;
-
-    // Mark as running so callers can poll the vehicle list for progress.
-    sqlx::query(
-        "UPDATE riviamigo.vehicles \
-         SET history_backfill_status = 'running', \
-             history_backfilled_at   = NULL, \
-             history_session_count   = NULL \
-         WHERE id = $1",
-    )
-    .bind(vid)
-    .execute(&state.pool)
-    .await?;
-
-    // Spawn the backfill; update tracking columns when done.
-    let pool = state.pool.clone();
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
-
-    tokio::spawn(async move {
-        match crate::ingestion::rivian_poll::fetch_charge_history_full(
-            &rivian_vehicle_id,
-            vid,
-            &pool,
-            &client,
-            &tokens,
-        )
-        .await
-        {
-            Ok(count) => {
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicles \
-                     SET history_backfill_status = 'done', \
-                         history_backfilled_at   = now(), \
-                         history_session_count   = $2 \
-                     WHERE id = $1",
-                )
-                .bind(vid)
-                .bind(count as i32)
-                .execute(&pool)
-                .await;
-                tracing::info!(vehicle_id=%vid, count, "manual backfill complete");
-            }
-            Err(e) => {
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicles \
-                     SET history_backfill_status = 'error' \
-                     WHERE id = $1",
-                )
-                .bind(vid)
-                .execute(&pool)
-                .await;
-                tracing::warn!(vehicle_id=%vid, err=%e, "manual backfill failed");
-            }
-        }
-    });
-
-    Ok(Json(serde_json::json!({ "status": "running" })))
 }

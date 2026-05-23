@@ -21,6 +21,17 @@ export interface ChargeSessionRow {
   is_free_session: boolean | null;
   is_rivian_network: boolean | null;
   rivian_paid_total: number | null;
+  rivian_charger_type?: string | null;
+  currency_code?: string | null;
+  rivian_city?: string | null;
+  is_public?: boolean | null;
+  charger_id?: string | null;
+  live_current_price?: number | null;
+  live_current_currency?: string | null;
+  live_total_charged_kwh?: number | null;
+  live_range_added_km?: number | null;
+  live_power_kw?: number | null;
+  live_charge_rate_kph?: number | null;
   source?: string | null;
   telemetry_sample_count?: number;
 }

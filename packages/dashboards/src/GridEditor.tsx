@@ -168,8 +168,8 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         }
       `}</style>
 
-      <div className="rgl-editor overflow-x-auto">
-        <div className="min-w-[640px]">
+      <div className="rgl-editor min-w-0">
+        <div className="min-w-0">
         <div ref={containerRef as React.Ref<HTMLDivElement>} className="w-full">
           {mounted ? (
             <GridLayout

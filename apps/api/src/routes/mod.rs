@@ -109,6 +109,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(auth::protected_router())
         .merge(api_keys::router())
         .merge(backups::router())
+        .merge(backfill::router())
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())

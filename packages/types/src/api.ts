@@ -112,6 +112,17 @@ export interface ChargeSession {
   is_free_session?: boolean | null;
   is_rivian_network?: boolean | null;
   rivian_paid_total?: number | null;
+  rivian_charger_type?: string | null;
+  currency_code?: string | null;
+  rivian_city?: string | null;
+  is_public?: boolean | null;
+  charger_id?: string | null;
+  live_current_price?: number | null;
+  live_current_currency?: string | null;
+  live_total_charged_kwh?: number | null;
+  live_range_added_km?: number | null;
+  live_power_kw?: number | null;
+  live_charge_rate_kph?: number | null;
 }
 
 export interface ChargeCurvePoint {
@@ -156,6 +167,7 @@ export interface ChargingSummary {
   session_count: number;
   home_kwh?: number;
   away_kwh?: number;
+  unknown_location_kwh?: number;
   ac_kwh?: number;
   dc_kwh?: number;
   charging_cycles?: number | null;
