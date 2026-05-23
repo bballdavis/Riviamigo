@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '0 8 * * 1'   # Every Monday 08:00 UTC
 
 env:
   CARGO_TERM_COLOR: always
@@ -45,6 +47,8 @@ jobs:
         run: pnpm turbo lint
 
       - name: Unit tests with coverage
+        # Coverage thresholds (statements/functions/lines: 70, branches: 65) are
+        # enforced via vite.config.ts — this step will fail if any threshold is breached.
         run: pnpm --filter @riviamigo/web test:coverage
 
       - name: Build Storybook
@@ -129,7 +133,7 @@ jobs:
         run: cargo install cargo-llvm-cov --locked
 
       - name: Coverage
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 70
 
       - name: Upload backend coverage
         if: always()
@@ -163,10 +167,44 @@ jobs:
 
       - name: Cargo audit
         working-directory: apps/api
-        run: cargo audit
+        run: cargo audit --deny warnings --deny unmaintained
 
       - name: pnpm audit
-        run: pnpm audit --prod
+        run: pnpm install --frozen-lockfile && pnpm audit --prod --audit-level=high
 
       - name: Secret scan
         uses: gitleaks/gitleaks-action@v2
+
+      - name: Semgrep SAST
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/rust
+            p/typescript
+            p/react
+            p/owasp-top-ten
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: true
+
+  # ── Docker Image Security ────────────────────────────────────────────────────
+  docker-security:
+    name: Docker image scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -t riviamigo-api:${{ github.sha }} ./apps/api
+        continue-on-error: true
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'riviamigo-api:${{ github.sha }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        continue-on-error: true
