@@ -12,6 +12,7 @@ interface ChargingSummarySnapshot {
   total_cost_usd: number | null;
   home_kwh: number | null;
   away_kwh: number | null;
+  unknown_location_kwh: number | null;
   ac_kwh: number | null;
   dc_kwh: number | null;
   charging_cycles: number | null;
@@ -100,7 +101,7 @@ const CHARGING_STAT_DEFINITIONS: ChargingStatDefinition[] = [
       return formatPercent(((s.home_kwh ?? 0) / total) * 100, 0);
     },
     getSecondary: (s) =>
-      `Home ${fmt(s.home_kwh, formatKwh)} / Away ${fmt(s.away_kwh, formatKwh)}`,
+      `Home ${fmt(s.home_kwh, formatKwh)} / Away ${fmt(s.away_kwh, formatKwh)} / Unknown ${fmt(s.unknown_location_kwh, formatKwh)}`,
   },
   {
     id: 'dc_share',

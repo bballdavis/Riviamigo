@@ -105,7 +105,7 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
     dataSource: 'chargingSummary',
     valueFormula: '([home_kwh] / [total_energy_kwh]) * 100',
     unit: '%',
-    secondaryTemplate: 'Home [home_kwh:kWh] / Away [away_kwh:kWh]',
+    secondaryTemplate: 'Home [home_kwh:kWh] / Away [away_kwh:kWh] / Unknown [unknown_location_kwh:kWh]',
     icon: 'lucide:home',
     chartType: 'none',
     valueMode: 'latest',

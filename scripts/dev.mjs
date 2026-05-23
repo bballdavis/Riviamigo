@@ -338,9 +338,29 @@ async function ensureSchema() {
     '0003_dashboards.sql',
   );
   await applyMigrationIfMissing(
+    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='charge_sessions' AND column_name='network_vendor')",
+    resolve(apiDir, 'migrations/0024_charge_enrichment_schedules.sql'),
+    '0024_charge_enrichment_schedules.sql',
+  );
+  await applyMigrationIfMissing(
+    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='charge_sessions' AND column_name='source')",
+    resolve(apiDir, 'migrations/0025_backfill_status.sql'),
+    '0025_backfill_status.sql',
+  );
+  await applyMigrationIfMissing(
     "to_regclass('riviamigo.security_events')",
     resolve(apiDir, 'migrations/0027_security_events.sql'),
     '0027_security_events.sql',
+  );
+  await applyMigrationIfMissing(
+    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='charge_sessions' AND column_name='rivian_charger_type')",
+    resolve(apiDir, 'migrations/0029_charge_enrichment_recovery.sql'),
+    '0029_charge_enrichment_recovery.sql',
+  );
+  await applyMigrationIfMissing(
+    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='vehicles' AND column_name='updated_at')",
+    resolve(apiDir, 'migrations/0030_vehicle_updated_at_for_enrichment.sql'),
+    '0030_vehicle_updated_at_for_enrichment.sql',
   );
   log('');
 }

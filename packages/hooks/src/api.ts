@@ -490,6 +490,7 @@ class ApiClient {
       session_count?: number;
       home_kwh?: number;
       away_kwh?: number;
+      unknown_location_kwh?: number;
       ac_kwh?: number;
       ac_l2_kwh?: number;
       dc_kwh?: number;
@@ -522,6 +523,7 @@ class ApiClient {
       session_count: summary.session_count ?? 0,
       home_kwh: summary.home_kwh ?? 0,
       away_kwh: summary.away_kwh ?? 0,
+      unknown_location_kwh: summary.unknown_location_kwh ?? 0,
       ac_kwh: acKwh,
       dc_kwh: dcKwh,
       charging_cycles: summary.charging_cycles ?? null,
@@ -805,6 +807,17 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     is_free_session: typeof row.is_free_session === 'boolean' ? row.is_free_session : null,
     is_rivian_network: typeof row.is_rivian_network === 'boolean' ? row.is_rivian_network : null,
     rivian_paid_total: finiteNumber(row.rivian_paid_total) ?? null,
+    rivian_charger_type: typeof row.rivian_charger_type === 'string' ? row.rivian_charger_type : null,
+    currency_code: typeof row.currency_code === 'string' ? row.currency_code : null,
+    rivian_city: typeof row.rivian_city === 'string' ? row.rivian_city : null,
+    is_public: typeof row.is_public === 'boolean' ? row.is_public : null,
+    charger_id: typeof row.charger_id === 'string' ? row.charger_id : null,
+    live_current_price: finiteNumber(row.live_current_price) ?? null,
+    live_current_currency: typeof row.live_current_currency === 'string' ? row.live_current_currency : null,
+    live_total_charged_kwh: finiteNumber(row.live_total_charged_kwh) ?? null,
+    live_range_added_km: finiteNumber(row.live_range_added_km) ?? null,
+    live_power_kw: finiteNumber(row.live_power_kw) ?? null,
+    live_charge_rate_kph: finiteNumber(row.live_charge_rate_kph) ?? null,
   };
 }
 

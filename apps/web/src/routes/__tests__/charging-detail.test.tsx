@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { vi, describe, it, expect } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
@@ -8,6 +8,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 });
 
 const mockNavigate = vi.fn();
+const mockSession = vi.hoisted(() => ({ cost_usd: 8.75 as number | null }));
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -36,8 +37,14 @@ vi.mock('@riviamigo/hooks', () => ({
       soc_start: 20,
       soc_end: 80,
       peak_power_kw: 11.5,
-      cost_usd: 8.75,
+      cost_usd: mockSession.cost_usd,
       duration_min: 75,
+      source: 'telemetry+rivian_api',
+      telemetry_sample_count: 12,
+      network_vendor: 'Rivian',
+      range_added_km: 88.4,
+      rivian_paid_total: 8.75,
+      rivian_city: 'Austin',
     },
   }),
 }));
@@ -51,10 +58,23 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatPercent: (v: number) => `${v}%`,
   formatEfficiency: (v: number) => `${v} Wh/mi`,
 }));
+vi.mock('lucide-react', () => ({
+  ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
+  Database: () => <svg data-testid="icon-database" />,
+  MapPin: () => <svg data-testid="icon-map-pin" />,
+  RadioTower: () => <svg data-testid="icon-radio" />,
+  Receipt: () => <svg data-testid="icon-receipt" />,
+  Route: () => <svg data-testid="icon-route" />,
+  Zap: () => <svg data-testid="icon-zap" />,
+}));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
 
 describe('Charge session detail page', () => {
+  beforeEach(() => {
+    mockSession.cost_usd = 8.75;
+  });
+
   it('renders session details and the charge curve chart', () => {
     render(<ChargeSessionContent />);
 
@@ -62,13 +82,26 @@ describe('Charge session detail page', () => {
     expect(screen.getByText('Energy Added')).toBeInTheDocument();
     expect(screen.getByText('28.5 kWh')).toBeInTheDocument();
     expect(screen.getByText('SoC')).toBeInTheDocument();
-    expect(screen.getByText('20% → 80%')).toBeInTheDocument();
+    expect(screen.getByText('20% -> 80%')).toBeInTheDocument();
     expect(screen.getByText('Duration')).toBeInTheDocument();
     expect(screen.getByText('75 min')).toBeInTheDocument();
     expect(screen.getByText('Cost')).toBeInTheDocument();
-    expect(screen.getByText('$8.75')).toBeInTheDocument();
+    expect(screen.getAllByText('$8.75').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
+    expect(screen.getByText('12 samples matched')).toBeInTheDocument();
+    expect(screen.getByText('88.4 km added')).toBeInTheDocument();
+    expect(screen.getByText('Austin')).toBeInTheDocument();
     expect(screen.getByText('Power vs state of charge')).toBeInTheDocument();
     expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
+  });
+
+  it('renders missing cost as a dash instead of zero dollars', () => {
+    mockSession.cost_usd = null;
+    render(<ChargeSessionContent />);
+
+    const costLabel = screen.getByText('Cost');
+    expect(costLabel.parentElement).toHaveTextContent('-');
+    expect(screen.queryByText('$0')).not.toBeInTheDocument();
   });
 
   it('navigates back to the charging page', () => {

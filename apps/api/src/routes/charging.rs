@@ -78,6 +78,17 @@ struct SessionRow {
     rivian_paid_total: Option<f64>,
     source: Option<String>,
     telemetry_sample_count: i64,
+    rivian_charger_type: Option<String>,
+    currency_code: Option<String>,
+    rivian_city: Option<String>,
+    is_public: Option<bool>,
+    charger_id: Option<String>,
+    live_current_price: Option<f64>,
+    live_current_currency: Option<String>,
+    live_total_charged_kwh: Option<f64>,
+    live_range_added_km: Option<f64>,
+    live_power_kw: Option<f64>,
+    live_charge_rate_kph: Option<f64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -101,6 +112,7 @@ struct SummaryAggRow {
     session_count: i64,
     home_kwh: Option<f64>,
     away_kwh: Option<f64>,
+    unknown_location_kwh: Option<f64>,
     ac_kwh: Option<f64>,
     ac_l2_kwh: Option<f64>,
     dc_kwh: Option<f64>,
@@ -348,8 +360,11 @@ async fn list_sessions_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                cs.cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                COALESCE(cs.cost_usd, cs.rivian_paid_total) AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
+                cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
+                cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
+                cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
                 COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
@@ -415,9 +430,12 @@ async fn get_session_response(
                     END \
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, COALESCE(cs.cost_usd, cs.rivian_paid_total) AS cost_usd, \
                 cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
+                cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
+                cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
+                cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
                 COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
@@ -499,7 +517,7 @@ async fn get_summary_response(
                 charger_type,
                 network_vendor,
                 charge_limit,
-                cost_usd,
+                COALESCE(cost_usd, rivian_paid_total) AS cost_usd,
                 energy_used_wh,
                 is_free_session,
                 range_added_km,
@@ -524,6 +542,7 @@ async fn get_summary_response(
             COUNT(*) AS session_count,
             COALESCE(SUM(CASE WHEN is_home THEN energy_kwh ELSE 0 END),0) AS home_kwh,
             COALESCE(SUM(CASE WHEN is_home = false THEN energy_kwh ELSE 0 END),0) AS away_kwh,
+            COALESCE(SUM(CASE WHEN is_home IS NULL THEN energy_kwh ELSE 0 END),0) AS unknown_location_kwh,
             COALESCE(SUM(CASE WHEN derived_type='ac' THEN energy_kwh ELSE 0 END),0) AS ac_kwh,
             COALESCE(SUM(CASE WHEN derived_type='ac_l2' THEN energy_kwh ELSE 0 END),0) AS ac_l2_kwh,
             COALESCE(SUM(CASE WHEN derived_type='dc' THEN energy_kwh ELSE 0 END),0) AS dc_kwh,
@@ -642,6 +661,7 @@ async fn get_summary_response(
         "session_count":   agg.session_count,
         "home_kwh":        agg.home_kwh,
         "away_kwh":        agg.away_kwh,
+        "unknown_location_kwh": agg.unknown_location_kwh,
         "by_type": {
             "ac_kwh":   agg.ac_kwh,
             "ac_l2_kwh": agg.ac_l2_kwh,
@@ -697,17 +717,16 @@ mod tests {
     // Run with: cargo test -- --ignored
 
     async fn make_app() -> axum::Router {
-        use std::sync::Arc;
         use crate::middleware::auth::{AppState, JwtKeys};
         use rsa::{
             pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
             RsaPrivateKey,
         };
+        use std::sync::Arc;
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
 
         let pool = crate::db::pool::create_pool(&database_url)
             .await
@@ -717,7 +736,10 @@ mod tests {
         let mut rng = rand::thread_rng();
         let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
         let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let private_pem = priv_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("pem")
+            .to_string();
         let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
         let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
 
@@ -844,6 +866,37 @@ async fn load_curve(
     .bind(ended_at)
     .fetch_all(pool)
     .await?;
+
+    if rows.len() < 2 {
+        let fallback = sqlx::query_as::<_, CurveRow>(
+            r#"SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
+                      power_kw AS charge_rate_kw,
+                      NULL::float8 AS soc
+               FROM riviamigo.rivian_charge_curve_points
+               WHERE vehicle_id=$1
+                 AND ts >= $2
+                 AND ts <= $3
+                 AND power_kw IS NOT NULL
+               ORDER BY ts"#,
+        )
+        .bind(vehicle_id)
+        .bind(started_at)
+        .bind(ended_at)
+        .fetch_all(pool)
+        .await?;
+        if !fallback.is_empty() {
+            return Ok(fallback
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "minutes_elapsed": r.minutes_elapsed,
+                        "charge_rate_kw": r.charge_rate_kw,
+                        "soc": r.soc,
+                    })
+                })
+                .collect());
+        }
+    }
 
     Ok(rows
         .iter()
