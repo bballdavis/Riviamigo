@@ -196,7 +196,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {options.showPicker && chartOptions.length > 1 ? (
         <ChartPicker
           value={activeChartId}
@@ -212,7 +212,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           {settingsButton}
         </div>
       )}
-      <div ref={ref} className="min-h-0 flex-1">
+      <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
         <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothing={smoothing} />
       </div>
     </div>

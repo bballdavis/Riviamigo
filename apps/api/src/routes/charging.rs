@@ -76,6 +76,8 @@ struct SessionRow {
     is_free_session: Option<bool>,
     is_rivian_network: Option<bool>,
     rivian_paid_total: Option<f64>,
+    source: Option<String>,
+    telemetry_sample_count: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -257,6 +259,7 @@ async fn get_curve_analysis(
                       cs.ended_at,
                       COALESCE(cs.charger_type,
                         CASE
+                          WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
                           WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw) < 12 THEN 'ac'
                           WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw) < 50 THEN 'ac_l2'
                           WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw) IS NOT NULL THEN 'dc'
@@ -334,6 +337,7 @@ async fn list_sessions_response(
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
                     CASE \
+                        WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' \
                         WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
                             CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
                         WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
@@ -345,10 +349,18 @@ async fn list_sessions_response(
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
                 cs.cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
-                cs.is_rivian_network, cs.rivian_paid_total \
+                cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
+                COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         LEFT JOIN LATERAL ( \
+             SELECT COUNT(*)::int8 AS sample_count \
+             FROM timeseries.telemetry t \
+             WHERE t.vehicle_id = cs.vehicle_id \
+               AND t.ts BETWEEN cs.started_at - interval '30 minutes' \
+                            AND COALESCE(cs.ended_at, cs.started_at) + interval '30 minutes' \
+         ) telem ON true \
          WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
          ORDER BY cs.started_at DESC LIMIT $4 OFFSET $5"
     )
@@ -393,6 +405,7 @@ async fn get_session_response(
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
                     CASE \
+                        WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' \
                         WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
                             CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) < 12 THEN 'ac' \
                         WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
@@ -404,10 +417,18 @@ async fn get_session_response(
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd, \
                 cs.network_vendor, cs.range_added_km, cs.is_free_session, \
-                cs.is_rivian_network, cs.rivian_paid_total \
+                cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
+                COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         LEFT JOIN LATERAL ( \
+             SELECT COUNT(*)::int8 AS sample_count \
+             FROM timeseries.telemetry t \
+             WHERE t.vehicle_id = cs.vehicle_id \
+               AND t.ts BETWEEN cs.started_at - interval '30 minutes' \
+                            AND COALESCE(cs.ended_at, cs.started_at) + interval '30 minutes' \
+         ) telem ON true \
             WHERE cs.id=$1 AND cs.vehicle_id=$2"
     )
         .bind(id)
@@ -476,6 +497,7 @@ async fn get_summary_response(
                 COALESCE(kwh_added, energy_added_wh / 1000.0) AS energy_kwh,
                 is_home,
                 charger_type,
+                network_vendor,
                 charge_limit,
                 cost_usd,
                 energy_used_wh,
@@ -491,6 +513,7 @@ async fn get_summary_response(
         typed AS (
             SELECT *,
                 COALESCE(charger_type, CASE
+                    WHEN lower(COALESCE(network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
                     WHEN rate_kw < 12 THEN 'ac'
                     WHEN rate_kw < 50 THEN 'ac_l2'
                     WHEN rate_kw IS NOT NULL THEN 'dc'
@@ -500,7 +523,7 @@ async fn get_summary_response(
         SELECT COALESCE(SUM(energy_kwh),0) AS total_kwh,
             COUNT(*) AS session_count,
             COALESCE(SUM(CASE WHEN is_home THEN energy_kwh ELSE 0 END),0) AS home_kwh,
-            COALESCE(SUM(CASE WHEN NOT COALESCE(is_home,false) THEN energy_kwh ELSE 0 END),0) AS away_kwh,
+            COALESCE(SUM(CASE WHEN is_home = false THEN energy_kwh ELSE 0 END),0) AS away_kwh,
             COALESCE(SUM(CASE WHEN derived_type='ac' THEN energy_kwh ELSE 0 END),0) AS ac_kwh,
             COALESCE(SUM(CASE WHEN derived_type='ac_l2' THEN energy_kwh ELSE 0 END),0) AS ac_l2_kwh,
             COALESCE(SUM(CASE WHEN derived_type='dc' THEN energy_kwh ELSE 0 END),0) AS dc_kwh,

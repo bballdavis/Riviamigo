@@ -30,8 +30,9 @@
         "chartIds": ["charging-sessions-energy", "charge-level", "charging-weekly-energy", "charging-curve-analysis"],
         "showPicker": true
       },
-      "layout": { "x": 0, "y": 6, "w": 12, "h": 10 }
+      "layout": { "x": 0, "y": 6, "w": 12, "h": 11 }
     },
-    { "id": "d4000004-0000-0000-0000-000000000012", "componentType": "custom", "definitionId": "charging.sessions.table", "title": "Charging Sessions", "layout": { "x": 0, "y": 16, "w": 12, "h": 12 }, "options": {} }
+    { "id": "d4000004-0000-0000-0000-000000000012", "componentType": "custom", "definitionId": "charging.sessions.table", "title": "Charging Sessions", "layout": { "x": 0, "y": 17, "w": 12, "h": 12 }, "options": {} },
+    { "id": "d4000004-0000-0000-0000-000000000016", "componentType": "custom", "definitionId": "charging.network_breakdown", "title": "Network Breakdown", "options": {}, "layout": { "x": 0, "y": 29, "w": 12, "h": 4 } }
   ]
 }

@@ -21,6 +21,8 @@ export interface ChargeSessionRow {
   is_free_session: boolean | null;
   is_rivian_network: boolean | null;
   rivian_paid_total: number | null;
+  source?: string | null;
+  telemetry_sample_count?: number;
 }
 
 const col = createColumnHelper<ChargeSessionRow>();

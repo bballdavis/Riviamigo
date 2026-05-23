@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Wifi, WifiOff, Battery, BatteryCharging, Loader2 } from 'lucide-react';
+import { Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff } from 'react-icons/tb';
 import { cn, formatMiles } from '../lib/utils';
 
 export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'error';
@@ -14,6 +15,14 @@ export interface StatusBarProps {
   className?: string | undefined;
 }
 
+function getBatteryIcon(socPercent: number) {
+  if (socPercent > 75) return { Component: TbBattery4, variant: 'four' };
+  if (socPercent > 50) return { Component: TbBattery3, variant: 'three' };
+  if (socPercent > 25) return { Component: TbBattery2, variant: 'two' };
+  if (socPercent > 5) return { Component: TbBattery1, variant: 'one' };
+  return { Component: TbBatteryOff, variant: 'off' };
+}
+
 export function StatusBar({
   vehicleName,
   onlineState,
@@ -23,6 +32,11 @@ export function StatusBar({
   compact = false,
   className,
 }: StatusBarProps) {
+  const batteryIcon = socPercent !== undefined
+    ? isCharging
+      ? { Component: TbBatteryCharging, variant: 'charging' }
+      : getBatteryIcon(socPercent)
+    : undefined;
   const statusLabel = onlineState === 'online'
     ? 'Online'
     : onlineState === 'connecting'
@@ -34,8 +48,8 @@ export function StatusBar({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-elevated',
-        compact && 'justify-center px-2',
+        'w-full flex items-center gap-3 px-3 py-2 rounded-lg',
+        compact && 'justify-between px-2',
         className
       )}
     >
@@ -45,13 +59,13 @@ export function StatusBar({
         aria-label={`Vehicle status: ${statusLabel}`}
       >
         {onlineState === 'connecting' ? (
-          <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />
+          <Loader2 className="h-4 w-4 text-accent animate-spin" />
         ) : onlineState === 'online' ? (
-          <Wifi className="h-3.5 w-3.5 text-[#10B981]" />
+          <Wifi className="h-4 w-4 text-[#10B981]" />
         ) : onlineState === 'error' ? (
-          <WifiOff className="h-3.5 w-3.5 text-[#F87171]" />
+          <WifiOff className="h-4 w-4 text-[#F87171]" />
         ) : (
-          <WifiOff className="h-3.5 w-3.5 text-fg-tertiary" />
+          <WifiOff className="h-4 w-4 text-fg-tertiary" />
         )}
         {!compact && (
           <span
@@ -81,14 +95,19 @@ export function StatusBar({
           title={`Battery status: ${Math.round(socPercent)}%`}
           aria-label={`Battery status: ${Math.round(socPercent)}%`}
         >
-          {isCharging ? (
-            <BatteryCharging className="h-3.5 w-3.5 text-accent" />
-          ) : (
-            <Battery
+          {batteryIcon && (
+            <batteryIcon.Component
               className={cn(
-                'h-3.5 w-3.5',
-                socPercent > 50 ? 'text-[#10B981]' : socPercent > 20 ? 'text-[#F59E0B]' : 'text-[#F87171]'
+                'h-[1.44375rem] w-[1.44375rem]',
+                isCharging
+                  ? 'text-accent'
+                  : socPercent > 50
+                  ? 'text-[#10B981]'
+                  : socPercent > 20
+                  ? 'text-[#F59E0B]'
+                  : 'text-[#F87171]'
               )}
+              data-battery-icon={`tb-battery-${batteryIcon.variant}`}
             />
           )}
           {!compact && <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>}

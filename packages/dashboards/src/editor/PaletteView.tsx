@@ -20,21 +20,27 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
     : visibleWidgets;
 
   return (
-    <div className="flex h-full flex-col gap-2">
-      <p className="shrink-0 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-        Add Widget
-      </p>
-      <div className="relative h-8 shrink-0">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-tertiary" />
-        <input
-          type="search"
-          placeholder="Search widgets…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="h-full w-full rounded-lg border border-border bg-bg pl-8 pr-3 text-xs placeholder:text-fg-tertiary focus:outline-none focus:ring-1 focus:ring-accent/50"
-        />
+    <div className="flex flex-col">
+      {/* Sticky search header — sticks to top of the EditorDrawer scroll container */}
+      <div
+        className="sticky top-0 z-10 flex flex-col gap-2 px-3 pb-2 pt-3"
+        style={{ backgroundColor: 'var(--rm-bg-page)' }}
+      >
+        <p className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+          Add Widget
+        </p>
+        <div className="relative h-8">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-tertiary" />
+          <input
+            type="search"
+            placeholder="Search widgets…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-full w-full rounded-lg border border-border bg-bg pl-10 pr-3 text-xs placeholder:text-fg-tertiary focus:outline-none focus:ring-1 focus:ring-accent/50"
+          />
+        </div>
       </div>
-      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
+      <div className="flex flex-col gap-1 px-3 pb-3">
         {filtered.map((def) => (
           <button
             key={`${def.componentType}:${def.definitionId}`}

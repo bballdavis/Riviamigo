@@ -74,21 +74,6 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
         onNavigate={(href) => navigate({ to: href })}
         bottomSlot={({ collapsed }) => (
           <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => navigate({ to: '/settings' })}
-              title="Settings"
-              aria-label="Open settings"
-              className={
-                collapsed
-                  ? 'w-full flex items-center justify-center py-2 rounded-lg text-fg-secondary hover:text-fg hover:bg-bg-elevated transition-colors'
-                  : 'w-full flex items-center gap-2 px-2 py-2 rounded-lg text-fg-secondary hover:text-fg hover:bg-bg-elevated transition-colors'
-              }
-            >
-              <Settings className="h-4 w-4 shrink-0" />
-              {!collapsed && <span className="text-xs font-medium">Settings</span>}
-            </button>
-
             <StatusBar
               onlineState={onlineState}
               socPercent={status?.battery_level ?? undefined}
@@ -97,15 +82,35 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
               compact={collapsed}
             />
 
-            <div className={collapsed ? 'flex items-center justify-between' : 'flex items-center justify-between'}>
+            <button
+              type="button"
+              onClick={() => navigate({ to: '/settings' })}
+              title="Settings"
+              aria-label="Open settings"
+              className={
+                collapsed
+                  ? 'w-full flex items-center justify-center py-2 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors'
+                  : 'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors'
+              }
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              {!collapsed && <span className="text-xs font-medium">Settings</span>}
+            </button>
+
+            <div className="flex items-center justify-between">
               <button
                 type="button"
                 onClick={handleLogout}
                 title="Sign out"
                 aria-label="Sign out"
-                className="flex items-center justify-center w-8 h-8 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
+                className={
+                  collapsed
+                    ? 'flex items-center justify-center w-8 h-8 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors'
+                    : 'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors'
+                }
               >
-                <LogOut className="h-4 w-4" />
+                <LogOut className="h-4 w-4 shrink-0" />
+                {!collapsed && <span className="text-xs font-medium">Sign out</span>}
               </button>
               <ThemeToggle />
             </div>
@@ -114,8 +119,8 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       />
 
       {/* Main content: offset by sidebar width on lg+ */}
-      <main className="lg:pl-64 transition-all duration-200">
-        <div className="p-4 pt-14 sm:p-6 sm:pt-14 lg:p-6 max-w-7xl mx-auto">
+      <main className="rm-app-main lg:pl-64 transition-all duration-200">
+        <div className="rm-app-content p-4 pt-14 sm:p-6 sm:pt-14 lg:p-6 max-w-7xl mx-auto">
           {children}
         </div>
       </main>

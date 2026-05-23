@@ -37,8 +37,14 @@ export interface Vehicle {
   trim: string | null;
   color: string | null;
   battery_capacity_kwh: number | null;
+  battery_config?: string | null;
   display_name: string;
   created_at: string;
+  history_backfill_status?: string | null;
+  history_backfilled_at?: string | null;
+  history_session_count?: number | null;
+  worker_health?: string | null;
+  worker_health_msg?: string | null;
   images?: VehicleImages | null;
 }
 

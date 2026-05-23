@@ -11,7 +11,7 @@ import type {
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse,
-  CreateBackupRestoreRequestBody, BackupRestoreRequest,
+  CreateBackupRestoreRequestBody, BackupRestoreRequest, DataQualityResponse,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -272,6 +272,16 @@ class ApiClient {
     return this.request('POST', '/v1/vehicles', body);
   }
 
+  async deleteVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string | null }> {
+    return this.request('DELETE', `/v1/vehicles/${vehicleId}`);
+  }
+
+  async refreshVehicleCredentials(vehicleId: string, rivianVehicleId?: string): Promise<{ ok: boolean; vehicle_id: string }> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/credentials`, {
+      rivian_vehicle_id: rivianVehicleId,
+    });
+  }
+
   async connectRivian(email: string, password: string): Promise<ConnectResult> {
     return this.request('POST', '/v1/vehicles/connect', { email, password });
   }
@@ -285,6 +295,10 @@ class ApiClient {
     body: { battery_capacity_kwh?: number; battery_config?: string }
   ): Promise<void> {
     return this.request('PUT', `/v1/vehicles/${vehicleId}/battery-config`, body);
+  }
+
+  async updateVehicleName(vehicleId: string, name: string): Promise<void> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/name`, { name });
   }
 
   // API access
@@ -486,6 +500,16 @@ class ApiClient {
       max_charge_limit_pct?: number | null;
       max_charge_rate_kw?: number | null;
       typed_session_count?: number;
+      free_session_count?: number;
+      total_range_added_km?: number | null;
+      rivian_paid_total_usd?: number | null;
+      network_breakdown?: Array<{
+        network_vendor: string | null;
+        session_count: number;
+        energy_kwh: number | null;
+        cost_usd: number | null;
+        free_sessions: number;
+      }>;
       weekly?: Array<{ week_start: string; kwh?: number; energy_kwh?: number; sessions: number }>;
     }>('GET', '/v1/charging/summary', undefined, {
       vehicle_id: vehicleId, from, to,
@@ -506,6 +530,10 @@ class ApiClient {
       max_charge_limit_pct: summary.max_charge_limit_pct ?? null,
       max_charge_rate_kw: summary.max_charge_rate_kw ?? null,
       typed_session_count: summary.typed_session_count ?? 0,
+      free_session_count: summary.free_session_count ?? 0,
+      total_range_added_km: summary.total_range_added_km ?? null,
+      rivian_paid_total_usd: summary.rivian_paid_total_usd ?? null,
+      network_breakdown: summary.network_breakdown ?? [],
       weekly: (summary.weekly ?? []).map((week) => ({
         week_start: week.week_start,
         energy_kwh: week.energy_kwh ?? week.kwh ?? 0,
@@ -554,6 +582,13 @@ class ApiClient {
 
   async triggerBackfill(vehicleId: string): Promise<void> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/backfill`);
+  }
+
+  async getDataQuality(vehicleId: string, from?: string, to?: string): Promise<DataQualityResponse> {
+    const params: Record<string, string> = {};
+    if (from) params.from = from;
+    if (to) params.to = to;
+    return this.request('GET', `/v1/vehicles/${vehicleId}/data-quality`, undefined, params);
   }
 
   // ── Efficiency ────────────────────────────────────────────────────────────
@@ -763,6 +798,13 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     peak_power_kw: finiteNumber(row.peak_power_kw) ?? finiteNumber(row.max_charge_rate_kw) ?? finiteNumber(row.avg_charge_rate_kw) ?? null,
     cost_usd: finiteNumber(row.cost_usd) ?? null,
     duration_min: finiteNumber(row.duration_min) ?? finiteNumber(row.duration_minutes) ?? null,
+    source: typeof row.source === 'string' ? row.source : null,
+    telemetry_sample_count: finiteNumber(row.telemetry_sample_count) ?? 0,
+    network_vendor: typeof row.network_vendor === 'string' ? row.network_vendor : null,
+    range_added_km: finiteNumber(row.range_added_km) ?? null,
+    is_free_session: typeof row.is_free_session === 'boolean' ? row.is_free_session : null,
+    is_rivian_network: typeof row.is_rivian_network === 'boolean' ? row.is_rivian_network : null,
+    rivian_paid_total: finiteNumber(row.rivian_paid_total) ?? null,
   };
 }
 

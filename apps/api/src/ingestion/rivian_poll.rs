@@ -609,7 +609,10 @@ async fn fetch_charge_history_inner(
                      range_added_km     = COALESCE(range_added_km, $4),
                      is_free_session    = COALESCE(is_free_session, $5),
                      is_rivian_network  = COALESCE(is_rivian_network, $6),
-                     rivian_paid_total  = COALESCE(rivian_paid_total, $7)
+                     rivian_paid_total  = COALESCE(rivian_paid_total, $7),
+                     is_home            = COALESCE(is_home, $8),
+                     duration_minutes   = COALESCE(duration_minutes, CASE WHEN $10::timestamptz IS NOT NULL THEN EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz))::int / 60 END),
+                     charger_type       = COALESCE(charger_type, CASE WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' WHEN $8 THEN 'ac' END)
                  WHERE vehicle_id = $1
                    AND rivian_session_id = $2",
             )
@@ -620,6 +623,9 @@ async fn fetch_charge_history_inner(
             .bind(is_free_session)
             .bind(is_rivian_network)
             .bind(s.paid_total)
+            .bind(s.is_home_charger)
+            .bind(s.start_instant)
+            .bind(s.end_instant)
             .execute(pool)
             .await?
             .rows_affected();
@@ -637,7 +643,10 @@ async fn fetch_charge_history_inner(
                              range_added_km     = COALESCE(range_added_km, $4),
                              is_free_session    = COALESCE(is_free_session, $5),
                              is_rivian_network  = COALESCE(is_rivian_network, $6),
-                             rivian_paid_total  = COALESCE(rivian_paid_total, $7)
+                             rivian_paid_total  = COALESCE(rivian_paid_total, $7),
+                             is_home            = COALESCE(is_home, $10),
+                             duration_minutes   = COALESCE(duration_minutes, CASE WHEN $12::timestamptz IS NOT NULL THEN EXTRACT(EPOCH FROM ($12::timestamptz - $11::timestamptz))::int / 60 END),
+                             charger_type       = COALESCE(charger_type, CASE WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' WHEN $10 THEN 'ac' END)
                          WHERE vehicle_id = $1
                            AND rivian_session_id IS NULL
                            AND started_at BETWEEN $8 AND $9",
@@ -651,6 +660,9 @@ async fn fetch_charge_history_inner(
                     .bind(s.paid_total)
                     .bind(window_start)
                     .bind(window_end)
+                    .bind(s.is_home_charger)
+                    .bind(s.start_instant)
+                    .bind(s.end_instant)
                     .execute(pool)
                     .await?
                     .rows_affected()
@@ -666,8 +678,8 @@ async fn fetch_charge_history_inner(
                                  (vehicle_id, started_at, ended_at, kwh_added,
                                   rivian_session_id, network_vendor, range_added_km,
                                   is_free_session, is_rivian_network, rivian_paid_total,
-                                  source)
-                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'rivian_api')
+                                  is_home, charger_type, duration_minutes, source)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'rivian_api')
                              ON CONFLICT DO NOTHING",
                         )
                         .bind(vehicle_id)
@@ -680,6 +692,9 @@ async fn fetch_charge_history_inner(
                         .bind(is_free_session)
                         .bind(is_rivian_network)
                         .bind(s.paid_total)
+                        .bind(s.is_home_charger)
+                        .bind(infer_api_charger_type(s.vendor.as_deref(), s.is_home_charger))
+                        .bind(s.end_instant.map(|end| (end - start).num_minutes() as i32))
                         .execute(pool)
                         .await;
 
@@ -701,6 +716,24 @@ async fn fetch_charge_history_inner(
         "charge history synced"
     );
     Ok(total_processed)
+}
+
+fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option<&'static str> {
+    if vendor
+        .map(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "tesla" | "rivian" | "electrify america" | "evgo"
+            )
+        })
+        .unwrap_or(false)
+    {
+        return Some("dc");
+    }
+    if is_home == Some(true) {
+        return Some("ac");
+    }
+    None
 }
 
 // ── Live session data (Redis only, not persisted) ─────────────────────────────
