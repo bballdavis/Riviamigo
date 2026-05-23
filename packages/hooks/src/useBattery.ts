@@ -60,12 +60,3 @@ export function useBatteryMileage(vehicleId: string | null) {
     placeholderData: (previous) => previous,
   });
 }
-
-export function useDegradation(vehicleId: string | null) {
-  return useQuery({
-    queryKey: ['battery', 'degradation', vehicleId],
-    queryFn: () => api.getDegradation(vehicleId!),
-    enabled: !!vehicleId,
-    staleTime: 60 * 60 * 1000,
-  });
-}

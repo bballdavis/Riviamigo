@@ -102,7 +102,9 @@ describe('LoginPage', () => {
   });
 
   it('shows an error message when login fails', async () => {
-    mockLogin.mockRejectedValue(new Error('Invalid credentials'));
+    // 401 → mapped to "Incorrect email or password" by the login page
+    const err = Object.assign(new Error('Unauthorized'), { status: 401 });
+    mockLogin.mockRejectedValue(err);
     const user = userEvent.setup();
     render(<LoginPage />);
 
@@ -111,7 +113,7 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Invalid credentials')).toBeInTheDocument();
+      expect(screen.getByText('Incorrect email or password. Please try again.')).toBeInTheDocument();
     });
   });
 
