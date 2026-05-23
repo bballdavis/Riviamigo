@@ -92,6 +92,10 @@ function getAppMapStyle(): MapStyleMode {
   return document.documentElement.classList.contains('light') ? 'light' : 'dark';
 }
 
+// How many track requests to fire at once.  The API rate-limiter allows
+// burst=20 across all protected routes, so keep this well below that.
+const TRACK_BATCH_SIZE = 4;
+
 function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { selectedIds } = useTripSelection();
   const [mapStyle, setMapStyle] = useState<MapStyleMode>(getAppMapStyle);
@@ -118,14 +122,46 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
     return () => observer.disconnect();
   }, []);
 
+  // ── Batched track fetching ───────────────────────────────────────────────
+  // Firing one request per trip simultaneously hits the API rate-limiter when
+  // a page has 20+ trips.  We enable queries in batches of TRACK_BATCH_SIZE,
+  // advancing to the next batch once all queries in the current batch settle.
+  const [enabledUpTo, setEnabledUpTo] = React.useState(TRACK_BATCH_SIZE);
+
+  // Reset batching whenever the date window / vehicle changes so a fresh run
+  // starts from the first batch rather than assuming prior queries are cached.
+  React.useEffect(() => {
+    setEnabledUpTo(TRACK_BATCH_SIZE);
+  }, [ctx.vehicleId, ctx.from, ctx.to]);
+
   const trackQueries = useQueries({
-    queries: trips.map((trip) => ({
+    queries: trips.map((trip, index) => ({
       queryKey: ['trips', 'track', trip.id, ctx.vehicleId],
       queryFn: () => api.getTripTrack(trip.id, ctx.vehicleId!),
-      enabled: !!ctx.vehicleId,
-      staleTime: 5 * 60 * 1000,
+      // Only enable queries up to the current batch window.
+      enabled: !!ctx.vehicleId && index < enabledUpTo,
+      // Trip tracks are immutable once recorded — cache them forever.
+      staleTime: Infinity,
+      gcTime: 24 * 60 * 60 * 1000,
     })),
   });
+
+  // Advance the batch window once every enabled query in the current window
+  // has settled (success or error).
+  const currentWindowSize = Math.min(enabledUpTo, trips.length);
+  const settledInWindow = trackQueries
+    .slice(0, currentWindowSize)
+    .filter((q) => q.isSuccess || q.isError).length;
+
+  React.useEffect(() => {
+    if (
+      trips.length > 0 &&
+      settledInWindow >= currentWindowSize &&
+      enabledUpTo < trips.length
+    ) {
+      setEnabledUpTo((prev) => Math.min(prev + TRACK_BATCH_SIZE, trips.length));
+    }
+  }, [settledInWindow, currentWindowSize, enabledUpTo, trips.length]);
 
   const trackDataVersion = trackQueries.map((query) => query.dataUpdatedAt).join(',');
 

@@ -1,5 +1,10 @@
 import React, { useEffect, useState } from 'react';
 
+// Module-level counter — `Date.now()` only has ms precision, so two toasts
+// fired in the same millisecond would share the same key and trigger a React
+// duplicate-key warning.
+let _nextToastId = 0;
+
 interface ToastPayload {
   title: string;
   message: string;
@@ -45,7 +50,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       const detail = (event as CustomEvent<ToastPayload>).detail;
       if (!detail?.message) return;
 
-      const id = Date.now();
+      const id = ++_nextToastId;
       setToasts((current) => [...current.slice(-2), { ...detail, id }]);
       window.setTimeout(() => {
         setToasts((current) => current.filter((toast) => toast.id !== id));
