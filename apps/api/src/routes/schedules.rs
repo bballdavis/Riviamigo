@@ -9,12 +9,10 @@
 //!   DELETE /v1/vehicles/:id/departure-schedules/:schedule_id
 //!   GET  /v1/vehicles/:id/wallboxes
 //!   GET  /v1/vehicles/:id/ota-details
-//!   GET  /v1/vehicles/:id/backfill-status
-//!   POST /v1/vehicles/:id/backfill
 
 use axum::{
     extract::{Path, State},
-    routing::{get, patch, post},
+    routing::{get, patch},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -49,8 +47,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/vehicles/:id/wallboxes", get(list_wallboxes))
         .route("/vehicles/:id/ota-details", get(get_ota_details))
-        .route("/vehicles/:id/backfill-status", get(get_backfill_status))
-        .route("/vehicles/:id/backfill", post(trigger_backfill))
 }
 
 // ── Helper: load Rivian tokens for a vehicle ─────────────────────────────────
@@ -379,141 +375,3 @@ async fn get_ota_details(
     Ok(Json(row))
 }
 
-// ── GET /v1/vehicles/:id/backfill-status ─────────────────────────────────────
-
-async fn get_backfill_status(
-    auth: AuthUser,
-    State(state): State<AppState>,
-    Path(vehicle_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
-
-    let row: Option<(Option<DateTime<Utc>>, Option<String>, Option<i32>, i64)> =
-        sqlx::query_as(
-            "SELECT v.history_backfilled_at, v.history_backfill_status, v.history_session_count,
-                    COUNT(cs.id)
-             FROM riviamigo.vehicles v
-             LEFT JOIN riviamigo.charge_sessions cs ON cs.vehicle_id = v.id
-             WHERE v.id = $1
-             GROUP BY v.history_backfilled_at, v.history_backfill_status, v.history_session_count",
-        )
-        .bind(vehicle_id)
-        .fetch_optional(&state.pool)
-        .await?;
-
-    let (backfilled_at, status, rivian_count, local_count) =
-        row.unwrap_or((None, None, None, 0));
-
-    Ok(Json(serde_json::json!({
-        "vehicle_id":            vehicle_id,
-        "history_backfilled_at": backfilled_at,
-        "status":                status,
-        "rivian_session_count":  rivian_count,
-        "local_session_count":   local_count,
-    })))
-}
-
-// ── POST /v1/vehicles/:id/backfill ────────────────────────────────────────────
-
-async fn trigger_backfill(
-    auth: AuthUser,
-    State(state): State<AppState>,
-    Path(vehicle_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
-
-    // Mark status as pending so the worker will pick it up on next cycle.
-    sqlx::query(
-        "UPDATE riviamigo.vehicles
-         SET history_backfill_status = 'pending',
-             history_backfilled_at = NULL,
-             history_session_count = NULL
-         WHERE id = $1",
-    )
-    .bind(vehicle_id)
-    .execute(&state.pool)
-    .await?;
-
-    // Fire-and-forget the backfill now using stored credentials.
-    let pool2 = state.pool.clone();
-    let age_key = state.age_key.clone();
-    tokio::spawn(async move {
-        let identity = match age_key.parse::<age::x25519::Identity>() {
-            Ok(i) => i,
-            Err(e) => {
-                tracing::error!(vehicle_id=%vehicle_id, err=%e, "backfill: bad age key");
-                return;
-            }
-        };
-        let row = sqlx::query_as::<_, (String, Vec<u8>)>(
-            "SELECT v.rivian_vehicle_id, c.encrypted_tokens
-             FROM riviamigo.vehicles v
-             JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id
-             WHERE v.id = $1",
-        )
-        .bind(vehicle_id)
-        .fetch_optional(&pool2)
-        .await;
-
-        let (riv_id, encrypted) = match row {
-            Ok(Some(r)) => r,
-            _ => {
-                tracing::error!(vehicle_id=%vehicle_id, "backfill: credentials not found");
-                return;
-            }
-        };
-
-        let tokens = match crate::ingestion::session_store::decrypt_tokens(&encrypted, &identity) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!(vehicle_id=%vehicle_id, err=%e, "backfill: decrypt failed");
-                return;
-            }
-        };
-
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
-
-        // Mark running
-        let _ = sqlx::query(
-            "UPDATE riviamigo.vehicles SET history_backfill_status='running' WHERE id=$1",
-        )
-        .bind(vehicle_id)
-        .execute(&pool2)
-        .await;
-
-        match crate::ingestion::rivian_poll::fetch_charge_history_full(
-            &riv_id, vehicle_id, &pool2, &client, &tokens,
-        )
-        .await
-        {
-            Ok(count) => {
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicles
-                     SET history_backfill_status='done',
-                         history_backfilled_at=now(),
-                         history_session_count=$2
-                     WHERE id=$1",
-                )
-                .bind(vehicle_id)
-                .bind(count as i32)
-                .execute(&pool2)
-                .await;
-                tracing::info!(vehicle_id=%vehicle_id, count, "backfill: done");
-            }
-            Err(e) => {
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicles SET history_backfill_status='error' WHERE id=$1",
-                )
-                .bind(vehicle_id)
-                .execute(&pool2)
-                .await;
-                tracing::error!(vehicle_id=%vehicle_id, err=%e, "backfill: failed");
-            }
-        }
-    });
-
-    Ok(Json(serde_json::json!({ "ok": true, "status": "running" })))
-}

@@ -27,6 +27,12 @@
 - PostgreSQL accessible only on internal Docker network (not exposed to host)
 - Parameterized queries via sqlx (compile-time checked)
 - Telemetry column names validated against allowlist before interpolation
+- Rivian vehicle credentials are encrypted with age before durable storage
+
+## Secret Storage
+- Durable Rivian credential bundles are encrypted before storage in `riviamigo.vehicle_credentials`
+- Short-lived connect / OTP staging data should stay encrypted at rest in Redis and Redis should remain internal-only
+- Production should prefer externally supplied `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and `JWT_PUBLIC_KEY` over DB-generated fallback keys
 
 ## Audit Logging
 - Security events (login success/failure, key operations) logged to `riviamigo.security_events`
@@ -41,8 +47,10 @@
 ## Production Checklist
 - [ ] `COOKIE_INSECURE` is NOT set
 - [ ] `POSTGRES_PASSWORD` changed from default
+- [ ] `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and `JWT_PUBLIC_KEY` are supplied from deployment secrets or a secret manager
 - [ ] TLS certificates provisioned at `/etc/ssl/riviamigo/`
 - [ ] `ALLOWED_ORIGINS` set to exact frontend domain(s)
 - [ ] nginx `server_name` set to actual domain
+- [ ] Redis is reachable only on a private/internal network
 - [ ] Firewall blocks port 5432 externally
 - [ ] Firewall allows only 80, 443 externally
