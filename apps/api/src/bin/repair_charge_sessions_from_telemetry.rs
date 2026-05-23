@@ -479,9 +479,9 @@ async fn repair_api_summary_metadata(pool: &sqlx::PgPool) -> Result<u64> {
 async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {
     let sessions = sqlx::query!(
         r#"SELECT id, vehicle_id, geofence_id, cost_profile_id, started_at, ended_at,
-                  duration_minutes, energy_added_wh, energy_used_wh
-           FROM riviamigo.charge_sessions
-           WHERE COALESCE(source, '') <> 'rivian_api'"#
+                  duration_minutes, kwh_added, energy_added_wh, energy_used_wh,
+                  rivian_paid_total, is_public, is_rivian_network
+           FROM riviamigo.charge_sessions"#
     )
     .fetch_all(pool)
     .await?;
@@ -496,18 +496,29 @@ async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {
             session.vehicle_id,
         )
         .await?;
-        let cost_usd = profile.as_ref().and_then(|p| {
-            compute_cost(
-                p,
-                session.energy_added_wh.map(|wh| wh / 1000.0),
-                session.energy_used_wh.map(|wh| wh / 1000.0),
-                session.duration_minutes.unwrap_or(0),
-                session.started_at,
-                session.ended_at,
-            )
+        let authoritative_paid_total = (session.is_public == Some(true)
+            || session.is_rivian_network == Some(true))
+        .then_some(session.rivian_paid_total)
+        .flatten();
+        let cost_usd = authoritative_paid_total.or_else(|| {
+            profile.as_ref().and_then(|p| {
+                compute_cost(
+                    p,
+                    session
+                        .energy_added_wh
+                        .map(|wh| wh / 1000.0)
+                        .or(session.kwh_added),
+                    session.energy_used_wh.map(|wh| wh / 1000.0),
+                    session.duration_minutes.unwrap_or(0),
+                    session.started_at,
+                    session.ended_at,
+                )
+            })
         });
         let resolved_profile_id = profile.as_ref().map(|p| p.id);
-        let cost_method = if resolved_profile_id.is_some() {
+        let cost_method = if authoritative_paid_total.is_some() {
+            Some("rivian_paid_total")
+        } else if resolved_profile_id.is_some() {
             Some("profile")
         } else {
             Some("unknown")

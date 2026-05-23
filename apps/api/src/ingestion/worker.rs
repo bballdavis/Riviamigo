@@ -125,14 +125,13 @@ pub async fn run_vehicle_worker(
     };
 
     // Fetch owner user_id (needed for wallbox enrichment).
-    let user_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT user_id FROM riviamigo.vehicles WHERE id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
+    let user_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vehicle_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
 
     let ws_shutdown = shutdown.resubscribe();
     let ev_tx_ws = ev_tx.clone();
@@ -158,8 +157,7 @@ pub async fn run_vehicle_worker(
 
     // ── Poll tasks ───────────────────────────────────────────────────────────
     // Channel to push PowerState changes from the main event loop to the poll loop.
-    let (power_state_tx, power_state_rx) =
-        watch::channel::<Option<PowerState>>(None);
+    let (power_state_tx, power_state_rx) = watch::channel::<Option<PowerState>>(None);
 
     // Fire-and-forget startup enrichment (runs once; errors are non-fatal).
     {
@@ -170,7 +168,8 @@ pub async fn run_vehicle_worker(
         let tok2 = tokens.clone();
         let age_key2 = age_key.clone();
         tokio::spawn(async move {
-            rivian_poll::run_startup_polls(riv_id, vehicle_id, uid, tok2, pool2, client2, age_key2).await;
+            rivian_poll::run_startup_polls(riv_id, vehicle_id, uid, tok2, pool2, client2, age_key2)
+                .await;
         });
     }
 
@@ -218,6 +217,7 @@ pub async fn run_vehicle_worker(
     let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
     let mut raw_cleanup_tick: u64 = 0;
+    let mut last_live_charge_poll: Option<chrono::DateTime<Utc>> = None;
 
     while let Some(inbound) = ev_rx.recv().await {
         handle_inbound_accounting(&pool, vehicle_id, &config, &inbound).await;
@@ -248,6 +248,33 @@ pub async fn run_vehicle_worker(
             ChargeEvent::SessionEnded(session) => Some(session.session_id),
             _ => charge_det.active_session_id(),
         };
+
+        if session_id.is_some()
+            && last_live_charge_poll
+                .map(|last| (event.ts - last).num_seconds() >= 30)
+                .unwrap_or(true)
+        {
+            last_live_charge_poll = Some(event.ts);
+            let riv_id = rivian_vehicle_id.clone();
+            let pool2 = pool.clone();
+            let client2 = http_client.clone();
+            let tok2 = tokens.clone();
+            let active_session_id = session_id;
+            tokio::spawn(async move {
+                if let Err(e) = rivian_poll::fetch_live_charge_session(
+                    &riv_id,
+                    vehicle_id,
+                    active_session_id,
+                    &pool2,
+                    &client2,
+                    &tok2,
+                )
+                .await
+                {
+                    tracing::debug!(vehicle_id=%vehicle_id, err=%e, "live charge session enrichment failed");
+                }
+            });
+        }
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
@@ -355,7 +382,22 @@ pub async fn run_vehicle_worker(
             let client2 = http_client.clone();
             let tok2 = tokens.clone();
             tokio::spawn(async move {
-                if let Err(e) = rivian_poll::fetch_charge_history(&riv_id, vehicle_id, &pool2, &client2, &tok2).await {
+                if let Err(e) = rivian_poll::fetch_live_session_history(
+                    &riv_id,
+                    vehicle_id,
+                    Some(session.session_id),
+                    &pool2,
+                    &client2,
+                    &tok2,
+                )
+                .await
+                {
+                    tracing::debug!(vehicle_id=%vehicle_id, err=%e, "live charge history sync failed");
+                }
+                if let Err(e) =
+                    rivian_poll::fetch_charge_history(&riv_id, vehicle_id, &pool2, &client2, &tok2)
+                        .await
+                {
                     tracing::warn!(vehicle_id=%vehicle_id, err=%e, "post-session charge history sync failed");
                 }
             });
@@ -1300,7 +1342,10 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
     set_opt!("window_rl_closed", e.window_rl_closed);
     set_opt!("window_rr_closed", e.window_rr_closed);
     set_opt!("gear_guard_locked", e.gear_guard_locked);
-    set_opt!("gear_guard_video_status", e.gear_guard_video_status.as_deref());
+    set_opt!(
+        "gear_guard_video_status",
+        e.gear_guard_video_status.as_deref()
+    );
     set_opt!("wiper_fluid_low", e.wiper_fluid_low);
     set_opt!("brake_fluid_low", e.brake_fluid_low);
     set_opt!("alarm_active", e.alarm_active);
@@ -1538,8 +1583,8 @@ async fn persist_charge_session(
             energy_added_wh, energy_used_wh,
             avg_charge_rate_kw, peak_voltage,
             geofence_id, address_id, cost_profile_id, cost_method,
-            charger_type)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)"#,
+            charger_type, source)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry')"#,
     )
     .bind(session.session_id)
     .bind(session.vehicle_id)

@@ -17,14 +17,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   };
 });
 
-vi.mock('@riviamigo/ui/charts', () => ({
-  ChargeCurveChart: ({ loading }: { loading?: boolean }) => (
-    <div data-testid="charge-curve-chart">{loading ? 'loading' : 'charge-curve'}</div>
-  ),
-}));
-
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth:          () => ({ defaultVehicleId: 'v1' }),
+  useAuth: () => ({ defaultVehicleId: 'v1' }),
   useChargeSession: () => ({
     data: {
       id: 'session-xyz',
@@ -35,6 +29,9 @@ vi.mock('@riviamigo/hooks', () => ({
       cost_usd: 12.50,
       location_name: 'Home',
       duration_min: 90,
+      source: 'telemetry',
+      telemetry_sample_count: 0,
+      charger_type: 'ac',
     },
   }),
   useChargeCurve: () => ({ data: [], isLoading: false }),
@@ -46,19 +43,25 @@ vi.mock('@riviamigo/dashboards', () => ({
   ),
 }));
 
-vi.mock('../../components/layout/AppLayout',  () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock('../../components/layout/AuthGuard',  () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../components/layout/NoVehicleState', () => ({
   NoVehicleState: ({ title }: { title?: string }) => <div data-testid="no-vehicle">{title ?? 'No vehicle'}</div>,
 }));
 vi.mock('@riviamigo/ui/lib/utils', () => ({
-  formatKwh:      (v: number) => `${v} kWh`,
+  formatKwh: (v: number) => `${v} kWh`,
   formatCurrency: (v: number) => `$${v.toFixed(2)}`,
-  formatPercent:  (v: number, _d?: number) => `${v}%`,
+  formatPercent: (v: number) => `${v}%`,
   formatDuration: (v: number) => `${v} min`,
 }));
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
+  Database: () => <svg data-testid="icon-database" />,
+  MapPin: () => <svg data-testid="icon-map-pin" />,
+  RadioTower: () => <svg data-testid="icon-radio" />,
+  Receipt: () => <svg data-testid="icon-receipt" />,
+  Route: () => <svg data-testid="icon-route" />,
+  Zap: () => <svg data-testid="icon-zap" />,
 }));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
@@ -83,9 +86,19 @@ describe('Charge Session Detail page', () => {
     expect(screen.getByText('$12.50')).toBeInTheDocument();
   });
 
-  it('renders the SoC range as start → end', () => {
+  it('renders the SoC range as start to end', () => {
     render(<ChargeSessionContent />);
-    expect(screen.getByText('20% → 90%')).toBeInTheDocument();
+    expect(screen.getByText('20% -> 90%')).toBeInTheDocument();
+  });
+
+  it('renders source telemetry and network facts for telemetry sessions', () => {
+    render(<ChargeSessionContent />);
+    expect(screen.getByText('Source')).toBeInTheDocument();
+    expect(screen.getByText('Live telemetry')).toBeInTheDocument();
+    expect(screen.getByText('Telemetry')).toBeInTheDocument();
+    expect(screen.getByText('No telemetry samples matched')).toBeInTheDocument();
+    expect(screen.getByText('Network')).toBeInTheDocument();
+    expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders the Charge Curve section title', () => {
@@ -102,10 +115,5 @@ describe('Charge Session Detail page', () => {
     render(<ChargeSessionContent />);
     fireEvent.click(screen.getByRole('button', { name: /back to charging/i }));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
-  });
-
-  it('renders the session location as subtitle', () => {
-    render(<ChargeSessionContent />);
-    expect(screen.getByText('Home')).toBeInTheDocument();
   });
 });
