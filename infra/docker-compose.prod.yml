@@ -1,0 +1,84 @@
+version: '3.9'
+
+services:
+  api:
+    image: riviamigo-api:${IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      RUST_LOG: info
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - internal
+      - proxy
+    # Do NOT expose port directly in prod — nginx handles TLS termination
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # Security: drop all Linux capabilities, read-only FS, no new privs
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  timescaledb:
+    image: timescale/timescaledb:2.16.1-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: riviamigo
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    # NOT exposed to host — only accessible via internal network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d riviamigo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/ssl/riviamigo:/etc/ssl/riviamigo:ro
+      - ../apps/web/dist:/app/dist:ro
+    networks:
+      - internal
+      - proxy
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  proxy:
+    driver: bridge
