@@ -90,24 +90,35 @@ const CHARGING_SWAP_WIDGET_KEYS = new Set([
   'sensor:charging_free_sessions',
   'sensor:charging_range_added',
   'custom:charging.connection',
+  'custom:charging.sessions.table',
   'custom:charging.network_breakdown',
+  'chart:catalog',
 ]);
 
 const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
+  // Always-visible stat chips (left 6 columns)
   sensorWidget('d4000004-0000-0000-0000-000000000001', 'charging_sessions_summary', 'Sessions', {}, { x: 0, y: 0, w: 3, h: 2 }),
   sensorWidget('d4000004-0000-0000-0000-000000000002', 'charging_total_energy', 'Total Energy', {}, { x: 3, y: 0, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000003', 'charging_total_cost', 'Total Cost', {}, { x: 3, y: 2, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000004', 'charging_avg_session', 'Avg / Session', unpluggedOptions(), { x: 9, y: 2, w: 3, h: 2 }),
   sensorWidget('d4000004-0000-0000-0000-000000000005', 'charging_cycles_summary', 'Charging Cycles', {}, { x: 0, y: 2, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000006', 'charging_efficiency_summary', 'Charge Efficiency', unpluggedOptions(), { x: 9, y: 0, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000007', 'charging_max_rate', 'Max Charge Rate', unpluggedOptions(), { x: 6, y: 2, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000008', 'charging_max_limit', 'Max Charge Limit', unpluggedOptions(), { x: 6, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000003', 'charging_total_cost', 'Total Cost', {}, { x: 3, y: 2, w: 3, h: 2 }),
   sensorWidget('d4000004-0000-0000-0000-000000000009', 'charging_home_share', 'Home Charging', {}, { x: 0, y: 4, w: 3, h: 2 }),
   sensorWidget('d4000004-0000-0000-0000-000000000010', 'charging_dc_share', 'DC Fast Charging', {}, { x: 3, y: 4, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000014', 'charging_free_sessions', 'Free Sessions', {}, { x: 6, y: 4, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000015', 'charging_range_added', 'Range Added', {}, { x: 9, y: 4, w: 3, h: 2 }),
-  customWidget('d4000004-0000-0000-0000-000000000013', 'charging.connection', 'Charging Connection', pluggedOptions(), { x: 0, y: 6, w: 8, h: 8 }),
-  customWidget('d4000004-0000-0000-0000-000000000016', 'charging.network_breakdown', 'Network Breakdown', {}, { x: 8, y: 6, w: 4, h: 8 }),
+  // Plugged-in: connection widget spans x:6-11, y:0-5.
+  customWidget('d4000004-0000-0000-0000-000000000013', 'charging.connection', 'Charging Connection', pluggedOptions(), { x: 6, y: 0, w: 6, h: 6 }),
+  // Unplugged-only: stat chips at the same grid cells as the connection widget above
+  sensorWidget('d4000004-0000-0000-0000-000000000006', 'charging_efficiency_summary', 'Charge Efficiency', unpluggedOptions(), { x: 6, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000008', 'charging_max_limit', 'Max Charge Limit', unpluggedOptions(), { x: 9, y: 0, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000007', 'charging_max_rate', 'Max Charge Rate', unpluggedOptions(), { x: 6, y: 2, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000004', 'charging_avg_session', 'Avg / Session', unpluggedOptions(), { x: 9, y: 2, w: 3, h: 2 }),
+  // Keep network enrichment below the session table so the primary chart row stays full-width.
+  chartWidget('d4000004-0000-0000-0000-000000000011', 'catalog', 'Charging Charts', {
+    page: 'charging',
+    chartId: 'charging-sessions-energy',
+    chartIds: ['charging-sessions-energy', 'charge-level', 'charging-weekly-energy', 'charging-curve-analysis'],
+    showPicker: true,
+  }, { x: 0, y: 6, w: 12, h: 11 }),
+  customWidget('d4000004-0000-0000-0000-000000000012', 'charging.sessions.table', 'Charging Sessions', {}, { x: 0, y: 17, w: 12, h: 12 }),
+  customWidget('d4000004-0000-0000-0000-000000000016', 'charging.network_breakdown', 'Network Breakdown', {}, { x: 0, y: 29, w: 12, h: 4 }),
 ];
 
 function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConfig {
@@ -133,6 +144,16 @@ function customWidget(
   layout: WidgetInstance['layout'],
 ): WidgetInstance {
   return { id, componentType: 'custom', definitionId, title, options, layout };
+}
+
+function chartWidget(
+  id: string,
+  definitionId: string,
+  title: string,
+  options: Record<string, unknown>,
+  layout: WidgetInstance['layout'],
+): WidgetInstance {
+  return { id, componentType: 'chart', definitionId, title, options, layout };
 }
 
 function pluggedOptions() {

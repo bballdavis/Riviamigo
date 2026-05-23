@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check } from 'lucide-react';
+import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
 import { CHART_COLOR_OPTIONS, getChartColor, type ChartColorKey } from '@riviamigo/ui/charts';
 import { getWidgetForInstance } from '../registry';
@@ -26,9 +26,10 @@ interface WidgetEditFormProps {
   widget: WidgetInstance;
   onChange: (next: WidgetInstance) => void;
   onClose: () => void;
+  onRemove?: () => void;
 }
 
-export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProps) {
+export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEditFormProps) {
   const def = getWidgetForInstance(widget);
   const { data: catalog = [] } = useMetricCatalog();
 
@@ -146,9 +147,12 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-2">
+    <div className="flex flex-col">
+      {/* Sticky header — pins to top of the EditorDrawer scroll container */}
+      <div
+        className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 pb-2 pt-3"
+        style={{ backgroundColor: 'var(--rm-bg-page)' }}
+      >
         <div className="min-w-0">
           <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
             Editing
@@ -157,17 +161,30 @@ export function WidgetEditForm({ widget, onChange, onClose }: WidgetEditFormProp
             {def?.title ?? `${widget.componentType}/${widget.definitionId}`}
           </h2>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          title="Done"
-          className="flex shrink-0 items-center justify-center rounded-lg border border-accent/60 bg-accent/15 p-2 text-accent transition-colors hover:bg-accent/25"
-        >
-          <Check className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="text-[11px] font-medium text-fg-tertiary">Component</span>
+          <button
+            type="button"
+            onClick={onClose}
+            title="Save component"
+            className="flex items-center justify-center rounded-lg bg-accent p-2 text-white transition-colors hover:bg-accent/90"
+          >
+            <Save className="h-4 w-4" />
+          </button>
+          {onRemove ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              title="Remove component"
+              className="flex items-center justify-center rounded-lg border border-border p-2 text-fg-tertiary transition-colors hover:border-status-danger/60 hover:text-status-danger"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-y-contain" style={{ scrollbarGutter: 'stable' }}>
+      <div className="flex flex-col gap-3 px-3 pb-3">
         <Section title="Identity">
           <Field label="Title">
             <input

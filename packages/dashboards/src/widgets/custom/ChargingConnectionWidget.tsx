@@ -5,7 +5,7 @@ import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
-import { findBestChargingSideOverlay, findSideChargingImage, findFirstSideImage } from './imageUtils';
+import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
 const CHARGING_SIDE_LIGHT_IMAGE_URL = '/vehicle-images/r1s-side-charging-light.png';
 
@@ -48,17 +48,9 @@ function ChargingConnectionWidget({
     findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
     chargingSideLight;
-  const regularSideLight =
-    (activeVehicle?.images as { side?: { light?: string | null } } | null | undefined)?.side?.light ??
-    findFirstSideImage(activeVehicle?.images?.all, 'light') ??
-    CHARGING_SIDE_LIGHT_IMAGE_URL;
-  const regularSideDark =
-    (activeVehicle?.images as { side?: { dark?: string | null } } | null | undefined)?.side?.dark ??
-    findFirstSideImage(activeVehicle?.images?.all, 'dark') ??
-    regularSideLight;
-  const imageMode = charging ? 'side-charging' : 'side';
-  const displaySideLight = charging ? chargingSideLight : regularSideLight;
-  const displaySideDark = charging ? chargingSideDark : regularSideDark;
+  const imageMode = 'side-charging';
+  const displaySideLight = chargingSideLight;
+  const displaySideDark = chargingSideDark;
   const rows = [
     {
       label: 'Status',
@@ -102,8 +94,8 @@ function ChargingConnectionWidget({
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        <VehicleSideImage source={displaySideLight} mode={charging ? 'charging' : 'side'} darkClassName="dark:hidden" />
-        <VehicleSideImage source={displaySideDark} mode={charging ? 'charging' : 'side'} darkClassName="hidden dark:block" />
+        <VehicleSideImage source={displaySideLight} darkClassName="dark:hidden" />
+        <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" />
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/82 to-transparent" />
@@ -240,25 +232,20 @@ function ChargingBatteryLedBar({
 
 function VehicleSideImage({
   source,
-  mode,
   darkClassName,
 }: {
   source: string;
-  mode: 'side' | 'charging';
   darkClassName: string;
 }) {
-  const transform = mode === 'charging' ? 'translateX(-12%) scale(1.12)' : 'translateX(-5%) scale(1.15)';
-  const objectPosition = mode === 'charging' ? 'left center' : 'right center';
-
   return (
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <img
         src={source}
         alt=""
         data-testid="charging-side-image"
-        data-image-mode={mode}
+        data-image-mode="charging"
         className="h-full w-auto max-w-none object-contain"
-        style={{ objectPosition, transform, transformOrigin: mode === 'charging' ? 'left top' : 'right center' }}
+        style={{ objectPosition: 'left center', transform: 'translateX(-12%) scale(1.12)', transformOrigin: 'left top' }}
       />
     </div>
   );

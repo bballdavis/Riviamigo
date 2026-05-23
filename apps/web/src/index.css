@@ -102,3 +102,19 @@
 .rm-drive-across {
   animation: rm-drive-across 2.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
+
+@keyframes rm-hills-y {
+  0%   { transform: translateY(0px); }
+  15%  { transform: translateY(0px); }
+  23%  { transform: translateY(-9px); }
+  35%  { transform: translateY(4px); }
+  52%  { transform: translateY(-12px); }
+  65%  { transform: translateY(4px); }
+  75%  { transform: translateY(-6px); }
+  85%  { transform: translateY(1px); }
+  100% { transform: translateY(0px); }
+}
+
+.rm-hills-y {
+  animation: rm-hills-y 2.2s ease-in-out infinite;
+}

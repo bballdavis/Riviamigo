@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { createRoute, useNavigate } from '@tanstack/react-router';
+import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
+import { z } from 'zod';
 import { rootRoute } from './__root';
-import { api, useAuth } from '@riviamigo/hooks';
+import { api, useAuth, useVehicles } from '@riviamigo/hooks';
 import type { ConnectedRivianVehicle, ConnectResult } from '@riviamigo/types';
 import { PageLayout, Button, Input, Card } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -12,6 +13,10 @@ import { Car, Check, KeyRound, ShieldCheck, Zap } from 'lucide-react';
 export const connectRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/connect',
+  validateSearch: z.object({
+    mode: z.enum(['add', 'refresh']).optional(),
+    vehicle_id: z.string().optional(),
+  }),
   component: ConnectPage,
 });
 
@@ -21,7 +26,11 @@ function ConnectPage() {
 
 export function ConnectContent() {
   const navigate = useNavigate();
+  const search = useSearch({ from: '/connect' });
   const setDefaultVehicleId = useAuth((state) => state.setDefaultVehicleId);
+  const { data: connectedVehicles } = useVehicles();
+  const refreshVehicleId = search.mode === 'refresh' ? search.vehicle_id : undefined;
+  const refreshVehicle = connectedVehicles?.find((vehicle) => vehicle.id === refreshVehicleId);
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
@@ -37,7 +46,10 @@ export function ConnectContent() {
     try {
       const result = await api.connectRivian(email, password);
       if (result.requires_otp && result.challenge_id) {
-        navigate({ to: '/connect/otp', search: { challenge_id: result.challenge_id, email } });
+        navigate({
+          to: '/connect/otp',
+          search: { challenge_id: result.challenge_id, email, mode: search.mode, vehicle_id: refreshVehicleId },
+        });
       } else {
         await finishConnectedResult(result);
       }
@@ -49,6 +61,23 @@ export function ConnectContent() {
   }
 
   async function finishConnectedResult(result: ConnectResult) {
+    if (refreshVehicleId) {
+      if (!refreshVehicle) {
+        setError('Choose an existing vehicle before refreshing Rivian credentials.');
+        return;
+      }
+      const matchingVehicle = result.vehicles.find((vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id);
+      if (!matchingVehicle) {
+        setError('That Rivian account does not include this vehicle.');
+        return;
+      }
+      await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
+      setDefaultVehicleId(refreshVehicleId);
+      setSuccessVehicleName(formatVehicleName(matchingVehicle));
+      setVehicles([]);
+      return;
+    }
+
     if (!result.vehicles.length) {
       setError('Rivian sign-in succeeded, but no vehicles were returned for this account.');
       return;
@@ -78,18 +107,18 @@ export function ConnectContent() {
   return (
     <AppLayout activeKey="settings">
       <PageLayout
-        title="Add a Vehicle"
-        subtitle="Connect your Rivian account so Riviamigo can securely prepare telemetry access."
+        title={refreshVehicle ? 'Refresh Rivian Login' : 'Add a Vehicle'}
+        subtitle={refreshVehicle ? `Update encrypted credentials for ${refreshVehicle.display_name}.` : 'Connect your Rivian account so Riviamigo can securely prepare telemetry access.'}
         className="min-h-[calc(100vh-3rem)] justify-center [&>div:first-child]:justify-center [&>div:first-child>div]:text-center"
       >
-        <div className="mx-auto w-full max-w-xl">
+        <div className="mx-auto w-full max-w-2xl">
           <Card padding="lg" className="shadow-lg">
             <ConnectProgress currentStep={currentStep} />
 
             {successVehicleName ? (
               <ConnectedVehicleSuccess
                 vehicleName={successVehicleName}
-                onOpenDashboard={() => navigate({ to: '/' })}
+                onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
               />
             ) : vehicles.length > 1 ? (
               <VehiclePicker
@@ -119,7 +148,7 @@ export function ConnectContent() {
                 <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-4">
                   <Input label="Rivian Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
                   <Input label="Rivian Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" required />
-                  {error && <p className="text-xs text-[#F87171]">{error}</p>}
+                  {error && <p className="text-xs text-status-danger">{error}</p>}
                   <Button type="submit" loading={loading} iconLeft={<KeyRound className="h-4 w-4" />} className="mt-1">
                     {loading ? 'Checking account' : 'Connect Account'}
                   </Button>
@@ -160,7 +189,7 @@ function ConnectProgress({ currentStep }: { currentStep: number }) {
           style={{ width: `${((currentStep + 1) / steps.length) * 100}%` }}
         />
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+      <div className="mt-5 grid grid-cols-3 items-stretch gap-3">
         {steps.map((step, index) => {
           const Icon = step.icon;
           const active = index === currentStep;
@@ -223,7 +252,7 @@ function VehiclePicker({
           </button>
         ))}
       </div>
-      {error && <p className="mt-4 text-xs text-[#F87171]">{error}</p>}
+      {error && <p className="mt-4 text-xs text-status-danger">{error}</p>}
     </div>
   );
 }

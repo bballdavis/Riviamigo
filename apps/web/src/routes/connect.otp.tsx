@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
 import { z } from 'zod';
 import { rootRoute } from './__root';
-import { api, useAuth } from '@riviamigo/hooks';
+import { api, useAuth, useVehicles } from '@riviamigo/hooks';
 import type { ConnectedRivianVehicle, ConnectResult } from '@riviamigo/types';
 import { PageLayout, Button, Input, Card } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -13,6 +13,8 @@ import { Car, Check, KeyRound, ShieldCheck } from 'lucide-react';
 const searchSchema = z.object({
   challenge_id: z.string(),
   email: z.string().optional(),
+  mode: z.enum(['add', 'refresh']).optional(),
+  vehicle_id: z.string().optional(),
 });
 
 export const connectOtpRoute = createRoute({
@@ -28,8 +30,11 @@ function ConnectOtpPage() {
 
 export function ConnectOtpContent() {
   const navigate = useNavigate();
-  const { challenge_id, email } = useSearch({ from: '/connect/otp' });
+  const { challenge_id, email, mode, vehicle_id } = useSearch({ from: '/connect/otp' });
   const setDefaultVehicleId = useAuth((state) => state.setDefaultVehicleId);
+  const { data: connectedVehicles } = useVehicles();
+  const refreshVehicleId = mode === 'refresh' ? vehicle_id : undefined;
+  const refreshVehicle = connectedVehicles?.find((vehicle) => vehicle.id === refreshVehicleId);
   const [otp, setOtp]         = useState('');
   const [error, setError]     = useState('');
   const [loading, setLoading] = useState(false);
@@ -51,6 +56,23 @@ export function ConnectOtpContent() {
   }
 
   async function finishConnectedResult(result: ConnectResult) {
+    if (refreshVehicleId) {
+      if (!refreshVehicle) {
+        setError('Choose an existing vehicle before refreshing Rivian credentials.');
+        return;
+      }
+      const matchingVehicle = result.vehicles.find((vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id);
+      if (!matchingVehicle) {
+        setError('That Rivian account does not include this vehicle.');
+        return;
+      }
+      await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
+      setDefaultVehicleId(refreshVehicleId);
+      setSuccessVehicleName(formatVehicleName(matchingVehicle));
+      setVehicles([]);
+      return;
+    }
+
     if (!result.vehicles.length) {
       setError('Rivian verification succeeded, but no vehicles were returned for this account.');
       return;
@@ -80,18 +102,18 @@ export function ConnectOtpContent() {
   return (
     <AppLayout activeKey="settings">
       <PageLayout
-        title="Add a Vehicle"
-        subtitle="Complete Rivian verification so encrypted vehicle access can be saved."
+        title={refreshVehicle ? 'Refresh Rivian Login' : 'Add a Vehicle'}
+        subtitle={refreshVehicle ? `Complete verification to update credentials for ${refreshVehicle.display_name}.` : 'Complete Rivian verification so encrypted vehicle access can be saved.'}
         className="min-h-[calc(100vh-3rem)] justify-center [&>div:first-child]:justify-center [&>div:first-child>div]:text-center"
       >
-        <div className="mx-auto w-full max-w-xl">
+        <div className="mx-auto w-full max-w-2xl">
           <Card padding="lg" className="shadow-lg">
             <ConnectOtpProgress loading={loading} success={Boolean(successVehicleName)} />
 
             {successVehicleName ? (
               <ConnectedVehicleSuccess
                 vehicleName={successVehicleName}
-                onOpenDashboard={() => navigate({ to: '/' })}
+                onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
               />
             ) : vehicles.length > 1 ? (
               <VehiclePicker
@@ -133,7 +155,7 @@ export function ConnectOtpContent() {
                     required
                     autoFocus
                   />
-                  {error && <p className="text-xs text-[#F87171]">{error}</p>}
+                  {error && <p className="text-xs text-status-danger">{error}</p>}
                   <Button type="submit" loading={loading} iconLeft={<ShieldCheck className="h-4 w-4" />}>
                     {loading ? 'Verifying code' : 'Verify and Connect'}
                   </Button>
@@ -159,7 +181,7 @@ function ConnectOtpProgress({ loading, success }: { loading: boolean; success: b
       <div className="h-2 overflow-hidden rounded-full bg-bg-elevated">
         <div className="h-full w-full rounded-full bg-accent transition-all duration-300" />
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+      <div className="mt-5 grid grid-cols-3 items-stretch gap-3">
         {items.map((item) => {
           const Icon = item.icon;
           return (
@@ -222,7 +244,7 @@ function VehiclePicker({
           </button>
         ))}
       </div>
-      {error && <p className="mt-4 text-xs text-[#F87171]">{error}</p>}
+      {error && <p className="mt-4 text-xs text-status-danger">{error}</p>}
     </div>
   );
 }

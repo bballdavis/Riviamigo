@@ -251,7 +251,7 @@ describe('charging connection custom widget', () => {
     });
   });
 
-  it('uses normal side art and disables the runner when connected but not charging', () => {
+  it('uses charging side art and disables the runner when connected but not charging', () => {
     chargingMocks.forcePluggedState = 'Connected';
     chargingMocks.images = vehicleImageFixtures;
 
@@ -263,10 +263,10 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByText('Standby')).toBeInTheDocument();
-    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side');
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
     expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
-      '/rivian/side-light.webp',
-      '/rivian/side-dark.webp',
+      '/rivian/side-charging-light.webp',
+      '/rivian/side-charging-dark.webp',
     ]);
     expect(screen.queryByTestId('charging-battery-led-sweep')).not.toBeInTheDocument();
     expect(screen.getAllByTestId('charging-battery-led-segment')).toHaveLength(20);

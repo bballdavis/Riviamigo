@@ -92,9 +92,9 @@ function getAppMapStyle(): MapStyleMode {
   return document.documentElement.classList.contains('light') ? 'light' : 'dark';
 }
 
-// How many track requests to fire at once.  The API rate-limiter allows
-// burst=20 across all protected routes, so keep this well below that.
-const TRACK_BATCH_SIZE = 4;
+// How many track requests to fire at once. Keep batching to avoid thundering
+// herd of simultaneous requests; stale time is infinite so tracks are cached forever.
+const TRACK_BATCH_SIZE = 8;
 
 function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { selectedIds } = useTripSelection();

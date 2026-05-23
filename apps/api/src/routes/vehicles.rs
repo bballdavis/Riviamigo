@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -18,10 +18,13 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
+        .route("/vehicles/:id", delete(delete_vehicle))
+        .route("/vehicles/:id/credentials", put(refresh_vehicle_credentials))
         .route("/vehicles/:id/status", get(vehicle_status))
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
         .route("/vehicles/:id/battery-config", put(update_battery_config))
+        .route("/vehicles/:id/name", put(update_vehicle_name))
         .route("/vehicles/:id/charging-backfill", post(trigger_charging_backfill))
 }
 
@@ -146,6 +149,7 @@ struct VehicleListRow {
     color: Option<String>,
     name: Option<String>,
     battery_capacity_wh: Option<f64>,
+    battery_config: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     // Enrichment fields (migration 0023)
     interior_color: Option<String>,
@@ -158,6 +162,13 @@ struct VehicleListRow {
     history_backfill_status: Option<String>,
     history_backfilled_at: Option<chrono::DateTime<chrono::Utc>>,
     history_session_count: Option<i32>,
+    worker_health: Option<String>,
+    worker_health_msg: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RefreshCredentialsBody {
+    rivian_vehicle_id: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -586,6 +597,20 @@ async fn add_vehicle(
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(|e| AppError::Internal(e))?;
 
+    let existing_vehicle_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.vehicles WHERE user_id = $1 AND rivian_vehicle_id = $2",
+    )
+    .bind(auth.user_id)
+    .bind(&rivian_vehicle_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if existing_vehicle_id.is_some() {
+        return Err(AppError::Conflict(
+            "vehicle already exists; refresh credentials from vehicle settings".into(),
+        ));
+    }
+
     let vehicle_id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO riviamigo.vehicles
            (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
@@ -594,9 +619,9 @@ async fn add_vehicle(
     .bind(auth.user_id)
     .bind(&rivian_vehicle_id)
     .bind(body.model.as_deref().unwrap_or("R1T"))
-    .bind(body.trim)
-    .bind(body.vin)
-    .bind(body.name)
+    .bind(body.trim.as_deref())
+    .bind(body.vin.as_deref())
+    .bind(body.name.as_deref())
     .bind(body.home_lat)
     .bind(body.home_lng)
     .fetch_one(&state.pool)
@@ -604,7 +629,11 @@ async fn add_vehicle(
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at) \
-         VALUES ($1,$2,now())",
+         VALUES ($1,$2,now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET encrypted_tokens = EXCLUDED.encrypted_tokens,
+             token_created_at = now(),
+             last_refreshed_at = now()",
     )
     .bind(vehicle_id)
     .bind(encrypted.as_slice())
@@ -622,6 +651,17 @@ async fn add_vehicle(
     .await?;
 
     cache_vehicle_images(&state.pool, vehicle_id, &tokens).await;
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, worker_health, worker_health_msg, updated_at)
+         VALUES ($1, 'ok', NULL, now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET worker_health = 'ok',
+             worker_health_msg = NULL,
+             updated_at = now()",
+    )
+    .bind(vehicle_id)
+    .execute(&state.pool)
+    .await?;
 
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
     info!(
@@ -634,6 +674,108 @@ async fn add_vehicle(
     // Spawn worker
     // (supervisor handle is stored in AppState in main — passed via extension)
     Ok(Json(serde_json::json!({"vehicle_id": vehicle_id})))
+}
+
+async fn refresh_vehicle_credentials(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<RefreshCredentialsBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    let rivian_vehicle_id: String = sqlx::query_scalar(
+        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1 AND user_id = $2",
+    )
+    .bind(vid)
+    .bind(auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    if let Some(requested) = body.rivian_vehicle_id.as_deref() {
+        if requested != rivian_vehicle_id {
+            return Err(AppError::Validation("selected Rivian vehicle does not match this local vehicle".into()));
+        }
+    }
+
+    let mut conn = state.redis.get_multiplexed_async_connection().await?;
+    let key = format!("rivian:connect:{}", auth.user_id);
+    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
+    let raw = raw.ok_or_else(|| AppError::Validation("complete /vehicles/connect first".into()))?;
+
+    let tokens: crate::ingestion::session_store::RivianTokenBundle = serde_json::from_str(&raw)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt token")))?;
+
+    let client = reqwest::Client::new();
+    let account_vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
+        .await
+        .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    if !account_vehicles.iter().any(|vehicle| vehicle.id == rivian_vehicle_id) {
+        return Err(AppError::Validation("Rivian account does not include this vehicle".into()));
+    }
+
+    let identity = state
+        .age_key
+        .parse::<age::x25519::Identity>()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
+    let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
+        .map_err(AppError::Internal)?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
+         VALUES ($1,$2,now(),now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET encrypted_tokens = EXCLUDED.encrypted_tokens,
+             last_refreshed_at = now()",
+    )
+    .bind(vid)
+    .bind(encrypted.as_slice())
+    .execute(&state.pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, worker_health, worker_health_msg, updated_at)
+         VALUES ($1, 'ok', NULL, now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET worker_health = 'ok',
+             worker_health_msg = NULL,
+             updated_at = now()",
+    )
+    .bind(vid)
+    .execute(&state.pool)
+    .await?;
+
+    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
+    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vid })))
+}
+
+async fn delete_vehicle(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    sqlx::query("DELETE FROM riviamigo.vehicles WHERE id = $1 AND user_id = $2")
+        .bind(vid)
+        .bind(auth.user_id)
+        .execute(&state.pool)
+        .await?;
+
+    let next_default: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at LIMIT 1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    sqlx::query("UPDATE riviamigo.users SET default_vehicle_id = $1 WHERE id = $2")
+        .bind(next_default)
+        .bind(auth.user_id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(Json(serde_json::json!({ "ok": true, "default_vehicle_id": next_default })))
 }
 
 #[derive(Deserialize)]
@@ -664,16 +806,43 @@ async fn update_battery_config(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+#[derive(Deserialize)]
+struct UpdateVehicleNameBody {
+    name: String,
+}
+
+async fn update_vehicle_name(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateVehicleNameBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let trimmed = body.name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("name must not be blank".into()));
+    }
+    sqlx::query("UPDATE riviamigo.vehicles SET name = $2 WHERE id = $1")
+        .bind(vid)
+        .bind(trimmed)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 async fn list_vehicles(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query_as::<_, VehicleListRow>(
-        "SELECT id, rivian_vehicle_id, model, trim, vin, color, name, battery_capacity_wh, \
-                created_at, interior_color, wheel_option, max_vehicle_power_kw, \
-                charge_port_type, battery_cell_type, supported_features, \
-                history_backfill_status, history_backfilled_at, history_session_count \
-         FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at",
+        "SELECT v.id, v.rivian_vehicle_id, v.model, v.trim, v.vin, v.color, v.name, v.battery_capacity_wh, \
+                v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
+                v.charge_port_type, v.battery_cell_type, v.supported_features, \
+                v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
+                vrs.worker_health, vrs.worker_health_msg \
+         FROM riviamigo.vehicles v \
+         LEFT JOIN riviamigo.vehicle_runtime_state vrs ON vrs.vehicle_id = v.id \
+         WHERE v.user_id = $1 ORDER BY v.created_at",
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
@@ -712,12 +881,15 @@ async fn list_vehicles(
             "battery_cell_type":        r.battery_cell_type,
             "supported_features":       r.supported_features,
             "battery_capacity_kwh":     r.battery_capacity_wh.map(|w| w / 1000.0),
+            "battery_config":           r.battery_config,
             "display_name":             r.name.as_deref().unwrap_or(&r.model),
             "created_at":               r.created_at,
             "images":                   images,
             "history_backfill_status":  r.history_backfill_status,
             "history_backfilled_at":    r.history_backfilled_at,
             "history_session_count":    r.history_session_count,
+            "worker_health":            r.worker_health,
+            "worker_health_msg":        r.worker_health_msg,
         }));
     }
 

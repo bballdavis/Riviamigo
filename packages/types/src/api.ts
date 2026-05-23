@@ -42,6 +42,19 @@ export interface MetricSeriesPoint {
   value: number | null;
 }
 
+export interface DataQualityResponse {
+  vehicle_id: string;
+  window_from: string;
+  window_to: string;
+  total_samples: number;
+  samples_with_location: number;
+  samples_with_battery: number;
+  samples_with_power_kw: number;
+  samples_with_odometer: number;
+  coverage_pct: number | null;
+  gap_count: number;
+}
+
 export interface PhantomDrainPoint {
   date: string;
   drain_pct: number;
@@ -92,6 +105,13 @@ export interface ChargeSession {
   soc_end: number | null;
   peak_power_kw: number | null;
   cost_usd: number | null;
+  source?: string | null;
+  telemetry_sample_count?: number;
+  network_vendor?: string | null;
+  range_added_km?: number | null;
+  is_free_session?: boolean | null;
+  is_rivian_network?: boolean | null;
+  rivian_paid_total?: number | null;
 }
 
 export interface ChargeCurvePoint {
@@ -144,6 +164,16 @@ export interface ChargingSummary {
   max_charge_limit_pct?: number | null;
   max_charge_rate_kw?: number | null;
   typed_session_count?: number;
+  free_session_count?: number;
+  total_range_added_km?: number | null;
+  rivian_paid_total_usd?: number | null;
+  network_breakdown?: Array<{
+    network_vendor: string | null;
+    session_count: number;
+    energy_kwh: number | null;
+    cost_usd: number | null;
+    free_sessions: number;
+  }>;
   weekly: Array<{ week_start: string; energy_kwh: number; sessions: number }>;
 }
 

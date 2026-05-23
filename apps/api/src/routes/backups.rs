@@ -324,7 +324,7 @@ async fn update_backup_settings(
     let run_at = parse_run_time(&body.run_at)?;
     let timezone = parse_timezone(&body.timezone)?;
     validate_schedule(&body.frequency, body.day_of_week, body.day_of_month)?;
-    validate_target(body.target_type, body.enabled, &body.bucket)?;
+    validate_target(body.target_type, body.enabled, &body.endpoint, &body.bucket)?;
 
     let normalized_day_of_week = match body.frequency {
         BackupFrequency::Weekly => body.day_of_week,
@@ -729,14 +729,17 @@ fn validate_schedule(
 fn validate_target(
     target_type: BackupTargetType,
     enabled: bool,
+    endpoint: &str,
     bucket: &str,
 ) -> Result<(), AppError> {
     if target_type != BackupTargetType::S3 {
         return Err(AppError::Validation("target_type must be s3".into()));
     }
-    if enabled && bucket.trim().is_empty() {
+    // Bucket is only required when an S3 endpoint is configured; local-only runs
+    // (empty endpoint) do not need one.
+    if enabled && !endpoint.trim().is_empty() && bucket.trim().is_empty() {
         return Err(AppError::Validation(
-            "bucket is required when automatic backups are enabled".into(),
+            "bucket is required when an S3 endpoint is configured".into(),
         ));
     }
     Ok(())
