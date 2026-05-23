@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{middleware, routing::get, Router};
 use http::{
     header::{
@@ -6,9 +8,11 @@ use http::{
     },
     HeaderValue,
 };
+use tower_governor::{GovernorConfigBuilder, GovernorLayer};
 use tower_http::{
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
+    limit::RequestBodyLimitLayer,
     request_id::{MakeRequestUuid, SetRequestIdLayer},
     set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
@@ -61,6 +65,22 @@ pub fn build_router(state: AppState) -> Router {
         .allow_headers(AllowHeaders::mirror_request())
         .allow_credentials(true);
 
+    // Rate-limit configs
+    let auth_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(6)
+            .burst_size(10)
+            .finish()
+            .unwrap(),
+    );
+    let data_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_millisecond(500)
+            .burst_size(20)
+            .finish()
+            .unwrap(),
+    );
+
     // Inject decoding key into request extensions so AuthUser extractor can find it
     let decoding_key = state.jwt_keys.decoding.clone();
 
@@ -96,11 +116,20 @@ pub fn build_router(state: AppState) -> Router {
                     next.run(req).await
                 }
             },
-        ));
+        ))
+        .layer(RequestBodyLimitLayer::new(64 * 1024))
+        .layer(GovernorLayer {
+            config: data_config,
+        });
+
+    // Public auth routes with strict rate limiting
+    let auth_public = auth::router().layer(GovernorLayer {
+        config: auth_config,
+    });
 
     Router::new()
         .route("/health", get(health))
-        .nest("/v1", Router::new().merge(auth::router()).merge(protected))
+        .nest("/v1", Router::new().merge(auth_public).merge(protected))
         .route("/grafana/query", axum::routing::post(grafana::query_stub))
         .route("/grafana/search", axum::routing::post(grafana::search_stub))
         .layer(cors)
