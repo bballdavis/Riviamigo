@@ -30,6 +30,7 @@ interface MapApi {
   remove(): void;
   on(event: string, cb: () => void): void;
   on(event: string, layerId: string, cb: () => void): void;
+  off(event: string, cb: () => void): void;
   resize(): void;
   fitBounds(bounds: [[number, number], [number, number]], options?: { padding?: number; animate?: boolean }): void;
   addSource(id: string, source: unknown): void;
@@ -108,12 +109,15 @@ export function TripMapChart({
     return () => observer.disconnect();
   }, []);
 
-  // Create or recreate the map when the route set or theme style changes.
+  // ── Map creation — runs once when the first routes become available ─────────
+  // The map instance is kept alive for the lifetime of the component.  Style
+  // changes (dark↔light) are applied via setStyle() on the existing instance
+  // rather than destroying and recreating the map, which avoids losing the
+  // in-GPU tile cache and triggering a "WebGL context was lost" error.
   React.useEffect(() => {
     if (!containerRef.current || routeList.length === 0 || mapRef.current) return;
 
     let cancelled = false;
-    let map: MapApi | null = null;
 
     (async () => {
       const maplibregl = await import('maplibre-gl');
@@ -124,12 +128,14 @@ export function TripMapChart({
       const firstPoint = routeList[0]?.track[0];
       if (!firstPoint) return;
 
-      map = new maplibregl.default.Map({
+      const map = new maplibregl.default.Map({
         container: containerRef.current!,
         style: buildMapLibreStyle(mapStyle),
         center: [firstPoint.lng, firstPoint.lat],
         zoom: 12,
         attributionControl: false,
+        // Keep more tiles in the GPU cache to survive style swaps.
+        maxTileCacheSize: 512,
       }) as MapApi;
 
       mapRef.current = map;
@@ -155,7 +161,35 @@ export function TripMapChart({
         mapRef.current = null;
       }
     };
-  }, [routeList.length, mapStyle]);
+    // Only run when the first routes arrive — NOT on mapStyle change so that
+    // toggling dark/light doesn't destroy the map instance.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeList.length === 0]);
+
+  // ── Style swap — update tiles in place without destroying the map ─────────
+  // setStyle() clears all sources/layers, so we re-sync routes once the new
+  // style has loaded.  We register the handler here and clean it up if the
+  // effect re-fires (rapid dark/light toggle) before it fires.
+  React.useEffect(() => {
+    if (!isLoadedRef.current || !mapRef.current) return;
+
+    const map = mapRef.current;
+    const snapshot = { routes: routeList, selectedIds: selectedRouteIds, clickRef: onRouteClickRef };
+
+    function onStyleLoad() {
+      isLoadedRef.current = true;
+      lastRouteSignatureRef.current = '';
+      syncedRouteIdsRef.current = [];
+      syncRoutes(map, snapshot.routes, snapshot.selectedIds, snapshot.clickRef);
+    }
+
+    map.setStyle(buildMapLibreStyle(mapStyle));
+    map.on('style.load', onStyleLoad);
+
+    return () => {
+      map.off('style.load', onStyleLoad);
+    };
+  }, [mapStyle]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
