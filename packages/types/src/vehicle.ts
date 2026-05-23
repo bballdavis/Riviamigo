@@ -73,6 +73,7 @@ export interface VehicleStatus {
   battery_limit?: number | null;
   power_state: PowerState | null;
   charger_state: ChargerState | null;
+  charger_state_ts?: string | null;
   charger_status?: string | null;
   time_to_end_of_charge_min?: number | null;
   speed_mph: number | null;

@@ -35,8 +35,12 @@ vi.mock('@riviamigo/dashboards', () => ({
   ),
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => mockConfig,
+  downloadDashboardYaml: vi.fn(),
+  importDashboardYaml: vi.fn(),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <div data-testid="app-layout">{children}</div> }));
@@ -48,7 +52,7 @@ vi.mock('../../lib/dates', () => ({
 }));
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>();
-  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+  return { ...actual, useQuery: () => ({ data: undefined }), useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
 });
 
 vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {

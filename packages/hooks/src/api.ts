@@ -14,6 +14,85 @@ import type {
   CreateBackupRestoreRequestBody, BackupRestoreRequest,
 } from '@riviamigo/types';
 
+// ── Schedule & live-session types ─────────────────────────────────────────────
+
+export interface ChargingSchedule {
+  id: string;
+  enabled: boolean;
+  start_time_minutes: number | null;
+  duration_minutes: number | null;
+  amperage: number | null;
+  location_lat: number | null;
+  location_lng: number | null;
+  week_days: string[] | null;
+  rivian_updated_at: string | null;
+  updated_at: string;
+}
+
+export interface ChargingScheduleInput {
+  enabled: boolean;
+  start_time_minutes?: number | null;
+  duration_minutes?: number | null;
+  amperage?: number | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  week_days?: string[] | null;
+}
+
+export interface DepartureOccurrence {
+  type: 'RepeatsWeekly' | 'Once';
+  days?: string[];
+  time_minutes?: number;
+}
+
+export interface DepartureComfortSettings {
+  seat_fl_heat?: number;
+  seat_fr_heat?: number;
+  seat_rl_heat?: number;
+  seat_rr_heat?: number;
+  cabin_temp_c?: number;
+  defrost?: boolean;
+}
+
+export interface DepartureSchedule {
+  id: string;
+  rivian_schedule_id: string;
+  name: string | null;
+  enabled: boolean;
+  occurrence: DepartureOccurrence | null;
+  comfort_settings: DepartureComfortSettings | null;
+  updated_at: string;
+}
+
+export interface DepartureScheduleInput {
+  name?: string | null;
+  enabled: boolean;
+  occurrence?: DepartureOccurrence | null;
+  comfort_settings?: DepartureComfortSettings | null;
+}
+
+export interface LiveSession {
+  session_id: string;
+  power_kw: number | null;
+  soc_pct: number | null;
+  energy_kwh: number | null;
+  range_added_km: number | null;
+  time_remaining_min: number | null;
+  charger_type: string | null;
+  network: string | null;
+  ts: string;
+}
+
+export interface BackfillStatus {
+  vehicle_id: string;
+  history_backfilled_at: string | null;
+  status: string | null;
+  rivian_session_count: number | null;
+  local_session_count: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function isLoopbackHostname(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
@@ -429,6 +508,44 @@ class ApiClient {
 
   async getVehicleHealth(vehicleId: string): Promise<VehicleHealth> {
     return this.request('GET', `/v1/vehicles/${vehicleId}/health`);
+  }
+
+  async getChargingSchedule(vehicleId: string): Promise<ChargingSchedule | null> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/charging-schedule`);
+  }
+
+  async putChargingSchedule(vehicleId: string, body: ChargingScheduleInput): Promise<void> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/charging-schedule`, body);
+  }
+
+  async listDepartureSchedules(vehicleId: string): Promise<DepartureSchedule[]> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/departure-schedules`);
+  }
+
+  async createDepartureSchedule(vehicleId: string, body: DepartureScheduleInput): Promise<{ rivian_schedule_id: string }> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/departure-schedules`, body);
+  }
+
+  async updateDepartureSchedule(vehicleId: string, scheduleId: string, body: DepartureScheduleInput): Promise<void> {
+    return this.request('PATCH', `/v1/vehicles/${vehicleId}/departure-schedules/${scheduleId}`, body);
+  }
+
+  async deleteDepartureSchedule(vehicleId: string, scheduleId: string): Promise<void> {
+    return this.request('DELETE', `/v1/vehicles/${vehicleId}/departure-schedules/${scheduleId}`);
+  }
+
+  async getLiveSession(vehicleId: string): Promise<LiveSession | null> {
+    // 204 = no active session → returns undefined from request()
+    const result = await this.request<LiveSession | undefined>('GET', `/v1/vehicles/${vehicleId}/live-session`);
+    return result ?? null;
+  }
+
+  async getBackfillStatus(vehicleId: string): Promise<BackfillStatus> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/backfill-status`);
+  }
+
+  async triggerBackfill(vehicleId: string): Promise<void> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/backfill`);
   }
 
   // ── Efficiency ────────────────────────────────────────────────────────────

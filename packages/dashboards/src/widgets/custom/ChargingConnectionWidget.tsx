@@ -5,7 +5,7 @@ import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
-import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
+import { findBestChargingSideOverlay, findSideChargingImage, findFirstSideImage } from './imageUtils';
 
 const CHARGING_SIDE_LIGHT_IMAGE_URL = '/vehicle-images/r1s-side-charging-light.png';
 
@@ -36,6 +36,7 @@ function ChargingConnectionWidget({
   const { data: vehicles } = useVehicles();
   const { data: summary } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
+  const pluggedIn = isPluggedIn(status);
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
@@ -47,6 +48,17 @@ function ChargingConnectionWidget({
     findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
     chargingSideLight;
+  const regularSideLight =
+    (activeVehicle?.images as { side?: { light?: string | null } } | null | undefined)?.side?.light ??
+    findFirstSideImage(activeVehicle?.images?.all, 'light') ??
+    CHARGING_SIDE_LIGHT_IMAGE_URL;
+  const regularSideDark =
+    (activeVehicle?.images as { side?: { dark?: string | null } } | null | undefined)?.side?.dark ??
+    findFirstSideImage(activeVehicle?.images?.all, 'dark') ??
+    regularSideLight;
+  const imageMode = charging ? 'side-charging' : 'side';
+  const displaySideLight = charging ? chargingSideLight : regularSideLight;
+  const displaySideDark = charging ? chargingSideDark : regularSideDark;
   const rows = [
     {
       label: 'Status',
@@ -78,20 +90,20 @@ function ChargingConnectionWidget({
     },
   ];
 
-  if (!charging) return null;
+  if (!pluggedIn) return null;
 
   return (
     <section
       data-testid="charging-connection-chip"
-      data-charging-state="charging"
-      data-image-mode="side-charging"
-      data-image-light={chargingSideLight}
-      data-image-dark={chargingSideDark}
+      data-charging-state={charging ? 'charging' : 'connected'}
+      data-image-mode={imageMode}
+      data-image-light={displaySideLight}
+      data-image-dark={displaySideDark}
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        <VehicleSideImage source={chargingSideLight} mode="charging" darkClassName="dark:hidden" />
-        <VehicleSideImage source={chargingSideDark} mode="charging" darkClassName="hidden dark:block" />
+        <VehicleSideImage source={displaySideLight} mode={charging ? 'charging' : 'side'} darkClassName="dark:hidden" />
+        <VehicleSideImage source={displaySideDark} mode={charging ? 'charging' : 'side'} darkClassName="hidden dark:block" />
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/82 to-transparent" />
@@ -267,6 +279,21 @@ function formatTimeToFull(minutes: number | null | undefined) {
 
 function formatMaybePercent(value: number | null | undefined, digits: number) {
   return value == null ? '-' : formatDashboardPercent(value, digits);
+}
+
+function isPluggedIn(status: VehicleStatus | null | undefined) {
+  const state = status?.charger_state?.toLowerCase();
+  if (!state || state === 'unknown' || state === 'disconnected') return false;
+  if (status?.charger_status === 'chrgr_sts_not_connected') return false;
+  // If the vehicle has been sending fresh telemetry but the charger state hasn't
+  // updated in over 2 hours, the disconnect event was likely dropped. Treat as stale.
+  if (status?.charger_state_ts && status?.last_updated) {
+    const chargerTs = new Date(status.charger_state_ts).getTime();
+    const latestTs = new Date(status.last_updated).getTime();
+    const twoHoursMs = 2 * 60 * 60 * 1000;
+    if (latestTs - chargerTs > twoHoursMs) return false;
+  }
+  return true;
 }
 
 function isActivelyCharging(status: VehicleStatus | null | undefined) {

@@ -90,12 +90,31 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
               isLocked: false,
             });
           } else {
-            await createDashboard.mutateAsync({
-              ...localConfig,
-              isDefault: false,
-              isLocked: false,
-              ownerId: null,
-            });
+            try {
+              await createDashboard.mutateAsync({
+                ...localConfig,
+                isDefault: false,
+                isLocked: false,
+                ownerId: null,
+              });
+            } catch {
+              // POST failed — stale cache likely hid an existing owned copy.
+              // Refetch by-slug then fall back to the list cache.
+              await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
+              const refreshedBySlug = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
+              const refreshedOwned =
+                refreshedBySlug?.ownerId != null
+                  ? refreshedBySlug
+                  : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
+              if (!refreshedOwned) throw new Error('Could not find owned dashboard after refetch');
+              await updateDashboard.mutateAsync({
+                ...localConfig,
+                id: refreshedOwned.id,
+                ownerId: refreshedOwned.ownerId,
+                isDefault: false,
+                isLocked: false,
+              });
+            }
           }
         }
         exitEdit();

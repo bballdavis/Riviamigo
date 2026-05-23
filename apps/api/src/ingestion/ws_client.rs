@@ -137,6 +137,8 @@ subscription vehicleState($vehicleID: String!) {
 }
 "#;
 
+// Forward-declared for the departure-schedule WS subscription (wired in a follow-up).
+#[allow(dead_code)]
 pub(crate) const DEPARTURE_SCHEDULE_SUBSCRIPTION: &str = r#"
 subscription vehicleDepartureSchedules($vehicleID: String!) {
   vehicleDepartureSchedules(vehicleId: $vehicleID) {

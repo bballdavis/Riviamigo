@@ -15,6 +15,12 @@ export interface ChargeSessionRow {
   cost_usd: number | null;
   charger_type: string | null;
   location_name: string | null;
+  // Enrichment fields from Rivian API
+  network_vendor: string | null;
+  range_added_km: number | null;
+  is_free_session: boolean | null;
+  is_rivian_network: boolean | null;
+  rivian_paid_total: number | null;
 }
 
 const col = createColumnHelper<ChargeSessionRow>();
@@ -40,6 +46,23 @@ export const chargingColumns = [
         {info.getValue() ?? '—'}
       </span>
     ),
+  }),
+  col.accessor('network_vendor', {
+    header: 'Network',
+    enableSorting: false,
+    cell: (info) => {
+      const vendor = info.getValue();
+      const isFree = info.row.original.is_free_session;
+      if (!vendor) return <span className="text-fg-tertiary">—</span>;
+      return (
+        <span className="flex items-center gap-1.5">
+          <span className="text-fg-secondary text-sm">{vendor}</span>
+          {isFree && (
+            <Badge variant="success" size="sm">Free</Badge>
+          )}
+        </span>
+      );
+    },
   }),
   col.accessor('charger_type', {
     header: 'Type',

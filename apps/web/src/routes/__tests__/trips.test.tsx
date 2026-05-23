@@ -16,7 +16,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>();
-  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+  return { ...actual, useQuery: () => ({ data: undefined }), useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
 });
 
 vi.mock('@riviamigo/ui/tables', () => ({
@@ -64,8 +64,12 @@ vi.mock('@riviamigo/dashboards', () => ({
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: { schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
+  useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => ({ schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }),
+  downloadDashboardYaml: vi.fn(),
+  importDashboardYaml: vi.fn(),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));

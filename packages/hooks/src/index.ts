@@ -1,9 +1,10 @@
 export { api } from './api';
+export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
 export { useAuth } from './useAuth';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
 export { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
 export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile } from './useTrips';
-export { useChargeSessions, useChargeSession, useChargeCurve, useChargeCurveAnalysis, useChargingSummary } from './useCharging';
+export { useChargeSessions, useChargeSession, useChargeCurve, useChargeCurveAnalysis, useChargingSummary, useChargingSchedule, useUpdateChargingSchedule, useDepartureSchedules, useCreateDepartureSchedule, useUpdateDepartureSchedule, useDeleteDepartureSchedule, useLiveSession } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
 export { useSummaryStats } from './useStats';
 export { useMetricCatalog, useMetricValue, useMetricSeries } from './useMetrics';

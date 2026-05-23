@@ -49,21 +49,24 @@ export function ChargeSessionContent() {
     ? format(parseISO(session.started_at), 'MMMM d, yyyy · h:mm a')
     : 'Charge Session';
 
+  const backButton = (
+    <button
+      type="button"
+      aria-label="Back to charging"
+      className="inline-flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent transition-colors hover:bg-accent/10 focus:outline-none focus:ring-1 focus:ring-accent"
+      onClick={() => navigate({ to: '/charging' })}
+    >
+      <ArrowLeft className="h-6 w-6" />
+    </button>
+  );
+
   return (
     <AppLayout activeKey="charging">
       <PageLayout
         title={title}
         subtitle={session?.location_name ?? undefined}
-        titleAction={
-          <button
-            type="button"
-            aria-label="Back to charging"
-            className="inline-flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent transition-colors hover:bg-accent/10 focus:outline-none focus:ring-1 focus:ring-accent"
-            onClick={() => navigate({ to: '/charging' })}
-          >
-            <ArrowLeft className="h-6 w-6" />
-          </button>
-        }
+        titleAction={backButton}
+        titleActionPosition="left"
       >
         {!hasVehicle ? (
           <NoVehicleState

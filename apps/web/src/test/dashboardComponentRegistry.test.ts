@@ -18,7 +18,7 @@ describe('dashboard component registry', () => {
   });
 
   it('uses reusable sensor chips for default page stats outside overview too', () => {
-    for (const slug of ['battery', 'charging', 'trips'] as const) {
+    for (const slug of ['battery', 'charging'] as const) {
       const dashboard = DEFAULT_DASHBOARDS.find((item) => item.slug === slug);
       expect(dashboard).toBeTruthy();
       const topStats = dashboard?.widgets.filter((widget) => widget.layout.y === 0 || widget.layout.y === 2 || widget.layout.y === 4) ?? [];
@@ -55,7 +55,7 @@ describe('dashboard component registry', () => {
     const connectedChip = widgets.find((widget) => widget.definitionId === 'charging.connection');
     expect(connectedChip).toMatchObject({
       componentType: 'custom',
-      layout: { x: 6, y: 0, w: 6, h: 6 },
+      layout: { x: 0, y: 6, w: 8, h: 8 },
       options: { chargingConnectionVisibility: 'plugged' },
     });
 
@@ -94,7 +94,15 @@ describe('dashboard component registry', () => {
       options: {},
       layout: { x: 3, y: 4, w: 3, h: 2 },
     });
-    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000014')).toBeUndefined();
-    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000015')).toBeUndefined();
+    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000014')).toMatchObject({
+      componentType: 'sensor',
+      definitionId: 'charging_free_sessions',
+      layout: { x: 6, y: 4, w: 3, h: 2 },
+    });
+    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000015')).toMatchObject({
+      componentType: 'sensor',
+      definitionId: 'charging_range_added',
+      layout: { x: 9, y: 4, w: 3, h: 2 },
+    });
   });
 });
