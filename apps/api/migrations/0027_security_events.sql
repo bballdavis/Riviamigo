@@ -5,5 +5,7 @@ CREATE TABLE IF NOT EXISTS riviamigo.security_events (
     detail      TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX ON riviamigo.security_events (user_id, created_at DESC);
-CREATE INDEX ON riviamigo.security_events (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS security_events_user_created_idx
+    ON riviamigo.security_events (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS security_events_type_created_idx
+    ON riviamigo.security_events (event_type, created_at DESC);

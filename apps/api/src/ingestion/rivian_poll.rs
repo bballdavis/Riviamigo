@@ -88,7 +88,11 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
         return Err(anyhow!("Rivian API: unauthorized (token expired?)"));
     }
     if !status.is_success() {
-        return Err(anyhow!("Rivian API: HTTP {}", status));
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unreadable body>"));
+        return Err(anyhow!("Rivian API: HTTP {} body={} ", status, body));
     }
 
     let envelope = response

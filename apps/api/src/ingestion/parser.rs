@@ -144,7 +144,8 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         brake_fluid_low: extract_bool(state, "/brakeFluidLow/value"),
         alarm_active: extract_str(state, "/alarmSoundStatus/value")
             .map(|s| matches!(s.to_lowercase().as_str(), "active" | "on" | "sounding")),
-        service_mode: extract_str(state, "/vehicleInServiceMode/value")
+        service_mode: extract_str(state, "/serviceMode/value")
+            .or_else(|| extract_str(state, "/vehicleInServiceMode/value"))
             .map(|s| matches!(s.to_lowercase().as_str(), "on" | "active" | "true")),
     }))
 }
