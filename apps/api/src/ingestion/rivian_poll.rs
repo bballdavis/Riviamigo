@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::ingestion::rivian_auth::rivian_refresh_tokens;
 use crate::ingestion::session_store::{encrypt_tokens, RivianTokenBundle};
+use crate::services::charge_backfill::{self, ChargeBackfillError};
 
 // ── URL constants ────────────────────────────────────────────────────────────
 
@@ -152,14 +153,16 @@ async fn try_refresh_tokens(
     let encrypted = encrypt_tokens(&new_tokens, &identity)?;
 
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, updated_at)
-         VALUES ($1, $2, now())
+        "INSERT INTO riviamigo.vehicle_credentials
+            (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
+         VALUES ($1, $2, $3, now())
          ON CONFLICT (vehicle_id) DO UPDATE
          SET encrypted_tokens = EXCLUDED.encrypted_tokens,
-             updated_at       = now()",
+             last_refreshed_at = now()",
     )
     .bind(vehicle_id)
     .bind(&encrypted)
+    .bind(new_tokens.created_at)
     .execute(pool)
     .await?;
 
@@ -1808,43 +1811,14 @@ pub async fn run_startup_polls(
     if needs_full_backfill {
         tracing::info!(vehicle_id=%vehicle_id, "starting full charge history backfill");
 
-        let _ = sqlx::query(
-            "UPDATE riviamigo.vehicles SET history_backfill_status='running' WHERE id=$1",
-        )
-        .bind(vehicle_id)
-        .execute(&pool)
-        .await;
-
-        match fetch_charge_history_full(
-            &rivian_vehicle_id,
-            vehicle_id,
-            &pool,
-            &client,
-            &active_tokens,
-        )
-        .await
-        {
+        match charge_backfill::run(&pool, &client, &age_key, vehicle_id).await {
             Ok(count) => {
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicles
-                     SET history_backfill_status='done',
-                         history_backfilled_at=now(),
-                         history_session_count=$2
-                     WHERE id=$1",
-                )
-                .bind(vehicle_id)
-                .bind(count as i32)
-                .execute(&pool)
-                .await;
                 tracing::info!(vehicle_id=%vehicle_id, count, "full backfill complete");
             }
+            Err(ChargeBackfillError::AlreadyRunning) => {
+                tracing::info!(vehicle_id=%vehicle_id, "full backfill already running; startup sync skipped");
+            }
             Err(e) => {
-                let _ = sqlx::query(
-                    "UPDATE riviamigo.vehicles SET history_backfill_status='error' WHERE id=$1",
-                )
-                .bind(vehicle_id)
-                .execute(&pool)
-                .await;
                 tracing::warn!(vehicle_id=%vehicle_id, err=%e, "full backfill failed");
             }
         }
