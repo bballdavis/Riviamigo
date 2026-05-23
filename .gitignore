@@ -47,3 +47,7 @@ apps/web/dist/
 
 # pnpm
 pnpm-debug.log*
+
+#agents
+.claude*
+.codex*
