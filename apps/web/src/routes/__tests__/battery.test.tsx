@@ -71,6 +71,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
   getDefaultBySlug: () => mockConfig,
   downloadDashboardYaml: vi.fn(),
   importDashboardYaml: vi.fn(),
@@ -83,7 +84,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>();
-  return { ...actual, useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
+  return { ...actual, useQuery: () => ({ data: undefined }), useQueryClient: () => ({ invalidateQueries: vi.fn() }) };
 });
 
 import { BatteryDashboardPage } from '../../components/dashboard/BatteryDashboardPage';

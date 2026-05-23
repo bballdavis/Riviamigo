@@ -22,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
         .route("/vehicles/:id/battery-config", put(update_battery_config))
+        .route("/vehicles/:id/charging-backfill", post(trigger_charging_backfill))
 }
 
 #[derive(Deserialize)]
@@ -66,6 +67,7 @@ struct LatestVehicleTelemetry {
     battery_limit: Option<f64>,
     power_state: Option<String>,
     charger_state: Option<String>,
+    charger_state_ts: Option<chrono::DateTime<chrono::Utc>>,
     charger_status: Option<String>,
     time_to_end_of_charge_min: Option<i32>,
     drive_mode: Option<String>,
@@ -103,6 +105,35 @@ struct LatestVehicleTelemetry {
     ota_current_status: Option<String>,
     hv_thermal_event: Option<String>,
     twelve_volt_health: Option<String>,
+    // Extended vehicleStatus fields (migration 0022)
+    charge_port_open: Option<bool>,
+    charger_derate_active: Option<bool>,
+    cabin_precon_status: Option<String>,
+    cabin_precon_type: Option<String>,
+    pet_mode_active: Option<bool>,
+    pet_mode_temp_ok: Option<bool>,
+    defrost_active: Option<bool>,
+    steering_wheel_heat: Option<i16>,
+    seat_fl_heat: Option<i16>,
+    seat_fr_heat: Option<i16>,
+    seat_rl_heat: Option<i16>,
+    seat_rr_heat: Option<i16>,
+    seat_fl_vent: Option<i16>,
+    seat_fr_vent: Option<i16>,
+    tonneau_locked: Option<bool>,
+    tonneau_closed: Option<bool>,
+    side_bin_left_locked: Option<bool>,
+    side_bin_right_locked: Option<bool>,
+    window_fl_closed: Option<bool>,
+    window_fr_closed: Option<bool>,
+    window_rl_closed: Option<bool>,
+    window_rr_closed: Option<bool>,
+    gear_guard_locked: Option<bool>,
+    gear_guard_video_status: Option<String>,
+    wiper_fluid_low: Option<bool>,
+    brake_fluid_low: Option<bool>,
+    alarm_active: Option<bool>,
+    service_mode: Option<bool>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -116,6 +147,17 @@ struct VehicleListRow {
     name: Option<String>,
     battery_capacity_wh: Option<f64>,
     created_at: chrono::DateTime<chrono::Utc>,
+    // Enrichment fields (migration 0023)
+    interior_color: Option<String>,
+    wheel_option: Option<String>,
+    max_vehicle_power_kw: Option<f64>,
+    charge_port_type: Option<String>,
+    battery_cell_type: Option<String>,
+    supported_features: Option<serde_json::Value>,
+    // Backfill tracking (migration 0025)
+    history_backfill_status: Option<String>,
+    history_backfilled_at: Option<chrono::DateTime<chrono::Utc>>,
+    history_session_count: Option<i32>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -123,6 +165,100 @@ struct VehicleRuntimeStateRow {
     is_online: Option<bool>,
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
+}
+
+/// Serializable response shape for `GET /v1/vehicles/:id/status`.
+/// Using a typed struct instead of `serde_json::json!` avoids the recursive
+/// macro expansion that exhausts the compiler's recursion limit as fields grow.
+#[derive(serde::Serialize)]
+struct VehicleStatusResponse {
+    vehicle_id: Uuid,
+    is_online: bool,
+    last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_updated: Option<chrono::DateTime<chrono::Utc>>,
+    worker_health: Option<String>,
+    battery_level: Option<f64>,
+    range_miles: Option<f64>,
+    battery_capacity_kwh: Option<f64>,
+    battery_limit: Option<f64>,
+    power_state: Option<String>,
+    charger_state: Option<String>,
+    charger_state_ts: Option<chrono::DateTime<chrono::Utc>>,
+    charger_status: Option<String>,
+    time_to_end_of_charge_min: Option<i32>,
+    speed_mph: Option<f64>,
+    altitude_m: Option<f64>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    drive_mode: Option<String>,
+    gear_status: Option<String>,
+    cabin_temp_c: Option<f64>,
+    driver_temp_c: Option<f64>,
+    outside_temp_c: Option<f64>,
+    heading_deg: Option<f64>,
+    odometer_miles: Option<f64>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+    tire_min_psi: Option<f64>,
+    tire_fl_status: Option<String>,
+    tire_fr_status: Option<String>,
+    tire_rl_status: Option<String>,
+    tire_rr_status: Option<String>,
+    door_front_left_locked: Option<bool>,
+    door_front_right_locked: Option<bool>,
+    door_rear_left_locked: Option<bool>,
+    door_rear_right_locked: Option<bool>,
+    door_front_left_closed: Option<bool>,
+    door_front_right_closed: Option<bool>,
+    door_rear_left_closed: Option<bool>,
+    door_rear_right_closed: Option<bool>,
+    closure_frunk_locked: Option<bool>,
+    closure_frunk_closed: Option<bool>,
+    closure_liftgate_locked: Option<bool>,
+    closure_liftgate_closed: Option<bool>,
+    closure_tailgate_locked: Option<bool>,
+    closure_tailgate_closed: Option<bool>,
+    ota_current_version: Option<String>,
+    ota_available_version: Option<String>,
+    ota_status: Option<String>,
+    ota_current_status: Option<String>,
+    hv_thermal_event: Option<String>,
+    twelve_volt_health: Option<String>,
+    doors_locked: Option<bool>,
+    open_closures: serde_json::Value,
+    tire_pressure_status: Option<String>,
+    software_update_status: Option<String>,
+    // Extended vehicleStatus fields (migration 0022)
+    charge_port_open: Option<bool>,
+    charger_derate_active: Option<bool>,
+    cabin_precon_status: Option<String>,
+    cabin_precon_type: Option<String>,
+    pet_mode_active: Option<bool>,
+    pet_mode_temp_ok: Option<bool>,
+    defrost_active: Option<bool>,
+    steering_wheel_heat: Option<i16>,
+    seat_fl_heat: Option<i16>,
+    seat_fr_heat: Option<i16>,
+    seat_rl_heat: Option<i16>,
+    seat_rr_heat: Option<i16>,
+    seat_fl_vent: Option<i16>,
+    seat_fr_vent: Option<i16>,
+    tonneau_locked: Option<bool>,
+    tonneau_closed: Option<bool>,
+    side_bin_left_locked: Option<bool>,
+    side_bin_right_locked: Option<bool>,
+    window_fl_closed: Option<bool>,
+    window_fr_closed: Option<bool>,
+    window_rl_closed: Option<bool>,
+    window_rr_closed: Option<bool>,
+    gear_guard_locked: Option<bool>,
+    gear_guard_video_status: Option<String>,
+    wiper_fluid_low: Option<bool>,
+    brake_fluid_low: Option<bool>,
+    alarm_active: Option<bool>,
+    service_mode: Option<bool>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -534,7 +670,9 @@ async fn list_vehicles(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query_as::<_, VehicleListRow>(
         "SELECT id, rivian_vehicle_id, model, trim, vin, color, name, battery_capacity_wh, \
-                created_at \
+                created_at, interior_color, wheel_option, max_vehicle_power_kw, \
+                charge_port_type, battery_cell_type, supported_features, \
+                history_backfill_status, history_backfilled_at, history_session_count \
          FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at",
     )
     .bind(auth.user_id)
@@ -559,18 +697,27 @@ async fn list_vehicles(
             });
         }
         vehicles.push(serde_json::json!({
-            "id":                    r.id,
-            "user_id":               auth.user_id,
-            "rivian_vehicle_id":     r.rivian_vehicle_id,
-            "vin":                   r.vin,
-            "model":                 r.model,
-            "year":                  serde_json::Value::Null,
-            "trim":                  r.trim,
-            "color":                 r.color,
-            "battery_capacity_kwh":  r.battery_capacity_wh.map(|w| w / 1000.0),
-            "display_name":          r.name.as_deref().unwrap_or(&r.model),
-            "created_at":            r.created_at,
-            "images":                images,
+            "id":                       r.id,
+            "user_id":                  auth.user_id,
+            "rivian_vehicle_id":        r.rivian_vehicle_id,
+            "vin":                      r.vin,
+            "model":                    r.model,
+            "year":                     serde_json::Value::Null,
+            "trim":                     r.trim,
+            "color":                    r.color,
+            "interior_color":           r.interior_color,
+            "wheel_option":             r.wheel_option,
+            "max_vehicle_power_kw":     r.max_vehicle_power_kw,
+            "charge_port_type":         r.charge_port_type,
+            "battery_cell_type":        r.battery_cell_type,
+            "supported_features":       r.supported_features,
+            "battery_capacity_kwh":     r.battery_capacity_wh.map(|w| w / 1000.0),
+            "display_name":             r.name.as_deref().unwrap_or(&r.model),
+            "created_at":               r.created_at,
+            "images":                   images,
+            "history_backfill_status":  r.history_backfill_status,
+            "history_backfilled_at":    r.history_backfilled_at,
+            "history_session_count":    r.history_session_count,
         }));
     }
 
@@ -581,7 +728,7 @@ async fn vehicle_status(
     State(state): State<AppState>,
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<VehicleStatusResponse>, AppError> {
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let vehicle = sqlx::query_scalar::<_, Option<f64>>(
@@ -614,6 +761,7 @@ async fn vehicle_status(
           (SELECT battery_limit FROM timeseries.telemetry WHERE vehicle_id = $1 AND battery_limit IS NOT NULL ORDER BY ts DESC LIMIT 1) AS battery_limit,
           (SELECT power_state FROM timeseries.telemetry WHERE vehicle_id = $1 AND power_state IS NOT NULL ORDER BY ts DESC LIMIT 1) AS power_state,
           (SELECT charger_state FROM timeseries.telemetry WHERE vehicle_id = $1 AND charger_state IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charger_state,
+          (SELECT ts FROM timeseries.telemetry WHERE vehicle_id = $1 AND charger_state IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charger_state_ts,
           (SELECT charger_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND charger_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charger_status,
           (SELECT time_to_end_of_charge_min FROM timeseries.telemetry WHERE vehicle_id = $1 AND time_to_end_of_charge_min IS NOT NULL ORDER BY ts DESC LIMIT 1) AS time_to_end_of_charge_min,
           (SELECT drive_mode FROM timeseries.telemetry WHERE vehicle_id = $1 AND drive_mode IS NOT NULL ORDER BY ts DESC LIMIT 1) AS drive_mode,
@@ -650,7 +798,35 @@ async fn vehicle_status(
           (SELECT ota_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND ota_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS ota_status,
           (SELECT ota_current_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND ota_current_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS ota_current_status,
           (SELECT hv_thermal_event FROM timeseries.telemetry WHERE vehicle_id = $1 AND hv_thermal_event IS NOT NULL ORDER BY ts DESC LIMIT 1) AS hv_thermal_event,
-          (SELECT twelve_volt_health FROM timeseries.telemetry WHERE vehicle_id = $1 AND twelve_volt_health IS NOT NULL ORDER BY ts DESC LIMIT 1) AS twelve_volt_health
+          (SELECT twelve_volt_health FROM timeseries.telemetry WHERE vehicle_id = $1 AND twelve_volt_health IS NOT NULL ORDER BY ts DESC LIMIT 1) AS twelve_volt_health,
+          (SELECT charge_port_open FROM timeseries.telemetry WHERE vehicle_id = $1 AND charge_port_open IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charge_port_open,
+          (SELECT charger_derate_active FROM timeseries.telemetry WHERE vehicle_id = $1 AND charger_derate_active IS NOT NULL ORDER BY ts DESC LIMIT 1) AS charger_derate_active,
+          (SELECT cabin_precon_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND cabin_precon_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS cabin_precon_status,
+          (SELECT cabin_precon_type FROM timeseries.telemetry WHERE vehicle_id = $1 AND cabin_precon_type IS NOT NULL ORDER BY ts DESC LIMIT 1) AS cabin_precon_type,
+          (SELECT pet_mode_active FROM timeseries.telemetry WHERE vehicle_id = $1 AND pet_mode_active IS NOT NULL ORDER BY ts DESC LIMIT 1) AS pet_mode_active,
+          (SELECT pet_mode_temp_ok FROM timeseries.telemetry WHERE vehicle_id = $1 AND pet_mode_temp_ok IS NOT NULL ORDER BY ts DESC LIMIT 1) AS pet_mode_temp_ok,
+          (SELECT defrost_active FROM timeseries.telemetry WHERE vehicle_id = $1 AND defrost_active IS NOT NULL ORDER BY ts DESC LIMIT 1) AS defrost_active,
+          (SELECT steering_wheel_heat FROM timeseries.telemetry WHERE vehicle_id = $1 AND steering_wheel_heat IS NOT NULL ORDER BY ts DESC LIMIT 1) AS steering_wheel_heat,
+          (SELECT seat_fl_heat FROM timeseries.telemetry WHERE vehicle_id = $1 AND seat_fl_heat IS NOT NULL ORDER BY ts DESC LIMIT 1) AS seat_fl_heat,
+          (SELECT seat_fr_heat FROM timeseries.telemetry WHERE vehicle_id = $1 AND seat_fr_heat IS NOT NULL ORDER BY ts DESC LIMIT 1) AS seat_fr_heat,
+          (SELECT seat_rl_heat FROM timeseries.telemetry WHERE vehicle_id = $1 AND seat_rl_heat IS NOT NULL ORDER BY ts DESC LIMIT 1) AS seat_rl_heat,
+          (SELECT seat_rr_heat FROM timeseries.telemetry WHERE vehicle_id = $1 AND seat_rr_heat IS NOT NULL ORDER BY ts DESC LIMIT 1) AS seat_rr_heat,
+          (SELECT seat_fl_vent FROM timeseries.telemetry WHERE vehicle_id = $1 AND seat_fl_vent IS NOT NULL ORDER BY ts DESC LIMIT 1) AS seat_fl_vent,
+          (SELECT seat_fr_vent FROM timeseries.telemetry WHERE vehicle_id = $1 AND seat_fr_vent IS NOT NULL ORDER BY ts DESC LIMIT 1) AS seat_fr_vent,
+          (SELECT tonneau_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND tonneau_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tonneau_locked,
+          (SELECT tonneau_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND tonneau_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS tonneau_closed,
+          (SELECT side_bin_left_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND side_bin_left_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS side_bin_left_locked,
+          (SELECT side_bin_right_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND side_bin_right_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS side_bin_right_locked,
+          (SELECT window_fl_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND window_fl_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS window_fl_closed,
+          (SELECT window_fr_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND window_fr_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS window_fr_closed,
+          (SELECT window_rl_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND window_rl_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS window_rl_closed,
+          (SELECT window_rr_closed FROM timeseries.telemetry WHERE vehicle_id = $1 AND window_rr_closed IS NOT NULL ORDER BY ts DESC LIMIT 1) AS window_rr_closed,
+          (SELECT gear_guard_locked FROM timeseries.telemetry WHERE vehicle_id = $1 AND gear_guard_locked IS NOT NULL ORDER BY ts DESC LIMIT 1) AS gear_guard_locked,
+          (SELECT gear_guard_video_status FROM timeseries.telemetry WHERE vehicle_id = $1 AND gear_guard_video_status IS NOT NULL ORDER BY ts DESC LIMIT 1) AS gear_guard_video_status,
+          (SELECT wiper_fluid_low FROM timeseries.telemetry WHERE vehicle_id = $1 AND wiper_fluid_low IS NOT NULL ORDER BY ts DESC LIMIT 1) AS wiper_fluid_low,
+          (SELECT brake_fluid_low FROM timeseries.telemetry WHERE vehicle_id = $1 AND brake_fluid_low IS NOT NULL ORDER BY ts DESC LIMIT 1) AS brake_fluid_low,
+          (SELECT alarm_active FROM timeseries.telemetry WHERE vehicle_id = $1 AND alarm_active IS NOT NULL ORDER BY ts DESC LIMIT 1) AS alarm_active,
+          (SELECT service_mode FROM timeseries.telemetry WHERE vehicle_id = $1 AND service_mode IS NOT NULL ORDER BY ts DESC LIMIT 1) AS service_mode
         "#,
     )
     .bind(vid)
@@ -674,7 +850,7 @@ async fn vehicle_status(
         latest.tire_rl_status.as_deref(),
         latest.tire_rr_status.as_deref(),
     ];
-    let tire_pressure_status = tire_statuses
+    let tire_pressure_status: Option<String> = tire_statuses
         .into_iter()
         .flatten()
         .find(|status| {
@@ -690,7 +866,8 @@ async fn vehicle_status(
             .into_iter()
             .flatten()
             .next()
-        });
+        })
+        .map(str::to_string);
     let lock_values = [
         latest.door_front_left_locked,
         latest.door_front_right_locked,
@@ -710,76 +887,114 @@ async fn vehicle_status(
         ("Frunk", latest.closure_frunk_closed),
         ("Liftgate", latest.closure_liftgate_closed),
         ("Tailgate", latest.closure_tailgate_closed),
+        ("Tonneau", latest.tonneau_closed),
+        ("Left side bin", latest.side_bin_left_locked.map(|v| !v)),
+        ("Right side bin", latest.side_bin_right_locked.map(|v| !v)),
+        ("Front left window", latest.window_fl_closed),
+        ("Front right window", latest.window_fr_closed),
+        ("Rear left window", latest.window_rl_closed),
+        ("Rear right window", latest.window_rr_closed),
     ]);
-    let software_update_status = latest
+    let software_update_status: Option<String> = latest
         .ota_status
         .as_deref()
-        .or(latest.ota_current_status.as_deref());
+        .or(latest.ota_current_status.as_deref())
+        .map(str::to_string);
     let normalized_range_miles = normalize_remaining_range_miles(
         latest.distance_to_empty_mi,
         latest.battery_level,
         latest.battery_capacity_wh.or(vehicle),
     );
 
-    Ok(Json(serde_json::json!({
-        "vehicle_id": vid,
-        "is_online": row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
-        "last_event_at": row.as_ref().and_then(|r| r.last_event_at),
-        "last_updated": latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
-        "worker_health": row.as_ref().and_then(|r| r.worker_health.as_deref()),
-        "battery_level": latest.battery_level,
-        "range_miles": normalized_range_miles,
-        "battery_capacity_kwh": latest.battery_capacity_wh.map(|w| if w > 1000.0 { w / 1000.0 } else { w }),
-        "battery_limit": latest.battery_limit,
-        "power_state": latest.power_state.as_deref(),
-        "charger_state": latest.charger_state.as_deref(),
-        "charger_status": latest.charger_status.as_deref(),
-        "time_to_end_of_charge_min": latest.time_to_end_of_charge_min,
-        "speed_mph": latest.speed_mph,
-        "altitude_m": latest.altitude_m,
-        "latitude": latest.latitude,
-        "longitude": latest.longitude,
-        "drive_mode": latest.drive_mode.as_deref(),
-        "gear_status": latest.gear_status.as_deref(),
-        "cabin_temp_c": latest.cabin_temp_c,
-        "driver_temp_c": latest.driver_temp_c,
-        "outside_temp_c": latest.outside_temp_c,
-        "heading_deg": latest.heading_deg,
-        "odometer_miles": latest.odometer_miles,
-        "tire_fl_psi": latest.tire_fl_psi,
-        "tire_fr_psi": latest.tire_fr_psi,
-        "tire_rl_psi": latest.tire_rl_psi,
-        "tire_rr_psi": latest.tire_rr_psi,
-        "tire_min_psi": tire_min_psi,
-        "tire_fl_status": latest.tire_fl_status.as_deref(),
-        "tire_fr_status": latest.tire_fr_status.as_deref(),
-        "tire_rl_status": latest.tire_rl_status.as_deref(),
-        "tire_rr_status": latest.tire_rr_status.as_deref(),
-        "door_front_left_locked": latest.door_front_left_locked,
-        "door_front_right_locked": latest.door_front_right_locked,
-        "door_rear_left_locked": latest.door_rear_left_locked,
-        "door_rear_right_locked": latest.door_rear_right_locked,
-        "door_front_left_closed": latest.door_front_left_closed,
-        "door_front_right_closed": latest.door_front_right_closed,
-        "door_rear_left_closed": latest.door_rear_left_closed,
-        "door_rear_right_closed": latest.door_rear_right_closed,
-        "closure_frunk_locked": latest.closure_frunk_locked,
-        "closure_frunk_closed": latest.closure_frunk_closed,
-        "closure_liftgate_locked": latest.closure_liftgate_locked,
-        "closure_liftgate_closed": latest.closure_liftgate_closed,
-        "closure_tailgate_locked": latest.closure_tailgate_locked,
-        "closure_tailgate_closed": latest.closure_tailgate_closed,
-        "ota_current_version": latest.ota_current_version.as_deref(),
-        "ota_available_version": latest.ota_available_version.as_deref(),
-        "ota_status": latest.ota_status.as_deref(),
-        "ota_current_status": latest.ota_current_status.as_deref(),
-        "hv_thermal_event": latest.hv_thermal_event.as_deref(),
-        "twelve_volt_health": latest.twelve_volt_health.as_deref(),
-        "doors_locked": doors_locked,
-        "open_closures": open_closures,
-        "tire_pressure_status": tire_pressure_status,
-        "software_update_status": software_update_status,
-    })))
+    Ok(Json(VehicleStatusResponse {
+        vehicle_id: vid,
+        is_online: row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
+        last_event_at: row.as_ref().and_then(|r| r.last_event_at),
+        last_updated: latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
+        worker_health: row.as_ref().and_then(|r| r.worker_health.clone()),
+        battery_level: latest.battery_level,
+        range_miles: normalized_range_miles,
+        battery_capacity_kwh: latest.battery_capacity_wh.map(|w| if w > 1000.0 { w / 1000.0 } else { w }),
+        battery_limit: latest.battery_limit,
+        power_state: latest.power_state,
+        charger_state: latest.charger_state,
+        charger_state_ts: latest.charger_state_ts,
+        charger_status: latest.charger_status,
+        time_to_end_of_charge_min: latest.time_to_end_of_charge_min,
+        speed_mph: latest.speed_mph,
+        altitude_m: latest.altitude_m,
+        latitude: latest.latitude,
+        longitude: latest.longitude,
+        drive_mode: latest.drive_mode,
+        gear_status: latest.gear_status,
+        cabin_temp_c: latest.cabin_temp_c,
+        driver_temp_c: latest.driver_temp_c,
+        outside_temp_c: latest.outside_temp_c,
+        heading_deg: latest.heading_deg,
+        odometer_miles: latest.odometer_miles,
+        tire_fl_psi: latest.tire_fl_psi,
+        tire_fr_psi: latest.tire_fr_psi,
+        tire_rl_psi: latest.tire_rl_psi,
+        tire_rr_psi: latest.tire_rr_psi,
+        tire_min_psi,
+        tire_fl_status: latest.tire_fl_status,
+        tire_fr_status: latest.tire_fr_status,
+        tire_rl_status: latest.tire_rl_status,
+        tire_rr_status: latest.tire_rr_status,
+        door_front_left_locked: latest.door_front_left_locked,
+        door_front_right_locked: latest.door_front_right_locked,
+        door_rear_left_locked: latest.door_rear_left_locked,
+        door_rear_right_locked: latest.door_rear_right_locked,
+        door_front_left_closed: latest.door_front_left_closed,
+        door_front_right_closed: latest.door_front_right_closed,
+        door_rear_left_closed: latest.door_rear_left_closed,
+        door_rear_right_closed: latest.door_rear_right_closed,
+        closure_frunk_locked: latest.closure_frunk_locked,
+        closure_frunk_closed: latest.closure_frunk_closed,
+        closure_liftgate_locked: latest.closure_liftgate_locked,
+        closure_liftgate_closed: latest.closure_liftgate_closed,
+        closure_tailgate_locked: latest.closure_tailgate_locked,
+        closure_tailgate_closed: latest.closure_tailgate_closed,
+        ota_current_version: latest.ota_current_version,
+        ota_available_version: latest.ota_available_version,
+        ota_status: latest.ota_status,
+        ota_current_status: latest.ota_current_status,
+        hv_thermal_event: latest.hv_thermal_event,
+        twelve_volt_health: latest.twelve_volt_health,
+        doors_locked,
+        open_closures,
+        tire_pressure_status,
+        software_update_status,
+        // Extended vehicleStatus fields (migration 0022)
+        charge_port_open: latest.charge_port_open,
+        charger_derate_active: latest.charger_derate_active,
+        cabin_precon_status: latest.cabin_precon_status,
+        cabin_precon_type: latest.cabin_precon_type,
+        pet_mode_active: latest.pet_mode_active,
+        pet_mode_temp_ok: latest.pet_mode_temp_ok,
+        defrost_active: latest.defrost_active,
+        steering_wheel_heat: latest.steering_wheel_heat,
+        seat_fl_heat: latest.seat_fl_heat,
+        seat_fr_heat: latest.seat_fr_heat,
+        seat_rl_heat: latest.seat_rl_heat,
+        seat_rr_heat: latest.seat_rr_heat,
+        seat_fl_vent: latest.seat_fl_vent,
+        seat_fr_vent: latest.seat_fr_vent,
+        tonneau_locked: latest.tonneau_locked,
+        tonneau_closed: latest.tonneau_closed,
+        side_bin_left_locked: latest.side_bin_left_locked,
+        side_bin_right_locked: latest.side_bin_right_locked,
+        window_fl_closed: latest.window_fl_closed,
+        window_fr_closed: latest.window_fr_closed,
+        window_rl_closed: latest.window_rl_closed,
+        window_rr_closed: latest.window_rr_closed,
+        gear_guard_locked: latest.gear_guard_locked,
+        gear_guard_video_status: latest.gear_guard_video_status,
+        wiper_fluid_low: latest.wiper_fluid_low,
+        brake_fluid_low: latest.brake_fluid_low,
+        alarm_active: latest.alarm_active,
+        service_mode: latest.service_mode,
+    }))
 }
 
 #[cfg(test)]
@@ -1277,4 +1492,109 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+}
+
+/// POST /vehicles/:id/charging-backfill
+///
+/// Enqueues a full charge history backfill for the vehicle.  Idempotent: if
+/// one is already running, returns 409.  Otherwise resets the tracking columns
+/// and spawns the backfill task in the background.
+async fn trigger_charging_backfill(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    // Reject if a backfill is already in progress.
+    let current_status: Option<String> = sqlx::query_scalar(
+        "SELECT history_backfill_status FROM riviamigo.vehicles WHERE id = $1",
+    )
+    .bind(vid)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+
+    if current_status.as_deref() == Some("running") {
+        return Err(AppError::Conflict("backfill already running".into()));
+    }
+
+    // Fetch the vehicle's Rivian ID and decrypt its stored credentials.
+    let (rivian_vehicle_id, encrypted_tokens): (String, Vec<u8>) = sqlx::query_as(
+        "SELECT v.rivian_vehicle_id, vc.encrypted_tokens \
+         FROM riviamigo.vehicles v \
+         JOIN riviamigo.vehicle_credentials vc ON vc.vehicle_id = v.id \
+         WHERE v.id = $1",
+    )
+    .bind(vid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let identity = state
+        .age_key
+        .parse::<age::x25519::Identity>()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
+
+    let tokens = crate::ingestion::session_store::decrypt_tokens(&encrypted_tokens, &identity)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("decrypt failed: {e}")))?;
+
+    // Mark as running so callers can poll the vehicle list for progress.
+    sqlx::query(
+        "UPDATE riviamigo.vehicles \
+         SET history_backfill_status = 'running', \
+             history_backfilled_at   = NULL, \
+             history_session_count   = NULL \
+         WHERE id = $1",
+    )
+    .bind(vid)
+    .execute(&state.pool)
+    .await?;
+
+    // Spawn the backfill; update tracking columns when done.
+    let pool = state.pool.clone();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+
+    tokio::spawn(async move {
+        match crate::ingestion::rivian_poll::fetch_charge_history_full(
+            &rivian_vehicle_id,
+            vid,
+            &pool,
+            &client,
+            &tokens,
+        )
+        .await
+        {
+            Ok(count) => {
+                let _ = sqlx::query(
+                    "UPDATE riviamigo.vehicles \
+                     SET history_backfill_status = 'done', \
+                         history_backfilled_at   = now(), \
+                         history_session_count   = $2 \
+                     WHERE id = $1",
+                )
+                .bind(vid)
+                .bind(count as i32)
+                .execute(&pool)
+                .await;
+                tracing::info!(vehicle_id=%vid, count, "manual backfill complete");
+            }
+            Err(e) => {
+                let _ = sqlx::query(
+                    "UPDATE riviamigo.vehicles \
+                     SET history_backfill_status = 'error' \
+                     WHERE id = $1",
+                )
+                .bind(vid)
+                .execute(&pool)
+                .await;
+                tracing::warn!(vehicle_id=%vid, err=%e, "manual backfill failed");
+            }
+        }
+    });
+
+    Ok(Json(serde_json::json!({ "status": "running" })))
 }

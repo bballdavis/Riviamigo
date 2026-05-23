@@ -87,7 +87,10 @@ const CHARGING_SWAP_WIDGET_KEYS = new Set([
   'sensor:charging_max_limit',
   'sensor:charging_home_share',
   'sensor:charging_dc_share',
+  'sensor:charging_free_sessions',
+  'sensor:charging_range_added',
   'custom:charging.connection',
+  'custom:charging.network_breakdown',
 ]);
 
 const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
@@ -101,7 +104,10 @@ const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
   sensorWidget('d4000004-0000-0000-0000-000000000008', 'charging_max_limit', 'Max Charge Limit', unpluggedOptions(), { x: 6, y: 0, w: 3, h: 2 }),
   sensorWidget('d4000004-0000-0000-0000-000000000009', 'charging_home_share', 'Home Charging', {}, { x: 0, y: 4, w: 3, h: 2 }),
   sensorWidget('d4000004-0000-0000-0000-000000000010', 'charging_dc_share', 'DC Fast Charging', {}, { x: 3, y: 4, w: 3, h: 2 }),
-  customWidget('d4000004-0000-0000-0000-000000000013', 'charging.connection', 'Charging Connection', pluggedOptions(), { x: 6, y: 0, w: 6, h: 6 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000014', 'charging_free_sessions', 'Free Sessions', {}, { x: 6, y: 4, w: 3, h: 2 }),
+  sensorWidget('d4000004-0000-0000-0000-000000000015', 'charging_range_added', 'Range Added', {}, { x: 9, y: 4, w: 3, h: 2 }),
+  customWidget('d4000004-0000-0000-0000-000000000013', 'charging.connection', 'Charging Connection', pluggedOptions(), { x: 0, y: 6, w: 8, h: 8 }),
+  customWidget('d4000004-0000-0000-0000-000000000016', 'charging.network_breakdown', 'Network Breakdown', {}, { x: 8, y: 6, w: 4, h: 8 }),
 ];
 
 function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConfig {

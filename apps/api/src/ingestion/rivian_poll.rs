@@ -155,8 +155,10 @@ struct VehicleEnrichmentDetails {
     charge_port_type: Option<String>,
 }
 
+/// API response shape — `status` field is received from Rivian but not used locally.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct SupportedFeature {
     name: Option<String>,
     status: Option<String>,
@@ -436,10 +438,15 @@ struct ChargingLocation {
     longitude: Option<f64>,
 }
 
-/// Fetch completed charge sessions from Rivian's charging endpoint and
-/// enrich the local `riviamigo.charge_sessions` rows that match by
-/// `rivian_session_id`.  Rows without a local match are skipped — they predate
-/// our telemetry and have no trip context.
+/// Fetch completed charge sessions from Rivian's charging endpoint.
+///
+/// ## Modes
+/// - **`full_backfill = false`** (post-session enrichment): enriches existing
+///   local rows by matching on `rivian_session_id` then by start-time window.
+///   Sessions with no local match are skipped.
+/// - **`full_backfill = true`** (first-start backfill): additionally INSERTs
+///   sessions that have no local match at all, tagged with `source = 'rivian_api'`.
+///   Paginates until the API returns fewer than `PAGE_SIZE` results (cap: 50 pages).
 pub async fn fetch_charge_history(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -447,6 +454,32 @@ pub async fn fetch_charge_history(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
+    fetch_charge_history_inner(rivian_vehicle_id, vehicle_id, false, pool, client, tokens).await
+}
+
+/// Same as [`fetch_charge_history`] but inserts new sessions from the API that
+/// have no local counterpart (for the first-start full backfill flow).
+pub async fn fetch_charge_history_full(
+    rivian_vehicle_id: &str,
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<usize> {
+    fetch_charge_history_inner(rivian_vehicle_id, vehicle_id, true, pool, client, tokens).await
+}
+
+async fn fetch_charge_history_inner(
+    rivian_vehicle_id: &str,
+    vehicle_id: Uuid,
+    full_backfill: bool,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<usize> {
+    const PAGE_SIZE: i64 = 200;
+    const MAX_PAGES: usize = 50;
+
     const Q: &str = r#"
         query getCompletedSessionSummaries($vehicleId: String!, $limit: Int, $offset: Int) {
           getCompletedSessionSummaries(vehicleId: $vehicleId, limit: $limit, offset: $offset) {
@@ -471,85 +504,145 @@ pub async fn fetch_charge_history(
         }
     "#;
 
-    let vars = serde_json::json!({
-        "vehicleId": rivian_vehicle_id,
-        "limit": 200,
-        "offset": 0,
-    });
+    let mut total_processed = 0usize;
+    let mut total_inserted = 0usize;
+    let mut offset = 0i64;
 
-    let data: CompletedSessionsData =
-        gql_request(client, CHRG_URL, tokens, "getCompletedSessionSummaries", Q, vars).await?;
+    for _page in 0..MAX_PAGES {
+        let vars = serde_json::json!({
+            "vehicleId": rivian_vehicle_id,
+            "limit": PAGE_SIZE,
+            "offset": offset,
+        });
 
-    let sessions = data
-        .get_completed_session_summaries
-        .and_then(|p| p.data)
-        .unwrap_or_default();
+        let data: CompletedSessionsData =
+            gql_request(client, CHRG_URL, tokens, "getCompletedSessionSummaries", Q, vars.clone()).await?;
 
-    let mut enriched = 0usize;
-    for s in &sessions {
-        let Some(rivian_id) = &s.id else { continue };
+        increment_poll_counter(pool, vehicle_id).await;
 
-        // Only enrich rows we've already recorded locally.
-        let affected = sqlx::query(
-            "UPDATE riviamigo.charge_sessions SET
-                 rivian_session_id  = $2,
-                 network_vendor     = COALESCE(network_vendor, $3),
-                 range_added_km     = COALESCE(range_added_km, $4),
-                 is_free_session    = COALESCE(is_free_session, $5),
-                 is_rivian_network  = COALESCE(is_rivian_network, $6),
-                 rivian_paid_total  = COALESCE(rivian_paid_total, $7)
-             WHERE vehicle_id = $1
-               AND rivian_session_id = $2",
-        )
-        .bind(vehicle_id)
-        .bind(rivian_id)
-        .bind(&s.network_name)
-        .bind(s.range_added)
-        .bind(s.is_free_session)
-        .bind(s.rivian_energy)
-        .bind(s.paid_total)
-        .execute(pool)
-        .await?
-        .rows_affected();
+        let sessions = data
+            .get_completed_session_summaries
+            .and_then(|p| p.data)
+            .unwrap_or_default();
 
-        // If no existing row by rivian_session_id, try to match by start time.
-        if affected == 0 {
-            if let Some(start) = s.start_time {
-                let window_start = start - chrono::Duration::minutes(5);
-                let window_end = start + chrono::Duration::minutes(5);
+        let page_len = sessions.len();
 
-                sqlx::query(
-                    "UPDATE riviamigo.charge_sessions SET
-                         rivian_session_id  = $2,
-                         network_vendor     = COALESCE(network_vendor, $3),
-                         range_added_km     = COALESCE(range_added_km, $4),
-                         is_free_session    = COALESCE(is_free_session, $5),
-                         is_rivian_network  = COALESCE(is_rivian_network, $6),
-                         rivian_paid_total  = COALESCE(rivian_paid_total, $7)
-                     WHERE vehicle_id = $1
-                       AND rivian_session_id IS NULL
-                       AND started_at BETWEEN $8 AND $9",
-                )
-                .bind(vehicle_id)
-                .bind(rivian_id)
-                .bind(&s.network_name)
-                .bind(s.range_added)
-                .bind(s.is_free_session)
-                .bind(s.rivian_energy)
-                .bind(s.paid_total)
-                .bind(window_start)
-                .bind(window_end)
-                .execute(pool)
-                .await?;
+        for s in &sessions {
+            let Some(rivian_id) = &s.id else { continue };
+
+            // Try to enrich an existing row matched by rivian_session_id.
+            let affected = sqlx::query(
+                "UPDATE riviamigo.charge_sessions SET
+                     rivian_session_id  = $2,
+                     network_vendor     = COALESCE(network_vendor, $3),
+                     range_added_km     = COALESCE(range_added_km, $4),
+                     is_free_session    = COALESCE(is_free_session, $5),
+                     is_rivian_network  = COALESCE(is_rivian_network, $6),
+                     rivian_paid_total  = COALESCE(rivian_paid_total, $7)
+                 WHERE vehicle_id = $1
+                   AND rivian_session_id = $2",
+            )
+            .bind(vehicle_id)
+            .bind(rivian_id)
+            .bind(&s.network_name)
+            .bind(s.range_added)
+            .bind(s.is_free_session)
+            .bind(s.rivian_energy)
+            .bind(s.paid_total)
+            .execute(pool)
+            .await?
+            .rows_affected();
+
+            if affected == 0 {
+                // Try to match by start-time window (±5 min).
+                let time_matched = if let Some(start) = s.start_time {
+                    let window_start = start - chrono::Duration::minutes(5);
+                    let window_end = start + chrono::Duration::minutes(5);
+
+                    sqlx::query(
+                        "UPDATE riviamigo.charge_sessions SET
+                             rivian_session_id  = $2,
+                             network_vendor     = COALESCE(network_vendor, $3),
+                             range_added_km     = COALESCE(range_added_km, $4),
+                             is_free_session    = COALESCE(is_free_session, $5),
+                             is_rivian_network  = COALESCE(is_rivian_network, $6),
+                             rivian_paid_total  = COALESCE(rivian_paid_total, $7)
+                         WHERE vehicle_id = $1
+                           AND rivian_session_id IS NULL
+                           AND started_at BETWEEN $8 AND $9",
+                    )
+                    .bind(vehicle_id)
+                    .bind(rivian_id)
+                    .bind(&s.network_name)
+                    .bind(s.range_added)
+                    .bind(s.is_free_session)
+                    .bind(s.rivian_energy)
+                    .bind(s.paid_total)
+                    .bind(window_start)
+                    .bind(window_end)
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+                } else {
+                    0
+                };
+
+                // Full backfill: insert sessions that have no local counterpart.
+                if full_backfill && time_matched == 0 {
+                    if let Some(start) = s.start_time {
+                        let loc = s.location.as_ref();
+                        let result = sqlx::query(
+                            "INSERT INTO riviamigo.charge_sessions
+                                 (vehicle_id, started_at, ended_at, kwh_added,
+                                  soc_start, soc_end, location_lat, location_lng,
+                                  rivian_session_id, network_vendor, range_added_km,
+                                  is_free_session, is_rivian_network, rivian_paid_total,
+                                  source)
+                             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'rivian_api')
+                             ON CONFLICT DO NOTHING",
+                        )
+                        .bind(vehicle_id)
+                        .bind(start)
+                        .bind(s.end_time)
+                        .bind(s.energy_added)
+                        .bind(s.starting_soc)
+                        .bind(s.ending_soc)
+                        .bind(loc.and_then(|l| l.latitude))
+                        .bind(loc.and_then(|l| l.longitude))
+                        .bind(rivian_id)
+                        .bind(&s.network_name)
+                        .bind(s.range_added)
+                        .bind(s.is_free_session)
+                        .bind(s.rivian_energy)
+                        .bind(s.paid_total)
+                        .execute(pool)
+                        .await;
+
+                        if let Ok(r) = result {
+                            total_inserted += r.rows_affected() as usize;
+                        }
+                    }
+                }
             }
+
+            total_processed += 1;
         }
 
-        enriched += 1;
+        // Stop paginating when the page is smaller than the page size.
+        if page_len < PAGE_SIZE as usize {
+            break;
+        }
+        offset += PAGE_SIZE;
     }
 
-    increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, total=%sessions.len(), enriched=%enriched, "charge history synced");
-    Ok(enriched)
+    tracing::debug!(
+        vehicle_id=%vehicle_id,
+        total_processed,
+        total_inserted,
+        full_backfill,
+        "charge history synced"
+    );
+    Ok(total_processed)
 }
 
 // ── Live session data (Redis only, not persisted) ─────────────────────────────
@@ -877,8 +970,10 @@ pub struct ChargingScheduleInput {
     pub week_days: Option<Vec<String>>,
 }
 
+/// Mutation response — field received from Rivian but success is inferred from HTTP status.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct MutateChargingScheduleData {
     update_vehicle_charging_settings: Option<serde_json::Value>,
 }
@@ -1008,8 +1103,10 @@ pub async fn create_departure_schedule(
     Ok(rivian_id)
 }
 
+/// Mutation response — field received from Rivian but success is inferred from HTTP status.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct UpdateDepartureData {
     update_departure_schedule: Option<serde_json::Value>,
 }
@@ -1069,8 +1166,10 @@ pub async fn update_departure_schedule(
     Ok(())
 }
 
+/// Mutation response — field received from Rivian but success is inferred from HTTP status.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct DeleteDepartureData {
     delete_departure_schedule: Option<serde_json::Value>,
 }
@@ -1117,6 +1216,12 @@ pub async fn delete_departure_schedule(
 
 /// Run all one-shot startup polls for a vehicle.  Errors are logged but not
 /// fatal — a failure in one poll must not prevent others from running.
+///
+/// If `history_backfilled_at IS NULL` (first time this vehicle's worker has
+/// ever run), a full charge-history backfill is performed that also inserts
+/// sessions sourced entirely from the Rivian API.  On subsequent starts only
+/// the most recent page is fetched to pick up any sessions missed since the
+/// last run.
 pub async fn run_startup_polls(
     rivian_vehicle_id: String,
     vehicle_id: Uuid,
@@ -1139,9 +1244,58 @@ pub async fn run_startup_polls(
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
     }
 
-    match fetch_charge_history(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
-        Ok(n) => tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "charge history backfill complete"),
-        Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed"),
+    // Check whether this vehicle has already been fully backfilled.
+    let needs_full_backfill: bool = sqlx::query_scalar(
+        "SELECT history_backfilled_at IS NULL FROM riviamigo.vehicles WHERE id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(true);
+
+    if needs_full_backfill {
+        tracing::info!(vehicle_id=%vehicle_id, "starting full charge history backfill");
+
+        let _ = sqlx::query(
+            "UPDATE riviamigo.vehicles SET history_backfill_status='running' WHERE id=$1",
+        )
+        .bind(vehicle_id)
+        .execute(&pool)
+        .await;
+
+        match fetch_charge_history_full(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
+            Ok(count) => {
+                let _ = sqlx::query(
+                    "UPDATE riviamigo.vehicles
+                     SET history_backfill_status='done',
+                         history_backfilled_at=now(),
+                         history_session_count=$2
+                     WHERE id=$1",
+                )
+                .bind(vehicle_id)
+                .bind(count as i32)
+                .execute(&pool)
+                .await;
+                tracing::info!(vehicle_id=%vehicle_id, count, "full backfill complete");
+            }
+            Err(e) => {
+                let _ = sqlx::query(
+                    "UPDATE riviamigo.vehicles SET history_backfill_status='error' WHERE id=$1",
+                )
+                .bind(vehicle_id)
+                .execute(&pool)
+                .await;
+                tracing::warn!(vehicle_id=%vehicle_id, err=%e, "full backfill failed");
+            }
+        }
+    } else {
+        // Incremental enrich: just reconcile any sessions that appeared since last run.
+        match fetch_charge_history(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
+            Ok(n) => tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete"),
+            Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed"),
+        }
     }
 
     if let Err(e) = fetch_charging_schedule(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await {
