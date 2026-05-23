@@ -339,8 +339,8 @@ async function ensureSchema() {
   );
   await applyMigrationIfMissing(
     "to_regclass('riviamigo.security_events')",
-    resolve(apiDir, 'migrations/0003_security_events.sql'),
-    '0003_security_events.sql',
+    resolve(apiDir, 'migrations/0027_security_events.sql'),
+    '0027_security_events.sql',
   );
   log('');
 }
