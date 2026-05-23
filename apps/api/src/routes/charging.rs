@@ -181,7 +181,9 @@ async fn get_summary(
     let to = p.to.unwrap_or_else(Utc::now);
     let rate = crate::db::users::get_electricity_rate(&state.pool, auth.user_id).await?;
 
+
     let agg = sqlx::query!(
+
         "SELECT COALESCE(SUM(kwh_added),0) AS total_kwh,
                 COUNT(*) AS session_count,
                 COALESCE(SUM(CASE WHEN is_home THEN kwh_added ELSE 0 END),0) AS home_kwh,
@@ -226,4 +228,110 @@ async fn get_summary(
             "sessions":   r.sessions,
         })).collect::<Vec<_>>(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    // Run with: cargo test -- --ignored
+
+    async fn make_app() -> axum::Router {
+        use std::sync::Arc;
+        use crate::middleware::auth::{AppState, JwtKeys};
+        use rsa::{
+            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+            RsaPrivateKey,
+        };
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for integration tests");
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let redis = redis::Client::open(redis_url).expect("redis client");
+
+        let mut rng = rand::thread_rng();
+        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
+        let pub_key = priv_key.to_public_key();
+        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
+        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
+
+        let config = crate::config::Config {
+            database_url: database_url.clone(),
+            redis_url: "redis://127.0.0.1/".into(),
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec!["http://localhost:3000".into()],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+        };
+
+        let state = AppState {
+            pool,
+            redis,
+            jwt_keys,
+            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+                .to_string(),
+            config,
+        };
+
+        crate::routes::build_router(state)
+    }
+
+    async fn get_unauthenticated(app: axum::Router, uri: &str) -> http::StatusCode {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn list_sessions_requires_auth() {
+        let app = make_app().await;
+        let status = get_unauthenticated(app, "/v1/charging/sessions").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn session_detail_requires_auth() {
+        let app = make_app().await;
+        let status = get_unauthenticated(
+            app,
+            &format!("/v1/charging/sessions/{}", uuid::Uuid::new_v4()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn charging_summary_requires_auth() {
+        let app = make_app().await;
+        let status = get_unauthenticated(app, "/v1/charging/summary").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn session_detail_invalid_uuid() {
+        // Without auth header, 401 takes precedence over UUID parse error.
+        // This documents the auth-first ordering in the middleware stack.
+        let app = make_app().await;
+        let status = get_unauthenticated(app, "/v1/charging/sessions/not-a-uuid").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 }
