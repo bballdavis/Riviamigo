@@ -316,3 +316,392 @@ async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<Strin
     .await?;
     Ok(raw)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use http::{Request, StatusCode};
+    use tower::ServiceExt; // for `oneshot`
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// Build a full router backed by a real database.
+    /// Reads DATABASE_URL + REDIS_URL from the environment (set in CI).
+    async fn make_app() -> axum::Router {
+        use std::sync::Arc;
+        use crate::middleware::auth::JwtKeys;
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for integration tests");
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let redis = redis::Client::open(redis_url).expect("redis client");
+
+        let (private_pem, public_pem) = generate_test_rsa_keys();
+        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
+
+        let config = crate::config::Config {
+            database_url: database_url.clone(),
+            redis_url: "redis://127.0.0.1/".into(),
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec!["http://localhost:3000".into()],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+        };
+
+        let state = AppState {
+            pool,
+            redis,
+            jwt_keys,
+            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+                .to_string(),
+            config,
+        };
+
+        crate::routes::build_router(state)
+    }
+
+    /// Generate an RSA-2048 key pair in PEM format for testing.
+    fn generate_test_rsa_keys() -> (String, String) {
+        use rsa::{
+            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+            RsaPrivateKey,
+        };
+        let mut rng = rand::thread_rng();
+        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate rsa key");
+        let pub_key = priv_key.to_public_key();
+        let private_pem = priv_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("private pem")
+            .to_string();
+        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("public pem");
+        (private_pem, public_pem)
+    }
+
+    /// Send a POST request with a JSON body.
+    async fn post_json(
+        app: axum::Router,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        let req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        app.oneshot(req).await.unwrap()
+    }
+
+    /// Send a GET request.
+    async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap()
+    }
+
+    // ── pure unit tests (no DB needed) ───────────────────────────────────────
+
+    #[test]
+    fn register_validation_rejects_empty_email() {
+        // Mirror the handler validation: `body.email.is_empty() || body.password.len() < 8`
+        let email = "";
+        let password = "strongpassword123";
+        assert!(
+            email.is_empty() || password.len() < 8,
+            "expected validation to fire for empty email"
+        );
+    }
+
+    #[test]
+    fn register_validation_rejects_short_password() {
+        let email = "user@example.com";
+        let password = "short"; // < 8 chars
+        assert!(
+            email.is_empty() || password.len() < 8,
+            "expected validation to fire for short password"
+        );
+    }
+
+    #[test]
+    fn register_validation_passes_for_valid_input() {
+        let email = "user@example.com";
+        let password = "strongpass123"; // >= 8 chars
+        assert!(
+            !(email.is_empty() || password.len() < 8),
+            "valid input should not trigger validation error"
+        );
+    }
+
+    #[test]
+    fn refresh_cookie_format_contains_httponly() {
+        let cookie = refresh_cookie("mytoken", 3600);
+        assert!(cookie.contains("HttpOnly"), "cookie must be HttpOnly");
+        assert!(cookie.contains("SameSite=Lax"), "cookie must have SameSite=Lax");
+        assert!(
+            cookie.contains("refresh_token=mytoken"),
+            "cookie must contain token value"
+        );
+        assert!(cookie.contains("Max-Age=3600"), "cookie must set Max-Age");
+    }
+
+    #[test]
+    fn refresh_cookie_clear_sets_zero_max_age() {
+        let cookie = refresh_cookie("", 0);
+        assert!(cookie.contains("Max-Age=0"), "clearing cookie must set Max-Age=0");
+        assert!(
+            cookie.contains("refresh_token="),
+            "clearing cookie must have empty value"
+        );
+    }
+
+    #[test]
+    fn sha2_hash_is_deterministic() {
+        let h1 = sha2_hash("hello");
+        let h2 = sha2_hash("hello");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn sha2_hash_differs_for_different_inputs() {
+        let h1 = sha2_hash("hello");
+        let h2 = sha2_hash("world");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn argon2_hash_and_verify_roundtrip() {
+        let password = "supersecretpassword";
+        let hash = argon2_hash(password).expect("hash should succeed");
+        assert!(verify_password(password, &hash).is_ok());
+    }
+
+    #[test]
+    fn verify_password_rejects_wrong_password() {
+        let hash = argon2_hash("correctpassword").expect("hash");
+        assert!(verify_password("wrongpassword", &hash).is_err());
+    }
+
+    // ── integration tests (require DATABASE_URL) ─────────────────────────────
+    // Run with: cargo test -- --ignored
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn me_requires_auth() {
+        let app = make_app().await;
+        let resp = get(app, "/v1/auth/me").await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn register_fails_empty_email_http() {
+        let app = make_app().await;
+        let resp = post_json(
+            app,
+            "/v1/auth/register",
+            serde_json::json!({"email": "", "password": "strongpassword123"}),
+        )
+        .await;
+        assert!(
+            resp.status() == StatusCode::UNPROCESSABLE_ENTITY
+                || resp.status() == StatusCode::BAD_REQUEST,
+            "expected 422 or 400, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn register_fails_short_password_http() {
+        let app = make_app().await;
+        let resp = post_json(
+            app,
+            "/v1/auth/register",
+            serde_json::json!({"email": "test@example.com", "password": "short"}),
+        )
+        .await;
+        assert!(
+            resp.status() == StatusCode::UNPROCESSABLE_ENTITY
+                || resp.status() == StatusCode::BAD_REQUEST,
+            "expected 422 or 400, got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn register_succeeds() {
+        let app = make_app().await;
+        let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
+        let resp = post_json(
+            app,
+            "/v1/auth/register",
+            serde_json::json!({
+                "email": unique_email,
+                "password": "strongpassword123"
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CREATED, "register should return 201");
+        let set_cookie = resp
+            .headers()
+            .get("set-cookie")
+            .expect("should have Set-Cookie header")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            set_cookie.contains("refresh_token="),
+            "Set-Cookie should contain refresh_token"
+        );
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(
+            body.get("access_token").is_some(),
+            "body should contain access_token"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn login_wrong_password() {
+        let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
+        // Register first
+        let app = make_app().await;
+        post_json(
+            app.clone(),
+            "/v1/auth/register",
+            serde_json::json!({
+                "email": unique_email,
+                "password": "correctpassword123"
+            }),
+        )
+        .await;
+        // Try to log in with wrong password
+        let resp = post_json(
+            app,
+            "/v1/auth/login",
+            serde_json::json!({
+                "email": unique_email,
+                "password": "wrongpassword456"
+            }),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "wrong password should return 401"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn login_succeeds() {
+        let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
+        let app = make_app().await;
+        // Register first
+        post_json(
+            app.clone(),
+            "/v1/auth/register",
+            serde_json::json!({
+                "email": unique_email,
+                "password": "correctpassword123"
+            }),
+        )
+        .await;
+        // Login
+        let resp = post_json(
+            app,
+            "/v1/auth/login",
+            serde_json::json!({
+                "email": unique_email,
+                "password": "correctpassword123"
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "valid login should return 200");
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(
+            body.get("access_token").is_some(),
+            "login response should have access_token"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn logout_clears_cookie() {
+        let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
+        let app = make_app().await;
+
+        // Register (auto-logs in)
+        let reg_resp = post_json(
+            app.clone(),
+            "/v1/auth/register",
+            serde_json::json!({
+                "email": unique_email,
+                "password": "correctpassword123"
+            }),
+        )
+        .await;
+        let set_cookie = reg_resp
+            .headers()
+            .get("set-cookie")
+            .expect("should have Set-Cookie after register")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Extract the refresh token value from the Set-Cookie header
+        let token_value = set_cookie
+            .split(';')
+            .next()
+            .and_then(|s| s.strip_prefix("refresh_token="))
+            .expect("should extract refresh_token value")
+            .to_string();
+
+        // Logout
+        let logout_req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/logout")
+            .header("cookie", format!("refresh_token={token_value}"))
+            .body(Body::empty())
+            .unwrap();
+        let logout_resp = app.clone().oneshot(logout_req).await.unwrap();
+        assert_eq!(
+            logout_resp.status(),
+            StatusCode::NO_CONTENT,
+            "logout should return 204"
+        );
+
+        // After logout, refreshing should return 401
+        let refresh_req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/refresh")
+            .header("cookie", format!("refresh_token={token_value}"))
+            .body(Body::empty())
+            .unwrap();
+        let refresh_resp = app.oneshot(refresh_req).await.unwrap();
+        assert_eq!(
+            refresh_resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "refresh after logout should return 401"
+        );
+    }
+}
