@@ -84,7 +84,7 @@ impl FromRequestParts<AppState> for AuthUser {
                 .await;
         }
 
-        // Retrieve JWT public key from extensions (set by middleware)
+        // Retrieve JWT public key from extensions (set by router middleware).
         let decoding_key = parts
             .extensions
             .get::<DecodingKey>()

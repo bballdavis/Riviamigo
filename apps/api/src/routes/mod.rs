@@ -15,7 +15,7 @@ use tower_http::{
     limit::RequestBodyLimitLayer,
     request_id::{MakeRequestUuid, SetRequestIdLayer},
     set_header::SetResponseHeaderLayer,
-    trace::TraceLayer,
+    trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
 };
 
 use crate::middleware::auth::AppState;
@@ -45,6 +45,21 @@ pub mod state_timeline;
 pub mod stats;
 pub mod trips;
 pub mod vehicles;
+
+async fn log_server_errors(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let response = next.run(req).await;
+
+    if response.status().is_server_error() {
+        tracing::error!(%method, %path, status = %response.status(), "request returned server error");
+    }
+
+    response
+}
 
 pub fn build_router(state: AppState) -> Router {
     let allowed_origins: Vec<HeaderValue> = state
@@ -82,7 +97,7 @@ pub fn build_router(state: AppState) -> Router {
             .unwrap(),
     );
 
-    // Inject decoding key into request extensions so AuthUser extractor can find it
+    // Inject decoding key into request extensions so AuthUser extractor can find it.
     let decoding_key = state.jwt_keys.decoding.clone();
 
     let protected = Router::new()
@@ -90,7 +105,6 @@ pub fn build_router(state: AppState) -> Router {
         .merge(api_keys::router())
         .merge(backups::router())
         .merge(vehicles::router())
-        .merge(backfill::router())
         .merge(battery::router())
         .merge(trips::router())
         .merge(charging::router())
@@ -134,10 +148,15 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/v1", Router::new().merge(auth_public).merge(protected))
         .route("/grafana/query", axum::routing::post(grafana::query_stub))
         .route("/grafana/search", axum::routing::post(grafana::search_stub))
+        .layer(middleware::from_fn(log_server_errors))
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().include_headers(false))
+                .on_failure(DefaultOnFailure::new()),
+        )
         .layer(SetResponseHeaderLayer::overriding(
             STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),

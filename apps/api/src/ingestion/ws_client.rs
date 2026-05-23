@@ -99,8 +99,6 @@ subscription vehicleState($vehicleID: String!) {
     otaCurrentStatus    { timeStamp value }
     cabinClimateInteriorTemperature { timeStamp value }
     cabinClimateDriverTemperature   { timeStamp value }
-    cabinClimateExteriorTemperature { timeStamp value }
-    cabinClimateRunning             { timeStamp value }
     batteryHvThermalEvent           { timeStamp value }
     twelveVoltBatteryHealth         { timeStamp value }
     chargePortState                 { timeStamp value }
@@ -130,9 +128,7 @@ subscription vehicleState($vehicleID: String!) {
     wiperFluidState                 { timeStamp value }
     brakeFluidLow                   { timeStamp value }
     alarmSoundStatus                { timeStamp value }
-    vehicleInServiceMode            { timeStamp value }
-    vehiclePowerOutput              { timeStamp value }
-    regenerativeBrakingPower        { timeStamp value }
+        serviceMode                     { timeStamp value }
   }
 }
 "#;
@@ -326,6 +322,14 @@ async fn connect_and_subscribe(
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).unwrap_or_default();
                         let message_type = message_type(&value);
+                        if matches!(message_type.as_deref(), Some("error") | Some("complete")) {
+                            tracing::warn!(
+                                vehicle_id = %vehicle_id,
+                                message_type = message_type.as_deref().unwrap_or("unknown"),
+                                message = %truncate_ws_message(&text),
+                                "Rivian WS control message"
+                            );
+                        }
                         match classify_text_message(&text, *vehicle_id) {
                             Ok(inbound) => {
                                 let _ = tx.send(WsInboundEvent {
