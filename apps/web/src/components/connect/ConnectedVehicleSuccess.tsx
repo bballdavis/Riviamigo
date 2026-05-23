@@ -1,21 +1,37 @@
+import { TbCarSuvFilled } from 'react-icons/tb';
 import { Button } from '@riviamigo/ui/primitives';
-import { Car, Gauge, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 
 interface ConnectedVehicleSuccessProps {
   vehicleName: string;
   onOpenDashboard: () => void;
 }
 
+const HILLS_FILL = "M-10,65 C20,65 50,25 75,25 C100,25 125,65 148,65 C165,65 195,16 220,16 C245,16 260,64 280,64 C298,64 320,35 342,35 C360,35 380,56 410,52 L410,80 L-10,80 Z";
+const HILLS_LINE = "M-10,65 C20,65 50,25 75,25 C100,25 125,65 148,65 C165,65 195,16 220,16 C245,16 260,64 280,64 C298,64 320,35 342,35 C360,35 380,56 410,52";
+
 export function ConnectedVehicleSuccess({ vehicleName, onOpenDashboard }: ConnectedVehicleSuccessProps) {
   return (
     <div className="py-3 text-center">
-      <div className="relative mx-auto h-20 max-w-sm overflow-hidden rounded-xl border border-border bg-bg-elevated/40">
-        <div className="absolute inset-x-8 bottom-5 h-px bg-border-strong" />
-        <div className="rm-drive-across absolute bottom-6 left-0 flex h-11 w-11 items-center justify-center rounded-xl bg-accent text-fg-on-accent shadow-glow-button">
-          <Car className="h-6 w-6" />
-        </div>
-        <div className="absolute right-6 top-5 flex h-8 w-8 items-center justify-center rounded-lg bg-bg-surface text-accent">
-          <Gauge className="h-4 w-4" />
+      <div className="relative mx-auto h-24 max-w-sm overflow-hidden rounded-xl border border-border bg-bg-elevated/40">
+        <svg
+          viewBox="0 0 400 80"
+          preserveAspectRatio="none"
+          className="absolute inset-0 h-full w-full"
+          aria-hidden="true"
+        >
+          <path d={HILLS_FILL} fill="var(--rm-accent)" fillOpacity="0.08" />
+          <path d={HILLS_LINE} fill="none" stroke="var(--rm-accent)" strokeOpacity="0.25" strokeWidth="1.5" />
+        </svg>
+
+        {/* Outer div carries horizontal travel; inner div carries vertical hill bob */}
+        <div className="rm-drive-across absolute bottom-4 left-0">
+          <div className="rm-hills-y">
+            <TbCarSuvFilled
+              className="h-8 w-8 text-accent"
+              style={{ filter: 'drop-shadow(0 1px 6px color-mix(in oklab, var(--rm-accent) 50%, transparent))' }}
+            />
+          </div>
         </div>
       </div>
 

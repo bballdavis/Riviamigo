@@ -12,9 +12,10 @@ import {
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { BackupSection } from '../components/settings/BackupSection';
+import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Car, CircleHelp, Clipboard, Database, DatabaseBackup, KeyRound, LogOut, MapPin, Pencil, Plus, Ruler, ShieldCheck, Trash2,
+  Car, CircleHelp, Clipboard, Database, DatabaseBackup, KeyRound, ListChecks, LogOut, MapPin, Pencil, Plus, RefreshCw, Ruler, Save, ShieldCheck, Trash2, X,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -43,13 +44,14 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'raw' | 'backup' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'api', label: 'API Access', icon: KeyRound },
+  { id: 'jobs', label: 'Jobs', icon: ListChecks },
   { id: 'raw', label: 'Raw Data', icon: Database },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
@@ -109,7 +111,7 @@ function SettingsPage() {
 }
 
 export function SettingsContent() {
-  const { logout, defaultVehicleId } = useAuth();
+  const { logout, defaultVehicleId, setDefaultVehicleId } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
@@ -129,6 +131,9 @@ export function SettingsContent() {
   const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
   const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
   const [customKwh, setCustomKwh] = React.useState('');
+  const [editNameValue, setEditNameValue] = React.useState('');
+  const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
   const isAdmin = me.data?.role === 'admin';
   const sections = React.useMemo(
     () => isAdmin
@@ -198,40 +203,74 @@ export function SettingsContent() {
       api.updateVehicleBatteryConfig(vehicleId, { battery_capacity_kwh: kwh, battery_config: config }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      setEditingBatteryVehicleId(null);
     },
   });
 
-  function startEditBattery(vehicleId: string, currentKwh: number | null | undefined) {
+  const updateVehicleName = useMutation({
+    mutationFn: ({ vehicleId, name }: { vehicleId: string; name: string }) =>
+      api.updateVehicleName(vehicleId, name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+
+  const deleteVehicle = useMutation({
+    mutationFn: (vehicleId: string) => api.deleteVehicle(vehicleId),
+    onSuccess: (result) => {
+      setDefaultVehicleId(result.default_vehicle_id ?? null);
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+
+  function startEditVehicle(vehicleId: string, currentKwh: number | null | undefined) {
     setEditingBatteryVehicleId(vehicleId);
     const vehicle = vehicles?.find((v) => v.id === vehicleId);
-    const modelLower = vehicle?.model?.toLowerCase() ?? '';
-    const isGen2 = modelLower.includes('gen 2') || modelLower.includes('2nd') || (vehicle?.year && vehicle.year >= 2025);
-    const gen: BatteryGen = isGen2 ? 'gen2' : 'gen1';
-    setBatteryGen(gen);
+    setEditNameValue(vehicle?.display_name ?? '');
 
     if (currentKwh != null) {
-      const match = RIVIAN_BATTERY_PRESETS[gen].find((p) => p.kwh === currentKwh);
-      if (match && match.key !== 'custom') {
-        setBatteryPreset(match.key);
-        setCustomKwh('');
-      } else {
-        setBatteryPreset('custom');
-        setCustomKwh(String(currentKwh));
+      // Search all gens so a Gen 2 pack saved while gen was auto-detected as Gen 1 still resolves correctly
+      for (const g of ['gen1', 'gen2'] as BatteryGen[]) {
+        const match = RIVIAN_BATTERY_PRESETS[g].find((p) => p.kwh === currentKwh && p.key !== 'custom');
+        if (match) {
+          setBatteryGen(g);
+          setBatteryPreset(match.key);
+          setCustomKwh('');
+          return;
+        }
       }
+      if (R2S_PRESET.kwh === currentKwh) {
+        setBatteryPreset(R2S_PRESET.key);
+        setCustomKwh('');
+        return;
+      }
+      setBatteryPreset('custom');
+      setCustomKwh(String(currentKwh));
     } else {
+      const modelLower = vehicle?.model?.toLowerCase() ?? '';
+      const isGen2 = modelLower.includes('gen 2') || modelLower.includes('2nd') || (vehicle?.year && vehicle.year >= 2025);
+      const gen: BatteryGen = isGen2 ? 'gen2' : 'gen1';
+      setBatteryGen(gen);
       setBatteryPreset(gen === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
       setCustomKwh('');
     }
   }
 
-  function handleSaveBatteryConfig(vehicleId: string) {
+  async function handleSaveVehicle(vehicleId: string) {
+    const vehicle = vehicles?.find((v) => v.id === vehicleId);
+    const trimmedName = editNameValue.trim();
     const preset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
     if (!preset) return;
     const kwh = preset.key === 'custom' ? parseFloat(customKwh) : preset.kwh!;
     if (!isFinite(kwh) || kwh <= 0) return;
-    const config = preset.key === 'custom' ? `Custom (${kwh} kWh)` : `${preset.label}`;
-    updateBatteryConfig.mutate({ vehicleId, kwh, config });
+    const config = preset.key === 'custom' ? `Custom (${kwh} kWh)` : preset.label;
+    const saves: Promise<unknown>[] = [
+      updateBatteryConfig.mutateAsync({ vehicleId, kwh, config }),
+    ];
+    if (trimmedName && trimmedName !== vehicle?.display_name) {
+      saves.push(updateVehicleName.mutateAsync({ vehicleId, name: trimmedName }));
+    }
+    await Promise.all(saves);
+    setEditingBatteryVehicleId(null);
   }
 
   async function handleLogout() {
@@ -289,132 +328,253 @@ export function SettingsContent() {
                   {(vehicles?.length ?? 0) === 0 && (
                     <p className="text-sm text-fg-tertiary">No vehicles connected yet.</p>
                   )}
+                  {/* Delete confirmation dialog */}
+                  {deleteConfirmId && (() => {
+                    const dv = vehicles?.find((v) => v.id === deleteConfirmId);
+                    return (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 backdrop-blur-sm">
+                        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
+                          <h3 className="text-sm font-semibold text-fg">Delete {dv?.display_name}?</h3>
+                          <p className="mt-2 text-xs text-fg-tertiary">
+                            This permanently removes all local telemetry, trips, and charging history for this vehicle.
+                            Type <strong className="font-semibold text-fg">DELETE</strong> below to confirm.
+                          </p>
+                          <input
+                            value={deleteConfirmText}
+                            onChange={(e) => setDeleteConfirmText(e.target.value)}
+                            placeholder="DELETE"
+                            autoFocus
+                            className="mt-3 h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                          />
+                          <div className="mt-3 flex justify-end gap-2">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => { setDeleteConfirmId(null); setDeleteConfirmText(''); }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              disabled={deleteConfirmText !== 'DELETE'}
+                              loading={deleteVehicle.isPending}
+                              onClick={() => {
+                                deleteVehicle.mutate(deleteConfirmId);
+                                setDeleteConfirmId(null);
+                                setDeleteConfirmText('');
+                              }}
+                            >
+                              Delete Vehicle
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="divide-y divide-border">
                     {vehicles?.map((v) => {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
                       const isEditingBattery = editingBatteryVehicleId === v.id;
+
+                      const needsReauth = v.worker_health === 'needs_reauth';
                       const selectedPreset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
+
+                      const healthColor = needsReauth
+                        ? 'var(--rm-status-warning)'
+                        : (v.worker_health === 'ok' || v.worker_health === 'connected')
+                          ? 'var(--rm-status-positive)'
+                          : v.worker_health != null
+                            ? 'var(--rm-status-danger)'
+                            : 'var(--rm-border-default)';
+                      const healthText = needsReauth
+                        ? 'Login required'
+                        : (v.worker_health === 'ok' || v.worker_health === 'connected')
+                          ? (isActive ? 'Active' : 'Connected')
+                          : v.worker_health != null
+                            ? 'Error'
+                            : (isActive ? 'Active' : 'Offline');
+                      const hasGlow = v.worker_health != null;
+
+                      const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
+                      const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';
+
                       return (
-                      <div key={v.id} className="py-3">
-                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                          <div className="flex min-w-0 items-center gap-3">
+                      <div key={v.id} className="py-2">
+                        <div className="rounded-lg border border-border bg-bg-elevated/35 p-3">
+                          <div className="flex gap-3">
+                            {/* Status chip */}
                             <div
-                              className={[
-                                'flex h-12 w-24 items-center justify-center rounded-xl border bg-bg-elevated/70 p-1 transition-shadow',
-                                isActive ? 'border-accent/60 shadow-[0_0_24px_rgba(56,189,248,0.22)]' : 'border-border',
-                              ].join(' ')}
-                              aria-label={isActive ? 'Active vehicle' : 'Vehicle'}
+                              className="flex w-40 shrink-0 flex-col items-center gap-1 rounded-xl border bg-bg-elevated/70 px-1.5 py-2 transition-shadow"
+                              style={{
+                                borderColor: healthColor,
+                                boxShadow: hasGlow
+                                  ? `0 0 18px color-mix(in oklab, ${healthColor} 35%, transparent)`
+                                  : 'none',
+                              }}
                             >
                               <ThemeVehicleImage
                                 images={v.images}
                                 placement="side"
-                                className="h-full max-h-10 w-full object-contain"
-                                fallback={<Car className="h-5 w-5 text-fg-secondary" />}
+                                className="w-full object-contain"
+                                fallback={<Car className="h-6 w-6 text-fg-secondary" />}
                               />
+                              <span className="text-[10px] font-medium leading-none" style={{ color: healthColor }}>
+                                {healthText}
+                              </span>
                             </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-fg">{v.display_name}</p>
-                              <p className="text-xs text-fg-tertiary">
-                                {[v.model, v.year, v.trim].filter(Boolean).join(' / ') || 'Vehicle details pending'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="grid gap-1 text-xs text-fg-tertiary sm:justify-items-end">
-                            <span>VIN: <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span></span>
-                            <span>Rivian ID: <span className="font-mono text-fg">{v.rivian_vehicle_id}</span></span>
-                            <span className={isActive ? 'text-accent' : 'text-fg-tertiary'}>{isActive ? 'Active vehicle' : 'Connected'}</span>
-                          </div>
-                        </div>
 
-                        {/* Battery capacity configuration */}
-                        <div className="mt-3 rounded-lg border border-border bg-bg-elevated/40 p-3">
-                          {isEditingBattery ? (
-                            <div className="grid gap-3">
-                              <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Factory Battery Capacity</p>
-                              <div className="flex flex-wrap items-end gap-2">
-                                {(v.model?.includes('R1') || v.model?.includes('r1')) && (
-                                  <label className="grid gap-1">
-                                    <span className="text-xs text-fg-tertiary">Generation</span>
-                                    <select
-                                      value={batteryGen}
-                                      onChange={(e) => {
-                                        setBatteryGen(e.target.value as BatteryGen);
-                                        setBatteryPreset(e.target.value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
-                                        setCustomKwh('');
-                                      }}
-                                      className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                    >
-                                      <option value="gen1">Gen 1</option>
-                                      <option value="gen2">Gen 2</option>
-                                    </select>
-                                  </label>
+                            {/* Name + model */}
+                            <div className="flex min-w-0 flex-1 flex-col">
+                              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                                <p className="text-lg font-medium text-fg">{v.display_name}</p>
+                                {needsReauth && (
+                                  <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
                                 )}
-                                <label className="grid gap-1">
-                                  <span className="text-xs text-fg-tertiary">Pack</span>
-                                  <select
-                                    value={batteryPreset}
-                                    onChange={(e) => setBatteryPreset(e.target.value)}
-                                    className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                  >
-                                    {(v.model?.includes('R2') || v.model?.includes('r2') ? [R2S_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((p) => (
-                                      <option key={p.key} value={p.key}>
-                                        {p.label}{p.kwh != null ? ` (${p.kwh} kWh)` : ''}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                {batteryPreset === 'custom' && (
-                                  <label className="grid gap-1">
-                                    <span className="text-xs text-fg-tertiary">kWh</span>
+                              </div>
+                              <div className="mt-auto grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-0.5 text-sm">
+                                <span className="text-fg-tertiary">Model</span>
+                                <span className="text-fg">{modelLine}{!isEditingBattery && batteryLabel}</span>
+                                <span className="text-fg-tertiary">VIN</span>
+                                <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span>
+                                <span className="text-fg-tertiary">Rivian ID</span>
+                                <span className="font-mono text-fg">{v.rivian_vehicle_id}</span>
+                              </div>
+                            </div>
+
+                            {/* Action buttons */}
+                            <div className="flex shrink-0 items-center gap-1.5 self-center">
+                              <Tooltip content="Refresh Rivian login">
+                                <Button
+                                  aria-label={`Refresh Rivian login for ${v.display_name}`}
+                                  variant="secondary"
+                                  size="sm"
+                                  className={[
+                                    'h-8 w-8 px-0',
+                                    needsReauth
+                                      ? 'border-[var(--rm-status-warning)] text-[var(--rm-status-warning)] hover:border-[var(--rm-status-warning)] hover:text-[var(--rm-status-warning)]'
+                                      : '',
+                                  ].join(' ')}
+                                  onClick={() => navigate({ to: '/connect', search: { mode: 'refresh', vehicle_id: v.id } })}
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                </Button>
+                              </Tooltip>
+                              <Tooltip content="Edit vehicle">
+                                <Button
+                                  aria-label={`Edit ${v.display_name}`}
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-8 w-8 px-0"
+                                  onClick={() => startEditVehicle(v.id, v.battery_capacity_kwh)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              </Tooltip>
+                              <Tooltip content="Delete vehicle">
+                                <Button
+                                  aria-label={`Delete ${v.display_name}`}
+                                  variant="danger"
+                                  size="sm"
+                                  className="h-8 w-8 px-0"
+                                  onClick={() => { setDeleteConfirmId(v.id); setDeleteConfirmText(''); }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </Tooltip>
+                            </div>
+                          </div>
+
+                          {/* Battery capacity edit — only when open */}
+                          {isEditingBattery && (
+                            <div className="mt-3 border-t border-border/70 pt-3">
+                              <div className="grid gap-3">
+                                <div className="flex items-end gap-2">
+                                  <label className="grid gap-1 flex-1">
+                                    <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle Name</span>
                                     <input
-                                      type="number"
-                                      value={customKwh}
-                                      onChange={(e) => setCustomKwh(e.target.value)}
-                                      placeholder="e.g. 135"
-                                      min="1"
-                                      max="500"
-                                      step="1"
-                                      className="h-9 w-28 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                      value={editNameValue}
+                                      onChange={(e) => setEditNameValue(e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === 'Escape') setEditingBatteryVehicleId(null); }}
+                                      className="h-9 w-40 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                      placeholder="Vehicle name"
                                     />
                                   </label>
-                                )}
-                                <Button
-                                  size="sm"
-                                  loading={updateBatteryConfig.isPending}
-                                  disabled={batteryPreset === 'custom' && (!customKwh || isNaN(parseFloat(customKwh)))}
-                                  onClick={() => handleSaveBatteryConfig(v.id)}
-                                >
-                                  Save
-                                </Button>
-                                <Button variant="secondary" size="sm" onClick={() => setEditingBatteryVehicleId(null)}>
-                                  Cancel
-                                </Button>
-                              </div>
-                              {selectedPreset && selectedPreset.key !== 'custom' && (
-                                <p className="text-xs text-fg-tertiary">
-                                  This value is used as the baseline for battery health % and degradation charts.
-                                  Defaults can be overridden if your vehicle came with a different pack.
-                                </p>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
+                                  <Button
+                                    className="h-9 w-9 shrink-0 px-0"
+                                    iconLeft={<Save className="h-5 w-5" />}
+                                    loading={updateBatteryConfig.isPending || updateVehicleName.isPending}
+                                    disabled={!editNameValue.trim() || (batteryPreset === 'custom' && (!customKwh || isNaN(parseFloat(customKwh))))}
+                                    onClick={() => { handleSaveVehicle(v.id).catch(() => {}); }}
+                                    title="Save vehicle"
+                                    aria-label="Save vehicle"
+                                  />
+                                  <Button
+                                    variant="secondary"
+                                    className="h-9 w-9 shrink-0 px-0"
+                                    iconLeft={<X className="h-5 w-5" />}
+                                    onClick={() => setEditingBatteryVehicleId(null)}
+                                    title="Cancel"
+                                    aria-label="Cancel edit"
+                                  />
+                                </div>
                                 <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Factory Battery Capacity</p>
-                                <p className="mt-0.5 text-sm text-fg">
-                                  {v.battery_capacity_kwh != null
-                                    ? `${v.battery_capacity_kwh} kWh`
-                                    : <span className="text-fg-tertiary">Not set — using max observed from telemetry</span>}
-                                </p>
+                                <div className="flex flex-wrap items-end gap-2">
+                                  {(v.model?.includes('R1') || v.model?.includes('r1')) && (
+                                    <label className="grid gap-1">
+                                      <span className="text-xs text-fg-tertiary">Generation</span>
+                                      <select
+                                        value={batteryGen}
+                                        onChange={(e) => {
+                                          setBatteryGen(e.target.value as BatteryGen);
+                                          setBatteryPreset(e.target.value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
+                                          setCustomKwh('');
+                                        }}
+                                        className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                      >
+                                        <option value="gen1">Gen 1</option>
+                                        <option value="gen2">Gen 2</option>
+                                      </select>
+                                    </label>
+                                  )}
+                                  <label className="grid gap-1">
+                                    <span className="text-xs text-fg-tertiary">Pack</span>
+                                    <select
+                                      value={batteryPreset}
+                                      onChange={(e) => setBatteryPreset(e.target.value)}
+                                      className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                    >
+                                      {(v.model?.includes('R2') || v.model?.includes('r2') ? [R2S_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((p) => (
+                                        <option key={p.key} value={p.key}>
+                                          {p.label}{p.kwh != null ? ` (${p.kwh} kWh)` : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  {batteryPreset === 'custom' && (
+                                    <label className="grid gap-1">
+                                      <span className="text-xs text-fg-tertiary">kWh</span>
+                                      <input
+                                        type="number"
+                                        value={customKwh}
+                                        onChange={(e) => setCustomKwh(e.target.value)}
+                                        placeholder="e.g. 135"
+                                        min="1"
+                                        max="500"
+                                        step="1"
+                                        className="h-9 w-28 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                      />
+                                    </label>
+                                  )}
+                                </div>
+                                {selectedPreset && selectedPreset.key !== 'custom' && (
+                                  <p className="text-xs text-fg-tertiary">
+                                    This value is used as the baseline for battery health % and degradation charts.
+                                    Defaults can be overridden if your vehicle came with a different pack.
+                                  </p>
+                                )}
                               </div>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                iconLeft={<Pencil className="h-3.5 w-3.5" />}
-                                onClick={() => startEditBattery(v.id, v.battery_capacity_kwh)}
-                              >
-                                {v.battery_capacity_kwh != null ? 'Edit' : 'Set'}
-                              </Button>
                             </div>
                           )}
                         </div>
@@ -654,6 +814,8 @@ export function SettingsContent() {
             {activeSection === 'places' && <PlacesSection unitSystem={unitSystem} />}
 
             {activeSection === 'backup' && isAdmin && <BackupSection />}
+
+            {activeSection === 'jobs' && <JobsSection vehicles={vehicles ?? []} />}
 
             {activeSection === 'raw' && (
               <div className="flex flex-col gap-5">

@@ -13,7 +13,7 @@ interface AuthState {
   logout: () => Promise<void>;
   refresh: () => Promise<boolean>;
   setTokens: (accessToken: string, defaultVehicleId: string | null) => void;
-  setDefaultVehicleId: (vehicleId: string) => void;
+  setDefaultVehicleId: (vehicleId: string | null) => void;
   clearSession: () => void;
 }
 

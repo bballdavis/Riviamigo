@@ -125,6 +125,7 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
 
     return (
       <>
+        <span className="text-[11px] font-medium text-fg-tertiary">Dashboard</span>
         <button
           onClick={handleSave}
           disabled={isPending}

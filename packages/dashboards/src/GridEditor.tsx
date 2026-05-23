@@ -152,7 +152,15 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
           opacity: 1;
           pointer-events: auto;
         }
-        /* Delete button hover state */
+        /* Editing state: green resize handle */
+        .rgl-editor .rgl-card[data-editing="true"] .react-resizable-handle-se {
+          border-color: color-mix(in oklab, var(--rm-status-positive) 65%, transparent);
+        }
+        .rgl-editor .rgl-card[data-editing="true"] .react-resizable-handle-se::after {
+          border-right-color: var(--rm-status-positive);
+          border-bottom-color: var(--rm-status-positive);
+        }
+        /* Delete button hover state — always danger red on hover regardless of editing */
         .rgl-editor button.rgl-delete:hover {
           background-color: var(--rm-bg-elevated) !important;
           border-color: color-mix(in oklab, var(--rm-status-danger) 70%, transparent) !important;
@@ -187,7 +195,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                     data-editing={isEditing ? 'true' : 'false'}
                     className={`rgl-card relative overflow-hidden rounded-lg border bg-bg transition-all ${
                       isEditing
-                        ? 'border-accent shadow-[0_0_0_2px_color-mix(in_oklab,var(--rm-accent)_28%,transparent)]'
+                        ? 'border-status-positive shadow-[0_0_0_2px_color-mix(in_oklab,var(--rm-status-positive)_28%,transparent)]'
                         : 'border-border'
                     }`}
                   >
@@ -198,7 +206,9 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
 
                     {/* Move handle — NW corner, inner notch at BR */}
                     <div
-                      className="drag-handle rgl-overlay absolute left-0 top-0 z-40 flex h-7 w-7 cursor-grab items-center justify-center border border-accent/60 text-accent active:cursor-grabbing"
+                      className={`drag-handle rgl-overlay absolute left-0 top-0 z-40 flex h-7 w-7 cursor-grab items-center justify-center border active:cursor-grabbing ${
+                        isEditing ? 'border-status-positive/60 text-status-positive' : 'border-accent/60 text-accent'
+                      }`}
                       style={{ borderRadius: '0 0 10px 0', backgroundColor: 'var(--rm-bg-elevated)' }}
                       title="Drag to move"
                     >
@@ -210,7 +220,9 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                       type="button"
                       onClick={(e) => { e.stopPropagation(); removeWidget(w.id); }}
                       title="Remove widget"
-                      className="rgl-overlay rgl-delete absolute right-0 top-0 z-40 flex h-7 w-7 items-center justify-center border border-accent/60 text-accent transition-colors"
+                      className={`rgl-overlay rgl-delete absolute right-0 top-0 z-40 flex h-7 w-7 items-center justify-center border transition-colors ${
+                        isEditing ? 'border-status-positive/60 text-status-positive' : 'border-accent/60 text-accent'
+                      }`}
                       style={{ borderRadius: '0 0 0 10px', backgroundColor: 'var(--rm-bg-elevated)' }}
                     >
                       <X className="h-3.5 w-3.5" />
@@ -226,10 +238,10 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                       title={isEditing ? 'Close editor' : 'Edit widget settings'}
                       className={`rgl-overlay absolute left-1/2 top-1/2 z-40 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
                         isEditing
-                          ? 'border-accent text-accent'
+                          ? 'border-status-positive text-status-positive'
                           : 'border-accent/60 text-accent'
                       }`}
-                      style={{ backgroundColor: isEditing ? 'color-mix(in oklab, var(--rm-accent) 20%, transparent)' : 'var(--rm-bg-elevated)' }}
+                      style={{ backgroundColor: isEditing ? 'color-mix(in oklab, var(--rm-status-positive) 20%, transparent)' : 'var(--rm-bg-elevated)' }}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                       {isEditing ? 'Editing' : 'Edit'}
@@ -254,6 +266,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
               widget={editingWidget}
               onChange={updateWidget}
               onClose={() => setEditingId(null)}
+              onRemove={() => removeWidget(editingWidget.id)}
             />
           ) : null
         }

@@ -101,10 +101,21 @@ describe('StatusBar', () => {
   });
 
   it('keeps the battery indicator visible in compact mode', () => {
-    const { container } = render(<StatusBar onlineState="online" socPercent={42} compact />);
+    const { container } = render(<StatusBar onlineState="online" socPercent={68} compact />);
 
-    expect(screen.getByLabelText('Battery status: 42%')).toBeInTheDocument();
-    expect(screen.queryByText('42%')).not.toBeInTheDocument();
-    expect(container.querySelector('svg')).toBeInTheDocument();
+    expect(screen.getByLabelText('Battery status: 68%')).toBeInTheDocument();
+    expect(screen.queryByText('68%')).not.toBeInTheDocument();
+    const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-three"]');
+    expect(batteryIcon).toBeInTheDocument();
+    expect(batteryIcon).toHaveClass('h-[1.44375rem]', 'w-[1.44375rem]');
+  });
+
+  it('uses the quarter battery icon for low charge', () => {
+    const { container } = render(<StatusBar onlineState="online" socPercent={12} compact />);
+
+    expect(screen.getByLabelText('Battery status: 12%')).toBeInTheDocument();
+    const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-one"]');
+    expect(batteryIcon).toBeInTheDocument();
+    expect(batteryIcon).toHaveClass('h-[1.44375rem]', 'w-[1.44375rem]');
   });
 });

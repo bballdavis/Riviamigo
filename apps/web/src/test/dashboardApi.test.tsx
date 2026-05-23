@@ -88,6 +88,7 @@ describe('dashboard API wiring', () => {
         { id: 'd4000004-0000-0000-0000-000000000009', componentType: 'charging', definitionId: 'home_share', title: 'Home Charging', options: {}, layout: { x: 0, y: 4, w: 6, h: 2 } },
         { id: 'd4000004-0000-0000-0000-000000000010', componentType: 'charging', definitionId: 'dc_share', title: 'DC Fast Charging', options: {}, layout: { x: 6, y: 4, w: 6, h: 2 } },
         { id: 'd4000004-0000-0000-0000-000000000011', componentType: 'chart', definitionId: 'catalog', title: 'Charging Charts', options: {}, layout: { x: 0, y: 6, w: 12, h: 10 } },
+        { id: 'd4000004-0000-0000-0000-000000000012', componentType: 'custom', definitionId: 'charging.sessions.table', title: 'Charging Sessions', options: {}, layout: { x: 0, y: 16, w: 12, h: 12 } },
       ],
     };
 
@@ -106,7 +107,7 @@ describe('dashboard API wiring', () => {
     });
     expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 9, y: 0, w: 3, h: 2 },
+      layout: { x: 6, y: 0, w: 3, h: 2 },
     });
     expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_max_rate')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
@@ -114,7 +115,7 @@ describe('dashboard API wiring', () => {
     });
     expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
       options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 6, y: 0, w: 3, h: 2 },
+      layout: { x: 9, y: 0, w: 3, h: 2 },
     });
     expect(normalized.widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000009')).toMatchObject({
       options: {},
@@ -126,7 +127,13 @@ describe('dashboard API wiring', () => {
     });
     expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.connection')).toMatchObject({
       options: { chargingConnectionVisibility: 'plugged' },
-      layout: { x: 0, y: 6, w: 8, h: 8 },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
+    });
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'catalog')).toMatchObject({
+      layout: { x: 0, y: 6, w: 12, h: 11 },
+    });
+    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.sessions.table')).toMatchObject({
+      layout: { x: 0, y: 17, w: 12, h: 12 },
     });
   });
 

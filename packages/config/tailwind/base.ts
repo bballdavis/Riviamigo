@@ -43,6 +43,12 @@ export const tailwindBase: Partial<Config> = {
           strong:  'var(--rm-border-strong)',
           accent:  'var(--rm-border-accent)',
         },
+        status: {
+          positive: 'var(--rm-status-positive)',
+          warning:  'var(--rm-status-warning)',
+          danger:   'var(--rm-status-danger)',
+          info:     'var(--rm-status-info)',
+        },
       },
       fontFamily: {
         display: ['"Space Grotesk Variable"', '"Space Grotesk"', 'system-ui', 'sans-serif'],

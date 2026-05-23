@@ -79,30 +79,37 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
 function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
   const isMobile = useIsMobile();
-  const { data, isLoading } = useChargeSessions(ctx.vehicleId, ctx.from, ctx.to, page);
+  const { data, isLoading } = useChargeSessions(ctx.vehicleId, ctx.from, ctx.to, page, pageSize);
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
   const sessions = (data?.items ?? []) as unknown as ChargeSessionRow[];
+
+  React.useEffect(() => {
+    setPage(1);
+  }, [ctx.from, ctx.to, ctx.vehicleId, pageSize]);
 
   function handleRowClick(row: Row<ChargeSessionRow>) {
     navigate({ to: '/charging/$sessionId', params: { sessionId: row.original.id } });
   }
 
-  const pagination = data && data.total > data.per_page ? (
-    <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
-      <p className="text-xs text-fg-tertiary">Page {page} of {totalPages}</p>
+  const pagination = data ? (
+    <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
+      <p className="text-xs text-fg-tertiary">
+        Page {page} of {Math.max(totalPages, 1)} &middot; {data.total} session{data.total === 1 ? '' : 's'}
+      </p>
       <div className="flex gap-2">
         <button
           disabled={page <= 1}
           onClick={() => setPage((p) => p - 1)}
-          className="text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors"
+          className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Prev
         </button>
         <button
-          disabled={page >= totalPages}
+          disabled={page >= totalPages || totalPages <= 1}
           onClick={() => setPage((p) => p + 1)}
-          className="text-xs px-3 py-1.5 rounded-lg border border-border disabled:opacity-40 hover:bg-bg-elevated transition-colors"
+          className="rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
         >
           Next
         </button>
@@ -111,7 +118,24 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
   ) : null;
 
   return (
-    <div className="flex flex-col h-full gap-1">
+    <div className="flex !h-auto min-h-full flex-col gap-3">
+      <div className="flex shrink-0 justify-end">
+        {!isMobile && (
+          <label className="flex items-center gap-2 text-xs text-fg-tertiary">
+            Rows
+            <select
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
+            >
+              <option value={15}>15</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </label>
+        )}
+      </div>
       {isMobile ? (
         <div className="flex flex-col gap-2">
           {isLoading
@@ -134,9 +158,11 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
           data={sessions}
           columns={chargingColumns}
           loading={isLoading}
+          loadingRows={pageSize}
           onRowClick={handleRowClick}
           emptyTitle="No charging sessions"
           emptyDescription="Sessions will appear here after your vehicle has charged."
+          className="overflow-x-auto"
         />
       )}
       {pagination}

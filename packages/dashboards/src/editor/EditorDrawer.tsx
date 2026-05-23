@@ -30,14 +30,26 @@ export function EditorDrawer({
   return createPortal(
     <>
       <style>{`
-        body.rgl-drawer-open { padding-right: 24rem; }
-        @media (max-width: 768px) { body.rgl-drawer-open { padding-right: 0; } }
+        html:has(body.rgl-drawer-open) { scrollbar-gutter: stable; }
+        body.rgl-drawer-open { overflow-x: hidden; }
+        body.rgl-drawer-open .rm-app-main { padding-right: 24rem; }
+        body.rgl-drawer-open .rm-app-content {
+          max-width: none;
+          margin-left: 0;
+          margin-right: 0;
+        }
+        @media (max-width: 768px) {
+          html:has(body.rgl-drawer-open) { scrollbar-gutter: unset; }
+          body.rgl-drawer-open { overflow-x: unset; }
+          body.rgl-drawer-open .rm-app-main { padding-right: 0; }
+        }
       `}</style>
       <aside
-        className="fixed right-0 top-0 z-50 flex h-screen w-96 flex-col border-l border-border shadow-2xl"
-        style={{ backgroundColor: 'var(--rm-bg-page)' }}
+        className="fixed z-50 flex w-96 max-w-[calc(100vw-1rem)] flex-col border-l border-border shadow-2xl"
+        style={{ backgroundColor: 'var(--rm-bg-page)', top: 0, right: 0, bottom: 0 }}
         role="complementary"
         aria-label="Dashboard editor"
+        onWheel={(event) => event.stopPropagation()}
       >
         <header
           className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2.5"
@@ -62,7 +74,7 @@ export function EditorDrawer({
           ) : null}
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-contain p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {mode === 'edit' && editContent ? editContent : paletteContent}
         </div>
       </aside>

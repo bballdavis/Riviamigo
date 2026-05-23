@@ -32,7 +32,7 @@ export function createTripColumns(places: Place[] = []) {
       header: 'Date',
       cell: (info) => (
         <span className="font-medium text-fg whitespace-nowrap">
-          {format(parseISO(info.getValue()), 'MM/dd/yyyy, h:mm:ss a')}
+          {format(parseISO(info.getValue()), 'MM/dd/yyyy, h:mm a')}
         </span>
       ),
     }),
@@ -76,7 +76,7 @@ export function createTripColumns(places: Place[] = []) {
       },
     }),
     col.accessor('drive_mode', {
-      header: 'Drive Mode',
+      header: 'Mode',
       enableSorting: false,
       cell: (info) => {
         const mode = info.getValue();
@@ -102,7 +102,7 @@ function locationColumn(kind: 'start' | 'end', header: string, places: Place[]) 
       const trip = info.row.original;
       const location = resolveTripLocation(trip, kind, places);
       return location ? (
-        <span className="block min-w-0 w-[14rem] truncate font-medium text-fg" title={location.title}>
+        <span className="block min-w-0 flex-1 truncate font-medium text-fg text-sm" title={location.title}>
           {location.label}
         </span>
       ) : (

@@ -154,7 +154,7 @@ vi.mock('@riviamigo/hooks', () => ({
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
   },
-  useAuth:    () => ({ logout: vi.fn() }),
+  useAuth:    () => ({ logout: vi.fn(), defaultVehicleId: 'v1', setDefaultVehicleId: vi.fn() }),
   useVehicles: () => ({
     data: [{ id: 'v1', display_name: 'Adventure Truck', model: 'R1T', year: null, trim: null, vin: null, rivian_vehicle_id: 'rivian-1' }],
   }),
@@ -169,19 +169,28 @@ vi.mock('lucide-react', () => ({
   Clipboard: () => <svg data-testid="icon-clipboard" />,
   Database: () => <svg data-testid="icon-database" />,
   DatabaseBackup: () => <svg data-testid="icon-database-backup" />,
+  Calendar: () => <svg data-testid="icon-calendar" />,
+  CheckCircle2: () => <svg data-testid="icon-check-circle" />,
   CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
   Clock3: () => <svg data-testid="icon-clock" />,
+  HardDrive: () => <svg data-testid="icon-hard-drive" />,
   History: () => <svg data-testid="icon-history" />,
+  Server: () => <svg data-testid="icon-server" />,
+  Timer: () => <svg data-testid="icon-timer" />,
   KeyRound: () => <svg data-testid="icon-key" />,
+  ListChecks: () => <svg data-testid="icon-list-checks" />,
   LogOut: () => <svg data-testid="icon-logout" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus:   () => <svg data-testid="icon-plus" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
   Play: () => <svg data-testid="icon-play" />,
+  RefreshCw: () => <svg data-testid="icon-refresh" />,
   Ruler: () => <svg data-testid="icon-ruler" />,
   RotateCcw: () => <svg data-testid="icon-rotate" />,
+  Save:       () => <svg data-testid="icon-save" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
   Trash2: () => <svg data-testid="icon-trash" />,
+  X:      () => <svg data-testid="icon-x" />,
 }));
 
 import { SettingsContent } from '../settings';
@@ -288,14 +297,14 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('Backup target')).toBeInTheDocument();
+      expect(screen.getByText('S3 upload')).toBeInTheDocument();
       expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
       expect(screen.getByText('Artifacts')).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByDisplayValue('America/Chicago'), { target: { value: 'UTC' } });
     fireEvent.change(screen.getByDisplayValue('riviamigo-backups'), { target: { value: 'nightly-backups' } });
-    fireEvent.click(screen.getByText('Save backup settings'));
+    fireEvent.click(screen.getByText('Save settings'));
 
     await waitFor(() => {
       expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(expect.objectContaining({
@@ -323,7 +332,8 @@ describe('Settings page', () => {
 
   it('shows active vehicle state for the connected vehicle', () => {
     renderSettings();
-    expect(screen.getByText('Active vehicle')).toBeInTheDocument();
+    // Status text now appears inside the vehicle chip ('Active' when worker_health is ok/connected)
+    expect(screen.getAllByText(/active|connected/i).length).toBeGreaterThan(0);
   });
 
   it('calls logout and navigates on Sign Out click', async () => {

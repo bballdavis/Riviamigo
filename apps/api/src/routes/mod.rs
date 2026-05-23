@@ -82,6 +82,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_credentials(true);
 
     // Rate-limit configs
+    // Auth routes: strict limit to prevent brute-force attacks on login/OTP
     let auth_config = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(6)
@@ -89,10 +90,14 @@ pub fn build_router(state: AppState) -> Router {
             .finish()
             .unwrap(),
     );
+    // Protected data routes: very generous limits for SPA usage. A single page load
+    // easily makes 50-100 concurrent requests when all widgets, metrics, dashboards,
+    // WebSockets, and retries are counted. 1000 req/sec still strongly deters abuse
+    // while accommodating realistic single-user activity.
     let data_config = Arc::new(
         GovernorConfigBuilder::default()
-            .per_millisecond(500)
-            .burst_size(20)
+            .per_second(1000)
+            .burst_size(1000)
             .finish()
             .unwrap(),
     );
