@@ -282,18 +282,13 @@ function formatMaybePercent(value: number | null | undefined, digits: number) {
 }
 
 function isPluggedIn(status: VehicleStatus | null | undefined) {
+  // Keep this in sync with DashboardRenderer.isPluggedIn.
+  // charger_state_ts is intentionally NOT checked here: a car sitting plugged in
+  // for hours won't re-emit a charger state event, so ts drift must not be treated
+  // as a disconnect signal.
   const state = status?.charger_state?.toLowerCase();
-  if (!state || state === 'unknown' || state === 'disconnected') return false;
-  if (status?.charger_status === 'chrgr_sts_not_connected') return false;
-  // If the vehicle has been sending fresh telemetry but the charger state hasn't
-  // updated in over 2 hours, the disconnect event was likely dropped. Treat as stale.
-  if (status?.charger_state_ts && status?.last_updated) {
-    const chargerTs = new Date(status.charger_state_ts).getTime();
-    const latestTs = new Date(status.last_updated).getTime();
-    const twoHoursMs = 2 * 60 * 60 * 1000;
-    if (latestTs - chargerTs > twoHoursMs) return false;
-  }
-  return true;
+  if (state && !['unknown', 'disconnected'].includes(state)) return true;
+  return Boolean(status?.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
 }
 
 function isActivelyCharging(status: VehicleStatus | null | undefined) {

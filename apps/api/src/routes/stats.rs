@@ -44,12 +44,12 @@ async fn get_summary(
     .fetch_one(&state.pool)
     .await?;
 
-    let latest_odometer: Option<f64> = sqlx::query_scalar!(
+    let latest_odometer: Option<f64> = sqlx::query_scalar::<_, Option<f64>>(
         "SELECT odometer_miles FROM timeseries.telemetry \
          WHERE vehicle_id=$1 AND odometer_miles IS NOT NULL \
          ORDER BY ts DESC LIMIT 1",
-        vid
     )
+    .bind(vid)
     .fetch_optional(&state.pool)
     .await?
     .flatten();
