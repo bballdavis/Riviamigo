@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM riviamigo.software_versions WHERE vehicle_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da8292c030823bad7c2449e791b85ba12a1deec56e82949ab3a2e2ab922d1024"
+}

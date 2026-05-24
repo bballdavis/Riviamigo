@@ -31,16 +31,14 @@ runIfConfigured('live API dashboard contract', () => {
     const from = '2026-04-01T00:00:00Z';
     const to = '2026-04-29T23:59:59Z';
 
-    const [status, stats, charging, efficiency, raw] = await Promise.all([
+    const [status, charging, efficiency, raw] = await Promise.all([
       liveGet(`/v1/vehicles/${vehicleId}/status`),
-      liveGet(`/v1/stats/summary?vehicle_id=${vehicleId}`),
       liveGet(`/v1/charging?vehicle_id=${vehicleId}&from=${from}&to=${to}&page=1&per_page=5`),
       liveGet(`/v1/efficiency/summary?vehicle_id=${vehicleId}&from=${from}&to=${to}`),
       liveGet(`/v1/vehicles/${vehicleId}/raw-data?limit=5`),
     ]);
 
     expect(status.vehicle_id).toBe(vehicleId);
-    expect(typeof stats.total_miles).toBe('number');
     expect(Array.isArray(charging.items ?? charging.data)).toBe(true);
     expect(typeof efficiency.p90_wh_per_mi).toBe('number');
     expect(Array.isArray(raw.samples)).toBe(true);

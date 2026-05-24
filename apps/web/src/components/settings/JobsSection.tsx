@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
-import { Activity, Play, RefreshCw } from 'lucide-react';
+import { Play, RefreshCw } from 'lucide-react';
 import { api } from '@riviamigo/hooks';
 import type { Vehicle } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
@@ -19,20 +19,11 @@ export function JobsSection({ vehicles }: JobsSectionProps) {
       refetchInterval: 15_000,
     })),
   });
-  const qualityQueries = useQueries({
-    queries: vehicles.map((vehicle) => ({
-      queryKey: ['jobs', 'data-quality', vehicle.id],
-      queryFn: () => api.getDataQuality(vehicle.id),
-      staleTime: 30_000,
-      refetchInterval: 30_000,
-    })),
-  });
   const triggerBackfill = useMutation({
     mutationFn: (vehicleId: string) => api.triggerBackfill(vehicleId),
     onSuccess: (_result, vehicleId) => {
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
       queryClient.invalidateQueries({ queryKey: ['jobs', 'backfill-status', vehicleId] });
-      queryClient.invalidateQueries({ queryKey: ['jobs', 'data-quality', vehicleId] });
     },
   });
 
@@ -68,7 +59,6 @@ export function JobsSection({ vehicles }: JobsSectionProps) {
               <tbody className="divide-y divide-border">
                 {vehicles.map((vehicle, index) => {
                   const backfill = backfillQueries[index]!;
-                  const quality = qualityQueries[index]!;
                   const status = backfill.data?.status ?? vehicle.history_backfill_status ?? 'unknown';
                   const running = status === 'running' || status === 'pending';
                   return (
@@ -100,27 +90,6 @@ export function JobsSection({ vehicles }: JobsSectionProps) {
                             Run
                           </Button>
                         </td>
-                      </tr>
-                      <tr>
-                        <td className="py-3 pr-4 align-top">
-                          <div className="flex items-center gap-2 text-fg-secondary">
-                            <Activity className="h-4 w-4" />
-                            <span>Telemetry</span>
-                          </div>
-                        </td>
-                        <td className="py-3 pr-4 align-top text-fg">Data quality scan</td>
-                        <td className="py-3 pr-4 align-top">
-                          <StatusBadge status={quality.isError ? 'error' : 'observed'} loading={quality.isLoading} />
-                        </td>
-                        <td className="py-3 pr-4 align-top text-fg-secondary">
-                          {formatDateTime(quality.data?.window_to)}
-                        </td>
-                        <td className="py-3 pr-4 align-top text-fg-secondary">
-                          {quality.data
-                            ? `${formatPct(quality.data.coverage_pct)} coverage / ${quality.data.gap_count.toLocaleString()} gaps / ${quality.data.total_samples.toLocaleString()} samples`
-                            : quality.isError ? 'Scan failed' : '-'}
-                        </td>
-                        <td className="py-3 text-right align-top text-xs text-fg-tertiary">Auto</td>
                       </tr>
                     </React.Fragment>
                   );

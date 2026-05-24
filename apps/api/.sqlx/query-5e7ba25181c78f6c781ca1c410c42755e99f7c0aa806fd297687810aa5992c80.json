@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM riviamigo.vehicle_state_periods",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5e7ba25181c78f6c781ca1c410c42755e99f7c0aa806fd297687810aa5992c80"
+}

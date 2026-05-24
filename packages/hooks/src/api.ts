@@ -5,13 +5,13 @@
 
 import type {
   Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
-  StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
+  EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse,
-  CreateBackupRestoreRequestBody, BackupRestoreRequest, DataQualityResponse,
+  CreateBackupRestoreRequestBody, BackupRestoreRequest,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -590,13 +590,6 @@ class ApiClient {
     return this.request('POST', `/v1/vehicles/${vehicleId}/backfill`);
   }
 
-  async getDataQuality(vehicleId: string, from?: string, to?: string): Promise<DataQualityResponse> {
-    const params: Record<string, string> = {};
-    if (from) params.from = from;
-    if (to) params.to = to;
-    return this.request('GET', `/v1/vehicles/${vehicleId}/data-quality`, undefined, params);
-  }
-
   // ── Efficiency ────────────────────────────────────────────────────────────
 
   async getEfficiencySummary(vehicleId: string, from: string, to: string) {
@@ -643,28 +636,6 @@ class ApiClient {
     return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number; total_miles: number | null; avg_speed_mph: number | null }[]>(
       'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
     );
-  }
-
-  // ── Stats ─────────────────────────────────────────────────────────────────
-
-  async getStats(vehicleId: string) {
-    const stats = await this.request<{
-      total_miles: number;
-      total_trips: number;
-      total_kwh_charged: number;
-      lifetime_efficiency_wh_mi: number | null;
-      total_charging_sessions: number;
-      estimated_total_cost_usd: number | null;
-    }>('GET', '/v1/stats/summary', undefined, { vehicle_id: vehicleId });
-
-    return {
-      total_miles: stats.total_miles,
-      total_trips: stats.total_trips,
-      total_energy_kwh: stats.total_kwh_charged,
-      avg_efficiency_wh_mi: stats.lifetime_efficiency_wh_mi,
-      total_charge_sessions: stats.total_charging_sessions,
-      total_cost_usd: stats.estimated_total_cost_usd,
-    } satisfies StatsSummary;
   }
 
   async getMetricCatalog(): Promise<MetricCatalogEntry[]> {

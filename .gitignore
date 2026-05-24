@@ -14,7 +14,7 @@ age_key.txt
 target/
 **/target-tests/
 apps/api/Cargo.lock
-apps/api/.sqlx/
+# apps/api/.sqlx/ — intentionally tracked; required for SQLX_OFFLINE=true builds
 *.lock.tmp
 /tmp
 .tmp/

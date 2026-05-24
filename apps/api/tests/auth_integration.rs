@@ -91,6 +91,8 @@ impl TestApp {
                 rivian_raw_event_retention_days: 7,
                 rivian_persist_raw_events: true,
                 rivian_suppress_duplicate_telemetry: true,
+                riviamigo_env: None,
+                cookie_insecure: None,
             },
             nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -707,7 +709,7 @@ async fn charging_sessions_surface_home_geofence_location() {
     assert_eq!(matched.id, geofence_id);
     assert!(matched.is_home);
 
-    let resolved_profile = resolve_profile(&app.pool, None, Some(geofence_id), vehicle_id)
+    let resolved_profile = resolve_profile(&app.pool, None, Some(geofence_id), vehicle_id, chrono::Utc::now())
         .await
         .expect("resolve cost profile")
         .expect("home geofence cost profile should resolve");

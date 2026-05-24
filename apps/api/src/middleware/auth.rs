@@ -91,7 +91,10 @@ impl FromRequestParts<AppState> for AuthUser {
             .ok_or(AppError::Unauthorized)?;
 
         let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&["riviamigo"]);
+        validation.set_issuer(&["riviamigo.app"]);
+        // Pin leeway to 0 — do not rely on library defaults. Tokens have a
+        // 15-minute lifetime; clock skew tolerance must be explicit and minimal.
+        validation.leeway = 0;
 
         let claims = decode::<Claims>(token, decoding_key, &validation)
             .map_err(|_| AppError::Unauthorized)?
@@ -163,7 +166,7 @@ pub fn issue_access_token(
     let now = chrono::Utc::now().timestamp();
     let claims = Claims {
         sub: user_id,
-        iss: "riviamigo".into(),
+        iss: "riviamigo.app".into(),
         exp: now + 900, // 15 min
         iat: now,
         default_vehicle_id,

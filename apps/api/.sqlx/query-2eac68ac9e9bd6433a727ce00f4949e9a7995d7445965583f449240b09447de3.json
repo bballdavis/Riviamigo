@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.distance_miles, t.soc_start, t.soc_end, t.range_start_mi, t.range_end_mi,\n                  t.efficiency_wh_per_mile,\n                  v.battery_capacity_wh\n           FROM riviamigo.trips t\n           JOIN riviamigo.vehicles v ON v.id = t.vehicle_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "distance_miles",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "soc_start",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "soc_end",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "range_start_mi",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "range_end_mi",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "efficiency_wh_per_mile",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "battery_capacity_wh",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "2eac68ac9e9bd6433a727ce00f4949e9a7995d7445965583f449240b09447de3"
+}

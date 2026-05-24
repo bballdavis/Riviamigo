@@ -87,6 +87,8 @@ impl TestApp {
                 rivian_raw_event_retention_days: 7,
                 rivian_persist_raw_events: true,
                 rivian_suppress_duplicate_telemetry: true,
+                riviamigo_env: None,
+                cookie_insecure: None,
             },
             nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),

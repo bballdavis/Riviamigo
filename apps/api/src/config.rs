@@ -33,6 +33,11 @@ pub struct Config {
     pub rivian_persist_raw_events: bool,
     #[serde(default = "default_true")]
     pub rivian_suppress_duplicate_telemetry: bool,
+    /// Set to "production" to enable production-mode validation guards.
+    pub riviamigo_env: Option<String>,
+    /// Set to any value to allow insecure (non-Secure) cookies. Must NOT be
+    /// set when `RIVIAMIGO_ENV=production`.
+    pub cookie_insecure: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -76,6 +81,30 @@ fn default_true() -> bool {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {}", e))
+        let config = envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate configuration for the current environment.
+    ///
+    /// Hard-rejects insecure configurations when `RIVIAMIGO_ENV=production`.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let is_production = self
+            .riviamigo_env
+            .as_deref()
+            .map(|e| e.eq_ignore_ascii_case("production"))
+            .unwrap_or(false);
+
+        if is_production {
+            if self.cookie_insecure.is_some() {
+                anyhow::bail!(
+                    "COOKIE_INSECURE must not be set when RIVIAMIGO_ENV=production. \
+                     Remove it from your environment before starting the API."
+                );
+            }
+        }
+
+        Ok(())
     }
 }

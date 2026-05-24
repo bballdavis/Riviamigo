@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, vehicle_id, location_lat, location_lng\n           FROM riviamigo.charge_sessions\n           WHERE geofence_id IS NULL\n             AND location_lat IS NOT NULL\n             AND location_lng IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vehicle_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "location_lat",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "location_lng",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "7ed34dae23c26c65a25b01cb6a18b70a3a00f91f52ad0c476fa1a7a4229b2e6a"
+}

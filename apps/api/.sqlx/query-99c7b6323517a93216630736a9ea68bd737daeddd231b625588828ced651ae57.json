@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.geofences\n           SET name = $3,\n               latitude = $4,\n               longitude = $5,\n               radius_m = $6,\n               address_id = $7,\n               is_home = $8,\n               is_work = $9,\n               cost_profile_id = $10,\n               updated_at = now()\n           WHERE id = $1 AND user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Uuid",
+        "Bool",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "99c7b6323517a93216630736a9ea68bd737daeddd231b625588828ced651ae57"
+}

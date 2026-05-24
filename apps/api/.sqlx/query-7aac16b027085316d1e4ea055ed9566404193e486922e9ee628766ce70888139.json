@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT battery_level, distance_to_empty_mi, power_state, odometer_miles,\n                  outside_temp_c, ts\n           FROM timeseries.telemetry\n           WHERE vehicle_id = $1\n           ORDER BY ts DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "battery_level",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "distance_to_empty_mi",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "power_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "odometer_miles",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "outside_temp_c",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "ts",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "7aac16b027085316d1e4ea055ed9566404193e486922e9ee628766ce70888139"
+}

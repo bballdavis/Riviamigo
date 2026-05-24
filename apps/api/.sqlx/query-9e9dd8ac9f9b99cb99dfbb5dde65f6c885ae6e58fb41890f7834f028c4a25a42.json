@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT miles_driven\n           FROM timeseries.odometer_daily\n           WHERE vehicle_id = $1\n                         AND day = date_trunc('day', now())::timestamptz\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "miles_driven",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9e9dd8ac9f9b99cb99dfbb5dde65f6c885ae6e58fb41890f7834f028c4a25a42"
+}

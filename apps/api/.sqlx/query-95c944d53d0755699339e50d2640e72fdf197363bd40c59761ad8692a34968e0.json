@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, started_at, ended_at, distance_miles,\n                  efficiency_wh_per_mile, soc_start, soc_end\n           FROM riviamigo.trips\n           WHERE vehicle_id = $1\n           ORDER BY ended_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "ended_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "distance_miles",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "efficiency_wh_per_mile",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "soc_start",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "soc_end",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "95c944d53d0755699339e50d2640e72fdf197363bd40c59761ad8692a34968e0"
+}

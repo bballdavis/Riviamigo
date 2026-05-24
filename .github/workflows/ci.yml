@@ -123,11 +123,14 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      - name: Check sqlx offline metadata
+        run: cargo sqlx prepare --check --workspace
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all
+        run: cargo test --all -- --include-ignored
 
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
@@ -183,6 +186,7 @@ jobs:
             p/typescript
             p/react
             p/owasp-top-ten
+            .semgrep/custom-rules.yml
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         continue-on-error: true
@@ -208,3 +212,63 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
         continue-on-error: true
+
+  # ── DB smoke ─────────────────────────────────────────────────────────────────
+  db-smoke:
+    name: DB smoke (fresh migrate + health check)
+    runs-on: ubuntu-latest
+    needs: backend
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.16.1-pg16
+        env:
+          POSTGRES_DB: riviamigo_smoke
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U riviamigo -d riviamigo_smoke"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/api
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+
+      - name: Run migrations on fresh DB
+        run: cargo sqlx migrate run
+
+      - name: Verify migration idempotency (re-run should no-op)
+        run: cargo sqlx migrate run
+
+      - name: Start API and probe health
+        run: |
+          REDIS_URL=redis://localhost:6379 cargo run &
+          API_PID=$!
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3001/health; then
+              echo "Health check passed"
+              kill $API_PID
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check timed out"
+          kill $API_PID
+          exit 1
