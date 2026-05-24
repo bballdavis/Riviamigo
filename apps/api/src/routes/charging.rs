@@ -121,6 +121,8 @@ struct SummaryAggRow {
     max_charge_rate_kw: Option<f64>,
     total_energy_used_kwh: Option<f64>,
     total_cost_usd: Option<f64>,
+    known_cost_session_count: i64,
+    unknown_cost_session_count: i64,
     // Enrichment fields (migration 0024)
     free_session_count: i64,
     total_range_added_km: Option<f64>,
@@ -360,7 +362,7 @@ async fn list_sessions_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                COALESCE(cs.cost_usd, cs.rivian_paid_total) AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                cs.cost_usd AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
@@ -430,7 +432,7 @@ async fn get_session_response(
                     END \
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, COALESCE(cs.cost_usd, cs.rivian_paid_total) AS cost_usd, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd AS cost_usd, \
                 cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
@@ -517,7 +519,7 @@ async fn get_summary_response(
                 charger_type,
                 network_vendor,
                 charge_limit,
-                COALESCE(cost_usd, rivian_paid_total) AS cost_usd,
+                cost_usd,
                 energy_used_wh,
                 is_free_session,
                 range_added_km,
@@ -550,7 +552,9 @@ async fn get_summary_response(
             MAX(charge_limit) AS max_charge_limit_pct,
             MAX(rate_kw) AS max_charge_rate_kw,
             SUM(GREATEST(energy_kwh, COALESCE(energy_used_wh / 1000.0, 0))) AS total_energy_used_kwh,
-            COALESCE(SUM(cost_usd),0) AS total_cost_usd,
+            SUM(cost_usd) AS total_cost_usd,
+            COUNT(cost_usd) AS known_cost_session_count,
+            COUNT(*) FILTER (WHERE cost_usd IS NULL) AS unknown_cost_session_count,
             COUNT(*) FILTER (WHERE is_free_session) AS free_session_count,
             SUM(range_added_km) AS total_range_added_km,
             SUM(rivian_paid_total) AS rivian_paid_total_usd
@@ -597,7 +601,7 @@ async fn get_summary_response(
     let weekly = sqlx::query_as::<_, WeeklySummaryRow>(
         "SELECT date_trunc('week', started_at) AS week_start,
             COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)),0) AS kwh,
-            COALESCE(SUM(cost_usd),0) AS cost_usd,
+            SUM(cost_usd) AS cost_usd,
             COUNT(*) AS sessions
          FROM riviamigo.charge_sessions
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
@@ -657,7 +661,7 @@ async fn get_summary_response(
     Ok(Json(serde_json::json!({
         "total_kwh":       total_kwh,
         "total_energy_kwh": total_kwh,
-        "total_cost_usd":  agg.total_cost_usd,
+        "total_cost_usd":  if agg.session_count == 0 { Some(0.0) } else { agg.total_cost_usd },
         "session_count":   agg.session_count,
         "home_kwh":        agg.home_kwh,
         "away_kwh":        agg.away_kwh,
@@ -673,6 +677,8 @@ async fn get_summary_response(
         "max_charge_limit_pct": agg.max_charge_limit_pct,
         "max_charge_rate_kw": agg.max_charge_rate_kw,
         "typed_session_count": agg.typed_session_count,
+        "known_cost_session_count": agg.known_cost_session_count,
+        "unknown_cost_session_count": agg.unknown_cost_session_count,
         "free_session_count": agg.free_session_count,
         "total_range_added_km": agg.total_range_added_km,
         "rivian_paid_total_usd": agg.rivian_paid_total_usd,

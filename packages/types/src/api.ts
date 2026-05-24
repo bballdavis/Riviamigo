@@ -163,7 +163,7 @@ export interface EfficiencySummary {
 
 export interface ChargingSummary {
   total_energy_kwh: number;
-  total_cost_usd: number;
+  total_cost_usd: number | null;
   session_count: number;
   home_kwh?: number;
   away_kwh?: number;
@@ -176,6 +176,8 @@ export interface ChargingSummary {
   max_charge_limit_pct?: number | null;
   max_charge_rate_kw?: number | null;
   typed_session_count?: number;
+  known_cost_session_count?: number;
+  unknown_cost_session_count?: number;
   free_session_count?: number;
   total_range_added_km?: number | null;
   rivian_paid_total_usd?: number | null;
@@ -249,6 +251,8 @@ export interface VehicleHealthRuntime {
   last_event_at: string | null;
   worker_health: string | null;
   worker_health_msg: string | null;
+  auth_state: string | null;
+  auth_reason_code: string | null;
   updated_at: string;
 }
 
@@ -324,7 +328,7 @@ export interface PlaceSearchSuggestion extends PlaceAddress {}
 
 export interface PlaceChargingInput {
   name?: string | null;
-  billing_type: 'flat' | 'tou';
+  billing_type: 'per_kwh' | 'tou';
   rate: number;
   session_fee?: number | null;
   currency?: string | null;

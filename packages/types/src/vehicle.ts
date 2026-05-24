@@ -45,6 +45,8 @@ export interface Vehicle {
   history_session_count?: number | null;
   worker_health?: string | null;
   worker_health_msg?: string | null;
+  auth_state?: string | null;
+  auth_reason_code?: string | null;
   images?: VehicleImages | null;
 }
 
@@ -143,4 +145,6 @@ export interface VehicleStatus {
   last_updated: string | null;
   last_event_at?: string | null;
   worker_health?: string | null;
+  auth_state?: string | null;
+  auth_reason_code?: string | null;
 }

@@ -172,6 +172,8 @@ struct VehicleListRow {
     history_session_count: Option<i32>,
     worker_health: Option<String>,
     worker_health_msg: Option<String>,
+    auth_state: Option<String>,
+    auth_reason_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -184,6 +186,8 @@ struct VehicleRuntimeStateRow {
     is_online: Option<bool>,
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
+    auth_state: Option<String>,
+    auth_reason_code: Option<String>,
 }
 
 /// Serializable response shape for `GET /v1/vehicles/:id/status`.
@@ -196,6 +200,8 @@ struct VehicleStatusResponse {
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
     last_updated: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
+    auth_state: Option<String>,
+    auth_reason_code: Option<String>,
     battery_level: Option<f64>,
     range_miles: Option<f64>,
     battery_capacity_kwh: Option<f64>,
@@ -702,10 +708,11 @@ async fn add_vehicle(
 
     cache_vehicle_images(&state.pool, vehicle_id, &tokens).await;
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, worker_health, worker_health_msg, updated_at)
-         VALUES ($1, 'ok', NULL, now())
+        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
+         VALUES ($1, 'authorized', NULL, NULL, now())
          ON CONFLICT (vehicle_id) DO UPDATE
-         SET worker_health = 'ok',
+         SET auth_state = 'authorized',
+             auth_reason_code = NULL,
              worker_health_msg = NULL,
              updated_at = now()",
     )
@@ -786,10 +793,11 @@ async fn refresh_vehicle_credentials(
     .await?;
 
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, worker_health, worker_health_msg, updated_at)
-         VALUES ($1, 'ok', NULL, now())
+        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
+         VALUES ($1, 'authorized', NULL, NULL, now())
          ON CONFLICT (vehicle_id) DO UPDATE
-         SET worker_health = 'ok',
+         SET auth_state = 'authorized',
+             auth_reason_code = NULL,
              worker_health_msg = NULL,
              updated_at = now()",
     )
@@ -891,7 +899,7 @@ async fn list_vehicles(
                 v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
                 v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
-                vrs.worker_health, vrs.worker_health_msg \
+            vrs.worker_health, vrs.worker_health_msg, vrs.auth_state, vrs.auth_reason_code \
          FROM riviamigo.vehicles v \
          LEFT JOIN riviamigo.vehicle_runtime_state vrs ON vrs.vehicle_id = v.id \
          WHERE v.user_id = $1 ORDER BY v.created_at",
@@ -942,6 +950,8 @@ async fn list_vehicles(
             "history_session_count":    r.history_session_count,
             "worker_health":            r.worker_health,
             "worker_health_msg":        r.worker_health_msg,
+            "auth_state":               r.auth_state,
+            "auth_reason_code":         r.auth_reason_code,
         }));
     }
 
@@ -964,7 +974,7 @@ async fn vehicle_status(
     .flatten();
 
     let row = sqlx::query_as::<_, VehicleRuntimeStateRow>(
-        "SELECT is_online, last_event_at, worker_health FROM riviamigo.vehicle_runtime_state \
+        "SELECT is_online, last_event_at, worker_health, auth_state, auth_reason_code FROM riviamigo.vehicle_runtime_state \
          WHERE vehicle_id = $1",
     )
     .bind(vid)
@@ -1136,6 +1146,8 @@ async fn vehicle_status(
         last_event_at: row.as_ref().and_then(|r| r.last_event_at),
         last_updated: latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
         worker_health: row.as_ref().and_then(|r| r.worker_health.clone()),
+        auth_state: row.as_ref().and_then(|r| r.auth_state.clone()),
+        auth_reason_code: row.as_ref().and_then(|r| r.auth_reason_code.clone()),
         battery_level: latest.battery_level,
         range_miles: normalized_range_miles,
         battery_capacity_kwh: latest.battery_capacity_wh.map(|w| if w > 1000.0 { w / 1000.0 } else { w }),

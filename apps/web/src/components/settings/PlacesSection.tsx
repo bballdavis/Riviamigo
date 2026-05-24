@@ -6,7 +6,7 @@ import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
 import { HelpCircle, Home, Pencil, Plus, Zap, Trash2 } from 'lucide-react';
 
-type PlanType = 'flat' | 'tou';
+type PlanType = 'per_kwh' | 'tou';
 type PlaceType = 'home' | 'work' | 'poi';
 
 interface ScheduleDraft {
@@ -22,7 +22,7 @@ interface PlaceDraft {
   placeType: PlaceType;
   chargingEnabled: boolean;
   planType: PlanType;
-  flatRate: string;
+  energyRate: string;
   sessionFee: string;
   timezone: string;
   schedule: ScheduleDraft[];
@@ -40,8 +40,8 @@ function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
     radius_m: unitSystem === 'metric' ? '75' : '250',
     placeType: 'poi',
     chargingEnabled: false,
-    planType: 'flat',
-    flatRate: '0.13',
+    planType: 'per_kwh',
+    energyRate: '0.13',
     sessionFee: '0',
     timezone: browserTimezone,
     schedule: [{ label: 'All day', start: '00:00', end: '24:00', rate: '0.13' }],
@@ -175,8 +175,8 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const addressChangedFromSelection = Boolean(selectedAddress && addressQuery.trim() !== selectedAddress.display_name);
   const chargeRateValid = () => {
     if (!draft.chargingEnabled) return true;
-    if (draft.planType === 'flat') {
-      return Number.isFinite(Number(draft.flatRate));
+    if (draft.planType === 'per_kwh') {
+      return Number.isFinite(Number(draft.energyRate));
     }
     return !scheduleValidation;
   };
@@ -230,8 +230,8 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       radius_m: String(Math.round(unitSystem === 'metric' ? place.radius_m : place.radius_m * METERS_TO_FEET)),
       placeType,
       chargingEnabled: !!place.charging,
-      planType: place.charging?.billing_type === 'tou' ? 'tou' : 'flat',
-      flatRate: String(place.charging?.rate ?? 0.13),
+      planType: place.charging?.billing_type === 'tou' ? 'tou' : 'per_kwh',
+      energyRate: String(place.charging?.rate ?? 0.13),
       sessionFee: String(place.charging?.session_fee ?? 0),
       timezone: place.charging?.timezone ?? browserTimezone,
       schedule: normalizeScheduleEdges(place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
@@ -387,7 +387,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                       Charging Rates
                     </div>
                     <p className="mt-1 text-xs text-fg-tertiary">
-                      Flat pricing charges one fixed amount per session. Time-of-Use (TOU) pricing requires contiguous periods that cover the full day in the selected timezone.
+                      Per-kWh pricing charges for energy added at this place. Time-of-Use (TOU) pricing requires contiguous periods that cover the full day in the selected timezone.
                     </p>
                   </div>
 
@@ -399,16 +399,16 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                         onChange={(event) => updateDraft('planType', event.target.value as PlanType)}
                         className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                       >
-                        <option value="flat">Flat</option>
+                        <option value="per_kwh">Per kWh</option>
                         <option value="tou">Time-of-Use</option>
                       </select>
                     </label>
-                    {draft.planType === 'flat' && (
+                    {draft.planType === 'per_kwh' && (
                       <label className="grid gap-1 sm:min-w-0">
                           <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Rate ($/kWh)</span>
                           <input
-                            value={draft.flatRate}
-                            onChange={(event) => updateDraft('flatRate', event.target.value)}
+                            value={draft.energyRate}
+                            onChange={(event) => updateDraft('energyRate', event.target.value)}
                             inputMode="decimal"
                             placeholder="0.13"
                             className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
@@ -417,7 +417,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                     )}
                   </div>
 
-                  {draft.planType === 'flat' && (
+                  {draft.planType === 'per_kwh' && (
                     <label className="grid gap-1 sm:max-w-xs">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Session Fee</span>
@@ -612,12 +612,12 @@ function buildChargingPayload(draft: PlaceDraft): PlaceChargingInput | null {
     return null;
   }
 
-  const rate = Number(draft.flatRate || '0');
+  const rate = Number(draft.energyRate || '0');
   const sessionFee = Number(draft.sessionFee || '0');
 
-  if (draft.planType === 'flat') {
+  if (draft.planType === 'per_kwh') {
     return {
-      billing_type: 'flat',
+      billing_type: 'per_kwh',
       rate,
       session_fee: sessionFee,
       currency: 'USD',

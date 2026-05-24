@@ -378,24 +378,30 @@ export function SettingsContent() {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
                       const isEditingBattery = editingBatteryVehicleId === v.id;
 
-                      const needsReauth = v.worker_health === 'needs_reauth';
+                      const needsReauth = v.auth_state === 'needs_reauth';
+                      const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
+                      const collectorPassive = v.worker_health === 'passive';
                       const selectedPreset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
 
                       const healthColor = needsReauth
                         ? 'var(--rm-status-warning)'
-                        : (v.worker_health === 'ok' || v.worker_health === 'connected')
+                        : collectorHealthy
                           ? 'var(--rm-status-positive)'
+                          : collectorPassive
+                            ? 'var(--rm-border-default)'
                           : v.worker_health != null
                             ? 'var(--rm-status-danger)'
                             : 'var(--rm-border-default)';
                       const healthText = needsReauth
                         ? 'Login required'
-                        : (v.worker_health === 'ok' || v.worker_health === 'connected')
+                        : collectorHealthy
                           ? (isActive ? 'Active' : 'Connected')
+                          : collectorPassive
+                            ? 'Standby'
                           : v.worker_health != null
                             ? 'Error'
                             : (isActive ? 'Active' : 'Offline');
-                      const hasGlow = v.worker_health != null;
+                      const hasGlow = needsReauth || v.worker_health != null;
 
                       const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
                       const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';

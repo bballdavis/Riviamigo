@@ -19,11 +19,14 @@ use crate::{
         ws_client::{self, WsInboundEvent, WsInboundKind},
     },
     models::{
-        cost_profile::compute_cost,
         state_period::VehicleState,
         telemetry::{ChargerState, PowerState, TelemetryEvent},
     },
-    services::{cost::resolve_profile, geofences::match_geofence, weather::fetch_ambient_temp_c},
+    services::{
+        cost::recompute_charge_session_cost,
+        geofences::match_geofence,
+        weather::fetch_ambient_temp_c,
+    },
 };
 
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
@@ -75,7 +78,16 @@ pub async fn run_vehicle_worker(
             Ok(t) => t,
             Err(e) => {
                 tracing::error!(vehicle_id=%vehicle_id, err=%e, "decrypt failed");
-                upsert_health(&pool, vehicle_id, false, "needs_reauth", &e.to_string()).await;
+                upsert_health(
+                    &pool,
+                    vehicle_id,
+                    false,
+                    "error",
+                    &e.to_string(),
+                    Some("needs_reauth"),
+                    Some("credentials_invalid"),
+                )
+                .await;
                 return;
             }
         },
@@ -93,7 +105,16 @@ pub async fn run_vehicle_worker(
         Ok(Some(conn)) => conn,
         Ok(None) => {
             increment_counter(&pool, vehicle_id, "collector_lock_skips").await;
-            upsert_health(&pool, vehicle_id, false, "passive", "collector lock held").await;
+            upsert_health(
+                &pool,
+                vehicle_id,
+                false,
+                "passive",
+                "collector lock held",
+                Some("authorized"),
+                None,
+            )
+            .await;
             tracing::info!(vehicle_id = %vehicle_id, "collector lock held; worker staying passive");
             return;
         }
@@ -103,7 +124,16 @@ pub async fn run_vehicle_worker(
         }
     };
 
-    upsert_health(&pool, vehicle_id, true, "connected", "").await;
+    upsert_health(
+        &pool,
+        vehicle_id,
+        true,
+        "connected",
+        "",
+        Some("authorized"),
+        None,
+    )
+    .await;
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
 
@@ -161,33 +191,28 @@ pub async fn run_vehicle_worker(
 
     // Fire-and-forget startup enrichment (runs once; errors are non-fatal).
     {
-        let riv_id = rivian_vehicle_id.clone();
         let uid = user_id.unwrap_or(Uuid::nil());
         let pool2 = pool.clone();
         let client2 = http_client.clone();
-        let tok2 = tokens.clone();
         let age_key2 = age_key.clone();
         tokio::spawn(async move {
-            rivian_poll::run_startup_polls(riv_id, vehicle_id, uid, tok2, pool2, client2, age_key2)
-                .await;
+            rivian_poll::run_startup_polls(vehicle_id, uid, pool2, client2, age_key2).await;
         });
     }
 
     // Adaptive periodic poll loop (live session data while charging, etc.).
     {
-        let riv_id = rivian_vehicle_id.clone();
         let pool2 = pool.clone();
         let client2 = http_client.clone();
-        let tok2 = tokens.clone();
         let redis2 = redis.clone();
+        let age_key2 = age_key.clone();
         let poll_shutdown = shutdown.resubscribe();
         tokio::spawn(async move {
             rivian_poll::run_poll_loop(
-                riv_id,
                 vehicle_id,
-                tok2,
                 pool2,
                 client2,
+                age_key2,
                 power_state_rx,
                 poll_shutdown,
                 redis2,
@@ -255,19 +280,17 @@ pub async fn run_vehicle_worker(
                 .unwrap_or(true)
         {
             last_live_charge_poll = Some(event.ts);
-            let riv_id = rivian_vehicle_id.clone();
             let pool2 = pool.clone();
             let client2 = http_client.clone();
-            let tok2 = tokens.clone();
+            let age_key2 = age_key.clone();
             let active_session_id = session_id;
             tokio::spawn(async move {
-                if let Err(e) = rivian_poll::fetch_live_charge_session(
-                    &riv_id,
+                if let Err(e) = rivian_poll::fetch_live_charge_session_for_vehicle(
                     vehicle_id,
                     active_session_id,
                     &pool2,
                     &client2,
-                    &tok2,
+                    &age_key2,
                 )
                 .await
                 {
@@ -377,26 +400,28 @@ pub async fn run_vehicle_worker(
             let _ = persist_charge_session(&pool, &session).await;
             // Trigger incremental charge history sync to enrich the new session
             // with Rivian API fields (network vendor, range added, etc.).
-            let riv_id = rivian_vehicle_id.clone();
             let pool2 = pool.clone();
             let client2 = http_client.clone();
-            let tok2 = tokens.clone();
+            let age_key2 = age_key.clone();
             tokio::spawn(async move {
-                if let Err(e) = rivian_poll::fetch_live_session_history(
-                    &riv_id,
+                if let Err(e) = rivian_poll::fetch_live_session_history_for_vehicle(
                     vehicle_id,
                     Some(session.session_id),
                     &pool2,
                     &client2,
-                    &tok2,
+                    &age_key2,
                 )
                 .await
                 {
                     tracing::debug!(vehicle_id=%vehicle_id, err=%e, "live charge history sync failed");
                 }
-                if let Err(e) =
-                    rivian_poll::fetch_charge_history(&riv_id, vehicle_id, &pool2, &client2, &tok2)
-                        .await
+                if let Err(e) = rivian_poll::fetch_charge_history_for_vehicle(
+                    vehicle_id,
+                    &pool2,
+                    &client2,
+                    &age_key2,
+                )
+                .await
                 {
                     tracing::warn!(vehicle_id=%vehicle_id, err=%e, "post-session charge history sync failed");
                 }
@@ -1552,26 +1577,7 @@ async fn persist_charge_session(
         (Some(user_id), Some(lat), Some(lon)) => match_point(pool, user_id, lat, lon).await?,
         _ => MatchedLocation::none(),
     };
-    let profile =
-        resolve_profile(pool, None, location_match.geofence_id, session.vehicle_id).await?;
     let energy_added_kwh = session.energy_added_wh.map(|wh| wh / 1000.0);
-    let energy_used_kwh = session.energy_used_wh.map(|wh| wh / 1000.0);
-    let cost_usd = profile.as_ref().and_then(|p| {
-        compute_cost(
-            p,
-            energy_added_kwh,
-            energy_used_kwh,
-            duration_minutes,
-            session.started_at,
-            Some(session.ended_at),
-        )
-    });
-    let cost_profile_id = profile.as_ref().map(|p| p.id);
-    let cost_method = if cost_profile_id.is_some() {
-        Some("profile")
-    } else {
-        Some("unknown")
-    };
 
     sqlx::query(
         r#"INSERT INTO riviamigo.charge_sessions
@@ -1599,18 +1605,19 @@ async fn persist_charge_session(
     .bind(duration_minutes)
     .bind(energy_added_kwh)
     .bind(session.peak_charge_kw)
-    .bind(cost_usd)
+    .bind(Option::<f64>::None)
     .bind(session.energy_added_wh)
     .bind(session.energy_used_wh)
     .bind(session.avg_charge_rate_kw)
     .bind(session.peak_charge_kw)
     .bind(location_match.geofence_id)
     .bind(location_match.address_id)
-    .bind(cost_profile_id)
-    .bind(cost_method)
+    .bind(Option::<Uuid>::None)
+    .bind(Option::<&str>::None)
     .bind(session.charger_type.as_deref())
     .execute(pool)
     .await?;
+    let _ = recompute_charge_session_cost(pool, session.session_id).await?;
     Ok(())
 }
 
@@ -1912,18 +1919,33 @@ async fn close_software_version(
     .await;
 }
 
-async fn upsert_health(pool: &PgPool, vehicle_id: Uuid, online: bool, health: &str, msg: &str) {
+async fn upsert_health(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    online: bool,
+    health: &str,
+    msg: &str,
+    auth_state: Option<&str>,
+    auth_reason_code: Option<&str>,
+) {
     let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
-           (vehicle_id, is_online, worker_health, worker_health_msg, updated_at)
-           VALUES ($1,$2,$3,$4,now())
+           (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,now())
            ON CONFLICT (vehicle_id) DO UPDATE
-           SET is_online=$2, worker_health=$3, worker_health_msg=$4, updated_at=now()"#,
+           SET is_online=$2,
+               worker_health=$3,
+               worker_health_msg=$4,
+               auth_state=$5,
+               auth_reason_code=$6,
+               updated_at=now()"#,
     )
     .bind(vehicle_id)
     .bind(online)
     .bind(health)
     .bind(msg)
+    .bind(auth_state)
+    .bind(auth_reason_code)
     .execute(pool)
     .await;
 }

@@ -26,5 +26,7 @@ pub struct VehicleRuntimeState {
     pub last_event_at: Option<DateTime<Utc>>,
     pub worker_health: Option<String>,
     pub worker_health_msg: Option<String>,
+    pub auth_state: Option<String>,
+    pub auth_reason_code: Option<String>,
     pub updated_at: DateTime<Utc>,
 }

@@ -22,12 +22,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    ingestion::{
-        rivian_poll::{
-            self, ChargingScheduleInput, DepartureScheduleInput,
-        },
-        session_store::decrypt_tokens,
-    },
+    ingestion::rivian_poll::{self, ChargingScheduleInput, DepartureScheduleInput},
     middleware::auth::{AppState, AuthUser},
 };
 
@@ -47,35 +42,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/vehicles/:id/wallboxes", get(list_wallboxes))
         .route("/vehicles/:id/ota-details", get(get_ota_details))
-}
-
-// ── Helper: load Rivian tokens for a vehicle ─────────────────────────────────
-
-async fn load_tokens(
-    state: &AppState,
-    vehicle_id: Uuid,
-) -> Result<(String, crate::ingestion::session_store::RivianTokenBundle), AppError> {
-    let identity = state
-        .age_key
-        .parse::<age::x25519::Identity>()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad age key: {e}")))?;
-
-    let row = sqlx::query_as::<_, (String, Vec<u8>)>(
-        "SELECT v.rivian_vehicle_id, c.encrypted_tokens
-         FROM riviamigo.vehicles v
-         JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id
-         WHERE v.id = $1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    let (rivian_vehicle_id, encrypted) = row;
-    let tokens = decrypt_tokens(&encrypted, &identity)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("decrypt failed: {e}")))?;
-
-    Ok((rivian_vehicle_id, tokens))
 }
 
 fn http_client() -> reqwest::Client {
@@ -131,10 +97,15 @@ async fn put_charging_schedule(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
-    let (riv_id, tokens) = load_tokens(&state, vehicle_id).await?;
     let client = http_client();
 
-    rivian_poll::mutate_charging_schedule(&riv_id, vehicle_id, &body, &state.pool, &client, &tokens)
+    rivian_poll::mutate_charging_schedule_for_vehicle(
+        vehicle_id,
+        &body,
+        &state.pool,
+        &client,
+        &state.age_key,
+    )
         .await
         .map_err(|e| AppError::RivianApi(e.to_string()))?;
 
@@ -192,7 +163,6 @@ async fn create_departure_schedule(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
-    let (riv_id, tokens) = load_tokens(&state, vehicle_id).await?;
     let client = http_client();
 
     let input = DepartureScheduleInput {
@@ -202,10 +172,15 @@ async fn create_departure_schedule(
         comfort_settings: body.comfort_settings,
     };
 
-    let rivian_id =
-        rivian_poll::create_departure_schedule(&riv_id, vehicle_id, &input, &state.pool, &client, &tokens)
-            .await
-            .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    let rivian_id = rivian_poll::create_departure_schedule_for_vehicle(
+        vehicle_id,
+        &input,
+        &state.pool,
+        &client,
+        &state.age_key,
+    )
+    .await
+    .map_err(|e| AppError::RivianApi(e.to_string()))?;
 
     Ok(Json(serde_json::json!({ "rivian_schedule_id": rivian_id })))
 }
@@ -232,7 +207,6 @@ async fn update_departure_schedule(
 
     let rivian_sched_id = rivian_sched_id.ok_or(AppError::NotFound)?;
 
-    let (riv_id, tokens) = load_tokens(&state, vehicle_id).await?;
     let client = http_client();
 
     let input = DepartureScheduleInput {
@@ -242,14 +216,13 @@ async fn update_departure_schedule(
         comfort_settings: body.comfort_settings,
     };
 
-    rivian_poll::update_departure_schedule(
-        &riv_id,
+    rivian_poll::update_departure_schedule_for_vehicle(
         vehicle_id,
         &rivian_sched_id,
         &input,
         &state.pool,
         &client,
-        &tokens,
+        &state.age_key,
     )
     .await
     .map_err(|e| AppError::RivianApi(e.to_string()))?;
@@ -277,16 +250,14 @@ async fn delete_departure_schedule(
 
     let rivian_sched_id = rivian_sched_id.ok_or(AppError::NotFound)?;
 
-    let (riv_id, tokens) = load_tokens(&state, vehicle_id).await?;
     let client = http_client();
 
-    rivian_poll::delete_departure_schedule(
-        &riv_id,
+    rivian_poll::delete_departure_schedule_for_vehicle(
         vehicle_id,
         &rivian_sched_id,
         &state.pool,
         &client,
-        &tokens,
+        &state.age_key,
     )
     .await
     .map_err(|e| AppError::RivianApi(e.to_string()))?;

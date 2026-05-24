@@ -112,6 +112,15 @@ struct ChargingProfileInput {
     tou_periods: Option<Value>,
 }
 
+fn normalize_place_billing_type(raw: &str) -> &str {
+    match raw {
+        "flat" => "per_kwh",
+        "tou" => "tou",
+        "per_kwh" => "per_kwh",
+        _ => raw,
+    }
+}
+
 async fn list_places(
     auth: AuthUser,
     State(state): State<AppState>,
@@ -445,9 +454,10 @@ async fn fetch_places(
                     .map(|cost_profile_id| ChargingProfileRecord {
                         id: cost_profile_id,
                         name: row.cost_profile_name.unwrap_or_else(|| place_name.clone()),
-                        billing_type: row
-                            .cost_profile_billing_type
-                            .unwrap_or_else(|| "flat".into()),
+                        billing_type: normalize_place_billing_type(
+                            row.cost_profile_billing_type.as_deref().unwrap_or("per_kwh"),
+                        )
+                        .to_string(),
                         rate: row.cost_profile_rate.unwrap_or(0.0),
                         session_fee: row.cost_profile_session_fee.unwrap_or(0.0),
                         currency: row.cost_profile_currency.unwrap_or_else(|| "USD".into()),
@@ -536,6 +546,7 @@ async fn upsert_cost_profile(
         .unwrap_or_else(|| format!("{} charging", place_name.trim()));
     let session_fee = input.session_fee.unwrap_or(0.0);
     let currency = input.currency.clone().unwrap_or_else(|| "USD".into());
+    let billing_type = normalize_place_billing_type(&input.billing_type).to_string();
     let tou_periods = input
         .tou_periods
         .clone()
@@ -556,7 +567,7 @@ async fn upsert_cost_profile(
             profile_id,
             user_id,
             profile_name,
-            input.billing_type,
+            billing_type,
             input.rate,
             session_fee,
             currency,
@@ -578,7 +589,7 @@ async fn upsert_cost_profile(
            RETURNING id"#,
         user_id,
         profile_name,
-        input.billing_type,
+        billing_type,
         input.rate,
         session_fee,
         currency,
@@ -619,11 +630,13 @@ fn validate_place_body(body: &PlaceBody) -> Result<(), AppError> {
 }
 
 fn validate_charging_input(input: &ChargingProfileInput) -> Result<(), AppError> {
-    match input.billing_type.as_str() {
-        "flat" | "tou" => {}
+    let billing_type = normalize_place_billing_type(&input.billing_type);
+
+    match billing_type {
+        "per_kwh" | "tou" => {}
         _ => {
             return Err(AppError::Validation(
-                "billing_type must be either flat or tou for places".into(),
+                "billing_type must be either per_kwh or tou for places".into(),
             ))
         }
     }
@@ -634,7 +647,7 @@ fn validate_charging_input(input: &ChargingProfileInput) -> Result<(), AppError>
         ));
     }
 
-    if input.billing_type == "tou" {
+    if billing_type == "tou" {
         if input
             .timezone
             .as_deref()
