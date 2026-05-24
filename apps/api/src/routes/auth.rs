@@ -13,6 +13,8 @@ use crate::{
     middleware::auth::{issue_access_token, AppState, AuthUser},
 };
 
+const MIN_PASSWORD_LEN: usize = 12;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/register", post(register))
@@ -51,7 +53,7 @@ async fn register(
     if body.email.len() > 254 {
         return Err(AppError::Validation("email too long".into()));
     }
-    if body.email.is_empty() || !body.email.contains('@') || body.password.len() < 12 {
+    if body.email.is_empty() || !body.email.contains('@') || body.password.len() < MIN_PASSWORD_LEN {
         return Err(AppError::Validation(
             "valid email required, password min 12 chars".into(),
         ));
@@ -366,6 +368,8 @@ mod tests {
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: true,
             rivian_suppress_duplicate_telemetry: true,
+            riviamigo_env: None,
+            cookie_insecure: None,
         };
 
         let state = AppState {

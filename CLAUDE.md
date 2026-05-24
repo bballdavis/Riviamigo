@@ -137,4 +137,4 @@ All colors must use design tokens. Never write hex literals, `rgb()`/`rgba()`, n
 - Integration (DB-dependent) Rust tests are marked `#[ignore = "requires DATABASE_URL"]` and run via `cargo test -- --ignored`
 
 ### Rivian auth
-Before modifying the vehicle connection / OTP flow, read `docs/RIVIAN_AUTH.md` and compare against the current Home Assistant Rivian integration — the upstream API shape is unofficial and changes.
+Before modifying the vehicle connection / OTP flow, read `docs/rivian-auth.md` and compare against the current Home Assistant Rivian integration — the upstream API shape is unofficial and changes.

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT bucket AS \"ts!\", avg_range_mi AS value FROM timeseries.telemetry_1hr WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ts!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "value",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "cd03296023c308a9a3eec5f9ec6e264d7fdd16f441138a655af94e6a6630cb65"
+}

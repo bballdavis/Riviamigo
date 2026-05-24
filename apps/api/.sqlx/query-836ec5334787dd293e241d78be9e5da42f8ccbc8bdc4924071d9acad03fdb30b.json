@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.cost_profiles\n               SET name = $3,\n                   billing_type = $4,\n                   rate = $5,\n                   session_fee = $6,\n                   currency = $7,\n                   timezone = $8,\n                   tou_periods = $9\n               WHERE id = $1 AND user_id = $2\n               RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Float8",
+        "Float8",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "836ec5334787dd293e241d78be9e5da42f8ccbc8bdc4924071d9acad03fdb30b"
+}

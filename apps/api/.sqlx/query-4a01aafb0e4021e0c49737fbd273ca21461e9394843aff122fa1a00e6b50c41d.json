@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO riviamigo.vehicle_state_periods\n               (vehicle_id, state, started_at, ended_at)\n               VALUES ($1, $2, $3, $4)\n               ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a01aafb0e4021e0c49737fbd273ca21461e9394843aff122fa1a00e6b50c41d"
+}

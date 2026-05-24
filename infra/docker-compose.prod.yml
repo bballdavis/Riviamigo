@@ -15,6 +15,8 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       RUST_LOG: info
+      RIVIAMIGO_ENV: production
+      COOKIE_INSECURE:   # must be absent in production — explicitly cleared here
     depends_on:
       timescaledb:
         condition: service_healthy

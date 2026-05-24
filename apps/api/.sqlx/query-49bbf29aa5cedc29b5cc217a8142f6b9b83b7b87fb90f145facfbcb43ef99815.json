@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO riviamigo.cost_profiles\n           (user_id, name, billing_type, rate, session_fee, currency, timezone, tou_periods)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Float8",
+        "Float8",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "49bbf29aa5cedc29b5cc217a8142f6b9b83b7b87fb90f145facfbcb43ef99815"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.trips SET outside_temp_c = $2 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c52615ca83451e61f654bdcd0d60d8b93dd6735027e6af745a7b37d36a6714d"
+}

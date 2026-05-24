@@ -101,7 +101,7 @@ docker compose -f infra/docker-compose.yml up -d --build
 4. Complete the OTP step if prompted
 
 Rivian cloud authentication uses an unofficial API shape that can change. Before
-changing onboarding/auth code, compare against [`docs/RIVIAN_AUTH.md`](docs/RIVIAN_AUTH.md)
+changing onboarding/auth code, compare against [`docs/rivian-auth.md`](docs/rivian-auth.md)
 and the current Home Assistant Rivian integration.
 
 ## Scripts
@@ -194,7 +194,7 @@ Toggle theme by adding `.dark` or `.light` to `<html>`. The FOUC-prevention scri
 
 Base URL: `http://localhost:3001`
 
-Rivian connect flow implementation notes are in [`docs/RIVIAN_AUTH.md`](docs/RIVIAN_AUTH.md).
+Rivian connect flow implementation notes are in [`docs/rivian-auth.md`](docs/rivian-auth.md).
 
 | Verb | Path | Description |
 |------|------|-------------|

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.refresh_tokens SET revoked_at = now() WHERE token_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6d86fd0a1f41115def828051e7ec33e3c5a44ecb623fb14b3c8817fd75f45714"
+}

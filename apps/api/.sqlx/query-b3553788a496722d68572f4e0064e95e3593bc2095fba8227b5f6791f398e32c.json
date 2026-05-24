@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at, distance_miles, duration_seconds, efficiency_wh_per_mile) VALUES ($1, now() - interval '1 day', now() - interval '1 day' + interval '30 minutes', $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3553788a496722d68572f4e0064e95e3593bc2095fba8227b5f6791f398e32c"
+}

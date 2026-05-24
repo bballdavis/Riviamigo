@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.charge_sessions\n               SET geofence_id = COALESCE(geofence_id, $2),\n                   address_id  = COALESCE(address_id,  $3),\n                   is_home     = COALESCE(is_home,     $4)\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "72742a6d4a13efd483975d02d7485321b770d72a78481efcae65ac3a15df16e3"
+}

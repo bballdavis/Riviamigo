@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE timeseries.telemetry\n               SET charge_session_id = $1\n               WHERE vehicle_id = $2\n                 AND ts >= $3\n                 AND ts <= $4\n                 AND charge_session_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ddd738d5d636d63fa62f86d014f0d9c857a8ea761da02f70ea1d5be2daa3a40e"
+}

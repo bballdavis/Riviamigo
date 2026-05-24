@@ -194,6 +194,9 @@ async fn load_vehicle_tokens(
     let (rivian_vehicle_id, encrypted_tokens) = row;
     let tokens = decrypt_tokens(&encrypted_tokens, &identity)
         .map_err(|e| anyhow!("failed to decrypt Rivian credentials: {e}"))?;
+    tokens
+        .validate()
+        .map_err(|e| anyhow!("Rivian credential bundle is invalid: {e}"))?;
 
     Ok((rivian_vehicle_id, tokens))
 }
@@ -207,11 +210,16 @@ async fn with_vehicle_auth_retry<T, F>(
     mut operation: F,
 ) -> Result<T>
 where
-    F: for<'a> FnMut(&'a str, &'a RivianTokenBundle) -> BoxFuture<'a, Result<T>>,
+    for<'a> F: FnMut(
+        &'a str,
+        &'a RivianTokenBundle,
+        &'a PgPool,
+        &'a reqwest::Client,
+    ) -> BoxFuture<'a, Result<T>>,
 {
     let (rivian_vehicle_id, current_tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
 
-    match operation(&rivian_vehicle_id, &current_tokens).await {
+    match operation(&rivian_vehicle_id, &current_tokens, pool, client).await {
         Ok(value) => Ok(value),
         Err(error) if is_auth_error(&error) => {
             tracing::warn!(
@@ -235,7 +243,7 @@ where
                 }
             };
 
-            operation(&rivian_vehicle_id, &refreshed_tokens).await
+            operation(&rivian_vehicle_id, &refreshed_tokens, pool, client).await
         }
         Err(error) => Err(error),
     }
@@ -608,7 +616,7 @@ pub async fn fetch_vehicle_enrichment_for_vehicle(
         client,
         age_key,
         "fetch_vehicle_enrichment",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_vehicle_enrichment(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
             })
@@ -629,7 +637,7 @@ pub async fn fetch_battery_static_for_vehicle(
         client,
         age_key,
         "fetch_battery_static",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_battery_static(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
             })
@@ -651,7 +659,7 @@ pub async fn fetch_wallboxes_for_vehicle(
         client,
         age_key,
         "fetch_wallboxes",
-        move |_rivian_vehicle_id, tokens| {
+        move |_rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move { fetch_wallboxes(user_id, vehicle_id, pool, client, tokens).await })
         },
     )
@@ -773,7 +781,7 @@ pub async fn fetch_charge_history_for_vehicle(
         client,
         age_key,
         "fetch_charge_history",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_charge_history(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
             })
@@ -1241,7 +1249,7 @@ pub async fn fetch_live_charge_session_for_vehicle(
         client,
         age_key,
         "fetch_live_charge_session",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_live_charge_session(
                     rivian_vehicle_id,
@@ -1327,7 +1335,7 @@ pub async fn fetch_live_session_history_for_vehicle(
         client,
         age_key,
         "fetch_live_session_history",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_live_session_history(
                     rivian_vehicle_id,
@@ -1447,7 +1455,7 @@ pub async fn fetch_live_session_for_vehicle(
         client,
         age_key,
         "fetch_live_session",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_live_session(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
             })
@@ -1571,7 +1579,7 @@ pub async fn fetch_charging_schedule_for_vehicle(
         client,
         age_key,
         "fetch_charging_schedule",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
             Box::pin(async move {
                 fetch_charging_schedule(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
             })
@@ -1788,15 +1796,17 @@ pub async fn mutate_charging_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
+    let input = input.clone();
     with_vehicle_auth_retry(
         vehicle_id,
         pool,
         client,
         age_key,
         "mutate_charging_schedule",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
+            let input = input.clone();
             Box::pin(async move {
-                mutate_charging_schedule(rivian_vehicle_id, vehicle_id, input, pool, client, tokens).await
+                mutate_charging_schedule(rivian_vehicle_id, vehicle_id, &input, pool, client, tokens).await
             })
         },
     )
@@ -1901,15 +1911,17 @@ pub async fn create_departure_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<String> {
+    let input = input.clone();
     with_vehicle_auth_retry(
         vehicle_id,
         pool,
         client,
         age_key,
         "create_departure_schedule",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
+            let input = input.clone();
             Box::pin(async move {
-                create_departure_schedule(rivian_vehicle_id, vehicle_id, input, pool, client, tokens).await
+                create_departure_schedule(rivian_vehicle_id, vehicle_id, &input, pool, client, tokens).await
             })
         },
     )
@@ -1994,19 +2006,23 @@ pub async fn update_departure_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
+    let rivian_schedule_id = rivian_schedule_id.to_string();
+    let input = input.clone();
     with_vehicle_auth_retry(
         vehicle_id,
         pool,
         client,
         age_key,
         "update_departure_schedule",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
+            let rivian_schedule_id = rivian_schedule_id.clone();
+            let input = input.clone();
             Box::pin(async move {
                 update_departure_schedule(
                     rivian_vehicle_id,
                     vehicle_id,
-                    rivian_schedule_id,
-                    input,
+                    &rivian_schedule_id,
+                    &input,
                     pool,
                     client,
                     tokens,
@@ -2078,18 +2094,20 @@ pub async fn delete_departure_schedule_for_vehicle(
     client: &reqwest::Client,
     age_key: &str,
 ) -> Result<()> {
+    let rivian_schedule_id = rivian_schedule_id.to_string();
     with_vehicle_auth_retry(
         vehicle_id,
         pool,
         client,
         age_key,
         "delete_departure_schedule",
-        move |rivian_vehicle_id, tokens| {
+        move |rivian_vehicle_id, tokens, pool, client| {
+            let rivian_schedule_id = rivian_schedule_id.clone();
             Box::pin(async move {
                 delete_departure_schedule(
                     rivian_vehicle_id,
                     vehicle_id,
-                    rivian_schedule_id,
+                    &rivian_schedule_id,
                     pool,
                     client,
                     tokens,

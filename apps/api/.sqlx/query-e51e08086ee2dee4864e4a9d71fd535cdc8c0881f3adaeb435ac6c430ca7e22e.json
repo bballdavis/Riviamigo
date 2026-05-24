@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.users SET default_vehicle_id = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e51e08086ee2dee4864e4a9d71fd535cdc8c0881f3adaeb435ac6c430ca7e22e"
+}

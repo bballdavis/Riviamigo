@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(AVG(efficiency_wh_per_mile),0) AS avg_wh_per_mi,\n                COALESCE(SUM(distance_miles),0) AS total_miles,\n                PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) AS p10,\n                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) AS p90\n         FROM riviamigo.trips\n         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3\n           AND efficiency_wh_per_mile IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "avg_wh_per_mi",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_miles",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "p10",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "p90",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8ec60e7a2ed4f8b513e45766d78f2303b19e88c90d2b37c486441e5c7842912d"
+}

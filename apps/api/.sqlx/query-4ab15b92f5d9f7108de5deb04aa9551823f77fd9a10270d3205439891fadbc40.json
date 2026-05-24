@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id,\n                t.distance_miles,\n                t.efficiency_wh_per_mile,\n                t.outside_temp_c AS avg_temp_c\n         FROM riviamigo.trips t\n         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3\n           AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0\n           AND t.outside_temp_c IS NOT NULL\n         ORDER BY t.started_at DESC LIMIT 500",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "distance_miles",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "efficiency_wh_per_mile",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_temp_c",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "4ab15b92f5d9f7108de5deb04aa9551823f77fd9a10270d3205439891fadbc40"
+}

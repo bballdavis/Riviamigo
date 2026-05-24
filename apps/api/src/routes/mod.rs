@@ -28,9 +28,7 @@ pub mod battery;
 pub mod charging;
 pub mod cost_profiles;
 pub mod dashboards;
-pub mod data_quality;
 pub mod efficiency;
-pub mod geofences;
 pub mod grafana;
 pub mod health;
 pub mod idle_drain;
@@ -42,7 +40,6 @@ pub mod places;
 pub mod rivian_stewardship;
 pub mod schedules;
 pub mod state_timeline;
-pub mod stats;
 pub mod trips;
 pub mod vehicles;
 
@@ -115,12 +112,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(trips::router())
         .merge(charging::router())
         .merge(efficiency::router())
-        .merge(stats::router())
         .merge(metrics::router())
         .merge(live::router())
         .merge(dashboards::router())
         .merge(cost_profiles::router())
-        .merge(geofences::router())
         .merge(places::router())
         .merge(rivian_stewardship::router())
         .merge(schedules::router())
@@ -129,7 +124,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(health::router())
         .merge(idle_drain::router())
         .merge(locations::router())
-        .merge(data_quality::router())
+        .merge(grafana::router())
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();
@@ -152,8 +147,6 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .nest("/v1", Router::new().merge(auth_public).merge(protected))
-        .route("/grafana/query", axum::routing::post(grafana::query_stub))
-        .route("/grafana/search", axum::routing::post(grafana::search_stub))
         .layer(middleware::from_fn(log_server_errors))
         .layer(cors)
         .layer(CompressionLayer::new())

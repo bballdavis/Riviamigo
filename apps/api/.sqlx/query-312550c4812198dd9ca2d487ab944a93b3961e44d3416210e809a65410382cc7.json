@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ts, ota_current_version\n           FROM timeseries.telemetry\n           WHERE vehicle_id = $1 AND ota_current_version IS NOT NULL\n           ORDER BY ts ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ts",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "ota_current_version",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "312550c4812198dd9ca2d487ab944a93b3961e44d3416210e809a65410382cc7"
+}
