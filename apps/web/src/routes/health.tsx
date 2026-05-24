@@ -146,7 +146,9 @@ function VehicleHealthContent() {
                     label="Last vehicle event"
                     value={formatDateTime(data?.runtime?.last_event_at ?? data?.latest?.ts)}
                     detail={
-                      data?.runtime?.worker_health_msg ??
+                      (data?.runtime?.auth_state === 'needs_reauth'
+                        ? 'Rivian access expired. Reconnect this vehicle from Settings.'
+                        : data?.runtime?.worker_health_msg) ??
                       'Collector messages will appear here when Rivian access needs attention.'
                     }
                   />

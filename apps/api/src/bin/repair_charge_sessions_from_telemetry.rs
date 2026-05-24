@@ -8,8 +8,9 @@
 
 use anyhow::Result;
 use riviamigo_api::{
-    db::vehicles::get_vehicle_owner_id, models::cost_profile::compute_cost,
-    services::cost::resolve_profile, services::geofences::match_geofence,
+    db::vehicles::get_vehicle_owner_id,
+    services::cost::recompute_charge_session_cost,
+    services::geofences::match_geofence,
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
@@ -477,67 +478,16 @@ async fn repair_api_summary_metadata(pool: &sqlx::PgPool) -> Result<u64> {
 }
 
 async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {
-    let sessions = sqlx::query!(
-        r#"SELECT id, vehicle_id, geofence_id, cost_profile_id, started_at, ended_at,
-                  duration_minutes, kwh_added, energy_added_wh, energy_used_wh,
-                  rivian_paid_total, is_public, is_rivian_network
-           FROM riviamigo.charge_sessions"#
-    )
+    let session_ids = sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM riviamigo.charge_sessions")
     .fetch_all(pool)
     .await?;
 
     let mut repaired = 0u64;
 
-    for session in sessions {
-        let profile = resolve_profile(
-            pool,
-            session.cost_profile_id,
-            session.geofence_id,
-            session.vehicle_id,
-        )
-        .await?;
-        let authoritative_paid_total = (session.is_public == Some(true)
-            || session.is_rivian_network == Some(true))
-        .then_some(session.rivian_paid_total)
-        .flatten();
-        let cost_usd = authoritative_paid_total.or_else(|| {
-            profile.as_ref().and_then(|p| {
-                compute_cost(
-                    p,
-                    session
-                        .energy_added_wh
-                        .map(|wh| wh / 1000.0)
-                        .or(session.kwh_added),
-                    session.energy_used_wh.map(|wh| wh / 1000.0),
-                    session.duration_minutes.unwrap_or(0),
-                    session.started_at,
-                    session.ended_at,
-                )
-            })
-        });
-        let resolved_profile_id = profile.as_ref().map(|p| p.id);
-        let cost_method = if authoritative_paid_total.is_some() {
-            Some("rivian_paid_total")
-        } else if resolved_profile_id.is_some() {
-            Some("profile")
-        } else {
-            Some("unknown")
-        };
-
-        let result = sqlx::query!(
-            r#"UPDATE riviamigo.charge_sessions
-               SET cost_profile_id = $2,
-                   cost_method = $3,
-                   cost_usd = $4
-               WHERE id = $1"#,
-            session.id,
-            resolved_profile_id,
-            cost_method,
-            cost_usd,
-        )
-        .execute(pool)
-        .await?;
-        repaired += result.rows_affected();
+    for session_id in session_ids {
+        if recompute_charge_session_cost(pool, session_id).await?.is_some() {
+            repaired += 1;
+        }
     }
 
     Ok(repaired)
