@@ -501,6 +501,8 @@ class ApiClient {
       max_charge_limit_pct?: number | null;
       max_charge_rate_kw?: number | null;
       typed_session_count?: number;
+      known_cost_session_count?: number;
+      unknown_cost_session_count?: number;
       free_session_count?: number;
       total_range_added_km?: number | null;
       rivian_paid_total_usd?: number | null;
@@ -519,7 +521,7 @@ class ApiClient {
     const dcKwh = summary.dc_kwh ?? summary.by_type?.dc_kwh ?? 0;
     return {
       total_energy_kwh: summary.total_energy_kwh ?? summary.total_kwh ?? 0,
-      total_cost_usd: summary.total_cost_usd ?? 0,
+      total_cost_usd: summary.total_cost_usd ?? null,
       session_count: summary.session_count ?? 0,
       home_kwh: summary.home_kwh ?? 0,
       away_kwh: summary.away_kwh ?? 0,
@@ -532,6 +534,8 @@ class ApiClient {
       max_charge_limit_pct: summary.max_charge_limit_pct ?? null,
       max_charge_rate_kw: summary.max_charge_rate_kw ?? null,
       typed_session_count: summary.typed_session_count ?? 0,
+      known_cost_session_count: summary.known_cost_session_count ?? 0,
+      unknown_cost_session_count: summary.unknown_cost_session_count ?? 0,
       free_session_count: summary.free_session_count ?? 0,
       total_range_added_km: summary.total_range_added_km ?? null,
       rivian_paid_total_usd: summary.rivian_paid_total_usd ?? null,

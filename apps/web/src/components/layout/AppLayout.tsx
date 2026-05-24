@@ -23,7 +23,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   // per page session even if the status keeps polling.
   const reauthToastFired = React.useRef(false);
   React.useEffect(() => {
-    if (currentStatus?.worker_health === 'needs_reauth' && !reauthToastFired.current) {
+    if (currentStatus?.auth_state === 'needs_reauth' && !reauthToastFired.current) {
       reauthToastFired.current = true;
       window.dispatchEvent(
         new CustomEvent('riviamigo:toast', {
@@ -37,10 +37,10 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       );
     }
     // Reset so the toast can refire if the vehicle recovers and expires again.
-    if (currentStatus?.worker_health !== 'needs_reauth') {
+    if (currentStatus?.auth_state !== 'needs_reauth') {
       reauthToastFired.current = false;
     }
-  }, [currentStatus?.worker_health]);
+  }, [currentStatus?.auth_state]);
 
   React.useEffect(() => {
     const handleUnitsChange = () => setUnitSystem(getUnitSystem());

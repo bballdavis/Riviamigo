@@ -10,12 +10,13 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::ingestion::rivian_auth::rivian_refresh_tokens;
-use crate::ingestion::session_store::{encrypt_tokens, RivianTokenBundle};
+use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
 use crate::services::charge_backfill::{self, ChargeBackfillError};
 
 // ── URL constants ────────────────────────────────────────────────────────────
@@ -170,16 +171,89 @@ async fn try_refresh_tokens(
     Ok(new_tokens)
 }
 
-/// Write `needs_reauth` into `vehicle_runtime_state` so the frontend can
-/// surface a toast.
+async fn load_vehicle_tokens(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    age_key: &str,
+) -> Result<(String, RivianTokenBundle)> {
+    let identity = age_key
+        .parse::<age::x25519::Identity>()
+        .map_err(|e| anyhow!("bad age key: {e}"))?;
+
+    let row = sqlx::query_as::<_, (String, Vec<u8>)>(
+        "SELECT v.rivian_vehicle_id, c.encrypted_tokens
+         FROM riviamigo.vehicles v
+         JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id
+         WHERE v.id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow!("vehicle {vehicle_id} has no Rivian credentials"))?;
+
+    let (rivian_vehicle_id, encrypted_tokens) = row;
+    let tokens = decrypt_tokens(&encrypted_tokens, &identity)
+        .map_err(|e| anyhow!("failed to decrypt Rivian credentials: {e}"))?;
+
+    Ok((rivian_vehicle_id, tokens))
+}
+
+async fn with_vehicle_auth_retry<T, F>(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+    operation_name: &'static str,
+    mut operation: F,
+) -> Result<T>
+where
+    F: for<'a> FnMut(&'a str, &'a RivianTokenBundle) -> BoxFuture<'a, Result<T>>,
+{
+    let (rivian_vehicle_id, current_tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
+
+    match operation(&rivian_vehicle_id, &current_tokens).await {
+        Ok(value) => Ok(value),
+        Err(error) if is_auth_error(&error) => {
+            tracing::warn!(
+                vehicle_id=%vehicle_id,
+                operation=operation_name,
+                err=%error,
+                "Rivian token expired; attempting refresh"
+            );
+
+            let refreshed_tokens = match try_refresh_tokens(vehicle_id, &current_tokens, client, pool, age_key).await {
+                Ok(tokens) => tokens,
+                Err(refresh_error) => {
+                    tracing::error!(
+                        vehicle_id=%vehicle_id,
+                        operation=operation_name,
+                        err=%refresh_error,
+                        "Rivian token refresh failed"
+                    );
+                    mark_needs_reauth(pool, vehicle_id, &refresh_error.to_string()).await;
+                    return Err(refresh_error);
+                }
+            };
+
+            operation(&rivian_vehicle_id, &refreshed_tokens).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Write an auth-required state into `vehicle_runtime_state` while keeping
+/// collector health separate from credential status.
 async fn mark_needs_reauth(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
     let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
-           (vehicle_id, is_online, worker_health, worker_health_msg, updated_at)
-           VALUES ($1, false, 'needs_reauth', $2, now())
+           (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
+           VALUES ($1, false, 'error', $2, 'needs_reauth', 'rivian_auth_expired', now())
            ON CONFLICT (vehicle_id) DO UPDATE
-           SET worker_health = 'needs_reauth',
+           SET is_online = false,
+               worker_health = 'error',
                worker_health_msg = $2,
+               auth_state = 'needs_reauth',
+               auth_reason_code = 'rivian_auth_expired',
                updated_at = now()"#,
     )
     .bind(vehicle_id)
@@ -522,6 +596,68 @@ pub async fn fetch_wallboxes(
     Ok(())
 }
 
+pub async fn fetch_vehicle_enrichment_for_vehicle(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_vehicle_enrichment",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_vehicle_enrichment(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
+            })
+        },
+    )
+    .await
+}
+
+pub async fn fetch_battery_static_for_vehicle(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_battery_static",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_battery_static(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
+            })
+        },
+    )
+    .await
+}
+
+pub async fn fetch_wallboxes_for_vehicle(
+    user_id: Uuid,
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_wallboxes",
+        move |_rivian_vehicle_id, tokens| {
+            Box::pin(async move { fetch_wallboxes(user_id, vehicle_id, pool, client, tokens).await })
+        },
+    )
+    .await
+}
+
 // ── Charge session history ────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -625,6 +761,27 @@ pub async fn fetch_charge_history(
     fetch_charge_history_inner(rivian_vehicle_id, vehicle_id, false, pool, client, tokens).await
 }
 
+pub async fn fetch_charge_history_for_vehicle(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<usize> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_charge_history",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_charge_history(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
+            })
+        },
+    )
+    .await
+}
+
 /// Same as [`fetch_charge_history`] but inserts new sessions from the API that
 /// have no local counterpart (for the first-start full backfill flow).
 pub async fn fetch_charge_history_full(
@@ -702,9 +859,11 @@ async fn fetch_charge_history_inner(
             .or_else(|| infer_api_charger_type(s.vendor.as_deref(), s.is_home_charger));
 
         // Try to enrich an existing row matched by rivian_session_id.
-        let affected = sqlx::query(
+        let mut matched_session_id = sqlx::query_scalar::<_, Uuid>(
                 "UPDATE riviamigo.charge_sessions SET
                      rivian_session_id  = $2,
+                 ended_at           = COALESCE(ended_at, $10),
+                 kwh_added          = COALESCE(kwh_added, $19),
                      network_vendor     = COALESCE(network_vendor, $3),
                      range_added_km     = COALESCE(range_added_km, $4),
                      is_free_session    = COALESCE(is_free_session, $5),
@@ -722,7 +881,8 @@ async fn fetch_charge_history_inner(
                      is_public           = COALESCE(is_public, $17),
                      rivian_meta         = COALESCE(rivian_meta, $18)
                  WHERE vehicle_id = $1
-                   AND rivian_session_id = $2",
+                                     AND rivian_session_id = $2
+                                 RETURNING id",
             )
             .bind(vehicle_id)
             .bind(rivian_id)
@@ -742,19 +902,21 @@ async fn fetch_charge_history_inner(
             .bind(&s.vehicle_name)
             .bind(s.is_public)
             .bind(&s.meta)
-            .execute(pool)
-            .await?
-            .rows_affected();
+            .bind(s.total_energy_kwh)
+            .fetch_optional(pool)
+            .await?;
 
-        if affected == 0 {
+        if matched_session_id.is_none() {
             // Try to match by start-time window (±5 min).
             let time_matched = if let Some(start) = s.start_instant {
                 let window_start = start - chrono::Duration::minutes(5);
                 let window_end = start + chrono::Duration::minutes(5);
 
-                sqlx::query(
+                sqlx::query_scalar::<_, Uuid>(
                         "UPDATE riviamigo.charge_sessions SET
                              rivian_session_id  = $2,
+                             ended_at           = COALESCE(ended_at, $12),
+                             kwh_added          = COALESCE(kwh_added, $21),
                              network_vendor     = COALESCE(network_vendor, $3),
                              range_added_km     = COALESCE(range_added_km, $4),
                              is_free_session    = COALESCE(is_free_session, $5),
@@ -773,7 +935,8 @@ async fn fetch_charge_history_inner(
                              rivian_meta         = COALESCE(rivian_meta, $20)
                          WHERE vehicle_id = $1
                            AND rivian_session_id IS NULL
-                           AND started_at BETWEEN $8 AND $9",
+                                                     AND started_at BETWEEN $8 AND $9
+                                                 RETURNING id",
                     )
                     .bind(vehicle_id)
                     .bind(rivian_id)
@@ -795,17 +958,18 @@ async fn fetch_charge_history_inner(
                     .bind(&s.vehicle_name)
                     .bind(s.is_public)
                     .bind(&s.meta)
-                    .execute(pool)
+                    .bind(s.total_energy_kwh)
+                    .fetch_optional(pool)
                     .await?
-                    .rows_affected()
             } else {
-                0
+                None
             };
+            matched_session_id = time_matched;
 
             // Full backfill: insert sessions that have no local counterpart.
-            if full_backfill && time_matched == 0 {
+            if full_backfill && matched_session_id.is_none() {
                 if let Some(start) = s.start_instant {
-                    let result = sqlx::query(
+                    let inserted_session_id = sqlx::query_scalar::<_, Uuid>(
                             "INSERT INTO riviamigo.charge_sessions
                                  (vehicle_id, started_at, ended_at, kwh_added,
                                   rivian_session_id, network_vendor, range_added_km,
@@ -814,7 +978,8 @@ async fn fetch_charge_history_inner(
                                   rivian_charger_type, currency_code, rivian_city,
                                   rivian_vehicle_id, rivian_vehicle_name, is_public, rivian_meta)
                              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'rivian_api',$14,$15,$16,$17,$18,$19,$20)
-                             ON CONFLICT DO NOTHING",
+                                ON CONFLICT DO NOTHING
+                                RETURNING id",
                         )
                         .bind(vehicle_id)
                         .bind(start)
@@ -836,14 +1001,19 @@ async fn fetch_charge_history_inner(
                         .bind(&s.vehicle_name)
                         .bind(s.is_public)
                         .bind(&s.meta)
-                        .execute(pool)
-                        .await;
+                        .fetch_optional(pool)
+                        .await?;
 
-                    if let Ok(r) = result {
-                        total_inserted += r.rows_affected() as usize;
+                    if inserted_session_id.is_some() {
+                        total_inserted += 1;
                     }
+                    matched_session_id = inserted_session_id;
                 }
             }
+        }
+
+        if let Some(session_id) = matched_session_id {
+            let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
         }
 
         if let Err(error) = record_charge_payload(
@@ -1005,7 +1175,7 @@ pub async fn fetch_live_charge_session(
     };
 
     if let Some(session_id) = target_session_id {
-        sqlx::query(
+        let updated_session_id = sqlx::query_scalar::<_, Uuid>(
             "UPDATE riviamigo.charge_sessions SET
                  charger_id = COALESCE(charger_id, $2),
                  is_free_session = COALESCE(is_free_session, $3),
@@ -1017,12 +1187,13 @@ pub async fn fetch_live_charge_session(
                  live_power_kw = COALESCE($9, live_power_kw),
                  live_charge_rate_kph = COALESCE($10, live_charge_rate_kph),
                  live_time_elapsed_seconds = COALESCE($11, live_time_elapsed_seconds),
+                 duration_minutes = COALESCE(duration_minutes, CASE WHEN $11 IS NOT NULL THEN (($11 + 59) / 60) END),
                  live_session_started_at = COALESCE(live_session_started_at, $12),
                  kwh_added = COALESCE(kwh_added, $7),
                  range_added_km = COALESCE(range_added_km, $8),
-                 cost_usd = COALESCE(cost_usd, $5),
                  source = CASE WHEN source = 'rivian_api' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'telemetry') END
-             WHERE id=$1",
+             WHERE id=$1
+             RETURNING id",
         )
         .bind(session_id)
         .bind(&live.charger_id)
@@ -1036,8 +1207,12 @@ pub async fn fetch_live_charge_session(
         .bind(live.kilometers_charged_per_hour.as_ref().and_then(|v| v.value))
         .bind(elapsed_seconds)
         .bind(live.start_time)
-        .execute(pool)
+        .fetch_optional(pool)
         .await?;
+
+        if let Some(session_id) = updated_session_id {
+            let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
+        }
     }
 
     record_charge_payload(
@@ -1051,6 +1226,36 @@ pub async fn fetch_live_charge_session(
     .await?;
 
     Ok(())
+}
+
+pub async fn fetch_live_charge_session_for_vehicle(
+    vehicle_id: Uuid,
+    active_session_id: Option<Uuid>,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_live_charge_session",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_live_charge_session(
+                    rivian_vehicle_id,
+                    vehicle_id,
+                    active_session_id,
+                    pool,
+                    client,
+                    tokens,
+                )
+                .await
+            })
+        },
+    )
+    .await
 }
 
 pub async fn fetch_live_session_history(
@@ -1107,6 +1312,36 @@ pub async fn fetch_live_session_history(
     }
 
     Ok(inserted)
+}
+
+pub async fn fetch_live_session_history_for_vehicle(
+    vehicle_id: Uuid,
+    active_session_id: Option<Uuid>,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<usize> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_live_session_history",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_live_session_history(
+                    rivian_vehicle_id,
+                    vehicle_id,
+                    active_session_id,
+                    pool,
+                    client,
+                    tokens,
+                )
+                .await
+            })
+        },
+    )
+    .await
 }
 
 // ── Live session data (Redis only, not persisted) ─────────────────────────────
@@ -1198,6 +1433,27 @@ pub async fn fetch_live_session(
         network_name: payload.network_name,
         fetched_at: Utc::now(),
     }))
+}
+
+pub async fn fetch_live_session_for_vehicle(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<Option<LiveSessionData>> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_live_session",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_live_session(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
+            })
+        },
+    )
+    .await
 }
 
 // ── Charging schedule ─────────────────────────────────────────────────────────
@@ -1301,6 +1557,27 @@ pub async fn fetch_charging_schedule(
     increment_poll_counter(pool, vehicle_id).await;
     tracing::debug!(vehicle_id=%vehicle_id, "charging schedule upserted");
     Ok(())
+}
+
+pub async fn fetch_charging_schedule_for_vehicle(
+    vehicle_id: Uuid,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "fetch_charging_schedule",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                fetch_charging_schedule(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
+            })
+        },
+    )
+    .await
 }
 
 // ── Departure schedules ───────────────────────────────────────────────────────
@@ -1504,6 +1781,28 @@ pub async fn mutate_charging_schedule(
     fetch_charging_schedule(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
 }
 
+pub async fn mutate_charging_schedule_for_vehicle(
+    vehicle_id: Uuid,
+    input: &ChargingScheduleInput,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "mutate_charging_schedule",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                mutate_charging_schedule(rivian_vehicle_id, vehicle_id, input, pool, client, tokens).await
+            })
+        },
+    )
+    .await
+}
+
 // ── Departure schedule mutations ──────────────────────────────────────────────
 
 /// Input for creating or updating a departure schedule.
@@ -1595,6 +1894,28 @@ pub async fn create_departure_schedule(
     Ok(rivian_id)
 }
 
+pub async fn create_departure_schedule_for_vehicle(
+    vehicle_id: Uuid,
+    input: &DepartureScheduleInput,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<String> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "create_departure_schedule",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                create_departure_schedule(rivian_vehicle_id, vehicle_id, input, pool, client, tokens).await
+            })
+        },
+    )
+    .await
+}
+
 /// Mutation response — field received from Rivian but success is inferred from HTTP status.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1665,6 +1986,38 @@ pub async fn update_departure_schedule(
     Ok(())
 }
 
+pub async fn update_departure_schedule_for_vehicle(
+    vehicle_id: Uuid,
+    rivian_schedule_id: &str,
+    input: &DepartureScheduleInput,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "update_departure_schedule",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                update_departure_schedule(
+                    rivian_vehicle_id,
+                    vehicle_id,
+                    rivian_schedule_id,
+                    input,
+                    pool,
+                    client,
+                    tokens,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
 /// Mutation response — field received from Rivian but success is inferred from HTTP status.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1718,6 +2071,36 @@ pub async fn delete_departure_schedule(
     Ok(())
 }
 
+pub async fn delete_departure_schedule_for_vehicle(
+    vehicle_id: Uuid,
+    rivian_schedule_id: &str,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    age_key: &str,
+) -> Result<()> {
+    with_vehicle_auth_retry(
+        vehicle_id,
+        pool,
+        client,
+        age_key,
+        "delete_departure_schedule",
+        move |rivian_vehicle_id, tokens| {
+            Box::pin(async move {
+                delete_departure_schedule(
+                    rivian_vehicle_id,
+                    vehicle_id,
+                    rivian_schedule_id,
+                    pool,
+                    client,
+                    tokens,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
 // ── Poll task entry points ────────────────────────────────────────────────────
 
 /// Run all one-shot startup polls for a vehicle.  Errors are logged but not
@@ -1729,71 +2112,23 @@ pub async fn delete_departure_schedule(
 /// the most recent page is fetched to pick up any sessions missed since the
 /// last run.
 pub async fn run_startup_polls(
-    rivian_vehicle_id: String,
     vehicle_id: Uuid,
     user_id: Uuid,
-    tokens: RivianTokenBundle,
     pool: PgPool,
     client: reqwest::Client,
     age_key: String,
 ) {
     tracing::info!(vehicle_id=%vehicle_id, "startup polls begin");
 
-    // Active token set — may be replaced below if a refresh succeeds.
-    let mut active_tokens = tokens;
-
-    match fetch_vehicle_enrichment(
-        &rivian_vehicle_id,
-        vehicle_id,
-        &pool,
-        &client,
-        &active_tokens,
-    )
-    .await
-    {
-        Ok(_) => {}
-        Err(e) if is_auth_error(&e) => {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment: token expired, attempting refresh");
-            match try_refresh_tokens(vehicle_id, &active_tokens, &client, &pool, &age_key).await {
-                Ok(new_tokens) => {
-                    active_tokens = new_tokens;
-                    // Retry enrichment with fresh tokens.
-                    if let Err(e2) = fetch_vehicle_enrichment(
-                        &rivian_vehicle_id,
-                        vehicle_id,
-                        &pool,
-                        &client,
-                        &active_tokens,
-                    )
-                    .await
-                    {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%e2, "fetch_vehicle_enrichment failed after refresh");
-                    }
-                }
-                Err(refresh_err) => {
-                    tracing::error!(vehicle_id=%vehicle_id, err=%refresh_err, "token refresh failed; marking needs_reauth");
-                    mark_needs_reauth(&pool, vehicle_id, &refresh_err.to_string()).await;
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
-        }
+    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
     }
 
-    if let Err(e) = fetch_battery_static(
-        &rivian_vehicle_id,
-        vehicle_id,
-        &pool,
-        &client,
-        &active_tokens,
-    )
-    .await
-    {
+    if let Err(e) = fetch_battery_static_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static failed");
     }
 
-    if let Err(e) = fetch_wallboxes(user_id, vehicle_id, &pool, &client, &active_tokens).await {
+    if let Err(e) = fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
     }
 
@@ -1816,7 +2151,11 @@ pub async fn run_startup_polls(
                 tracing::info!(vehicle_id=%vehicle_id, count, "full backfill complete");
             }
             Err(ChargeBackfillError::AlreadyRunning) => {
-                tracing::info!(vehicle_id=%vehicle_id, "full backfill already running; startup sync skipped");
+                tracing::info!(vehicle_id=%vehicle_id, "full backfill already running; running incremental charge sync");
+                match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+                    Ok(n) => tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete"),
+                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed"),
+                }
             }
             Err(e) => {
                 tracing::warn!(vehicle_id=%vehicle_id, err=%e, "full backfill failed");
@@ -1824,15 +2163,7 @@ pub async fn run_startup_polls(
         }
     } else {
         // Incremental enrich: just reconcile any sessions that appeared since last run.
-        match fetch_charge_history(
-            &rivian_vehicle_id,
-            vehicle_id,
-            &pool,
-            &client,
-            &active_tokens,
-        )
-        .await
-        {
+        match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
             Ok(n) => {
                 tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
             }
@@ -1840,15 +2171,7 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_charging_schedule(
-        &rivian_vehicle_id,
-        vehicle_id,
-        &pool,
-        &client,
-        &active_tokens,
-    )
-    .await
-    {
+    if let Err(e) = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
     }
 
@@ -1866,11 +2189,10 @@ pub async fn run_startup_polls(
 /// - Responds to `PollEvent` signals: charge session ended → re-sync history;
 ///   OTA version changed → fetch release notes.
 pub async fn run_poll_loop(
-    rivian_vehicle_id: String,
     vehicle_id: Uuid,
-    tokens: RivianTokenBundle,
     pool: PgPool,
     client: reqwest::Client,
+    age_key: String,
     mut power_state_rx: tokio::sync::watch::Receiver<Option<crate::models::telemetry::PowerState>>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     redis: redis::Client,
@@ -1899,8 +2221,7 @@ pub async fn run_poll_loop(
         let power = power_state_rx.borrow().clone();
 
         if matches!(power, Some(PowerState::Charging)) {
-            match fetch_live_session(&rivian_vehicle_id, vehicle_id, &pool, &client, &tokens).await
-            {
+            match fetch_live_session_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
                 Ok(Some(live)) => {
                     if let Ok(json) = serde_json::to_string(&live) {
                         if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {

@@ -47,6 +47,8 @@ struct RuntimeHealth {
     last_event_at: Option<DateTime<Utc>>,
     worker_health: Option<String>,
     worker_health_msg: Option<String>,
+    auth_state: Option<String>,
+    auth_reason_code: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
@@ -146,7 +148,7 @@ async fn fetch_vehicle(pool: &sqlx::PgPool, vid: Uuid) -> Result<HealthVehicle, 
 
 async fn fetch_runtime(pool: &sqlx::PgPool, vid: Uuid) -> Result<Option<RuntimeHealth>, AppError> {
     let row = sqlx::query_as::<_, RuntimeHealth>(
-        r#"SELECT is_online, last_event_at, worker_health, worker_health_msg, updated_at
+        r#"SELECT is_online, last_event_at, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at
            FROM riviamigo.vehicle_runtime_state
            WHERE vehicle_id = $1"#,
     )

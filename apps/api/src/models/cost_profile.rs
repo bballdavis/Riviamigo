@@ -32,6 +32,28 @@ impl CostProfile {
     pub fn tou_periods(&self) -> Vec<TouPeriod> {
         serde_json::from_value(self.tou_periods.clone()).unwrap_or_default()
     }
+
+    pub fn is_effective_at(&self, started_at: DateTime<Utc>) -> bool {
+        let local_date = self
+            .timezone
+            .as_deref()
+            .and_then(|value| value.parse::<Tz>().ok())
+            .map(|tz| started_at.with_timezone(&tz).date_naive())
+            .unwrap_or_else(|| started_at.date_naive());
+
+        if let Some(effective_from) = self.effective_from {
+            if local_date < effective_from {
+                return false;
+            }
+        }
+        if let Some(effective_to) = self.effective_to {
+            if local_date > effective_to {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 pub fn validate_tou_periods(periods: &[TouPeriod]) -> Result<(), String> {
@@ -74,6 +96,10 @@ pub fn compute_cost(
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
 ) -> Option<f64> {
+    if !profile.is_effective_at(started_at) {
+        return None;
+    }
+
     let session_fee = profile.session_fee;
     let rate = profile.rate;
 
@@ -252,6 +278,13 @@ mod tests {
         let p = profile("flat", 5.0, 1.5);
         let cost = compute_cost(&p, None, None, 20, Utc::now(), None).unwrap();
         assert!((cost - 6.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn rejects_profiles_outside_effective_window() {
+        let mut p = profile("per_kwh", 0.13, 0.0);
+        p.effective_from = Some((Utc::now() + Duration::days(1)).date_naive());
+        assert!(compute_cost(&p, Some(10.0), None, 30, Utc::now(), None).is_none());
     }
 
     #[test]
