@@ -7,17 +7,31 @@ use std::io::{Read, Write};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RivianTokenBundle {
-    #[serde(default)]
     pub access_token: String,
-    #[serde(default)]
     pub refresh_token: String,
-    #[serde(default)]
     pub app_session_token: String,
-    #[serde(default)]
     pub user_session_token: String,
-    #[serde(default)]
     pub csrf_token: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl RivianTokenBundle {
+    /// Returns an error if any required token field is empty.
+    ///
+    /// Call this immediately after decrypting or constructing a bundle to
+    /// catch corrupted or partially-written credential blobs early.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.access_token.is_empty() {
+            anyhow::bail!("RivianTokenBundle: access_token is empty");
+        }
+        if self.refresh_token.is_empty() {
+            anyhow::bail!("RivianTokenBundle: refresh_token is empty");
+        }
+        if self.user_session_token.is_empty() {
+            anyhow::bail!("RivianTokenBundle: user_session_token is empty");
+        }
+        Ok(())
+    }
 }
 
 pub fn encrypt_json<T: Serialize>(

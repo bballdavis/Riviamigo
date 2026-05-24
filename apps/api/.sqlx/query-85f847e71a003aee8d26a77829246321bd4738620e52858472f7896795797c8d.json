@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, user_id, name, billing_type, rate, session_fee, currency,\n                  timezone, tou_periods,\n                  effective_from, effective_to, created_at\n           FROM riviamigo.cost_profiles WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "billing_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "rate",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "session_fee",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "timezone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "tou_periods",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "effective_from",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 10,
+        "name": "effective_to",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "85f847e71a003aee8d26a77829246321bd4738620e52858472f7896795797c8d"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE riviamigo.trips\n               SET energy_wh = $2,\n                   energy_strategy = $3,\n                   efficiency_wh_per_mile = COALESCE($4, efficiency_wh_per_mile)\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ac02582f61b137a8c5a1f5c0e5dc6dbe737c615a0c75b6c4e0b9e43a5c56466"
+}

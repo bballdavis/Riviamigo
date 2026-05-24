@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE riviamigo.charge_sessions\n        SET duration_minutes = COALESCE(\n                duration_minutes,\n                CASE\n                    WHEN ended_at IS NOT NULL\n                    THEN EXTRACT(EPOCH FROM (ended_at - started_at))::int / 60\n                END\n            ),\n            charger_type = COALESCE(\n                charger_type,\n                CASE\n                    WHEN lower(COALESCE(network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'\n                    WHEN is_home THEN 'ac'\n                END\n            )\n        WHERE source = 'rivian_api'\n          AND (\n              duration_minutes IS NULL\n              OR charger_type IS NULL\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "ad06719ae2894f0ed80fa0d48379161219ddb63cac918994739c8c5fd89888df"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM riviamigo.addresses\n           WHERE earth_distance(\n               ll_to_earth(latitude, longitude),\n               ll_to_earth($1, $2)\n           ) < 100\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cfc9e176fd5795ea47aa38ecf1e831e81a573574da3377e6bb36f4521bffa701"
+}

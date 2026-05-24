@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, started_at, ended_at, soc_start, soc_end,\n                  energy_added_wh, charger_type\n           FROM riviamigo.charge_sessions\n           WHERE vehicle_id = $1\n           ORDER BY started_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "ended_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "soc_start",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "soc_end",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "energy_added_wh",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "charger_type",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "cd9809c42bb18974b2869aa4b1bedacca4ee76a4c50882d582692c7996735af5"
+}

@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT drive_mode, COUNT(*) AS trip_count,\n                COALESCE(SUM(distance_miles),0) AS total_miles,\n                COALESCE(AVG(efficiency_wh_per_mile),0) AS avg_wh_per_mi\n         FROM riviamigo.trips\n         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3\n           AND drive_mode IS NOT NULL AND efficiency_wh_per_mile IS NOT NULL\n         GROUP BY drive_mode ORDER BY avg_wh_per_mi",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "drive_mode",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "trip_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_miles",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "avg_wh_per_mi",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "4cfcbfff0a7d0587d36ec59b4ed3566011d9ec303cc07a91326cbca86e375006"
+}

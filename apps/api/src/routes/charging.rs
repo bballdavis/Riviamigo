@@ -771,6 +771,8 @@ mod tests {
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: true,
             rivian_suppress_duplicate_telemetry: true,
+            riviamigo_env: None,
+            cookie_insecure: None,
         };
 
         let state = AppState {

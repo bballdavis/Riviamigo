@@ -1,0 +1,173 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n               g.id,\n               g.name,\n               g.latitude,\n               g.longitude,\n               g.radius_m,\n               g.is_home,\n               g.is_work,\n               a.id AS \"address_id?: Uuid\",\n               a.display_name AS \"address_display_name?\",\n               a.osm_id AS \"address_osm_id?\",\n               a.latitude AS \"address_latitude?\",\n               a.longitude AS \"address_longitude?\",\n               a.road AS \"address_road?\",\n               a.city AS \"address_city?\",\n               a.state AS \"address_state?\",\n               a.postcode AS \"address_postcode?\",\n               a.country AS \"address_country?\",\n               a.raw AS \"address_raw?: Value\",\n               cp.id AS \"cost_profile_id?: Uuid\",\n               cp.name AS \"cost_profile_name?\",\n               cp.billing_type AS \"cost_profile_billing_type?\",\n               cp.rate AS \"cost_profile_rate?\",\n               cp.session_fee AS \"cost_profile_session_fee?\",\n               cp.currency AS \"cost_profile_currency?\",\n               cp.timezone AS \"cost_profile_timezone?\",\n               cp.tou_periods AS \"cost_profile_tou_periods?: Value\"\n           FROM riviamigo.geofences g\n           LEFT JOIN riviamigo.addresses a ON a.id = g.address_id\n           LEFT JOIN riviamigo.cost_profiles cp ON cp.id = g.cost_profile_id\n           WHERE g.user_id = $1\n             AND ($2::uuid IS NULL OR g.id = $2)\n           ORDER BY g.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "latitude",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "longitude",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "radius_m",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_home",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "is_work",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "address_id?: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "address_display_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "address_osm_id?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "address_latitude?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "address_longitude?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "address_road?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "address_city?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "address_state?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "address_postcode?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "address_country?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "address_raw?: Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 18,
+        "name": "cost_profile_id?: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 19,
+        "name": "cost_profile_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "cost_profile_billing_type?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "cost_profile_rate?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 22,
+        "name": "cost_profile_session_fee?",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 23,
+        "name": "cost_profile_currency?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
+        "name": "cost_profile_timezone?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 25,
+        "name": "cost_profile_tou_periods?: Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "8597d2f900e3fd52e4e089c4e911a344a221cfb1a3b5dd2fedec74a2bb3b81fc"
+}

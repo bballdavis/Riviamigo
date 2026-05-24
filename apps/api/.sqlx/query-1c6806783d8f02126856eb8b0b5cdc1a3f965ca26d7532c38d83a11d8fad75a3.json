@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT day, soc_lost_pct_total::float8 AS total_soc_lost, avg_drain_pct_per_hour::float8 AS avg_drain_rate, hours_idle::float8 AS hours_parked FROM timeseries.phantom_drain_daily WHERE vehicle_id=$1 AND day>=$2 AND day<=$3 ORDER BY day",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_soc_lost",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_drain_rate",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "hours_parked",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "1c6806783d8f02126856eb8b0b5cdc1a3f965ca26d7532c38d83a11d8fad75a3"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO riviamigo.geofences\n           (user_id, name, latitude, longitude, radius_m, address_id, is_home, is_work, cost_profile_id)\n           VALUES ($1, $2, $3, $4, $5, $6, true, false, $7)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e0bb671a70a6f98c55fcb4fb4d5e8fc9ffdd6745032e87813a8e201e66060f19"
+}

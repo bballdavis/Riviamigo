@@ -1,0 +1,66 @@
+rules:
+  # Ban .unwrap_or_default() on known token field names.
+  # Silently persisting an empty token causes the Rivian auth session to
+  # appear valid while all API calls fail. Use explicit error propagation.
+  - id: rivian-token-unwrap-or-default
+    patterns:
+      - pattern: |
+          $X.access_token$Y.unwrap_or_default()
+      - pattern: |
+          $X.refresh_token$Y.unwrap_or_default()
+      - pattern: |
+          $X.user_session_token$Y.unwrap_or_default()
+      - pattern: |
+          $X.app_session_token$Y.unwrap_or_default()
+      - pattern: |
+          $X.csrf_token$Y.unwrap_or_default()
+    message: >
+      Never use `.unwrap_or_default()` on Rivian token fields.
+      An empty-string token silently breaks all subsequent Rivian API calls.
+      Use `ok_or_else(|| anyhow::anyhow!("missing token: <field>"))?` instead.
+    languages: [rust]
+    severity: ERROR
+    paths:
+      include:
+        - apps/api/src/**
+
+  # Ban direct SQL access to vehicle_credentials outside session_store.rs.
+  # All credential read/write must go through session_store to ensure
+  # age-encryption is consistently applied.
+  - id: vehicle-credentials-direct-access
+    pattern: |
+      "vehicle_credentials"
+    message: >
+      Direct string reference to `vehicle_credentials` table found outside
+      session_store.rs. All credential access must route through
+      `apps/api/src/ingestion/session_store.rs` to ensure age-encryption
+      is consistently applied.
+    languages: [rust]
+    severity: ERROR
+    paths:
+      include:
+        - apps/api/src/**
+      exclude:
+        - apps/api/src/ingestion/session_store.rs
+        - apps/api/src/migrations/**
+
+  # Ban tracing of known-sensitive field names.
+  # Log the operation result or an anonymous ID instead.
+  - id: tracing-sensitive-fields
+    patterns:
+      - pattern: |
+          tracing::$LEVEL!($MSG, access_token = $VAL, ...)
+      - pattern: |
+          tracing::$LEVEL!($MSG, refresh_token = $VAL, ...)
+      - pattern: |
+          tracing::$LEVEL!($MSG, password = $VAL, ...)
+      - pattern: |
+          tracing::$LEVEL!($MSG, csrf_token = $VAL, ...)
+    message: >
+      Sensitive field logged via tracing. Log the operation result or an
+      anonymous identifier instead — never emit token or password values.
+    languages: [rust]
+    severity: ERROR
+    paths:
+      include:
+        - apps/api/src/**

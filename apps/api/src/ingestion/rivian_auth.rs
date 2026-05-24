@@ -159,10 +159,19 @@ pub async fn rivian_refresh_tokens(
         })?;
 
     Ok(RivianTokenBundle {
-        access_token: payload.access_token.unwrap_or_default(),
-        refresh_token: payload.refresh_token.unwrap_or_default(),
+        access_token: payload
+            .access_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing accessToken in TokenExchange".into()))?,
+        refresh_token: payload
+            .refresh_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in TokenExchange".into()))?,
         app_session_token: session.app_session_token,
-        user_session_token: payload.user_session_token.unwrap_or_default(),
+        user_session_token: payload
+            .user_session_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing userSessionToken in TokenExchange".into()))?,
         csrf_token: session.csrf_token,
         created_at: chrono::Utc::now(),
     })
@@ -310,15 +319,27 @@ pub async fn rivian_login(
     match payload.typename.as_deref() {
         Some("MobileMFALoginResponse") => Ok(LoginResult::OtpRequired(RivianOtpChallenge {
             email: email.to_string(),
-            otp_token: payload.otp_token.unwrap_or_default(),
+            otp_token: payload
+                .otp_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing otpToken in MFA response".into()))?,
             csrf_token: session.csrf_token,
             app_session_token: session.app_session_token,
         })),
         _ => Ok(LoginResult::Authenticated(RivianTokenBundle {
-            access_token: payload.access_token.unwrap_or_default(),
-            refresh_token: payload.refresh_token.unwrap_or_default(),
+            access_token: payload
+                .access_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing accessToken in login response".into()))?,
+            refresh_token: payload
+                .refresh_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in login response".into()))?,
             app_session_token: session.app_session_token,
-            user_session_token: payload.user_session_token.unwrap_or_default(),
+            user_session_token: payload
+                .user_session_token
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing userSessionToken in login response".into()))?,
             csrf_token: session.csrf_token,
             created_at: chrono::Utc::now(),
         })),
@@ -375,10 +396,19 @@ pub async fn rivian_login_otp(
         .ok_or_else(|| RivianAuthError::UnexpectedResponse("empty OTP payload".into()))?;
 
     Ok(RivianTokenBundle {
-        access_token: payload.access_token.unwrap_or_default(),
-        refresh_token: payload.refresh_token.unwrap_or_default(),
+        access_token: payload
+            .access_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing accessToken in OTP response".into()))?,
+        refresh_token: payload
+            .refresh_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in OTP response".into()))?,
         app_session_token: challenge.app_session_token.clone(),
-        user_session_token: payload.user_session_token.unwrap_or_default(),
+        user_session_token: payload
+            .user_session_token
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing userSessionToken in OTP response".into()))?,
         csrf_token: challenge.csrf_token.clone(),
         created_at: chrono::Utc::now(),
     })
