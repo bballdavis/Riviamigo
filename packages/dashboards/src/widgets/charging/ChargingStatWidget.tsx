@@ -96,12 +96,12 @@ const CHARGING_STAT_DEFINITIONS: ChargingStatDefinition[] = [
     title: 'Home Charging',
     icon: 'lucide:home',
     getValue: (s) => {
-      const total = s.total_energy_kwh;
-      if (!total) return '—';
-      return formatPercent(((s.home_kwh ?? 0) / total) * 100, 0);
+      const knownEnergy = (s.home_kwh ?? 0) + (s.away_kwh ?? 0);
+      if (!knownEnergy) return '—';
+      return formatPercent(((s.home_kwh ?? 0) / knownEnergy) * 100, 0);
     },
     getSecondary: (s) =>
-      `Home ${fmt(s.home_kwh, formatKwh)} / Away ${fmt(s.away_kwh, formatKwh)} / Unknown ${fmt(s.unknown_location_kwh, formatKwh)}`,
+      `Home ${fmt(s.home_kwh, formatKwh)} / Away ${fmt(s.away_kwh, formatKwh)}`,
   },
   {
     id: 'dc_share',

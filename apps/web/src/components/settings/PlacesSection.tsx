@@ -482,6 +482,13 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                       </div>
 
                       <div className="grid gap-2">
+                        <div className="hidden gap-2 px-3 xl:grid xl:grid-cols-[minmax(0,1fr)_6.5rem_6.5rem_6.5rem_7rem]">
+                          <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Label</span>
+                          <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Start</span>
+                          <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">End</span>
+                          <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Rate ($/kWh)</span>
+                          <span />
+                        </div>
                         {draft.schedule.map((period, index) => (
                           <div key={`period-${index}`} className="grid min-w-0 gap-2 rounded-lg border border-border bg-bg p-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_6.5rem_6.5rem_6.5rem_7rem]">
                             <input

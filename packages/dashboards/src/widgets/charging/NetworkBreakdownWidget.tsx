@@ -1,7 +1,11 @@
 /**
  * NetworkBreakdownWidget — shows a per-network breakdown of charging energy, cost,
- * session count, and free session count.  Data comes from the charging summary
- * `network_breakdown` array, which is populated after the Rivian API backfill runs.
+ * session count, and free session count.
+ *
+ * Categories shown:
+ *   - "Home Charging"  — sessions where is_home=true
+ *   - "Other AC"       — non-home AC sessions with no public network vendor
+ *   - Named DC networks (Rivian, Electrify America, EVgo, …)
  */
 import React from 'react';
 import { Icon } from '@iconify/react';
@@ -34,10 +38,13 @@ function NetworkBar({ fraction, className }: { fraction: number; className?: str
 }
 
 const NETWORK_ICON: Record<string, string> = {
+  'home charging': 'lucide:home',
+  'other ac': 'lucide:plug',
   rivian: 'lucide:zap',
   'electrify america': 'lucide:bolt',
   evgo: 'lucide:plug-zap',
   chargepoint: 'lucide:plug',
+  tesla: 'lucide:zap',
 };
 
 function networkIcon(vendor: string | null): string {
@@ -67,8 +74,8 @@ function NetworkBreakdownWidget({ ctx }: { instance: WidgetInstance; ctx: Widget
       <div className="flex h-full items-center justify-center text-sm text-fg-tertiary">
         <div className="text-center">
           <Icon icon="lucide:plug-zap" className="mx-auto mb-2 h-8 w-8 text-fg-tertiary/40" />
-          <p>No network data yet</p>
-          <p className="mt-1 text-xs">Available after charge history backfill</p>
+          <p>No charging sessions yet</p>
+          <p className="mt-1 text-xs">Breakdown appears once sessions are recorded</p>
         </div>
       </div>
     );
@@ -89,7 +96,7 @@ function NetworkBreakdownWidget({ ctx }: { instance: WidgetInstance; ctx: Widget
                 <Icon icon={networkIcon(row.network_vendor)} className="h-3.5 w-3.5 shrink-0 text-accent" />
                 <span className="truncate text-sm font-medium text-fg">{name}</span>
                 {row.free_sessions > 0 && (
-                  <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-xs font-medium text-success">
+                  <span className="shrink-0 rounded-full bg-status-positive/15 px-1.5 py-0.5 text-xs font-medium text-status-positive">
                     {row.free_sessions} free
                   </span>
                 )}

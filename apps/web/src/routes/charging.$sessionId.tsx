@@ -3,7 +3,7 @@ import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import { useAuth, useChargeSession } from '@riviamigo/hooks';
 import {
-  PageLayout, ChartSection, StatCardGrid, StatCard, Card,
+  PageLayout, StatCardGrid, StatCard, Card,
 } from '@riviamigo/ui/primitives';
 import { DashboardChartWidget } from '@riviamigo/dashboards';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -46,7 +46,13 @@ export function ChargeSessionContent() {
   };
 
   const title = session
-    ? format(parseISO(session.started_at), 'MMMM d, yyyy - h:mm a')
+    ? (() => {
+        const start = parseISO(session.started_at);
+        const dateStr = format(start, 'MMMM d, yyyy');
+        const startTime = format(start, 'h:mm a');
+        const endTime = session.ended_at ? format(parseISO(session.ended_at), 'h:mm a') : null;
+        return endTime ? `${dateStr} · ${startTime} – ${endTime}` : `${dateStr} · ${startTime}`;
+      })()
     : 'Charge Session';
 
   const backButton = (
@@ -97,17 +103,26 @@ export function ChargeSessionContent() {
               />
             </StatCardGrid>
 
-            <ChartSection title="Charge Curve" subtitle="Power vs state of charge">
-              <DashboardChartWidget
-                instance={chargeCurveInstance}
-                ctx={{
-                  vehicleId: defaultVehicleId,
-                  from: session?.started_at ?? '',
-                  to: session?.ended_at ?? session?.started_at ?? '',
-                  chargeSessionId: sessionId,
-                }}
-              />
-            </ChartSection>
+            {/* Charge curve + cumulative energy on a shared time axis.
+                Explicit container height so the widget fills it properly
+                without a settings-button gap above the chart area. */}
+            <div className="bg-bg-surface border border-border rounded-xl p-5">
+              <div className="mb-3">
+                <h2 className="text-sm font-medium text-fg-secondary uppercase tracking-wider">Charge Curve</h2>
+                <p className="mt-0.5 text-xs text-fg-tertiary">Charge rate (kW) and cumulative energy (kWh) over time</p>
+              </div>
+              <div style={{ height: 360 }}>
+                <DashboardChartWidget
+                  instance={chargeCurveInstance}
+                  ctx={{
+                    vehicleId: defaultVehicleId,
+                    from: session?.started_at ?? '',
+                    to: session?.ended_at ?? session?.started_at ?? '',
+                    chargeSessionId: sessionId,
+                  }}
+                />
+              </div>
+            </div>
           </>
         )}
       </PageLayout>
@@ -143,7 +158,7 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
   ].filter(Boolean) as Array<{ icon: React.ReactNode; label: string; value: string }>;
 
   return (
-    <Card padding="md" className="grid gap-3 md:grid-cols-3">
+    <Card padding="md" className="grid gap-x-6 gap-y-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
       <SourceFact icon={<Database className="h-4 w-4" />} label="Source" value={formatSourceLabel(session.source)} />
       <SourceFact icon={<RadioTower className="h-4 w-4" />} label="Telemetry" value={telemetryLabel} />
       <SourceFact icon={<Zap className="h-4 w-4" />} label="Network" value={networkLabel} />

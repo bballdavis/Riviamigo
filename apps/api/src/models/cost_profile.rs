@@ -69,6 +69,18 @@ pub fn validate_tou_periods(periods: &[TouPeriod]) -> Result<(), String> {
         if !period.rate.is_finite() || period.rate < 0.0 {
             return Err("Each TOU period needs a non-negative rate.".into());
         }
+        // Sanity check: rates are stored in $/kWh.  Real US residential
+        // peak rates max out around $0.60/kWh.  Anything above $5 almost
+        // certainly means the user typed cents-per-kWh (e.g. "32.2499")
+        // by mistake — reject at the API boundary so it can't poison
+        // every cost calculation against this profile.
+        if period.rate > 5.0 {
+            return Err(format!(
+                "Rate {:.4} $/kWh is too high. Rates must be entered in dollars per kWh \
+                 (e.g. 0.32 for 32¢/kWh), not cents.",
+                period.rate
+            ));
+        }
         if period.start_minute != expected_start {
             return Err("TOU periods must be contiguous and start at 00:00.".into());
         }
@@ -291,6 +303,29 @@ mod tests {
     fn test_per_kwh_no_energy_returns_none() {
         let p = profile("per_kwh", 0.13, 0.0);
         assert!(compute_cost(&p, None, None, 30, Utc::now(), None).is_none());
+    }
+
+    #[test]
+    fn validate_tou_rejects_cents_typed_as_dollars() {
+        // The exact regression: user typed "32.2499" meaning ¢/kWh.
+        let bad = vec![
+            TouPeriod { label: "Night".into(), start_minute: 0, end_minute: 360, rate: 0.0 },
+            TouPeriod { label: "Day".into(), start_minute: 360, end_minute: 1200, rate: 32.2499 },
+            TouPeriod { label: "Night2".into(), start_minute: 1200, end_minute: 1440, rate: 0.0 },
+        ];
+        let err = validate_tou_periods(&bad).expect_err("should reject cents-as-dollars");
+        assert!(err.contains("too high"), "error should mention rate is too high, got: {err}");
+    }
+
+    #[test]
+    fn validate_tou_accepts_realistic_peak_rate() {
+        // 32¢/kWh peak — a realistic California/Texas summer rate.
+        let good = vec![
+            TouPeriod { label: "Off-peak".into(), start_minute: 0, end_minute: 360, rate: 0.10 },
+            TouPeriod { label: "Peak".into(), start_minute: 360, end_minute: 1200, rate: 0.322499 },
+            TouPeriod { label: "Off-peak".into(), start_minute: 1200, end_minute: 1440, rate: 0.10 },
+        ];
+        assert!(validate_tou_periods(&good).is_ok());
     }
 
     #[test]
