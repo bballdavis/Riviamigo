@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::ingestion::rivian_auth::rivian_refresh_tokens;
+use crate::ingestion::rivian_auth::rivian_refresh_csrf;
 use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
 use crate::services::charge_backfill::{self, ChargeBackfillError};
 
@@ -130,23 +130,21 @@ fn is_auth_error(e: &anyhow::Error) -> bool {
     msg.contains("unauthenticated") || msg.contains("unauthorized")
 }
 
-/// Attempt to refresh Rivian tokens, persist the new bundle to DB, and return
-/// it.  On any failure the error is logged and `Err` is returned — callers
-/// should fall back to marking the vehicle as `needs_reauth`.
-async fn try_refresh_tokens(
+/// Refresh the CSRF/app-session tokens and persist the updated bundle.
+/// The access token is preserved unchanged — only the short-lived CSRF pair rotates.
+async fn try_refresh_csrf(
     vehicle_id: Uuid,
     current_tokens: &RivianTokenBundle,
     client: &reqwest::Client,
     pool: &PgPool,
     age_key: &str,
 ) -> Result<RivianTokenBundle> {
-    tracing::info!(vehicle_id=%vehicle_id, "attempting Rivian token refresh");
+    tracing::info!(vehicle_id=%vehicle_id, "refreshing Rivian CSRF session");
 
-    let new_tokens = rivian_refresh_tokens(client, current_tokens)
+    let new_tokens = rivian_refresh_csrf(client, current_tokens)
         .await
-        .map_err(|e| anyhow!("token refresh failed: {e}"))?;
+        .map_err(|e| anyhow!("CSRF refresh failed: {e}"))?;
 
-    // Encrypt and persist so future worker restarts use valid credentials.
     let identity = age_key
         .parse::<age::x25519::Identity>()
         .map_err(|e| anyhow!("bad age key: {e}"))?;
@@ -167,7 +165,7 @@ async fn try_refresh_tokens(
     .execute(pool)
     .await?;
 
-    tracing::info!(vehicle_id=%vehicle_id, "Rivian token refresh persisted");
+    tracing::info!(vehicle_id=%vehicle_id, "Rivian CSRF session refreshed");
     Ok(new_tokens)
 }
 
@@ -217,33 +215,50 @@ where
         &'a reqwest::Client,
     ) -> BoxFuture<'a, Result<T>>,
 {
-    let (rivian_vehicle_id, current_tokens) = load_vehicle_tokens(vehicle_id, pool, age_key).await?;
+    let (rivian_vehicle_id, current_tokens) =
+        load_vehicle_tokens(vehicle_id, pool, age_key).await?;
 
     match operation(&rivian_vehicle_id, &current_tokens, pool, client).await {
         Ok(value) => Ok(value),
         Err(error) if is_auth_error(&error) => {
-            tracing::warn!(
+            // The CSRF/app-session tokens may have expired. Refresh them and retry
+            // (mirrors the HA integration's RivianExpiredTokenError handler).
+            // The access token is preserved; if it is also invalid the retry will
+            // return another auth error and we surface needs_reauth then.
+            tracing::info!(
                 vehicle_id=%vehicle_id,
                 operation=operation_name,
-                err=%error,
-                "Rivian token expired; attempting refresh"
+                "Rivian session may have expired; refreshing CSRF"
             );
 
-            let refreshed_tokens = match try_refresh_tokens(vehicle_id, &current_tokens, client, pool, age_key).await {
-                Ok(tokens) => tokens,
-                Err(refresh_error) => {
+            let refreshed_tokens =
+                match try_refresh_csrf(vehicle_id, &current_tokens, client, pool, age_key).await {
+                    Ok(tokens) => tokens,
+                    Err(refresh_error) => {
+                        tracing::error!(
+                            vehicle_id=%vehicle_id,
+                            operation=operation_name,
+                            err=%refresh_error,
+                            "CSRF refresh failed"
+                        );
+                        mark_needs_reauth(pool, vehicle_id, &refresh_error.to_string()).await;
+                        return Err(refresh_error);
+                    }
+                };
+
+            match operation(&rivian_vehicle_id, &refreshed_tokens, pool, client).await {
+                Ok(value) => Ok(value),
+                Err(retry_error) if is_auth_error(&retry_error) => {
                     tracing::error!(
                         vehicle_id=%vehicle_id,
                         operation=operation_name,
-                        err=%refresh_error,
-                        "Rivian token refresh failed"
+                        "operation still unauthenticated after CSRF refresh — access token invalid"
                     );
-                    mark_needs_reauth(pool, vehicle_id, &refresh_error.to_string()).await;
-                    return Err(refresh_error);
+                    mark_needs_reauth(pool, vehicle_id, &retry_error.to_string()).await;
+                    Err(retry_error)
                 }
-            };
-
-            operation(&rivian_vehicle_id, &refreshed_tokens, pool, client).await
+                Err(other) => Err(other),
+            }
         }
         Err(error) => Err(error),
     }
@@ -660,7 +675,9 @@ pub async fn fetch_wallboxes_for_vehicle(
         age_key,
         "fetch_wallboxes",
         move |_rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move { fetch_wallboxes(user_id, vehicle_id, pool, client, tokens).await })
+            Box::pin(
+                async move { fetch_wallboxes(user_id, vehicle_id, pool, client, tokens).await },
+            )
         },
     )
     .await
@@ -711,17 +728,13 @@ struct LiveChargeSessionData {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LiveChargeSessionItem {
-    is_rivian_charger: Option<bool>,
-    is_free_session: Option<bool>,
-    charger_id: Option<String>,
-    start_time: Option<DateTime<Utc>>,
-    time_elapsed: Option<serde_json::Value>,
-    kilometers_charged_per_hour: Option<LiveValue<f64>>,
+    soc: Option<LiveValue<f64>>,
     power: Option<LiveValue<f64>>,
-    range_added_this_session: Option<LiveValue<f64>>,
     total_charged_energy: Option<LiveValue<f64>>,
-    current_price: Option<f64>,
-    current_currency: Option<String>,
+    range_added_this_session: Option<LiveValue<f64>>,
+    time_remaining: Option<LiveValue<f64>>,
+    kilometers_charged_per_hour: Option<LiveValue<f64>>,
+    vehicle_charger_state: Option<LiveValue<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1116,14 +1129,6 @@ fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option
     None
 }
 
-fn json_i32(value: Option<&serde_json::Value>) -> Option<i32> {
-    match value {
-        Some(serde_json::Value::Number(n)) => n.as_i64().and_then(|v| i32::try_from(v).ok()),
-        Some(serde_json::Value::String(s)) => s.parse::<i32>().ok(),
-        _ => None,
-    }
-}
-
 pub async fn fetch_live_charge_session(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -1132,20 +1137,19 @@ pub async fn fetch_live_charge_session(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<()> {
+    // Fields confirmed by rivian-python-client LIVE_SESSION_PROPERTIES.
+    // Type must be ID! (not String!) per Rivian's schema.
     const Q: &str = r#"
-        query getLiveSessionData($vehicleId: String!) {
+        query getLiveSessionData($vehicleId: ID!) {
           getLiveSessionData(vehicleId: $vehicleId) {
-            isRivianCharger
-            isFreeSession
-            chargerId
-            startTime
-            timeElapsed
-            kilometersChargedPerHour { value updatedAt }
+            __typename
+            soc { value updatedAt }
             power { value updatedAt }
-            rangeAddedThisSession { value updatedAt }
             totalChargedEnergy { value updatedAt }
-            currentPrice
-            currentCurrency
+            rangeAddedThisSession { value updatedAt }
+            timeRemaining { value updatedAt }
+            kilometersChargedPerHour { value updatedAt }
+            vehicleChargerState { value updatedAt }
           }
         }
     "#;
@@ -1164,57 +1168,31 @@ pub async fn fetch_live_charge_session(
     let Some(live) = data.get_live_session_data else {
         return Ok(());
     };
-    let elapsed_seconds = json_i32(live.time_elapsed.as_ref());
-    let target_session_id = match (active_session_id, live.start_time) {
-        (Some(id), _) => Some(id),
-        (None, Some(start)) => {
-            sqlx::query_scalar(
-                "SELECT id FROM riviamigo.charge_sessions
-             WHERE vehicle_id=$1
-               AND started_at BETWEEN $2 - interval '30 minutes' AND $2 + interval '30 minutes'
-             ORDER BY ABS(EXTRACT(EPOCH FROM (started_at - $2))) LIMIT 1",
-            )
-            .bind(vehicle_id)
-            .bind(start)
-            .fetch_optional(pool)
-            .await?
-        }
-        (None, None) => None,
-    };
 
-    if let Some(session_id) = target_session_id {
+    if let Some(session_id) = active_session_id {
         let updated_session_id = sqlx::query_scalar::<_, Uuid>(
             "UPDATE riviamigo.charge_sessions SET
-                 charger_id = COALESCE(charger_id, $2),
-                 is_free_session = COALESCE(is_free_session, $3),
-                 is_rivian_network = COALESCE(is_rivian_network, $4),
-                 live_current_price = COALESCE($5, live_current_price),
-                 live_current_currency = COALESCE($6, live_current_currency),
-                 live_total_charged_kwh = COALESCE($7, live_total_charged_kwh),
-                 live_range_added_km = COALESCE($8, live_range_added_km),
-                 live_power_kw = COALESCE($9, live_power_kw),
-                 live_charge_rate_kph = COALESCE($10, live_charge_rate_kph),
-                 live_time_elapsed_seconds = COALESCE($11, live_time_elapsed_seconds),
-                 duration_minutes = COALESCE(duration_minutes, CASE WHEN $11 IS NOT NULL THEN (($11 + 59) / 60) END),
-                 live_session_started_at = COALESCE(live_session_started_at, $12),
-                 kwh_added = COALESCE(kwh_added, $7),
-                 range_added_km = COALESCE(range_added_km, $8),
-                 source = CASE WHEN source = 'rivian_api' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'telemetry') END
-             WHERE id=$1
+                 live_total_charged_kwh = COALESCE($2, live_total_charged_kwh),
+                 live_range_added_km    = COALESCE($3, live_range_added_km),
+                 live_power_kw          = COALESCE($4, live_power_kw),
+                 live_charge_rate_kph   = COALESCE($5, live_charge_rate_kph),
+                 kwh_added              = COALESCE(kwh_added, $2),
+                 range_added_km         = COALESCE(range_added_km, $3),
+                 source = CASE WHEN source = 'rivian_api'
+                               THEN 'telemetry+rivian_api'
+                               ELSE COALESCE(source, 'telemetry') END
+             WHERE id = $1
              RETURNING id",
         )
         .bind(session_id)
-        .bind(&live.charger_id)
-        .bind(live.is_free_session)
-        .bind(live.is_rivian_charger)
-        .bind(live.current_price)
-        .bind(&live.current_currency)
         .bind(live.total_charged_energy.as_ref().and_then(|v| v.value))
         .bind(live.range_added_this_session.as_ref().and_then(|v| v.value))
         .bind(live.power.as_ref().and_then(|v| v.value))
-        .bind(live.kilometers_charged_per_hour.as_ref().and_then(|v| v.value))
-        .bind(elapsed_seconds)
-        .bind(live.start_time)
+        .bind(
+            live.kilometers_charged_per_hour
+                .as_ref()
+                .and_then(|v| v.value),
+        )
         .fetch_optional(pool)
         .await?;
 
@@ -1354,17 +1332,17 @@ pub async fn fetch_live_session_history_for_vehicle(
 
 // ── Live session data (Redis only, not persisted) ─────────────────────────────
 
+/// Serialized to Redis and served by GET /v1/vehicles/:id/live-session.
+/// Field names must match the frontend LiveSession TypeScript interface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveSessionData {
-    pub session_id: Option<String>,
-    pub soc_percent: Option<f64>,
+    pub soc_pct: Option<f64>,
     pub power_kw: Option<f64>,
-    pub energy_added_kwh: Option<f64>,
+    pub energy_kwh: Option<f64>,
     pub range_added_km: Option<f64>,
-    pub minutes_remaining: Option<f64>,
-    pub cost_usd: Option<f64>,
-    pub network_name: Option<String>,
-    pub fetched_at: DateTime<Utc>,
+    pub time_remaining_min: Option<f64>,
+    pub charger_type: Option<String>,
+    pub ts: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1376,25 +1354,17 @@ struct LiveSessionApiData {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LiveSessionApiPayload {
-    id: Option<String>,
-    soc: Option<f64>,
-    power: Option<f64>,
-    energy_added: Option<f64>,
-    range_added: Option<f64>,
-    time_remaining: Option<f64>,
-    billing: Option<LiveSessionBilling>,
-    network_name: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveSessionBilling {
-    total: Option<f64>,
+    soc: Option<LiveValue<f64>>,
+    power: Option<LiveValue<f64>>,
+    total_charged_energy: Option<LiveValue<f64>>,
+    range_added_this_session: Option<LiveValue<f64>>,
+    time_remaining: Option<LiveValue<f64>>,
+    vehicle_charger_state: Option<LiveValue<String>>,
 }
 
 /// Fetch live charging session data from Rivian's charging endpoint.
 /// Returns `None` if no session is currently active.
-/// This data is NOT persisted to the database — publish to Redis instead.
+/// This data is NOT persisted to the database — published to Redis instead.
 pub async fn fetch_live_session(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -1402,19 +1372,17 @@ pub async fn fetch_live_session(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<Option<LiveSessionData>> {
+    // Type must be ID! (not String!) per Rivian's schema.
     const Q: &str = r#"
-        query getLiveSessionData($vehicleId: String!) {
+        query getLiveSessionData($vehicleId: ID!) {
           getLiveSessionData(vehicleId: $vehicleId) {
-            id
-            soc
-            power
-            energyAdded
-            rangeAdded
-            timeRemaining
-            networkName
-            billing {
-              total
-            }
+            __typename
+            soc { value updatedAt }
+            power { value updatedAt }
+            totalChargedEnergy { value updatedAt }
+            rangeAddedThisSession { value updatedAt }
+            timeRemaining { value updatedAt }
+            vehicleChargerState { value updatedAt }
           }
         }
     "#;
@@ -1431,15 +1399,13 @@ pub async fn fetch_live_session(
     };
 
     Ok(Some(LiveSessionData {
-        session_id: payload.id,
-        soc_percent: payload.soc,
-        power_kw: payload.power,
-        energy_added_kwh: payload.energy_added,
-        range_added_km: payload.range_added,
-        minutes_remaining: payload.time_remaining,
-        cost_usd: payload.billing.and_then(|b| b.total),
-        network_name: payload.network_name,
-        fetched_at: Utc::now(),
+        soc_pct: payload.soc.and_then(|v| v.value),
+        power_kw: payload.power.and_then(|v| v.value),
+        energy_kwh: payload.total_charged_energy.and_then(|v| v.value),
+        range_added_km: payload.range_added_this_session.and_then(|v| v.value),
+        time_remaining_min: payload.time_remaining.and_then(|v| v.value),
+        charger_type: payload.vehicle_charger_state.and_then(|v| v.value),
+        ts: Utc::now(),
     }))
 }
 
@@ -1806,7 +1772,15 @@ pub async fn mutate_charging_schedule_for_vehicle(
         move |rivian_vehicle_id, tokens, pool, client| {
             let input = input.clone();
             Box::pin(async move {
-                mutate_charging_schedule(rivian_vehicle_id, vehicle_id, &input, pool, client, tokens).await
+                mutate_charging_schedule(
+                    rivian_vehicle_id,
+                    vehicle_id,
+                    &input,
+                    pool,
+                    client,
+                    tokens,
+                )
+                .await
             })
         },
     )
@@ -1921,7 +1895,15 @@ pub async fn create_departure_schedule_for_vehicle(
         move |rivian_vehicle_id, tokens, pool, client| {
             let input = input.clone();
             Box::pin(async move {
-                create_departure_schedule(rivian_vehicle_id, vehicle_id, &input, pool, client, tokens).await
+                create_departure_schedule(
+                    rivian_vehicle_id,
+                    vehicle_id,
+                    &input,
+                    pool,
+                    client,
+                    tokens,
+                )
+                .await
             })
         },
     )
@@ -2121,6 +2103,8 @@ pub async fn delete_departure_schedule_for_vehicle(
 
 // ── Poll task entry points ────────────────────────────────────────────────────
 
+// ── Startup / periodic polls ──────────────────────────────────────────────────
+
 /// Run all one-shot startup polls for a vehicle.  Errors are logged but not
 /// fatal — a failure in one poll must not prevent others from running.
 ///
@@ -2138,7 +2122,8 @@ pub async fn run_startup_polls(
 ) {
     tracing::info!(vehicle_id=%vehicle_id, "startup polls begin");
 
-    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await
+    {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
     }
 
@@ -2146,7 +2131,8 @@ pub async fn run_startup_polls(
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static failed");
     }
 
-    if let Err(e) = fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await {
+    if let Err(e) = fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await
+    {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
     }
 
@@ -2171,8 +2157,12 @@ pub async fn run_startup_polls(
             Err(ChargeBackfillError::AlreadyRunning) => {
                 tracing::info!(vehicle_id=%vehicle_id, "full backfill already running; running incremental charge sync");
                 match fetch_charge_history_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-                    Ok(n) => tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete"),
-                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed"),
+                    Ok(n) => {
+                        tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
+                    }
+                    Err(e) => {
+                        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
+                    }
                 }
             }
             Err(e) => {
@@ -2189,7 +2179,8 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+    if let Err(e) = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await
+    {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
     }
 
@@ -2202,21 +2193,18 @@ pub async fn run_startup_polls(
 /// Periodic and event-driven poll loop.
 ///
 /// - Watches `power_state_rx` so it can adapt cadence with [`poll_interval`].
-/// - While `Charging`, fetches live session data every 30 s and publishes to
-///   the `vehicle:{id}:live_session` Redis key.
 /// - Responds to `PollEvent` signals: charge session ended → re-sync history;
 ///   OTA version changed → fetch release notes.
 pub async fn run_poll_loop(
     vehicle_id: Uuid,
-    pool: PgPool,
-    client: reqwest::Client,
-    age_key: String,
+    _pool: PgPool,
+    _client: reqwest::Client,
+    _age_key: String,
     mut power_state_rx: tokio::sync::watch::Receiver<Option<crate::models::telemetry::PowerState>>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
-    redis: redis::Client,
+    _redis: redis::Client,
 ) {
-    use crate::{ingestion::poller::poll_interval, models::telemetry::PowerState};
-    use redis::AsyncCommands;
+    use crate::ingestion::poller::poll_interval;
 
     tracing::info!(vehicle_id=%vehicle_id, "poll loop started");
 
@@ -2236,31 +2224,14 @@ pub async fn run_poll_loop(
             }
         }
 
-        let power = power_state_rx.borrow().clone();
-
-        if matches!(power, Some(PowerState::Charging)) {
-            match fetch_live_session_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-                Ok(Some(live)) => {
-                    if let Ok(json) = serde_json::to_string(&live) {
-                        if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
-                            let key = format!("vehicle:{}:live_session", vehicle_id);
-                            // Expire after 2 minutes so stale data auto-clears.
-                            let _: Result<(), _> = conn.set_ex(&key, &json, 120).await;
-                        }
-                    }
-                }
-                Ok(None) => {} // no active session
-                Err(e) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_live_session failed")
-                }
-            }
-        }
+        // getLiveSessionData was removed from Rivian's charging API.
+        // Live session polling is disabled until getSessionStatus schema is known.
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{json_i32, normalize_api_charger_type};
+    use super::normalize_api_charger_type;
 
     #[test]
     fn normalizes_documented_charger_types() {
@@ -2268,12 +2239,5 @@ mod tests {
         assert_eq!(normalize_api_charger_type(Some("Level2")), Some("ac"));
         assert_eq!(normalize_api_charger_type(Some("dcfc")), Some("dc"));
         assert_eq!(normalize_api_charger_type(Some("mystery")), None);
-    }
-
-    #[test]
-    fn parses_live_elapsed_time_numbers_and_strings() {
-        assert_eq!(json_i32(Some(&serde_json::json!(95))), Some(95));
-        assert_eq!(json_i32(Some(&serde_json::json!("120"))), Some(120));
-        assert_eq!(json_i32(Some(&serde_json::json!({ "value": 120 }))), None);
     }
 }

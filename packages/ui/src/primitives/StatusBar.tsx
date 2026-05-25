@@ -45,11 +45,15 @@ export function StatusBar({
     ? 'Connection failed'
     : 'Offline';
 
+  const showBattery = socPercent !== undefined && onlineState === 'online';
+  const shouldCenterConnection = compact && !showBattery;
+
   return (
     <div
       className={cn(
         'w-full flex items-center gap-3 px-3 py-2 rounded-lg',
         compact && 'justify-between px-2',
+        shouldCenterConnection && 'justify-center',
         className
       )}
     >
@@ -89,7 +93,7 @@ export function StatusBar({
         <span className="text-xs text-fg-tertiary truncate max-w-[120px]">{vehicleName}</span>
       )}
 
-      {socPercent !== undefined && (
+      {showBattery && (
         <div
           className={cn('flex items-center gap-1 ml-auto', compact && 'gap-0')}
           title={`Battery status: ${Math.round(socPercent)}%`}
