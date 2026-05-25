@@ -16,19 +16,31 @@ pub struct RivianTokenBundle {
 }
 
 impl RivianTokenBundle {
-    /// Returns an error if any required token field is empty.
+    /// Returns an error if any token field that is strictly required for API
+    /// calls is empty.
     ///
-    /// Call this immediately after decrypting or constructing a bundle to
-    /// catch corrupted or partially-written credential blobs early.
+    /// Only `access_token` and `refresh_token` are required:
+    /// - `access_token`: needed as the Bearer token for every Rivian GQL call.
+    /// - `refresh_token`: needed to exchange for new credentials when the
+    ///   access token expires.
+    ///
+    /// `user_session_token`, `app_session_token`, and `csrf_token` are NOT
+    /// required here because:
+    /// - Rivian's `tokenExchange` mutation does not always return a new
+    ///   `userSessionToken`; the login-time value is long-lived and is carried
+    ///   forward in the bundle.
+    /// - `app_session_token` and `csrf_token` are refreshed per-operation via
+    ///   `createCsrfToken` when needed.
+    ///
+    /// Call this immediately after decrypting a bundle to catch genuinely
+    /// corrupted blobs early, without rejecting valid bundles that happen to
+    /// have an empty `user_session_token`.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.access_token.is_empty() {
             anyhow::bail!("RivianTokenBundle: access_token is empty");
         }
         if self.refresh_token.is_empty() {
             anyhow::bail!("RivianTokenBundle: refresh_token is empty");
-        }
-        if self.user_session_token.is_empty() {
-            anyhow::bail!("RivianTokenBundle: user_session_token is empty");
         }
         Ok(())
     }
