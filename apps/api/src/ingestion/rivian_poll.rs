@@ -38,6 +38,13 @@ struct GqlEnvelope<T> {
 #[derive(Debug, Deserialize)]
 struct GqlError {
     message: String,
+    #[serde(default)]
+    extensions: Option<GqlErrorExtensions>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlErrorExtensions {
+    code: Option<String>,
 }
 
 fn fmt_errors(errors: &[GqlError]) -> String {
@@ -46,6 +53,24 @@ fn fmt_errors(errors: &[GqlError]) -> String {
         .map(|e| e.message.as_str())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+/// Typed marker error: the Rivian API explicitly reported an authentication
+/// failure (HTTP 401 or GraphQL `extensions.code = "UNAUTHENTICATED"`).
+///
+/// `with_vehicle_auth_retry` downcasts on this to decide whether to attempt a
+/// CSRF refresh — string-matching the wrapped message is no longer the signal.
+#[derive(Debug, thiserror::Error)]
+#[error("Rivian API: authentication required")]
+pub struct AuthError;
+
+fn errors_indicate_auth(errors: &[GqlError]) -> bool {
+    errors.iter().any(|e| {
+        e.extensions
+            .as_ref()
+            .and_then(|x| x.code.as_deref())
+            == Some("UNAUTHENTICATED")
+    })
 }
 
 fn json_number_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
@@ -96,7 +121,7 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
     let response = req.send().await.context("HTTP request failed")?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(anyhow!("Rivian API: unauthorized (token expired?)"));
+        return Err(anyhow!(AuthError));
     }
     if !status.is_success() {
         let body = response
@@ -113,6 +138,9 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
 
     if let Some(errors) = &envelope.errors {
         if !errors.is_empty() {
+            if errors_indicate_auth(errors) {
+                return Err(anyhow!(AuthError));
+            }
             return Err(anyhow!("Rivian GQL errors: {}", fmt_errors(errors)));
         }
     }
@@ -124,10 +152,13 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
 
 // ── Token-refresh helpers ────────────────────────────────────────────────────
 
-/// Returns `true` when an error looks like an expired / revoked access token.
+/// Returns `true` when the error is the typed [`AuthError`] marker — i.e. the
+/// Rivian API explicitly reported an authentication failure (HTTP 401 or
+/// GraphQL `extensions.code = "UNAUTHENTICATED"`).  Substring matching of
+/// `Error::to_string()` was previously used here and produced false positives
+/// against our own error-wrapper strings.
 fn is_auth_error(e: &anyhow::Error) -> bool {
-    let msg = e.to_string().to_lowercase();
-    msg.contains("unauthenticated") || msg.contains("unauthorized")
+    e.downcast_ref::<AuthError>().is_some()
 }
 
 /// Refresh the CSRF/app-session tokens and persist the updated bundle.
@@ -219,42 +250,50 @@ where
         load_vehicle_tokens(vehicle_id, pool, age_key).await?;
 
     match operation(&rivian_vehicle_id, &current_tokens, pool, client).await {
-        Ok(value) => Ok(value),
+        Ok(value) => {
+            reset_auth_failure_counter(pool, vehicle_id).await;
+            Ok(value)
+        }
         Err(error) if is_auth_error(&error) => {
-            // The CSRF/app-session tokens may have expired. Refresh them and retry
-            // (mirrors the HA integration's RivianExpiredTokenError handler).
-            // The access token is preserved; if it is also invalid the retry will
-            // return another auth error and we surface needs_reauth then.
+            // CSRF/app-session may have expired — rotate them and retry once.
+            // This mirrors the HA integration's RivianExpiredTokenError handler.
+            // The access token itself is long-lived and is never refreshed here.
             tracing::info!(
                 vehicle_id=%vehicle_id,
                 operation=operation_name,
-                "Rivian session may have expired; refreshing CSRF"
+                "Rivian auth failed; rotating CSRF and retrying"
             );
 
             let refreshed_tokens =
                 match try_refresh_csrf(vehicle_id, &current_tokens, client, pool, age_key).await {
                     Ok(tokens) => tokens,
                     Err(refresh_error) => {
-                        tracing::error!(
+                        tracing::warn!(
                             vehicle_id=%vehicle_id,
                             operation=operation_name,
                             err=%refresh_error,
                             "CSRF refresh failed"
                         );
-                        mark_needs_reauth(pool, vehicle_id, &refresh_error.to_string()).await;
+                        record_auth_failure(pool, vehicle_id, &refresh_error.to_string()).await;
                         return Err(refresh_error);
                     }
                 };
 
             match operation(&rivian_vehicle_id, &refreshed_tokens, pool, client).await {
-                Ok(value) => Ok(value),
+                Ok(value) => {
+                    reset_auth_failure_counter(pool, vehicle_id).await;
+                    Ok(value)
+                }
                 Err(retry_error) if is_auth_error(&retry_error) => {
-                    tracing::error!(
+                    // Transient 401s can survive a single CSRF refresh.  Don't
+                    // flip needs_reauth on the first occurrence — only after we
+                    // see this happen consecutively over a meaningful window.
+                    tracing::warn!(
                         vehicle_id=%vehicle_id,
                         operation=operation_name,
-                        "operation still unauthenticated after CSRF refresh — access token invalid"
+                        "operation still unauthenticated after CSRF refresh"
                     );
-                    mark_needs_reauth(pool, vehicle_id, &retry_error.to_string()).await;
+                    record_auth_failure(pool, vehicle_id, &retry_error.to_string()).await;
                     Err(retry_error)
                 }
                 Err(other) => Err(other),
@@ -262,6 +301,56 @@ where
         }
         Err(error) => Err(error),
     }
+}
+
+/// Threshold for flipping auth_state to `needs_reauth`.  A single transient
+/// 401 is recoverable via the CSRF rotation that already ran; we only mark
+/// the credentials as dead once we've seen repeated post-rotation failures.
+const NEEDS_REAUTH_FAILURE_THRESHOLD: i32 = 3;
+
+/// Increment the consecutive-failure counter.  Flip `auth_state` to
+/// `needs_reauth` only after the counter crosses the threshold.
+async fn record_auth_failure(pool: &PgPool, vehicle_id: Uuid, reason: &str) {
+    let updated: Option<i32> = sqlx::query_scalar(
+        r#"INSERT INTO riviamigo.vehicle_runtime_state
+               (vehicle_id, consecutive_auth_failures, last_auth_failure_at, updated_at)
+           VALUES ($1, 1, now(), now())
+           ON CONFLICT (vehicle_id) DO UPDATE
+               SET consecutive_auth_failures = vehicle_runtime_state.consecutive_auth_failures + 1,
+                   last_auth_failure_at = now(),
+                   updated_at = now()
+           RETURNING consecutive_auth_failures"#,
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let count = updated.unwrap_or(1);
+    tracing::debug!(
+        vehicle_id=%vehicle_id,
+        consecutive_auth_failures=count,
+        "rivian auth failure counted"
+    );
+
+    if count >= NEEDS_REAUTH_FAILURE_THRESHOLD {
+        mark_needs_reauth(pool, vehicle_id, reason).await;
+    }
+}
+
+async fn reset_auth_failure_counter(pool: &PgPool, vehicle_id: Uuid) {
+    let _ = sqlx::query(
+        "UPDATE riviamigo.vehicle_runtime_state
+            SET consecutive_auth_failures = 0,
+                last_auth_failure_at = NULL,
+                updated_at = now()
+          WHERE vehicle_id = $1
+            AND consecutive_auth_failures <> 0",
+    )
+    .bind(vehicle_id)
+    .execute(pool)
+    .await;
 }
 
 /// Write an auth-required state into `vehicle_runtime_state` while keeping
@@ -868,14 +957,7 @@ async fn fetch_charge_history_inner(
             continue;
         };
         let is_free_session = s.paid_total.map(|total| total == 0.0);
-        let is_rivian_network = s
-            .vendor
-            .as_deref()
-            .map(|vendor| vendor.eq_ignore_ascii_case("rivian"))
-            .or_else(|| {
-                s.is_roaming_network
-                    .map(|roaming| !roaming && !s.is_home_charger.unwrap_or(false))
-            });
+        let is_rivian_network = infer_is_rivian_network(s.vendor.as_deref());
         let normalized_charger_type = normalize_api_charger_type(s.charger_type.as_deref())
             .or_else(|| infer_api_charger_type(s.vendor.as_deref(), s.is_home_charger));
 
@@ -1100,6 +1182,24 @@ async fn record_charge_payload(
     .await?;
 
     Ok(())
+}
+
+/// Decide whether a charge session belongs to a paid public network ("Rivian
+/// Adventure" or a roaming partner) based on the vendor string only.
+///
+/// We deliberately do *not* infer this from absence-of-evidence: if Rivian
+/// returns `vendor=null` we leave the value `None`, not `Some(false)` and
+/// definitely not `Some(true)`.  An earlier version inferred `Some(true)` when
+/// `isRoamingNetwork=false` AND `isHomeCharger` was null/false, which turned
+/// home AC sessions into "Rivian network" rows and let the cost service treat
+/// `rivian_paid_total` as authoritative — producing wildly inflated home
+/// charging costs.
+pub fn infer_is_rivian_network(vendor: Option<&str>) -> Option<bool> {
+    let v = vendor?.to_ascii_lowercase();
+    Some(matches!(
+        v.as_str(),
+        "rivian" | "tesla" | "electrify america" | "evgo" | "chargepoint"
+    ))
 }
 
 fn normalize_api_charger_type(value: Option<&str>) -> Option<&'static str> {
@@ -2122,6 +2222,25 @@ pub async fn run_startup_polls(
 ) {
     tracing::info!(vehicle_id=%vehicle_id, "startup polls begin");
 
+    // Proactively rotate the CSRF/app-session pair before any operation runs.
+    // The stored pair from the last session may have expired during downtime;
+    // doing this once at boot avoids the otherwise-guaranteed "first poll 401
+    // → CSRF refresh → retry" dance on every restart.
+    if let Ok((_, current_tokens)) = load_vehicle_tokens(vehicle_id, &pool, &age_key).await {
+        match try_refresh_csrf(vehicle_id, &current_tokens, &client, &pool, &age_key).await {
+            Ok(_) => {
+                tracing::debug!(vehicle_id=%vehicle_id, "boot CSRF rotation complete");
+            }
+            Err(e) => {
+                tracing::debug!(
+                    vehicle_id=%vehicle_id,
+                    err=%e,
+                    "boot CSRF rotation failed (will retry on first poll)"
+                );
+            }
+        }
+    }
+
     if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await
     {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
@@ -2231,7 +2350,7 @@ pub async fn run_poll_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_api_charger_type;
+    use super::{infer_is_rivian_network, normalize_api_charger_type};
 
     #[test]
     fn normalizes_documented_charger_types() {
@@ -2239,5 +2358,40 @@ mod tests {
         assert_eq!(normalize_api_charger_type(Some("Level2")), Some("ac"));
         assert_eq!(normalize_api_charger_type(Some("dcfc")), Some("dc"));
         assert_eq!(normalize_api_charger_type(Some("mystery")), None);
+    }
+
+    // ── Regression: home-session inference bug ──────────────────────────────
+    // The previous version inferred `is_rivian_network = Some(true)` whenever
+    // `isRoamingNetwork=false` AND `isHomeCharger` was null/false — which
+    // mis-flagged home AC sessions as paid Rivian-network rows and let the
+    // cost service substitute `rivian_paid_total` for the real profile cost.
+    // The fix: infer ONLY from an explicit known vendor string.
+
+    #[test]
+    fn home_session_with_null_vendor_is_not_rivian_network() {
+        // The exact shape Rivian returns for a typical home charger: no vendor
+        // tag, no roaming/home-charger flags set.
+        assert_eq!(infer_is_rivian_network(None), None);
+    }
+
+    #[test]
+    fn known_paid_networks_are_identified() {
+        assert_eq!(infer_is_rivian_network(Some("Rivian")), Some(true));
+        assert_eq!(infer_is_rivian_network(Some("Electrify America")), Some(true));
+        assert_eq!(infer_is_rivian_network(Some("EVgo")), Some(true));
+        assert_eq!(infer_is_rivian_network(Some("ChargePoint")), Some(true));
+        assert_eq!(infer_is_rivian_network(Some("Tesla")), Some(true));
+    }
+
+    #[test]
+    fn unknown_vendor_is_not_a_paid_network() {
+        // Defensive: an unrecognized vendor name should not be assumed paid.
+        assert_eq!(infer_is_rivian_network(Some("Some Random EVSE")), Some(false));
+    }
+
+    #[test]
+    fn vendor_matching_is_case_insensitive() {
+        assert_eq!(infer_is_rivian_network(Some("RIVIAN")), Some(true));
+        assert_eq!(infer_is_rivian_network(Some("rivian")), Some(true));
     }
 }

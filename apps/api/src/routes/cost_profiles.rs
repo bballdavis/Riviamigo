@@ -264,6 +264,17 @@ fn validate_profile_details(
             "rate must be a non-negative number".into(),
         ));
     }
+    // Sanity check: rates are dollars per kWh.  Reject obviously-mis-unitted
+    // values (e.g. someone typed "32.2499" meaning cents per kWh) before they
+    // silently inflate every cost calculation by 100×.  Flat-fee profiles
+    // ("flat" billing_type) use `rate` as a per-session dollar amount, where
+    // larger values are legitimate — so this guard only applies to per_kwh.
+    if billing_type == "per_kwh" && rate > 5.0 {
+        return Err(AppError::Validation(format!(
+            "Rate {rate:.4} $/kWh is too high. Enter the rate in dollars per kWh \
+             (e.g. 0.13 for 13¢/kWh), not cents."
+        )));
+    }
 
     if billing_type == "tou" {
         if timezone

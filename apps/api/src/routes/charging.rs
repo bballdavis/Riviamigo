@@ -104,6 +104,7 @@ struct NetworkBreakdownRow {
 struct SessionBoundsRow {
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
+    charger_type: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -300,10 +301,15 @@ async fn get_curve_analysis(
            ),
            rates AS (
                SELECT avg_soc AS soc,
-                      GREATEST(0.0,
-                        60.0 * (avg_soc - LAG(avg_soc) OVER (PARTITION BY session_id ORDER BY bucket)) / 100.0
-                             * cap_wh / 1000.0
-                      ) AS charge_rate_kw,
+                      -- Context-aware cap: same two-tier logic as load_curve.
+                      -- DC sessions allow up to 300 kW; AC/unknown capped at 22 kW
+                      -- to prevent SOC-gap spikes from offline periods corrupting
+                      -- the aggregate charge-curve scatter plot.
+                      LEAST(CASE WHEN charger_type = 'dc' THEN 300.0 ELSE 22.0 END,
+                            GREATEST(0.0,
+                              60.0 * (avg_soc - LAG(avg_soc) OVER (PARTITION BY session_id ORDER BY bucket)) / 100.0
+                                   * cap_wh / 1000.0
+                      )) AS charge_rate_kw,
                       charger_type
                FROM samples
            )
@@ -462,6 +468,7 @@ async fn get_session_response(
         vehicle_id,
         session.started_at,
         session.ended_at,
+        session.charger_type.as_deref(),
     )
     .await?;
 
@@ -480,7 +487,7 @@ async fn get_session_curve_response(
     require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionBoundsRow>(
-        "SELECT started_at, ended_at FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
+        "SELECT started_at, ended_at, charger_type FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
     )
     .bind(id)
     .bind(vehicle_id)
@@ -493,7 +500,8 @@ async fn get_session_curve_response(
             &state.pool,
             vehicle_id,
             session.started_at,
-            session.ended_at
+            session.ended_at,
+            session.charger_type.as_deref(),
         )
         .await?
     )))
@@ -614,15 +622,25 @@ async fn get_summary_response(
     .await?;
 
     let network_breakdown = sqlx::query_as::<_, NetworkBreakdownRow>(
-        "SELECT network_vendor,
+        "SELECT
+                CASE
+                    WHEN is_home = true THEN 'Home Charging'
+                    WHEN network_vendor IS NOT NULL THEN network_vendor
+                    WHEN charger_type IN ('ac', 'ac_l2') THEN 'Other AC'
+                    ELSE NULL
+                END AS network_vendor,
                 COUNT(*) AS session_count,
                 SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS energy_kwh,
                 SUM(cost_usd) AS cost_usd,
                 COUNT(*) FILTER (WHERE is_free_session) AS free_sessions
          FROM riviamigo.charge_sessions
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND network_vendor IS NOT NULL
-         GROUP BY network_vendor
+           AND (
+               is_home = true
+               OR network_vendor IS NOT NULL
+               OR charger_type IN ('ac', 'ac_l2')
+           )
+         GROUP BY 1
          ORDER BY energy_kwh DESC NULLS LAST",
     )
     .bind(vehicle_id)
@@ -846,10 +864,20 @@ async fn load_curve(
     vehicle_id: Uuid,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
+    charger_type: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let Some(ended_at) = ended_at else {
         return Ok(vec![]);
     };
+
+    // Context-aware cap: DC fast chargers can peak ~220 kW on a Rivian so we
+    // allow up to 300 kW.  AC sessions (L1 or L2) are hard-limited by circuit
+    // amperage — even a 80A/240V L2 circuit tops out around 19 kW.  We cap at
+    // 22 kW to give a comfortable margin without letting SOC-gap spikes (from
+    // offline periods) corrupt the curve.  Unknown/null types get the AC cap as
+    // a conservative default; misclassifying a DC session as AC is unlikely
+    // since the charge_detector's AC-spike filter already screens those.
+    let is_dc = charger_type == Some("dc");
 
     let rows = sqlx::query_as::<_, CurveRow>(
         r#"WITH samples AS (
@@ -860,10 +888,13 @@ async fn load_curve(
                WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3
            )
            SELECT EXTRACT(EPOCH FROM (bucket - $2))::float8 / 60.0 AS minutes_elapsed,
-                  GREATEST(0.0,
+                  -- Context-aware cap: DC sessions allow up to 300 kW; AC/unknown
+                  -- sessions cap at 22 kW to eliminate SOC-gap spikes from offline
+                  -- periods that make home charging appear to run at 200-300 kW.
+                  LEAST(CASE WHEN $4 THEN 300.0 ELSE 22.0 END, GREATEST(0.0,
                     60.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
                          * cap_wh / 1000.0
-                  ) AS charge_rate_kw,
+                  )) AS charge_rate_kw,
                   avg_soc AS soc
            FROM samples
            WHERE avg_soc IS NOT NULL
@@ -872,6 +903,7 @@ async fn load_curve(
     .bind(vehicle_id)
     .bind(started_at)
     .bind(ended_at)
+    .bind(is_dc)
     .fetch_all(pool)
     .await?;
 
