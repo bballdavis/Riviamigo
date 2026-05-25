@@ -27,6 +27,9 @@ export interface SidebarProps {
   items?: NavItem[];
   logo?: React.ReactNode;
   bottomSlot?: React.ReactNode | ((context: { collapsed: boolean }) => React.ReactNode);
+  defaultCollapsed?: boolean;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   className?: string;
 }
 
@@ -36,9 +39,23 @@ export function Sidebar({
   items = DEFAULT_NAV_ITEMS,
   logo,
   bottomSlot,
+  defaultCollapsed = false,
+  collapsed: collapsedProp,
+  onCollapsedChange,
   className,
 }: SidebarProps) {
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [uncontrolledCollapsed, setUncontrolledCollapsed] = React.useState(defaultCollapsed);
+  const collapsed = collapsedProp ?? uncontrolledCollapsed;
+  const setCollapsed = React.useCallback(
+    (next: boolean | ((current: boolean) => boolean)) => {
+      const nextValue = typeof next === 'function' ? next(collapsed) : next;
+      if (collapsedProp === undefined) {
+        setUncontrolledCollapsed(nextValue);
+      }
+      onCollapsedChange?.(nextValue);
+    },
+    [collapsed, collapsedProp, onCollapsedChange]
+  );
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [isDark, setIsDark] = React.useState(() => {
     if (typeof window === 'undefined') return true;

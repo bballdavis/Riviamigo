@@ -29,4 +29,13 @@ describe('network proxy URL resolution', () => {
 
     expect(baseUrl).toBe('http://192.168.1.50:3001');
   });
+
+  it('supports VITE_RIVIAMIGO_API_BASE_URL for websocket calls', () => {
+    const baseUrl = getWebSocketBaseUrl('http://api.riviamigo.test', {
+      hostname: 'riviamigo.test',
+      origin: 'https://riviamigo.test',
+    });
+
+    expect(baseUrl).toBe('ws://api.riviamigo.test');
+  });
 });

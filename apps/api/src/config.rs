@@ -60,7 +60,10 @@ fn default_backup_poll_interval_seconds() -> u64 {
 }
 
 fn default_origins() -> Vec<String> {
-    vec!["http://localhost:3000".into()]
+    vec![
+        "http://localhost:3000".into(),
+        "http://localhost:5173".into(),
+    ]
 }
 
 fn default_rivian_ws_reconnect_initial_seconds() -> u64 {
@@ -81,7 +84,8 @@ fn default_true() -> bool {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        let config = envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
+        let config =
+            envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
         config.validate()?;
         Ok(config)
     }

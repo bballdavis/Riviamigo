@@ -109,11 +109,6 @@ function LiveChargingWidget({
       <div className="flex items-center gap-2">
         <Zap className={`h-4 w-4 ${isCharging ? 'text-accent animate-pulse' : 'text-fg-tertiary'}`} />
         <span className="text-sm font-medium text-fg">{headerText}</span>
-        {isCharging && session?.network && (
-          <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
-            {session.network}
-          </span>
-        )}
         {isCharging && session?.charger_type && (
           <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-xs text-fg-tertiary">
             {session.charger_type.toUpperCase()}

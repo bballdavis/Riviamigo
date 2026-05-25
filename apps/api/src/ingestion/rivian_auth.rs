@@ -73,124 +73,29 @@ struct LoginData {
     create_csrf_token: Option<CreateCsrfTokenPayload>,
 }
 
-// ── Token exchange (refresh) ─────────────────────────────────────────────────
+// ── CSRF session refresh ─────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-struct TokenExchangeResponse {
-    data: Option<TokenExchangeData>,
-    errors: Option<Vec<GqlError>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TokenExchangeData {
-    token_exchange: Option<LoginPayload>,
-}
-
-/// Silently refresh Rivian tokens using the `tokenExchange` mutation.
+/// Refresh the CSRF and app-session tokens while keeping the existing access,
+/// refresh, and user-session tokens unchanged.
 ///
-/// A new CSRF session is created first (required by Rivian's API), then the
-/// existing `refresh_token` is exchanged for a fresh set of credentials.
-/// Returns a new [`RivianTokenBundle`] with `created_at` set to now.
-pub async fn rivian_refresh_tokens(
+/// This mirrors what the Home Assistant Rivian integration does on
+/// `RivianExpiredTokenError`: call `createCsrfToken` to obtain a fresh
+/// short-lived session, then retry the failing request.  The access token
+/// itself is long-lived; only the CSRF/app-session pair needs periodic renewal.
+/// If the access token is truly invalid, the retried request will fail with an
+/// unauthenticated error and the caller is responsible for marking `needs_reauth`.
+pub async fn rivian_refresh_csrf(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<RivianTokenBundle, RivianAuthError> {
     let session = create_csrf_session(client).await?;
-
-    let query = r#"
-      mutation TokenExchange($appSessionToken: String!, $refreshToken: String!) {
-        tokenExchange(
-          tokenType: USER
-          appSessionToken: $appSessionToken
-          refreshToken: $refreshToken
-        ) {
-          __typename
-          ... on MobileLoginResponse {
-            accessToken
-            refreshToken
-            userSessionToken
-          }
-        }
-      }
-    "#;
-
-    let body = serde_json::json!({
-        "operationName": "TokenExchange",
-        "query": query,
-        "variables": {
-            "appSessionToken": session.app_session_token,
-            "refreshToken": tokens.refresh_token,
-        }
-    });
-
-    let req = client
-        .post(gateway_url())
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
-        .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
-        .header("Csrf-Token", &session.csrf_token)
-        .header("A-Sess", &session.app_session_token)
-        .json(&body);
-
-    let response = req.send().await?;
-    let http_status = response.status();
-    if http_status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(RivianAuthError::InvalidCredentials);
-    }
-
-    let parsed = response.json::<TokenExchangeResponse>().await?;
-
-    if let Some(errors) = parsed.errors {
-        if !errors.is_empty() {
-            return Err(RivianAuthError::UnexpectedResponse(format_gql_error(
-                &errors,
-            )));
-        }
-    }
-
-    let payload = parsed
-        .data
-        .and_then(|d| d.token_exchange)
-        .ok_or_else(|| {
-            RivianAuthError::UnexpectedResponse("empty tokenExchange payload".into())
-        })?;
-
-    // `userSessionToken` is not always returned by tokenExchange (Rivian's
-    // API omits or nulls it in some app/server versions).  When absent, we
-    // preserve the existing session token — it is long-lived and was validated
-    // at login time.  If the existing token is also empty (e.g., from an old
-    // bundle written before this fix), log a warning but still succeed: REST
-    // API calls can work with an empty U-Sess header, and the user will be
-    // prompted to re-authenticate only if the access/refresh tokens are truly
-    // invalid.  Failing the refresh here would cause every restart to set
-    // needs_reauth, which is the regression we are preventing.
-    let user_session_token = payload
-        .user_session_token
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            let existing = tokens.user_session_token.clone();
-            if existing.is_empty() {
-                tracing::warn!("rivian.token_refresh: tokenExchange did not return userSessionToken and existing bundle has no prior value; U-Sess header will be absent");
-            }
-            existing
-        });
-
     Ok(RivianTokenBundle {
-        access_token: payload
-            .access_token
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing accessToken in TokenExchange".into()))?,
-        refresh_token: payload
-            .refresh_token
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in TokenExchange".into()))?,
+        access_token: tokens.access_token.clone(),
+        refresh_token: tokens.refresh_token.clone(),
+        user_session_token: tokens.user_session_token.clone(),
         app_session_token: session.app_session_token,
-        user_session_token,
         csrf_token: session.csrf_token,
-        created_at: chrono::Utc::now(),
+        created_at: tokens.created_at,
     })
 }
 
@@ -336,10 +241,9 @@ pub async fn rivian_login(
     match payload.typename.as_deref() {
         Some("MobileMFALoginResponse") => Ok(LoginResult::OtpRequired(RivianOtpChallenge {
             email: email.to_string(),
-            otp_token: payload
-                .otp_token
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing otpToken in MFA response".into()))?,
+            otp_token: payload.otp_token.filter(|s| !s.is_empty()).ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse("missing otpToken in MFA response".into())
+            })?,
             csrf_token: session.csrf_token,
             app_session_token: session.app_session_token,
         })),
@@ -347,16 +251,28 @@ pub async fn rivian_login(
             access_token: payload
                 .access_token
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing accessToken in login response".into()))?,
+                .ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse(
+                        "missing accessToken in login response".into(),
+                    )
+                })?,
             refresh_token: payload
                 .refresh_token
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in login response".into()))?,
+                .ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse(
+                        "missing refreshToken in login response".into(),
+                    )
+                })?,
             app_session_token: session.app_session_token,
             user_session_token: payload
                 .user_session_token
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing userSessionToken in login response".into()))?,
+                .ok_or_else(|| {
+                    RivianAuthError::UnexpectedResponse(
+                        "missing userSessionToken in login response".into(),
+                    )
+                })?,
             csrf_token: session.csrf_token,
             created_at: chrono::Utc::now(),
         })),
@@ -416,16 +332,24 @@ pub async fn rivian_login_otp(
         access_token: payload
             .access_token
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing accessToken in OTP response".into()))?,
+            .ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse("missing accessToken in OTP response".into())
+            })?,
         refresh_token: payload
             .refresh_token
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in OTP response".into()))?,
+            .ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse("missing refreshToken in OTP response".into())
+            })?,
         app_session_token: challenge.app_session_token.clone(),
         user_session_token: payload
             .user_session_token
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing userSessionToken in OTP response".into()))?,
+            .ok_or_else(|| {
+                RivianAuthError::UnexpectedResponse(
+                    "missing userSessionToken in OTP response".into(),
+                )
+            })?,
         csrf_token: challenge.csrf_token.clone(),
         created_at: chrono::Utc::now(),
     })

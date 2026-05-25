@@ -298,8 +298,8 @@ function statusTimestampMs(status: VehicleStatus): number | null {
 
 export function getWebSocketBaseUrl(
   configuredBaseUrl = (() => {
-    const env = import.meta as { env?: { VITE_WS_URL?: string; VITE_API_URL?: string } };
-    return env.env?.VITE_WS_URL ?? env.env?.VITE_API_URL;
+    const env = import.meta as { env?: { VITE_WS_URL?: string; VITE_API_URL?: string; VITE_RIVIAMIGO_API_BASE_URL?: string } };
+    return env.env?.VITE_WS_URL ?? env.env?.VITE_API_URL ?? env.env?.VITE_RIVIAMIGO_API_BASE_URL;
   })(),
   location: Pick<Location, 'hostname' | 'origin'> | undefined = typeof window === 'undefined' ? undefined : window.location,
 ) {

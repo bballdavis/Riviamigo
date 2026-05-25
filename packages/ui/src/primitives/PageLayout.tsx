@@ -16,16 +16,14 @@ export interface PageLayoutProps {
 }
 
 export function PageLayout({ title, titleAction, titleActionPosition = 'right', subtitle, actions, children, className }: PageLayoutProps) {
-  const titleSection = titleActionPosition === 'left'
-    ? [titleAction, <h1 key="title" className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>]
-    : [<h1 key="title" className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>, titleAction];
-
   return (
     <div className={cn('flex flex-col gap-6', className)}>
       <div className="flex flex-wrap items-start justify-between gap-y-2">
         <div>
           <div className="flex items-center gap-2">
-            {titleSection}
+            {titleActionPosition === 'left' && titleAction}
+            <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
+            {titleActionPosition !== 'left' && titleAction}
           </div>
           {subtitle && <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>}
         </div>

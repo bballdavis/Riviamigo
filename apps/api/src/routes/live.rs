@@ -49,7 +49,7 @@ pub(crate) fn extract_jwt_from_headers(
         .ok_or(AppError::Unauthorized)?;
 
     let mut validation = Validation::new(Algorithm::RS256);
-    validation.set_issuer(&["riviamigo"]);
+    validation.set_issuer(&["riviamigo.app"]);
 
     decode::<Claims>(token, &jwt_keys.decoding, &validation)
         .map_err(|_| AppError::Unauthorized)
@@ -144,8 +144,21 @@ mod tests {
             extract_jwt_from_headers(&headers_with_proto(&format!("bearer.{token}")), &keys)
                 .expect("valid JWT should succeed");
         assert_eq!(claims.sub, user_id);
-        assert_eq!(claims.iss, "riviamigo");
+        assert_eq!(claims.iss, "riviamigo.app");
         assert_eq!(claims.default_vehicle_id, Some(vid));
+    }
+
+    #[test]
+    fn websocket_auth_accepts_standard_access_tokens() {
+        let keys = make_keys();
+        let user_id = Uuid::new_v4();
+        let token = issue_access_token(user_id, None, &keys).expect("issue_access_token");
+
+        let claims =
+            extract_jwt_from_headers(&headers_with_proto(&format!("bearer.{token}")), &keys)
+                .expect("websocket auth should accept normal API access tokens");
+
+        assert_eq!(claims.sub, user_id);
     }
 
     #[test]
@@ -177,12 +190,14 @@ async fn live_session_handler(
 
     match raw {
         Some(json) => {
-            let value: serde_json::Value = serde_json::from_str(&json)
-                .unwrap_or(serde_json::Value::Null);
+            let value: serde_json::Value =
+                serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
             Ok(axum::response::Response::builder()
                 .status(200)
                 .header("content-type", "application/json")
-                .body(axum::body::Body::from(serde_json::to_string(&value).unwrap_or_default()))
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&value).unwrap_or_default(),
+                ))
                 .unwrap())
         }
         None => Ok(axum::response::Response::builder()

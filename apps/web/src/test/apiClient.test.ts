@@ -171,4 +171,80 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/login');
   });
+
+  it('coalesces simultaneous automatic refreshes behind one refresh request', async () => {
+    api.setToken('expired-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/v1/auth/refresh')) {
+        return new Response(JSON.stringify({
+          access_token: 'fresh-token',
+          expires_in: 900,
+          default_vehicle_id: 'vehicle-1',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }) as Response;
+      }
+
+      const auth = init?.headers as Record<string, string> | undefined;
+      if (auth?.Authorization === 'Bearer fresh-token') {
+        return new Response(JSON.stringify({
+          vehicle_id: 'vehicle-1',
+          battery_level: 81,
+          range_miles: 251,
+          power_state: null,
+          charger_state: null,
+          speed_mph: 0,
+          latitude: null,
+          longitude: null,
+          is_online: true,
+          last_updated: '2026-04-29T00:00:00Z',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }) as Response;
+      }
+
+      return new Response(JSON.stringify({
+        error: { code: 'unauthorized', message: 'expired' },
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response;
+    });
+
+    await Promise.all([
+      api.vehicleStatus('vehicle-1'),
+      api.vehicleStatus('vehicle-1'),
+    ]);
+
+    const refreshCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/v1/auth/refresh'));
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('reports a failed shared refresh once for a burst of 401s', async () => {
+    api.setToken('expired-token');
+    const authExpired = vi.fn();
+    window.addEventListener('riviamigo:auth-expired', authExpired);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        error: { code: 'unauthorized', message: 'expired' },
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await expect(Promise.all([
+      api.vehicleStatus('vehicle-1'),
+      api.vehicleStatus('vehicle-1'),
+    ])).rejects.toMatchObject({
+      status: 401,
+      code: 'AUTH_EXPIRED',
+    });
+
+    expect(authExpired).toHaveBeenCalledTimes(1);
+    window.removeEventListener('riviamigo:auth-expired', authExpired);
+  });
 });
