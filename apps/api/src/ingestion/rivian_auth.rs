@@ -158,6 +158,26 @@ pub async fn rivian_refresh_tokens(
             RivianAuthError::UnexpectedResponse("empty tokenExchange payload".into())
         })?;
 
+    // `userSessionToken` is not always returned by tokenExchange (Rivian's
+    // API omits or nulls it in some app/server versions).  When absent, we
+    // preserve the existing session token — it is long-lived and was validated
+    // at login time.  If the existing token is also empty (e.g., from an old
+    // bundle written before this fix), log a warning but still succeed: REST
+    // API calls can work with an empty U-Sess header, and the user will be
+    // prompted to re-authenticate only if the access/refresh tokens are truly
+    // invalid.  Failing the refresh here would cause every restart to set
+    // needs_reauth, which is the regression we are preventing.
+    let user_session_token = payload
+        .user_session_token
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            let existing = tokens.user_session_token.clone();
+            if existing.is_empty() {
+                tracing::warn!("rivian.token_refresh: tokenExchange did not return userSessionToken and existing bundle has no prior value; U-Sess header will be absent");
+            }
+            existing
+        });
+
     Ok(RivianTokenBundle {
         access_token: payload
             .access_token
@@ -168,10 +188,7 @@ pub async fn rivian_refresh_tokens(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing refreshToken in TokenExchange".into()))?,
         app_session_token: session.app_session_token,
-        user_session_token: payload
-            .user_session_token
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| RivianAuthError::UnexpectedResponse("missing userSessionToken in TokenExchange".into()))?,
+        user_session_token,
         csrf_token: session.csrf_token,
         created_at: chrono::Utc::now(),
     })
