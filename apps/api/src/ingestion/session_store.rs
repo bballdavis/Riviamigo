@@ -21,16 +21,12 @@ impl RivianTokenBundle {
     ///
     /// Only `access_token` and `refresh_token` are required:
     /// - `access_token`: needed as the Bearer token for every Rivian GQL call.
-    /// - `refresh_token`: needed to exchange for new credentials when the
-    ///   access token expires.
+    /// - `refresh_token`: retained for future use; token renewal today works by
+    ///   refreshing the CSRF session via `createCsrfToken` (see `rivian_refresh_csrf`).
     ///
     /// `user_session_token`, `app_session_token`, and `csrf_token` are NOT
-    /// required here because:
-    /// - Rivian's `tokenExchange` mutation does not always return a new
-    ///   `userSessionToken`; the login-time value is long-lived and is carried
-    ///   forward in the bundle.
-    /// - `app_session_token` and `csrf_token` are refreshed per-operation via
-    ///   `createCsrfToken` when needed.
+    /// required here because they are refreshed on demand via `createCsrfToken`
+    /// when the session expires.
     ///
     /// Call this immediately after decrypting a bundle to catch genuinely
     /// corrupted blobs early, without rejecting valid bundles that happen to

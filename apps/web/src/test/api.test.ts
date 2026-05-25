@@ -34,13 +34,11 @@ describe('api.vehicleStatus', () => {
 
     await api.vehicleStatus('vehicle-123');
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/v1/vehicles/vehicle-123/status',
-      expect.objectContaining({
-        method: 'GET',
-        credentials: 'include',
-      })
-    );
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/vehicles/vehicle-123/status');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: 'GET',
+      credentials: 'include',
+    });
   });
 
   it('updates the auth store when an automatic refresh succeeds', async () => {

@@ -1,6 +1,6 @@
 /**
  * Thin typed wrapper around the Riviamigo REST API.
- * Base URL is read from the VITE_API_URL env var (or defaults to /api).
+ * Base URL is read from VITE_API_URL or VITE_RIVIAMIGO_API_BASE_URL.
  */
 
 import type {
@@ -72,14 +72,12 @@ export interface DepartureScheduleInput {
 }
 
 export interface LiveSession {
-  session_id: string;
-  power_kw: number | null;
   soc_pct: number | null;
+  power_kw: number | null;
   energy_kwh: number | null;
   range_added_km: number | null;
   time_remaining_min: number | null;
   charger_type: string | null;
-  network: string | null;
   ts: string;
 }
 
@@ -98,7 +96,12 @@ function isLoopbackHostname(hostname: string) {
 }
 
 export function resolveApiBaseUrl(
-  configuredBaseUrl = (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL) || '',
+  configuredBaseUrl = (() => {
+    const env = typeof import.meta !== 'undefined'
+      ? (import.meta as { env?: { VITE_API_URL?: string; VITE_RIVIAMIGO_API_BASE_URL?: string } }).env
+      : undefined;
+    return env?.VITE_API_URL ?? env?.VITE_RIVIAMIGO_API_BASE_URL ?? '';
+  })(),
   location: Pick<Location, 'hostname' | 'origin'> | undefined = typeof window === 'undefined' ? undefined : window.location,
 ) {
   if (!configuredBaseUrl || !location) {
@@ -135,20 +138,15 @@ const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
 
 type AuthChangeHandler = (tokens: AuthTokens | null) => void;
 
-interface ApiFailureDetail {
-  status: number;
-  code: string;
-  message: string;
-  method: string;
-  path: string;
-}
-
 class ApiClient {
   private accessToken: string | null = null;
   private authChangeHandler: AuthChangeHandler | null = null;
+  private refreshPromise: Promise<AuthTokens> | null = null;
+  private authExpiredReported = false;
 
   setToken(token: string | null) {
     this.accessToken = token;
+    if (token) this.authExpiredReported = false;
   }
 
   onAuthChange(handler: AuthChangeHandler) {
@@ -157,12 +155,30 @@ class ApiClient {
 
   private applyTokens(tokens: AuthTokens) {
     this.setToken(tokens.access_token);
+    this.authExpiredReported = false;
     this.authChangeHandler?.(tokens);
   }
 
   private clearTokens() {
     this.setToken(null);
     this.authChangeHandler?.(null);
+  }
+
+  private refreshAccessToken(): Promise<AuthTokens> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.request<AuthTokens>(
+        'POST',
+        '/v1/auth/refresh',
+        undefined,
+        undefined,
+        false,
+        false,
+      ).finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+
+    return this.refreshPromise;
   }
 
   private headers(): HeadersInit {
@@ -195,9 +211,9 @@ class ApiClient {
     });
 
     if (!res.ok) {
-      if (res.status === 401 && retryOnUnauthorized && !AUTH_REFRESH_EXCLUDED_PATHS.has(path)) {
+      if (res.status === 401 && retryOnUnauthorized && this.accessToken && !AUTH_REFRESH_EXCLUDED_PATHS.has(path)) {
         try {
-          const tokens = await this.request<AuthTokens>('POST', '/v1/auth/refresh', undefined, undefined, false, false);
+          const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
           return this.request<T>(method, path, body, params, false);
         } catch {
@@ -672,6 +688,11 @@ class ApiClient {
   }
 
   private reportFailure(detail: ApiFailureDetail) {
+    if (detail.code === 'AUTH_EXPIRED') {
+      if (this.authExpiredReported) return;
+      this.authExpiredReported = true;
+    }
+
     console.warn('[Riviamigo API] request failed', {
       status: detail.status,
       code: detail.code,

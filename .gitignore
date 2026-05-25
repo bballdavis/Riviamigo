@@ -41,6 +41,7 @@ infra/resolv.conf
 # Vite
 apps/web/.vite/
 apps/web/dist/
+apps/web/vite.config.js
 
 # Turbo cache
 .turbo/cache/

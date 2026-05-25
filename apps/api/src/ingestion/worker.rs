@@ -23,8 +23,7 @@ use crate::{
         telemetry::{ChargerState, PowerState, TelemetryEvent},
     },
     services::{
-        cost::recompute_charge_session_cost,
-        geofences::match_geofence,
+        cost::recompute_charge_session_cost, geofences::match_geofence,
         weather::fetch_ambient_temp_c,
     },
 };
@@ -242,7 +241,6 @@ pub async fn run_vehicle_worker(
     let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
     let mut raw_cleanup_tick: u64 = 0;
-    let mut last_live_charge_poll: Option<chrono::DateTime<Utc>> = None;
 
     while let Some(inbound) = ev_rx.recv().await {
         handle_inbound_accounting(&pool, vehicle_id, &config, &inbound).await;
@@ -274,30 +272,8 @@ pub async fn run_vehicle_worker(
             _ => charge_det.active_session_id(),
         };
 
-        if session_id.is_some()
-            && last_live_charge_poll
-                .map(|last| (event.ts - last).num_seconds() >= 30)
-                .unwrap_or(true)
-        {
-            last_live_charge_poll = Some(event.ts);
-            let pool2 = pool.clone();
-            let client2 = http_client.clone();
-            let age_key2 = age_key.clone();
-            let active_session_id = session_id;
-            tokio::spawn(async move {
-                if let Err(e) = rivian_poll::fetch_live_charge_session_for_vehicle(
-                    vehicle_id,
-                    active_session_id,
-                    &pool2,
-                    &client2,
-                    &age_key2,
-                )
-                .await
-                {
-                    tracing::debug!(vehicle_id=%vehicle_id, err=%e, "live charge session enrichment failed");
-                }
-            });
-        }
+        // getLiveSessionData was removed from Rivian's charging API.
+        // Live charge session enrichment is disabled until getSessionStatus schema is known.
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
@@ -416,10 +392,7 @@ pub async fn run_vehicle_worker(
                     tracing::debug!(vehicle_id=%vehicle_id, err=%e, "live charge history sync failed");
                 }
                 if let Err(e) = rivian_poll::fetch_charge_history_for_vehicle(
-                    vehicle_id,
-                    &pool2,
-                    &client2,
-                    &age_key2,
+                    vehicle_id, &pool2, &client2, &age_key2,
                 )
                 .await
                 {
