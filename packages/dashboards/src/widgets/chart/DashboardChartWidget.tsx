@@ -14,7 +14,7 @@ import {
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
-import { ChargeSessionDistributionChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { CHART_COLORS, ChargeSessionDistributionChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
@@ -196,7 +196,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       {options.showPicker && chartOptions.length > 1 ? (
         <ChartPicker
           value={activeChartId}
@@ -208,7 +208,9 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           trailing={settingsButton}
         />
       ) : (
-        <div className="mb-3 flex shrink-0 justify-end">
+        // Absolutely positioned so it doesn't consume flow height and doesn't
+        // create a gap between the section header above and the chart below.
+        <div className="absolute right-0 top-0 z-10">
           {settingsButton}
         </div>
       )}
@@ -293,6 +295,7 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           loading={selectedChargeCurveLoading}
           height={height}
           smoothing={smoothing}
+          startedAt={ctx.from || null}
         />
       );
     case 'charging_curve_analysis':
@@ -416,27 +419,93 @@ function ChargeSessionCurveChart({
   loading,
   height,
   smoothing,
+  startedAt,
 }: {
   definition: DashboardChartDefinition;
   data: ChargeCurvePoint[];
   loading: boolean;
   height: number;
   smoothing: number;
+  startedAt: string | null;
 }) {
   const rows = data.filter((point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw));
 
+  // Build time-based points when minutes_elapsed is available. This produces a
+  // single chart with charge rate (left Y, kW) and cumulative energy (right Y, kWh)
+  // on the same time axis — much easier to read than a SOC-on-X layout.
+  const { points, rateValues, energyValues, useTime } = React.useMemo(() => {
+    const startMs = startedAt ? new Date(startedAt).getTime() : null;
+    const timed = startMs != null && rows.some((p) => p.minutes_elapsed != null);
+
+    // Compute cumulative energy (kWh) across all rows.
+    let cumulative = 0;
+    const energyVals: number[] = rows.map((p, i) => {
+      if (i > 0) {
+        const prev = rows[i - 1]!;
+        if (prev.minutes_elapsed != null && p.minutes_elapsed != null) {
+          const dtHours = (p.minutes_elapsed - prev.minutes_elapsed) / 60;
+          cumulative += Math.max(0, p.power_kw ?? 0) * dtHours;
+        }
+      }
+      return Math.max(0, cumulative);
+    });
+
+    if (timed) {
+      // Prepend a zero-valued anchor at the session start time so any pre-charging
+      // wait (e.g. plugged in at 6 PM, scheduled charging starts at 11 PM) shows
+      // as a flat line rather than silently missing from the chart.
+      const firstMs = startMs! + (rows[0]?.minutes_elapsed ?? 0) * 60000;
+      const gapMs = firstMs - startMs!;
+      const anchored = gapMs > 5 * 60 * 1000; // >5 min gap → prepend anchor
+
+      const allPts = [
+        ...(anchored ? [{ ts: startedAt!, rate: 0, energy: 0 }] : []),
+        ...rows.map((p, i) => ({
+          ts: new Date(startMs! + p.minutes_elapsed! * 60000).toISOString(),
+          rate: p.power_kw,
+          energy: energyVals[i]!,
+        })),
+      ];
+      return {
+        useTime: true,
+        points: allPts.map((p) => ({ ts: p.ts })),
+        rateValues: allPts.map((p) => p.rate),
+        energyValues: allPts.map((p) => p.energy),
+      };
+    }
+
+    // Fallback: SOC on X axis (no minutes_elapsed data available).
+    return {
+      useTime: false,
+      points: rows.map((p) => ({ ts: p.soc_pct })),
+      rateValues: rows.map((p) => p.power_kw),
+      energyValues: energyVals,
+    };
+  }, [rows, startedAt]);
+
   return (
     <RichTimeSeriesChart
-      points={rows.map((point) => ({ ts: point.soc_pct }))}
-      series={[{ key: 'rate', label: 'Charge Rate', values: rows.map((point) => point.power_kw) }]}
+      points={points}
+      series={[
+        { key: 'rate', label: 'Charge Rate', values: rateValues, yScale: 'y' },
+        {
+          key: 'energy',
+          label: 'Energy Added',
+          color: CHART_COLORS.emerald,
+          values: energyValues,
+          mode: 'area',
+          yScale: 'y2',
+        },
+      ]}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      xTime={false}
-      xUnit="%"
+      xTime={useTime}
+      xUnit={useTime ? undefined : '%'}
       yUnit="kW"
+      yRightUnit="kWh"
       mode="line"
-      xValueFormatter={(value) => `${Math.round(value)}%`}
+      xValueFormatter={useTime ? undefined : (value) => `${Math.round(value)}%`}
       smoothing={smoothing}
     />
   );

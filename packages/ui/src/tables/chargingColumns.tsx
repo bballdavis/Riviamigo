@@ -44,12 +44,24 @@ const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success'> = {
 
 export const chargingColumns = [
   col.accessor('started_at', {
-    header: 'Date',
-    cell: (info) => (
-      <span className="text-fg font-medium">
-        {format(parseISO(info.getValue()), 'MMM d, yyyy')}
-      </span>
-    ),
+    header: 'Date / Time',
+    cell: (info) => {
+      const row = info.row.original;
+      const start = parseISO(info.getValue());
+      const endDate =
+        row.duration_min != null
+          ? new Date(start.getTime() + row.duration_min * 60000)
+          : null;
+      return (
+        <div className="flex flex-col gap-px">
+          <span className="text-sm font-medium text-fg leading-tight">{format(start, 'MMM d, yyyy')}</span>
+          <span className="text-xs text-fg-tertiary leading-tight">
+            {format(start, 'h:mm a')}
+            {endDate ? ` – ${format(endDate, 'h:mm a')}` : null}
+          </span>
+        </div>
+      );
+    },
   }),
   col.accessor('location_name', {
     header: 'Location',

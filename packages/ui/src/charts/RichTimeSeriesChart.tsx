@@ -13,6 +13,8 @@ export interface RichSeries {
   color?: string;
   values: Array<number | null>;
   mode?: 'line' | 'area' | 'bar' | 'scatter';
+  /** Which Y scale this series is drawn on. Default 'y' (left). Use 'y2' for a right axis. */
+  yScale?: 'y' | 'y2';
 }
 
 export interface RichTimeSeriesChartProps {
@@ -22,11 +24,15 @@ export interface RichTimeSeriesChartProps {
   loading?: boolean;
   emptyTitle?: string | undefined;
   yUnit?: string | undefined;
+  /** Unit label for the right Y axis (only shown when any series has yScale='y2'). */
+  yRightUnit?: string | undefined;
   className?: string | undefined;
   mode?: 'line' | 'area' | 'bar' | 'scatter' | undefined;
   xTime?: boolean;
   xUnit?: string | undefined;
   xValueFormatter?: ((value: number) => string) | undefined;
+  /** Secondary X axis shown at the top of the chart (same scale as primary X, different label format). */
+  xSecondaryFormatter?: ((value: number) => string) | undefined;
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
   smoothing?: number | undefined;
   yRange?: [number, number] | undefined;
@@ -257,11 +263,13 @@ export function RichTimeSeriesChart({
   loading = false,
   emptyTitle = 'No chart data',
   yUnit,
+  yRightUnit,
   className,
   mode = 'line',
   xTime = true,
   xUnit,
   xValueFormatter,
+  xSecondaryFormatter,
   yValueFormatter = formatValue,
   smoothing = 0,
   yRange,
@@ -275,17 +283,21 @@ export function RichTimeSeriesChart({
 
   const seriesRef = React.useRef(series);
   const yUnitRef = React.useRef(yUnit);
+  const yRightUnitRef = React.useRef(yRightUnit);
   const yValueFormatterRef = React.useRef(yValueFormatter);
   const xTimeRef = React.useRef(xTime);
   const xUnitRef = React.useRef(xUnit);
   const xValueFormatterRef = React.useRef(xValueFormatter);
+  const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
   const alignedDataRef = React.useRef<AlignedData>([[], []]);
   seriesRef.current = series;
   yUnitRef.current = yUnit;
+  yRightUnitRef.current = yRightUnit;
   yValueFormatterRef.current = yValueFormatter;
   xTimeRef.current = xTime;
   xUnitRef.current = xUnit;
   xValueFormatterRef.current = xValueFormatter;
+  xSecondaryFormatterRef.current = xSecondaryFormatter;
 
   const smoothingAmount = smoothing ?? 0;
 
@@ -305,9 +317,10 @@ export function RichTimeSeriesChart({
     () =>
       `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
       `${yRange ? yRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
-      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}`).join('|') +
+      `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
+      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, yRange, xSplits, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, yRange, xSplits, xSecondaryFormatter, yRightUnit, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -327,6 +340,8 @@ export function RichTimeSeriesChart({
     const xValues = alignedDataRef.current[0] as number[];
     const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
 
+    const hasRightAxis = seriesRef.current.some((s) => s.yScale === 'y2');
+
     const makeUSeries = (): Series[] => [
       {},
       ...seriesRef.current.map((item, index) => {
@@ -337,6 +352,7 @@ export function RichTimeSeriesChart({
           label: item.label,
           show: !hidden,
           stroke: color,
+          scale: item.yScale ?? 'y',
           width: seriesMode === 'scatter' ? 0 : 2,
           points: {
             show: seriesMode === 'scatter',
@@ -392,6 +408,27 @@ export function RichTimeSeriesChart({
       },
     };
 
+    const xSecondaryAxisConfig: uPlot.Axis | null = xSecondaryFormatterRef.current
+      ? {
+          scale: 'x', // share the primary X scale
+          side: 0,    // top
+          stroke: CHART_COLORS.muted,
+          grid: { show: false }, // avoid duplicate grid lines
+          font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+          size: 40,
+          gap: 6,
+          // Limit to ≤7 evenly spaced ticks so time labels don't crowd each other
+          // regardless of how many data-point splits the primary axis uses.
+          splits: (_u, _axisIdx, scaleMin, scaleMax) => {
+            const count = 7;
+            const step = (scaleMax - scaleMin) / (count - 1);
+            return Array.from({ length: count }, (_, i) => scaleMin + i * step);
+          },
+          values: (_u, vals) =>
+            vals.map((v) => xSecondaryFormatterRef.current!(v)),
+        }
+      : null;
+
     const yAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
       grid: { stroke: CHART_COLORS.grid, width: 1 },
@@ -404,12 +441,39 @@ export function RichTimeSeriesChart({
       values: (_u, vals) => vals.map((v) => yValueFormatterRef.current(v, yUnitRef.current)),
     };
 
+    // Right Y axis — only added when at least one series uses scale 'y2'.
+    const rightYAxisConfig: uPlot.Axis | null = hasRightAxis
+      ? {
+          scale: 'y2',
+          side: 1, // right
+          stroke: CHART_COLORS.muted,
+          grid: { show: false },
+          font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+          size: (_self, values) => {
+            if (!values || values.length === 0) return 50;
+            return estimateYLabelWidth(values as string[]);
+          },
+          gap: 8,
+          values: (_u, vals) =>
+            vals.map((v) => yValueFormatterRef.current(v, yRightUnitRef.current)),
+        }
+      : null;
+
+    // When a secondary top axis is present we need extra top padding so its
+    // labels are not clipped; otherwise keep the default small gutter.
+    const topPadding = xSecondaryAxisConfig ? 44 : 10;
+
+    const allAxes: uPlot.Axis[] = [xAxisConfig, yAxisConfig];
+    if (xSecondaryAxisConfig) allAxes.push(xSecondaryAxisConfig);
+    if (rightYAxisConfig) allAxes.push(rightYAxisConfig);
+
     const opts: Options = {
       width,
       height: chartHeight,
       data: alignedDataRef.current,
       // Keep a small left gutter so y-axis labels are not clipped at narrow widths.
-      padding: [10, 14, 0, 10],
+      // Right gutter grows when a right axis is present so its labels aren't clipped.
+      padding: [topPadding, hasRightAxis ? 4 : 14, 0, 10],
       cursor: {
         drag: { x: true, y: false },
         points: { size: 6 },
@@ -418,8 +482,9 @@ export function RichTimeSeriesChart({
       scales: {
         x: { time: xTime },
         y: yScaleConfig,
+        ...(hasRightAxis ? { y2: { auto: true } } : {}),
       },
-      axes: [xAxisConfig, yAxisConfig],
+      axes: allAxes,
       series: makeUSeries(),
       hooks: {
         setCursor: [
@@ -436,11 +501,14 @@ export function RichTimeSeriesChart({
               .map((item, seriesIndex) => {
                 if (hiddenKeys.has(item.key)) return null;
                 const value = data[seriesIndex + 1]?.[idx] as number | null | undefined;
-                return `${item.label}: ${yValueFormatterRef.current(value, yUnitRef.current)}`;
+                // Use the right-axis unit for y2 series, primary unit for y series.
+                const unit = item.yScale === 'y2' ? yRightUnitRef.current : yUnitRef.current;
+                return `${item.label}: ${yValueFormatterRef.current(value, unit)}`;
               })
               .filter((row): row is string => Boolean(row));
 
             let tooltipHeader = '';
+            let tooltipSubHeader = '';
             if (timestamp != null) {
               if (xValueFormatterRef.current) {
                 tooltipHeader = xValueFormatterRef.current(timestamp as number);
@@ -449,12 +517,15 @@ export function RichTimeSeriesChart({
               } else {
                 tooltipHeader = formatNumericAxis(timestamp as number, xUnitRef.current);
               }
+              if (xSecondaryFormatterRef.current) {
+                tooltipSubHeader = xSecondaryFormatterRef.current(timestamp as number);
+              }
             }
 
             setTooltip({
               left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
               top: Math.max((u.cursor.top ?? 0) + 12, 12),
-              text: [tooltipHeader, ...rows].filter(Boolean).join('\n'),
+              text: [tooltipHeader, tooltipSubHeader, ...rows].filter(Boolean).join('\n'),
             });
           },
         ],
@@ -513,7 +584,7 @@ export function RichTimeSeriesChart({
       <div ref={rootRef} className="rich-uplot-chart w-full min-h-0 flex-1" style={{ height: chartHeight }} />
       {tooltip ? (
         <div
-          className="pointer-events-none absolute z-10 whitespace-pre rounded-md border border-border bg-bg px-2 py-1 text-[11px] leading-4 text-fg-secondary shadow-lg"
+          className="pointer-events-none absolute z-10 whitespace-pre rounded-md border border-border-strong bg-bg-surface px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
           style={{ left: tooltip.left, top: tooltip.top }}
         >
           {tooltip.text}

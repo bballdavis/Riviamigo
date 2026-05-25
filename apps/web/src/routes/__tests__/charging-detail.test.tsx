@@ -91,7 +91,7 @@ describe('Charge session detail page', () => {
     expect(screen.getByText('12 samples matched')).toBeInTheDocument();
     expect(screen.getByText('88.4 km added')).toBeInTheDocument();
     expect(screen.getByText('Austin')).toBeInTheDocument();
-    expect(screen.getByText('Power vs state of charge')).toBeInTheDocument();
+    expect(screen.getByText('Charge rate (kW) and cumulative energy (kWh) over time')).toBeInTheDocument();
     expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
   });
 

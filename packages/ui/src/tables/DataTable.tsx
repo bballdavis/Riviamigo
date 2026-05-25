@@ -61,7 +61,7 @@ export function DataTable<TData>({
                   <th
                     key={header.id}
                     className={cn(
-                      'py-2.5 px-3 text-left text-xs font-medium text-fg-tertiary uppercase tracking-wider whitespace-nowrap',
+                      'py-2 px-3 text-left text-xs font-medium text-fg-tertiary uppercase tracking-wider whitespace-nowrap',
                       canSort && 'cursor-pointer select-none hover:text-fg-secondary'
                     )}
                     onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
@@ -91,7 +91,7 @@ export function DataTable<TData>({
             Array.from({ length: loadingRows }).map((_, i) => (
               <tr key={i} className="border-b border-border/50">
                 {columns.map((_, j) => (
-                  <td key={j} className="py-3 px-3">
+                  <td key={j} className="py-2 px-3">
                     <Skeleton className="h-4 w-full" />
                   </td>
                 ))}
@@ -123,7 +123,7 @@ export function DataTable<TData>({
                   )}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className={cn('py-3 px-3 text-fg-secondary', isSelected && 'text-fg')}>
+                    <td key={cell.id} className={cn('py-2 px-3 text-fg-secondary', isSelected && 'text-fg')}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}

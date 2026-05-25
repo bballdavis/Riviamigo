@@ -154,6 +154,12 @@ vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/ui/charts', () => ({
+  CHART_COLORS: {
+    accent: '#f97316',
+    emerald: '#10b981',
+    grid: 'rgba(255,255,255,0.06)',
+    muted: '#94a3b8',
+  },
   ChargeSessionDistributionChart: ({
     bands,
     emptyTitle,

@@ -12,6 +12,13 @@ const CHARGE_TIMEOUT_SECS: i64 = 1800; // 30 min
 const AC_L1_MAX_KW: f64 = 12.0;
 const AC_L2_MAX_KW: f64 = 50.0;
 
+/// Hard ceiling on any single power_kw telemetry reading during charging.
+/// The Rivian R1T/R1S peaks at ~220 kW DC (large pack). Values above this
+/// are sensor glitches and must not corrupt peak_charge_kw or the energy
+/// accumulator.  300 kW gives comfortable headroom for future hardware
+/// without letting runaway readings through.
+const PLAUSIBLE_MAX_CHARGE_KW: f64 = 300.0;
+
 #[derive(Debug, Clone)]
 pub struct CompletedChargeSession {
     pub session_id: Uuid,
@@ -103,10 +110,31 @@ impl ChargeDetectorState {
 
         // Power integration (|power_kw| for charging — power_kw may be negative
         // for grid intake depending on sign convention; take absolute value).
+        //
+        // Two-layer glitch rejection:
+        //
+        //  1. Hard ceiling (PLAUSIBLE_MAX_CHARGE_KW): no real charger delivers
+        //     more than ~220 kW to a Rivian.  Anything above 300 kW is hardware
+        //     noise and is discarded unconditionally.
+        //
+        //  2. AC-baseline spike filter: if every reading so far is below
+        //     AC_L2_MAX_KW (i.e. the session is clearly on a home/L2 circuit)
+        //     and this new sample is more than 5× the established peak, it is
+        //     almost certainly a transient sensor glitch — a home charger cannot
+        //     physically jump from 8 kW to 250 kW mid-session.  Discard it so a
+        //     single bad sample cannot flip the charger-type classification from
+        //     AC to DC or corrupt the energy accumulator.
         if self.is_charging {
             if let Some(kw) = event.power_kw {
                 let kw_abs = kw.abs();
-                if kw_abs > 0.0 {
+                let is_dc_spike_on_ac_session = self.peak_charge_kw > 0.0
+                    && self.peak_charge_kw < AC_L2_MAX_KW
+                    && kw_abs > self.peak_charge_kw * 5.0;
+
+                if kw_abs > 0.0
+                    && kw_abs <= PLAUSIBLE_MAX_CHARGE_KW
+                    && !is_dc_spike_on_ac_session
+                {
                     if let Some(last_t) = self.last_power_ts {
                         let dt_hours = (ts - last_t).num_milliseconds() as f64 / 3_600_000.0;
                         self.energy_used_wh_acc += kw_abs * 1_000.0 * dt_hours;
