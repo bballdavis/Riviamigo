@@ -36,7 +36,9 @@ const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 static NOMINATIM_NEXT_CALL: std::sync::OnceLock<tokio::sync::Mutex<std::time::Instant>> =
     std::sync::OnceLock::new();
 
-fn nominatim_gate() -> &'static tokio::sync::Mutex<std::time::Instant> {
+/// Process-wide rate-limit gate for Nominatim. Shared by the ingestion worker
+/// AND the places API route so the combined call rate never exceeds 1 req/sec.
+pub fn nominatim_gate() -> &'static tokio::sync::Mutex<std::time::Instant> {
     NOMINATIM_NEXT_CALL.get_or_init(|| tokio::sync::Mutex::new(std::time::Instant::now()))
 }
 
@@ -241,12 +243,19 @@ pub async fn run_vehicle_worker(
     let mut last_ota_available_version: Option<String> = None;
     let mut persistence_gate = TelemetryPersistenceGate::new(vehicle_id);
     let mut raw_cleanup_tick: u64 = 0;
+    // Shared counter batch — flushed every 50 events to amortize DB upserts.
+    let mut counter_batch = CounterBatch::new(vehicle_id);
+    let mut counter_flush_tick: u64 = 0;
 
     while let Some(inbound) = ev_rx.recv().await {
-        handle_inbound_accounting(&pool, vehicle_id, &config, &inbound).await;
+        handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch).await;
         raw_cleanup_tick += 1;
+        counter_flush_tick += 1;
         if raw_cleanup_tick % 500 == 0 {
             cleanup_raw_events(&pool, config.rivian_raw_event_retention_days).await;
+        }
+        if counter_flush_tick % 50 == 0 {
+            counter_batch.flush(&pool).await;
         }
 
         let Some(event) = inbound.telemetry else {
@@ -301,14 +310,12 @@ pub async fn run_vehicle_worker(
                 .await
                 .is_ok()
             {
-                increment_counter(&pool, vehicle_id, "telemetry_writes_persisted").await;
+                counter_batch.increment("telemetry_writes_persisted");
                 mark_persisted(&pool, vehicle_id, event.ts).await;
             }
         } else if let PersistenceDecision::Suppress(reason) = persistence_decision {
-            let mut suppress_batch = CounterBatch::new(vehicle_id);
-            suppress_batch.increment("telemetry_writes_suppressed");
-            suppress_batch.increment(reason.counter_column());
-            suppress_batch.flush(&pool).await;
+            counter_batch.increment("telemetry_writes_suppressed");
+            counter_batch.increment(reason.counter_column());
         }
 
         // ── State period tracking ────────────────────────────────────────────
@@ -404,6 +411,8 @@ pub async fn run_vehicle_worker(
         }
     }
 
+    // Flush any remaining accumulated counters before the worker exits.
+    counter_batch.flush(&pool).await;
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
 }
 
@@ -973,7 +982,8 @@ impl CounterBatch {
         }
     }
 
-    async fn flush(self, pool: &PgPool) {
+    /// Flush accumulated counts to the DB and reset the batch for reuse.
+    async fn flush(&mut self, pool: &PgPool) {
         if self.counts.is_empty() {
             return;
         }
@@ -1002,16 +1012,20 @@ impl CounterBatch {
             q = q.bind(*self.counts.get(col).unwrap_or(&0));
         }
         let _ = q.execute(pool).await;
+        self.counts.clear();
     }
 }
 
+/// Accumulate per-event counters into `batch`. The caller is responsible for
+/// flushing `batch` to the DB periodically (every N events) to amortize the
+/// cost of the upsert across many messages.
 async fn handle_inbound_accounting(
     pool: &PgPool,
     vehicle_id: Uuid,
     config: &Config,
     inbound: &WsInboundEvent,
+    batch: &mut CounterBatch,
 ) {
-    let mut batch = CounterBatch::new(vehicle_id);
     if !is_synthetic_control(inbound.message_type.as_deref()) {
         batch.increment("ws_messages_received");
         match inbound.kind {
@@ -1037,9 +1051,8 @@ async fn handle_inbound_accounting(
         _ => {}
     }
     if config.rivian_persist_raw_events {
-        persist_raw_event(pool, &mut batch, vehicle_id, inbound).await;
+        persist_raw_event(pool, batch, vehicle_id, inbound).await;
     }
-    batch.flush(pool).await;
 }
 
 fn is_synthetic_control(message_type: Option<&str>) -> bool {
@@ -1073,12 +1086,29 @@ async fn persist_raw_event(pool: &PgPool, batch: &mut CounterBatch, vehicle_id: 
 }
 
 async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
+    // Use a non-blocking advisory lock (id 0x726d_5241 = "rmRA") so that
+    // concurrent workers skip the DELETE rather than pile up on the same rows.
+    let got_lock: bool = sqlx::query_scalar(
+        "SELECT pg_try_advisory_lock(0x726d5241::bigint)",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !got_lock {
+        return;
+    }
+
     let _ = sqlx::query(
         "DELETE FROM riviamigo.rivian_ws_raw_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
     )
     .bind(retention_days.max(1) as i32)
     .execute(pool)
     .await;
+
+    // Release the session-level lock immediately so other workers can take it next cycle.
+    let _ = sqlx::query("SELECT pg_advisory_unlock(0x726d5241::bigint)")
+        .execute(pool)
+        .await;
 }
 
 async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {

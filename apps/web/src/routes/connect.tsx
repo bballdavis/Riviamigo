@@ -93,15 +93,20 @@ export function ConnectContent() {
 
   async function persistVehicle(vehicle: ConnectedRivianVehicle) {
     setLoading(true);
-    const added = await api.addVehicle({
-      rivian_vehicle_id: vehicle.id,
-      name: vehicle.name,
-      model: vehicle.model,
-      vin: vehicle.vin,
-    });
-    setDefaultVehicleId(added.vehicle_id);
-    setSuccessVehicleName(formatVehicleName(vehicle));
-    setVehicles([]);
+    try {
+      const added = await api.addVehicle({
+        rivian_vehicle_id: vehicle.id,
+        name: vehicle.name,
+        model: vehicle.model,
+        vin: vehicle.vin,
+      });
+      setDefaultVehicleId(added.vehicle_id);
+      setSuccessVehicleName(formatVehicleName(vehicle));
+      setVehicles([]);
+    } finally {
+      // Always clear the loading flag — even on error the button must re-enable.
+      setLoading(false);
+    }
   }
 
   return (
@@ -129,7 +134,6 @@ export function ConnectContent() {
                   setError('');
                   persistVehicle(vehicle).catch((err) => {
                     setError(err instanceof Error ? err.message : 'Vehicle add failed');
-                    setLoading(false);
                   });
                 }}
               />

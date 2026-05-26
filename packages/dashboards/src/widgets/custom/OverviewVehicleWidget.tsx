@@ -26,7 +26,7 @@ function CurrentVehicleStatePanel({
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
-  vehicleName?: string;
+  vehicleName?: string | undefined;
 }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
@@ -73,7 +73,10 @@ function CurrentVehicleStatePanel({
   }, []);
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-[radial-gradient(circle_at_20%_20%,rgba(253,131,4,0.16),transparent_32%),linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] p-4 shadow-lg shadow-black/10">
+    <section
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border p-4 shadow-sm"
+      style={{ background: 'radial-gradient(circle at 20% 20%, color-mix(in oklab, var(--rm-accent) 16%, transparent) 32%, transparent), linear-gradient(135deg, var(--rm-bg-surface), var(--rm-bg-elevated))' }}
+    >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
         <span className="rounded-lg border border-border bg-bg-elevated px-2 py-1 text-[11px] text-fg-tertiary">
@@ -221,7 +224,7 @@ function VehicleArtFrame({
   );
 }
 
-function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: { base: string; overlays: string[]; darkClassName: string; vehicleName?: string }) {
+function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: { base: string; overlays: string[]; darkClassName: string; vehicleName?: string | undefined }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
     width: 'var(--vehicle-frame-height)',
@@ -229,7 +232,7 @@ function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: {
   } as React.CSSProperties;
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
-      <img src={base} alt={vehicleName ?? ''} className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
+      <img src={base} alt={vehicleName ?? 'Rivian vehicle'} className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
       {overlays.map((overlayUrl) => <img key={overlayUrl} src={overlayUrl} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />)}
     </div>
   );

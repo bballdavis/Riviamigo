@@ -27,8 +27,6 @@ export const useLiveStatusStore = create<LiveStatusStore>((set) => ({
     set((s) => ({ connected: { ...s.connected, [vehicleId]: connected } })),
 }));
 
-const BASE_WS = getWebSocketBaseUrl();
-
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MAX_RECONNECT_DELAY_MS = 60_000;
 
@@ -140,7 +138,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     reconnectRef.current = undefined;
     shouldReconnectRef.current = true;
     const ws = new WebSocket(
-      `${BASE_WS}/v1/vehicles/live?vehicle_id=${vehicleId}`,
+      `${getWebSocketBaseUrl()}/v1/vehicles/live?vehicle_id=${vehicleId}`,
       ['bearer', `bearer.${accessToken}`]
     );
     wsRef.current = ws;
@@ -197,10 +195,14 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
 
       reconnectAttemptsRef.current += 1;
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+        // Signal persistent failure so the UI can show a warning, but keep
+        // retrying at the max-backoff interval rather than giving up forever.
+        // The user should not have to reload the page to recover from a flaky
+        // network; the hook will silently recover once the server is reachable.
         setConnectionState('failed');
-        return;
+      } else {
+        setConnectionState('connecting');
       }
-      setConnectionState('connecting');
       reconnectRef.current = setTimeout(() => {
         backoffRef.current = Math.min(backoffRef.current * 2, MAX_RECONNECT_DELAY_MS);
         connect();

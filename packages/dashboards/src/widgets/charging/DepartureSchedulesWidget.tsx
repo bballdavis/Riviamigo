@@ -154,7 +154,7 @@ function ScheduleCard({
             type="button"
             onClick={onDelete}
             disabled={deleting}
-            className="rounded-lg p-1.5 text-fg-tertiary hover:bg-[#7F1D1D]/20 hover:text-[#F87171] disabled:opacity-40"
+            className="rounded-lg p-1.5 text-fg-tertiary hover:bg-status-danger/10 hover:text-status-danger disabled:opacity-40"
             aria-label="Delete schedule"
           >
             <Trash2 className="h-3.5 w-3.5" />

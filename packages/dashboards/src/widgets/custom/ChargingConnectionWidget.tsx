@@ -241,7 +241,7 @@ function VehicleSideImage({
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <img
         src={source}
-        alt=""
+        alt="Vehicle side view showing charging port location"
         data-testid="charging-side-image"
         data-image-mode="charging"
         className="h-full w-auto max-w-none object-contain"

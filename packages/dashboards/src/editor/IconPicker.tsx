@@ -143,7 +143,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
         backgroundColor: 'var(--rm-bg-elevated)',
         border: '1px solid var(--rm-border-default)',
         borderRadius: '12px',
-        boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        boxShadow: 'var(--rm-shadow-xl)',
         display: 'flex',
         flexDirection: 'column',
         maxHeight: '460px',

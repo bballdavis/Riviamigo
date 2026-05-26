@@ -580,13 +580,13 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
               onChange={(e) => setAdvancedText(e.target.value)}
               rows={customMode ? 14 : 8}
               spellCheck={false}
-              className="w-full rounded-lg border border-border bg-black/30 px-3 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
+              className="w-full rounded-lg border border-border bg-bg-page/30 px-3 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
             />
-            {advancedError ? <p className="text-xs text-red-400">{advancedError}</p> : null}
+            {advancedError ? <p className="text-xs text-status-danger">{advancedError}</p> : null}
             <button
               type="button"
               onClick={applyAdvanced}
-              className="self-end rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:brightness-110"
+              className="self-end rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-fg-on-accent hover:brightness-110"
             >
               Apply JSON
             </button>

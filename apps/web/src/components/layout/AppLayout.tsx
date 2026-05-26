@@ -38,6 +38,12 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     localStorage.setItem('rm-sidebar-collapsed', String(nextCollapsed));
   }, []);
 
+  // Stable reference so both addEventListener and removeEventListener receive the
+  // same function identity even if React re-renders between the two calls.
+  const handleUnitsChange = React.useCallback(() => {
+    setUnitSystem(getUnitSystem());
+  }, []);
+
   // Fire a single reauth warning toast when the vehicle worker signals it needs
   // re-authentication.  The ref prevents the same toast firing more than once
   // per page session even if the status keeps polling.
@@ -63,14 +69,13 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   }, [currentStatus?.auth_state]);
 
   React.useEffect(() => {
-    const handleUnitsChange = () => setUnitSystem(getUnitSystem());
     window.addEventListener('rm-units-change', handleUnitsChange as EventListener);
     window.addEventListener('storage', handleUnitsChange);
     return () => {
       window.removeEventListener('rm-units-change', handleUnitsChange as EventListener);
       window.removeEventListener('storage', handleUnitsChange);
     };
-  }, []);
+  }, [handleUnitsChange]);
 
   const onlineState = !defaultVehicleId
     ? 'offline' as const

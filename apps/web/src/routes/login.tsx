@@ -67,7 +67,7 @@ export function LoginPage() {
         {/* Brand mark */}
         <div className="flex flex-col items-center mb-10">
           <div className="relative mb-5">
-            <div className="w-24 h-24 rounded-2xl bg-accent/10 border border-accent/25 grid place-items-center shadow-[0_0_40px_rgba(253,131,4,0.2)] overflow-hidden">
+            <div className="w-24 h-24 rounded-2xl bg-accent/10 border border-accent/25 grid place-items-center shadow-glow-md overflow-hidden">
               <img
                 src="/logo_color_lighter.svg"
                 alt="Riviamigo logo"
@@ -87,7 +87,7 @@ export function LoginPage() {
         </div>
 
         {/* Auth card */}
-        <div className="bg-bg-glass backdrop-blur-md border border-border rounded-2xl p-6 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+        <div className="bg-bg-glass backdrop-blur-md border border-border rounded-2xl p-6 shadow-xl">
           <p className="text-[11px] font-semibold text-fg-tertiary uppercase tracking-widest mb-5">
             {mode === 'login' ? 'Sign in' : 'Create account'}
           </p>
