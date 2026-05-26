@@ -51,6 +51,7 @@ export const queryClient = new QueryClient({
 });
 
 installQueryCachePersistence(queryClient);
+installSessionClearedHandler(queryClient);
 
 /** Call this after the user's identity is known (post-login or post-refresh). */
 export function hydrateQueryCacheForUser(userId: string) {
@@ -78,6 +79,13 @@ export function clearQueryCacheForUser(userId: string) {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(cacheKey(userId));
   queryClient.clear();
+}
+
+function installSessionClearedHandler(client: QueryClient) {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('riviamigo:session-cleared', () => {
+    client.cancelQueries();
+  });
 }
 
 function installQueryCachePersistence(client: QueryClient) {

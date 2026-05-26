@@ -141,8 +141,12 @@ async fn authenticate_api_key(
         _ => return Err(AppError::Forbidden),
     }
 
+    // Only update last_used_at at most once per minute to avoid an UPDATE on every request.
     sqlx::query(
-        "UPDATE riviamigo.api_keys SET last_used_at = now(), updated_at = now() WHERE key_hash = $1"
+        "UPDATE riviamigo.api_keys \
+         SET last_used_at = now(), updated_at = now() \
+         WHERE key_hash = $1 \
+           AND (last_used_at IS NULL OR last_used_at < now() - INTERVAL '1 minute')"
     )
     .bind(hash.as_slice())
     .execute(&state.pool)

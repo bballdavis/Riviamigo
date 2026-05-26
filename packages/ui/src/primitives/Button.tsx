@@ -20,7 +20,7 @@ const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     'bg-bg-elevated border border-border hover:border-border-strong hover:bg-bg-elevated/80 text-fg',
   ghost: 'text-fg-secondary hover:text-fg hover:bg-bg-elevated',
   danger:
-    'bg-[#7F1D1D]/30 border border-[#F87171]/30 text-[#F87171] hover:bg-[#7F1D1D]/50 hover:border-[#F87171]/60',
+    'bg-status-danger/10 border border-status-danger/30 text-status-danger hover:bg-status-danger/20 hover:border-status-danger/60',
 };
 
 const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
