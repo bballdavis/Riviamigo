@@ -62,7 +62,7 @@ async fn register(
     let hash = argon2_hash(&body.password)?;
     let email = body.email.to_lowercase();
     let mut tx = state.pool.begin().await?;
-    sqlx::query!("LOCK TABLE riviamigo.users IN ACCESS EXCLUSIVE MODE")
+    sqlx::query!("LOCK TABLE riviamigo.users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
 

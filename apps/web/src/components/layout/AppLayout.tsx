@@ -125,9 +125,9 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                     {onlineState === 'connecting' ? (
                       <Loader2 className="h-4 w-4 text-accent animate-spin" />
                     ) : onlineState === 'online' ? (
-                      <Wifi className="h-4 w-4 text-[#10B981]" />
+                      <Wifi className="h-4 w-4 text-status-positive" />
                     ) : onlineState === 'error' ? (
-                      <WifiOff className="h-4 w-4 text-[#F87171]" />
+                      <WifiOff className="h-4 w-4 text-status-danger" />
                     ) : (
                       <WifiOff className="h-4 w-4 text-fg-tertiary" />
                     )}
@@ -143,10 +143,10 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                           compactBatteryIcon.variant === 'charging'
                             ? 'text-accent'
                             : (compactBatteryLevel ?? 0) > 50
-                            ? 'text-[#10B981]'
+                            ? 'text-status-positive'
                             : (compactBatteryLevel ?? 0) > 20
-                            ? 'text-[#F59E0B]'
-                            : 'text-[#F87171]'
+                            ? 'text-status-warning'
+                            : 'text-status-danger'
                         }`}
                         data-battery-icon={`tb-battery-${compactBatteryIcon.variant}`}
                       />

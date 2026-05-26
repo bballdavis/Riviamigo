@@ -383,11 +383,27 @@ fn find_metric(id: &str) -> Result<&'static MetricDef, AppError> {
         .ok_or_else(|| AppError::Validation(format!("unknown metric: {id}")))
 }
 
+const ALLOWED_TELEMETRY_COLUMNS: &[&str] = &[
+    "battery_level",
+    "distance_to_empty_mi",
+    "odometer_miles",
+    "outside_temp_c",
+    "speed_mph",
+    "power_kw",
+    "tire_fl_psi",
+    "tire_fr_psi",
+    "tire_rl_psi",
+    "tire_rr_psi",
+];
+
 async fn latest_telemetry_value(
     pool: &sqlx::PgPool,
     vid: Uuid,
     column: &str,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
+    if !ALLOWED_TELEMETRY_COLUMNS.contains(&column) {
+        return Err(AppError::Validation(format!("unknown telemetry column: {column}")));
+    }
     let sql = format!(
         "SELECT {column}::float8 AS value, ts FROM timeseries.telemetry \
          WHERE vehicle_id = $1 AND {column} IS NOT NULL ORDER BY ts DESC LIMIT 1"
@@ -413,10 +429,10 @@ async fn summary_value(
 
     let value = match metric {
         "total_miles" => sqlx::query_scalar(
-            "SELECT COALESCE(
-                (SELECT odometer_miles FROM timeseries.telemetry WHERE vehicle_id=$1 AND odometer_miles IS NOT NULL ORDER BY ts DESC LIMIT 1),
-                (SELECT SUM(distance_miles) FROM riviamigo.trips WHERE vehicle_id=$1)
-            )",
+            "SELECT od.odometer_miles::float8 \
+             FROM timeseries.odometer_daily od \
+             WHERE od.vehicle_id = $1 \
+             ORDER BY od.bucket DESC LIMIT 1",
         )
         .bind(vid)
         .fetch_optional(pool)
@@ -605,6 +621,9 @@ async fn telemetry_daily_series(
     to: DateTime<Utc>,
     aggregation: &str,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
+    if !ALLOWED_TELEMETRY_COLUMNS.contains(&column) {
+        return Err(AppError::Validation(format!("unknown telemetry column: {column}")));
+    }
     let aggregate = match aggregation {
         "max" => "MAX",
         "sum" => "SUM",

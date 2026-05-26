@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { useAuth } from '@riviamigo/hooks';
+import { useAuth, useDocumentTheme } from '@riviamigo/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
 import { Zap, Route, Battery } from 'lucide-react';
 
@@ -19,22 +19,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isDark, setIsDark] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    const html = document.documentElement;
-    return html.classList.contains('dark') || !html.classList.contains('light');
-  });
-
-  React.useEffect(() => {
-    const html = document.documentElement;
-    const updateTheme = () => {
-      setIsDark(html.classList.contains('dark') || !html.classList.contains('light'));
-    };
-    updateTheme();
-    const observer = new MutationObserver(updateTheme);
-    observer.observe(html, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
+  const isDark = useDocumentTheme();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -127,7 +112,7 @@ export function LoginPage() {
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             />
             {error && (
-              <p className="text-xs text-[#F87171] bg-[#7F1D1D]/20 border border-[#F87171]/20 rounded-lg px-3 py-2">
+              <p className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
                 {error}
               </p>
             )}

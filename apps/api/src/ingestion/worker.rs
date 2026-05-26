@@ -305,8 +305,10 @@ pub async fn run_vehicle_worker(
                 mark_persisted(&pool, vehicle_id, event.ts).await;
             }
         } else if let PersistenceDecision::Suppress(reason) = persistence_decision {
-            increment_counter(&pool, vehicle_id, "telemetry_writes_suppressed").await;
-            increment_counter(&pool, vehicle_id, reason.counter_column()).await;
+            let mut suppress_batch = CounterBatch::new(vehicle_id);
+            suppress_batch.increment("telemetry_writes_suppressed");
+            suppress_batch.increment(reason.counter_column());
+            suppress_batch.flush(&pool).await;
         }
 
         // ── State period tracking ────────────────────────────────────────────
@@ -951,39 +953,93 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     2.0 * radius_m * a.sqrt().asin()
 }
 
+/// Batches stewardship counter increments and flushes them in a single upsert.
+struct CounterBatch {
+    vehicle_id: Uuid,
+    counts: std::collections::HashMap<&'static str, i64>,
+}
+
+impl CounterBatch {
+    fn new(vehicle_id: Uuid) -> Self {
+        Self {
+            vehicle_id,
+            counts: std::collections::HashMap::new(),
+        }
+    }
+
+    fn increment(&mut self, column: &str) {
+        if let Some(col) = stewardship_counter_column(column) {
+            *self.counts.entry(col).or_insert(0) += 1;
+        }
+    }
+
+    async fn flush(self, pool: &PgPool) {
+        if self.counts.is_empty() {
+            return;
+        }
+        let cols: Vec<&'static str> = self.counts.keys().copied().collect();
+        let set_clause = cols
+            .iter()
+            .map(|c| format!("{c} = riviamigo.rivian_stewardship_counters.{c} + EXCLUDED.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let col_list = cols.join(", ");
+        let placeholders: Vec<String> = cols
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 3))
+            .collect();
+        let sql = format!(
+            "INSERT INTO riviamigo.rivian_stewardship_counters (vehicle_id, day, {col_list}) \
+             VALUES ($1, CURRENT_DATE, {vals}) \
+             ON CONFLICT (vehicle_id, day) DO UPDATE SET {set_clause}, updated_at = now()",
+            vals = placeholders.join(", "),
+        );
+        let mut q = sqlx::query(&sql)
+            .bind(self.vehicle_id)
+            .bind(chrono::Utc::now().date_naive());
+        for col in &cols {
+            q = q.bind(*self.counts.get(col).unwrap_or(&0));
+        }
+        let _ = q.execute(pool).await;
+    }
+}
+
 async fn handle_inbound_accounting(
     pool: &PgPool,
     vehicle_id: Uuid,
     config: &Config,
     inbound: &WsInboundEvent,
 ) {
+    let mut batch = CounterBatch::new(vehicle_id);
     if !is_synthetic_control(inbound.message_type.as_deref()) {
-        increment_counter(pool, vehicle_id, "ws_messages_received").await;
+        batch.increment("ws_messages_received");
         match inbound.kind {
             WsInboundKind::Control => {
-                increment_counter(pool, vehicle_id, "ws_control_messages_received").await
+                batch.increment("ws_control_messages_received");
             }
             WsInboundKind::Heartbeat => {
-                increment_counter(pool, vehicle_id, "ws_heartbeats_received").await
+                batch.increment("ws_heartbeats_received");
             }
             WsInboundKind::Telemetry => {
-                increment_counter(pool, vehicle_id, "ws_payload_messages_received").await
+                batch.increment("ws_payload_messages_received");
             }
         }
     }
     match inbound.message_type.as_deref() {
         Some("connection_open") => {
-            increment_counter(pool, vehicle_id, "ws_connections_opened").await
+            batch.increment("ws_connections_opened");
         }
-        Some("reconnect") => increment_counter(pool, vehicle_id, "ws_reconnects").await,
+        Some("reconnect") => batch.increment("ws_reconnects"),
         Some("connection_init" | "subscribe") => {
-            increment_counter(pool, vehicle_id, "outbound_messages_sent").await
+            batch.increment("outbound_messages_sent");
         }
         _ => {}
     }
     if config.rivian_persist_raw_events {
-        persist_raw_event(pool, vehicle_id, inbound).await;
+        persist_raw_event(pool, &mut batch, vehicle_id, inbound).await;
     }
+    batch.flush(pool).await;
 }
 
 fn is_synthetic_control(message_type: Option<&str>) -> bool {
@@ -993,7 +1049,7 @@ fn is_synthetic_control(message_type: Option<&str>) -> bool {
     )
 }
 
-async fn persist_raw_event(pool: &PgPool, vehicle_id: Uuid, inbound: &WsInboundEvent) {
+async fn persist_raw_event(pool: &PgPool, batch: &mut CounterBatch, vehicle_id: Uuid, inbound: &WsInboundEvent) {
     let payload_json = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
     let result = sqlx::query(
         r#"
@@ -1012,7 +1068,7 @@ async fn persist_raw_event(pool: &PgPool, vehicle_id: Uuid, inbound: &WsInboundE
     .await;
 
     if result.is_ok() {
-        increment_counter(pool, vehicle_id, "raw_events_persisted").await;
+        batch.increment("raw_events_persisted");
     }
 }
 

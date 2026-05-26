@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from '@riviamigo/hooks';
+import { useAuth, api } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
 import type { DashboardConfig, WidgetInstance } from './schema';
 
@@ -19,26 +19,6 @@ interface DashboardRecord {
   config?: unknown;
 }
 
-async function apiFetch<T>(
-  url: string,
-  token: string | null,
-  init: RequestInit = {},
-): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init.headers,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.error?.message ?? `HTTP ${res.status}`);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
-}
 
 export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
   const record = raw as DashboardRecord;
@@ -192,7 +172,7 @@ export function useDashboards() {
   return useQuery<DashboardConfig[]>({
     queryKey: ['dashboards'],
     queryFn: async () => {
-      const records = await apiFetch<unknown[]>(BASE, accessToken);
+      const records = await api.apiFetch<unknown[]>('GET', BASE);
       return records.map(normalizeDashboardConfig);
     },
     enabled: !!accessToken,
@@ -204,21 +184,18 @@ export function useDashboardBySlug(slug: string | null) {
   const { accessToken } = useAuth();
   return useQuery<DashboardConfig>({
     queryKey: ['dashboards', 'slug', slug],
-    queryFn: async () => normalizeDashboardConfig(await apiFetch(`${BASE}/by-slug/${slug}`, accessToken)),
+    queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/by-slug/${slug}`)),
     enabled: !!accessToken && !!slug,
     placeholderData: (previous) => previous,
   });
 }
 
 export function useCreateDashboard() {
-  const { accessToken } = useAuth();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (config: DashboardConfig) =>
-      apiFetch<unknown>(BASE, accessToken, {
-        method: 'POST',
-        body: JSON.stringify(dashboardMutationBody(config)),
-      }).then(normalizeDashboardConfig),
+      api.apiFetch<unknown>('POST', BASE, dashboardMutationBody(config))
+        .then(normalizeDashboardConfig),
     onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
@@ -227,14 +204,11 @@ export function useCreateDashboard() {
 }
 
 export function useUpdateDashboard() {
-  const { accessToken } = useAuth();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (config: DashboardConfig) =>
-      apiFetch<unknown>(`${BASE}/${config.id}`, accessToken, {
-        method: 'PUT',
-        body: JSON.stringify(dashboardMutationBody(config)),
-      }).then(normalizeDashboardConfig),
+      api.apiFetch<unknown>('PUT', `${BASE}/${config.id}`, dashboardMutationBody(config))
+        .then(normalizeDashboardConfig),
     onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
@@ -243,13 +217,13 @@ export function useUpdateDashboard() {
 }
 
 export function useUpdateAdminDashboard() {
-  const { accessToken } = useAuth();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (config: DashboardConfig) =>
-      apiFetch<unknown>(`/v1/admin/dashboards/${config.id}`, accessToken, {
-        method: 'PUT',
-        body: JSON.stringify({ name: config.name, description: config.description, config }),
+      api.apiFetch<unknown>('PUT', `/v1/admin/dashboards/${config.id}`, {
+        name: config.name,
+        description: config.description,
+        config,
       }).then(normalizeDashboardConfig),
     onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
       qc.invalidateQueries({ queryKey: ['dashboards'] });
@@ -259,21 +233,18 @@ export function useUpdateAdminDashboard() {
 }
 
 export function useDeleteDashboard() {
-  const { accessToken } = useAuth();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<void>(`${BASE}/${id}`, accessToken, { method: 'DELETE' }),
+    mutationFn: (id: string) => api.apiFetch<void>('DELETE', `${BASE}/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboards'] }),
   });
 }
 
 export function useCloneDashboard() {
-  const { accessToken } = useAuth();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      apiFetch<unknown>(`${BASE}/${id}/clone`, accessToken, { method: 'POST' }).then(normalizeDashboardConfig),
+      api.apiFetch<unknown>('POST', `${BASE}/${id}/clone`).then(normalizeDashboardConfig),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboards'] }),
   });
 }
