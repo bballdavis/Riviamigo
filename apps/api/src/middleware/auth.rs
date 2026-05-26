@@ -55,9 +55,8 @@ pub struct AppState {
     pub jwt_keys: Arc<JwtKeys>,
     pub age_key: String,
     pub config: crate::config::Config,
-    /// Tracks when the next Nominatim call is allowed (rate limit: 1 req/1.1s).
-    pub nominatim_next_call: Arc<tokio::sync::Mutex<Instant>>,
-    /// Short-lived in-memory cache: normalised query -> (cached_at, json result).
+    /// Short-lived in-memory cache for address search results: normalised query -> (cached_at, json).
+    /// Rate limiting is handled by the process-wide `ingestion::worker::nominatim_gate()`.
     pub nominatim_cache: Arc<tokio::sync::RwLock<HashMap<String, (Instant, serde_json::Value)>>>,
     /// Handle for sending commands to the ingestion supervisor.
     pub supervisor: SupervisorHandle,

@@ -406,9 +406,6 @@ mod tests {
             age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
                 .to_string(),
             config,
-            nominatim_next_call: std::sync::Arc::new(tokio::sync::Mutex::new(
-                std::time::Instant::now(),
-            )),
             nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),

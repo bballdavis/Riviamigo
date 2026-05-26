@@ -170,8 +170,10 @@ async fn search_places(
     }
 
     // --- rate-limit: ≥ 1100 ms between Nominatim calls --------------------
+    // Share the process-wide gate with the ingestion worker so the combined
+    // call rate across all codepaths never exceeds Nominatim's 1 req/sec limit.
     let sleep_for = {
-        let mut next = state.nominatim_next_call.lock().await;
+        let mut next = crate::ingestion::worker::nominatim_gate().lock().await;
         let now = std::time::Instant::now();
         let wait = next.saturating_duration_since(now);
         *next = now + wait + Duration::from_millis(1100);

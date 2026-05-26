@@ -96,7 +96,10 @@ function VehicleHealthContent() {
         ) : (
           <>
             <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
-              <Card className="overflow-hidden border-accent/20 bg-[radial-gradient(circle_at_18%_0%,rgba(253,131,4,0.18),transparent_32%),var(--rm-bg-surface)]">
+              <Card
+                className="overflow-hidden border-accent/20"
+                style={{ background: 'radial-gradient(circle at 18% 0%, color-mix(in oklab, var(--rm-accent) 18%, transparent) 32%, transparent), var(--rm-bg-surface)' }}
+              >
                 <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
                   <div>
                     <div className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-accent-muted px-2.5 py-1 text-xs font-medium text-accent">

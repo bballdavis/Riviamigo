@@ -11,7 +11,7 @@ export const CHART_COLORS = {
   warning: colors.soc.mid,
   danger: colors.soc.low,
   muted: colors.slate[400],
-  grid: 'rgba(255,255,255,0.06)',
+  grid: 'var(--rm-chart-grid)',
   ...colors.dataViz,
 } as const;
 
@@ -53,7 +53,7 @@ export const TICK_STYLE = {
 } as const;
 
 export const TOOLTIP_CURSOR_STYLE = {
-  stroke: 'rgba(255,255,255,0.06)',
+  stroke: 'var(--rm-chart-grid)',
   strokeWidth: 1,
-  fill: 'rgba(255,255,255,0.02)',
+  fill: 'var(--rm-chart-hover-bg)',
 } as const;

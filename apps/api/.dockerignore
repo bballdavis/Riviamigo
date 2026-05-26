@@ -1,3 +1,26 @@
-target
-.git
+# Build artifacts
+target/
+
+# Version control
+.git/
+.gitignore
+
+# Local secrets and environment files — never bake into image
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor noise
 .DS_Store
+*.swp
+*.swo
+
+# Documentation and CI — not needed at runtime
+docs/
+.github/
+*.md
+LICENSE
+
+# Test fixtures and benches — not needed at runtime
+benches/

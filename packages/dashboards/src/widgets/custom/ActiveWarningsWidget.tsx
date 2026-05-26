@@ -21,28 +21,28 @@ const WARNINGS: Warning[] = [
     label: 'Brake Fluid Low',
     icon: <Droplets className="h-3.5 w-3.5" />,
     severity: 'error',
-    active: (s) => (s as any).brake_fluid_low === true,
+    active: (s) => s.brake_fluid_low === true,
   },
   {
     key: 'wiper_fluid',
     label: 'Wiper Fluid Low',
     icon: <Droplets className="h-3.5 w-3.5" />,
     severity: 'warn',
-    active: (s) => (s as any).wiper_fluid_low === true,
+    active: (s) => s.wiper_fluid_low === true,
   },
   {
     key: 'alarm',
     label: 'Alarm Active',
     icon: <Bell className="h-3.5 w-3.5" />,
     severity: 'error',
-    active: (s) => (s as any).alarm_active === true,
+    active: (s) => s.alarm_active === true,
   },
   {
     key: 'charger_derate',
     label: 'Charger Derate',
     icon: <ZapOff className="h-3.5 w-3.5" />,
     severity: 'warn',
-    active: (s) => (s as any).charger_derate_active === true,
+    active: (s) => s.charger_derate_active === true,
   },
   {
     key: 'hv_thermal',
@@ -56,7 +56,7 @@ const WARNINGS: Warning[] = [
     label: 'Service Mode',
     icon: <Wrench className="h-3.5 w-3.5" />,
     severity: 'info',
-    active: (s) => (s as any).service_mode === true,
+    active: (s) => s.service_mode === true,
   },
   {
     key: 'tire_pressure',
@@ -71,9 +71,9 @@ const WARNINGS: Warning[] = [
 ];
 
 const SEVERITY_COLORS: Record<Warning['severity'], string> = {
-  error: 'bg-[#7F1D1D]/20 text-[#F87171] border-[#F87171]/20',
-  warn:  'bg-amber-900/20 text-amber-400 border-amber-400/20',
-  info:  'bg-blue-900/20 text-blue-400 border-blue-400/20',
+  error: 'bg-status-danger/10 text-status-danger border-status-danger/20',
+  warn:  'bg-status-warning/10 text-status-warning border-status-warning/20',
+  info:  'bg-status-info/10 text-status-info border-status-info/20',
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -96,10 +96,10 @@ function ActiveWarningsWidget({
     <div className="flex h-full flex-col gap-3 p-4">
       {/* Header */}
       <div className="flex items-center gap-2">
-        <ShieldAlert className={`h-4 w-4 ${activeWarnings.length > 0 ? 'text-[#F87171]' : 'text-fg-tertiary'}`} />
+        <ShieldAlert className={`h-4 w-4 ${activeWarnings.length > 0 ? 'text-status-danger' : 'text-fg-tertiary'}`} />
         <span className="text-sm font-medium text-fg">Warnings</span>
         {activeWarnings.length > 0 && (
-          <span className="rounded-full bg-[#7F1D1D]/30 px-2 py-0.5 text-xs font-medium text-[#F87171]">
+          <span className="rounded-full bg-status-danger/15 px-2 py-0.5 text-xs font-medium text-status-danger">
             {activeWarnings.length}
           </span>
         )}
@@ -108,8 +108,8 @@ function ActiveWarningsWidget({
       {/* Content */}
       {activeWarnings.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
-          <CheckCircle2 className="h-7 w-7 text-[color:var(--rm-status-positive)]" />
-          <p className="text-sm font-medium text-[color:var(--rm-status-positive)]">All clear</p>
+          <CheckCircle2 className="h-7 w-7 text-status-positive" />
+          <p className="text-sm font-medium text-status-positive">All clear</p>
           <p className="text-xs text-fg-tertiary">No active warnings</p>
         </div>
       ) : (

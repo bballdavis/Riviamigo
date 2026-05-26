@@ -4,6 +4,14 @@ set -e
 echo "🚀 Starting Riviamigo production server..."
 echo ""
 
+# Source .env so DATABASE_URL, REDIS_URL, etc. are available for health checks
+# and cargo run.  Do this early — before any tool availability checks — so any
+# PATH overrides in .env are also picked up.
+if [ -f .env ]; then
+  # shellcheck disable=SC1091
+  set -a; source .env; set +a
+fi
+
 # Check if pnpm is installed
 if ! command -v pnpm &> /dev/null; then
   echo "❌ pnpm is not installed. Install it with:"
