@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::cost_profile::{compute_cost, CostProfile};
+use crate::models::cost_profile::{compute_cost, compute_tou_cost_from_readings, CostProfile, TimedEnergyPoint};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChargeCostComputation {
@@ -48,6 +48,12 @@ pub struct CostInputs {
     pub duration_minutes: i32,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// Per-interval telemetry readings used for accurate TOU attribution.
+    /// When non-empty and billing_type is "tou", cost is computed by summing
+    /// `kwh × rate` for each actual measured interval rather than
+    /// time-weighting the session window. An empty vec falls back to
+    /// the time-weighted method (used when telemetry is unavailable).
+    pub timed_kwh_readings: Vec<TimedEnergyPoint>,
 }
 
 /// Pure computation: given session inputs and an optional cost profile, return
@@ -76,14 +82,22 @@ pub fn apply_cost_inputs(
 
     let cost_usd = authoritative_paid_total.or_else(|| {
         profile.and_then(|p| {
-            compute_cost(
-                p,
-                inputs.energy_added_kwh,
-                inputs.energy_used_kwh,
-                inputs.duration_minutes,
-                inputs.started_at,
-                inputs.ended_at,
-            )
+            // For TOU billing, prefer actual measured readings over time-weighting.
+            // Time-weighting spreads energy uniformly across the session window
+            // (including idle time before/after charging), which attributes cost
+            // to periods when the car wasn't actually drawing power.
+            if p.billing_type == "tou" && !inputs.timed_kwh_readings.is_empty() {
+                compute_tou_cost_from_readings(p, &inputs.timed_kwh_readings)
+            } else {
+                compute_cost(
+                    p,
+                    inputs.energy_added_kwh,
+                    inputs.energy_used_kwh,
+                    inputs.duration_minutes,
+                    inputs.started_at,
+                    inputs.ended_at,
+                )
+            }
         })
     });
 
@@ -165,6 +179,86 @@ pub async fn resolve_profile(
     Ok(None)
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct TelemetryEnergyRow {
+    ts: DateTime<Utc>,
+    energy_kwh: f64,
+}
+
+/// Fetch per-interval energy readings for a charging session.
+///
+/// Primary source: `timeseries.telemetry_1min` — 1-minute SOC-delta buckets.
+/// Fallback: `riviamigo.rivian_charge_curve_points` — Rivian API backfill
+///   power samples, converted from kW to kWh (÷ 60 for one minute).
+///
+/// Returns an empty vec when no useful data is found; callers fall back to
+/// the time-weighted TOU method in that case.
+async fn fetch_session_energy_readings(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    session_id: Uuid,
+) -> Result<Vec<TimedEnergyPoint>> {
+    let rows = sqlx::query_as::<_, TelemetryEnergyRow>(
+        r#"WITH samples AS (
+               SELECT bucket,
+                      avg_soc,
+                      MAX(battery_capacity_wh) OVER () AS cap_wh
+               FROM timeseries.telemetry_1min
+               WHERE vehicle_id = $1
+                 AND bucket >= $2
+                 AND bucket <= $3
+                 AND avg_soc IS NOT NULL
+           ),
+           deltas AS (
+               SELECT bucket AS ts,
+                      GREATEST(0.0,
+                          (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket))
+                              / 100.0 * cap_wh / 1000.0
+                      ) AS energy_kwh
+               FROM samples
+           )
+           SELECT ts, energy_kwh
+           FROM deltas
+           WHERE energy_kwh > 0
+           ORDER BY ts"#,
+    )
+    .bind(vehicle_id)
+    .bind(started_at)
+    .bind(ended_at)
+    .fetch_all(pool)
+    .await?;
+
+    if !rows.is_empty() {
+        return Ok(rows
+            .into_iter()
+            .map(|r| TimedEnergyPoint { ts: r.ts, kwh: r.energy_kwh })
+            .collect());
+    }
+
+    // Fallback: Rivian API backfill curve points stored during polling.
+    // power_kw is instantaneous power; dividing by 60 gives kWh for that
+    // 1-minute sample interval.
+    let fallback = sqlx::query_as::<_, TelemetryEnergyRow>(
+        r#"SELECT ts,
+                  GREATEST(0.0, power_kw) / 60.0 AS energy_kwh
+           FROM riviamigo.rivian_charge_curve_points
+           WHERE charge_session_id = $1
+             AND power_kw IS NOT NULL
+             AND power_kw > 0
+           ORDER BY ts"#,
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(fallback
+        .into_iter()
+        .map(|r| TimedEnergyPoint { ts: r.ts, kwh: r.energy_kwh })
+        .collect())
+}
+
 pub async fn recompute_charge_session_cost(
     pool: &PgPool,
     session_id: Uuid,
@@ -201,6 +295,22 @@ pub async fn recompute_charge_session_cost(
             .max(0)
     });
 
+    // Fetch per-interval telemetry readings so TOU cost reflects actual
+    // charging activity rather than the session window as a whole.
+    let timed_kwh_readings = if let Some(ended_at) = session.ended_at {
+        fetch_session_energy_readings(
+            pool,
+            session.vehicle_id,
+            session.started_at,
+            ended_at,
+            session.id,
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        vec![]
+    };
+
     let inputs = CostInputs {
         is_rivian_network: session.is_rivian_network,
         is_home: session.is_home,
@@ -210,6 +320,7 @@ pub async fn recompute_charge_session_cost(
         duration_minutes,
         started_at: session.started_at,
         ended_at: session.ended_at,
+        timed_kwh_readings,
     };
 
     let result = apply_cost_inputs(&inputs, profile.as_ref());
@@ -279,6 +390,7 @@ mod tests {
             duration_minutes: duration_min,
             started_at: Utc::now(),
             ended_at: None,
+            timed_kwh_readings: vec![],
         }
     }
 
@@ -309,6 +421,7 @@ mod tests {
             duration_minutes: 30,
             started_at: Utc::now(),
             ended_at: None,
+            timed_kwh_readings: vec![],
         };
         let result = apply_cost_inputs(&inputs, Some(&profile));
         assert_eq!(result.cost_method, "rivian_paid_total");
@@ -354,6 +467,7 @@ mod tests {
             duration_minutes: 120,
             started_at: Utc::now(),
             ended_at: None,
+            timed_kwh_readings: vec![],
         };
         let result = apply_cost_inputs(&inputs, Some(&profile));
         assert_eq!(result.cost_method, "profile");
@@ -380,6 +494,7 @@ mod tests {
             duration_minutes: 873,
             started_at: Utc::now(),
             ended_at: None,
+            timed_kwh_readings: vec![],
         };
         let result = apply_cost_inputs(&inputs, Some(&profile));
         // Must use profile (50.4 × 0.12 = $6.048), NOT $508.88.
@@ -409,9 +524,60 @@ mod tests {
             duration_minutes: 360,
             started_at: start,
             ended_at: Some(end),
+            timed_kwh_readings: vec![],
         };
         let result = apply_cost_inputs(&inputs, Some(&profile));
         assert_eq!(result.cost_method, "profile");
         assert_eq!(result.cost_usd, Some(0.0));
+    }
+
+    // ── Regression: the bug observed in the screenshot session.
+    // ── Session window: 7 PM – 10:41 AM CDT (spans both paid daytime and
+    // ── free evening/overnight). Time-weighted average assigns ~$0.12/kWh
+    // ── because it counts the paid hour at session start (7–8 PM) and the
+    // ── paid 4.7 hours at session end (6–10:41 AM) even though no charging
+    // ── occurred then. Actual readings show all kWh delivered in the free
+    // ── Evening/Overnight window → cost must be $0.
+    #[test]
+    fn tou_uses_actual_readings_not_session_window() {
+        let mut profile = make_profile("tou", 0.0, 0.0);
+        profile.timezone = Some("America/Chicago".into());
+        profile.tou_periods = json!([
+            { "label": "Overnight", "start_minute": 0,    "end_minute": 360,  "rate": 0.0 },
+            { "label": "Daytime",   "start_minute": 360,  "end_minute": 1200, "rate": 0.322499 },
+            { "label": "Evening",   "start_minute": 1200, "end_minute": 1440, "rate": 0.0 }
+        ]);
+        // Session window: 2026-05-09 19:01 CDT → 2026-05-10 10:41 CDT
+        // CDT = UTC-5, so: 2026-05-10 00:01 UTC → 2026-05-10 15:41 UTC
+        let start = Utc.with_ymd_and_hms(2026, 5, 10, 0, 1, 0).single().unwrap();
+        let end   = Utc.with_ymd_and_hms(2026, 5, 10, 15, 41, 0).single().unwrap();
+
+        // Actual charging: 9:30 PM – 11:30 PM CDT = 02:30–04:30 UTC
+        // All in Evening (8 pm – midnight) and Overnight (midnight – 6 am) → rate = 0.
+        let readings = vec![
+            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 2, 30, 0).single().unwrap(), kwh: 5.0 }, // 9:30 PM CDT – Evening
+            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 3, 0,  0).single().unwrap(), kwh: 8.0 }, // 10:00 PM CDT – Evening
+            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 4, 0,  0).single().unwrap(), kwh: 8.0 }, // 11:00 PM CDT – Evening
+            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 4, 30, 0).single().unwrap(), kwh: 8.0 }, // 11:30 PM CDT – Evening
+            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 5, 0,  0).single().unwrap(), kwh: 5.0 }, // midnight CDT – Overnight
+            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 5, 30, 0).single().unwrap(), kwh: 5.0 }, // 12:30 AM CDT – Overnight
+        ];
+        let total_kwh: f64 = readings.iter().map(|r| r.kwh).sum(); // 39.0
+
+        let inputs = CostInputs {
+            is_rivian_network: Some(false),
+            is_home: Some(true),
+            rivian_paid_total: None,
+            energy_added_kwh: Some(total_kwh),
+            energy_used_kwh: None,
+            duration_minutes: ((end - start).num_seconds() / 60) as i32,
+            started_at: start,
+            ended_at: Some(end),
+            timed_kwh_readings: readings,
+        };
+        let result = apply_cost_inputs(&inputs, Some(&profile));
+        assert_eq!(result.cost_method, "profile");
+        // Time-weighted (old) path would give ~$4.50. Reading-based path must give $0.
+        assert_eq!(result.cost_usd, Some(0.0), "expected $0 since all charging is in free periods");
     }
 }

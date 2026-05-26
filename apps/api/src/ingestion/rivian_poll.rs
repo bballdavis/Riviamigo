@@ -974,7 +974,7 @@ async fn fetch_charge_history_inner(
                      rivian_paid_total  = COALESCE(rivian_paid_total, $7),
                      is_home            = COALESCE(is_home, $8),
                      duration_minutes   = COALESCE(duration_minutes, CASE WHEN $10::timestamptz IS NOT NULL THEN EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz))::int / 60 END),
-                     charger_type       = COALESCE(charger_type, $11, CASE WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' WHEN $8 THEN 'ac' END),
+                     charger_type       = COALESCE(charger_type, $11, CASE WHEN $8 THEN 'ac' WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' END),
                      source             = CASE WHEN source = 'telemetry' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'rivian_api') END,
                      rivian_charger_type = COALESCE(rivian_charger_type, $12),
                      currency_code       = COALESCE(currency_code, $13),
@@ -1010,10 +1010,19 @@ async fn fetch_charge_history_inner(
             .await?;
 
         if matched_session_id.is_none() {
-            // Try to match by start-time window (±5 min).
+            // Try to match by start-time window.  A ±5 min window is too tight
+            // for home sessions with a TOU/scheduled charging delay: the car is
+            // plugged in hours before the schedule window opens, so the
+            // telemetry-detected session start (when charger_state transitions
+            // to Charging) can differ substantially from the Rivian API's
+            // startInstant.  Use ±60 minutes to capture most scheduling delays
+            // while staying narrow enough to avoid matching sessions on the same
+            // day.  Among any candidates, the UPDATE takes the first match
+            // returned by the DB (ordered by started_at proximity is implicit
+            // via the LIMIT-free update — acceptable for typical patterns).
             let time_matched = if let Some(start) = s.start_instant {
-                let window_start = start - chrono::Duration::minutes(5);
-                let window_end = start + chrono::Duration::minutes(5);
+                let window_start = start - chrono::Duration::minutes(60);
+                let window_end = start + chrono::Duration::minutes(60);
 
                 sqlx::query_scalar::<_, Uuid>(
                         "UPDATE riviamigo.charge_sessions SET
@@ -1027,7 +1036,7 @@ async fn fetch_charge_history_inner(
                              rivian_paid_total  = COALESCE(rivian_paid_total, $7),
                              is_home            = COALESCE(is_home, $10),
                              duration_minutes   = COALESCE(duration_minutes, CASE WHEN $12::timestamptz IS NOT NULL THEN EXTRACT(EPOCH FROM ($12::timestamptz - $11::timestamptz))::int / 60 END),
-                             charger_type       = COALESCE(charger_type, $13, CASE WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' WHEN $10 THEN 'ac' END),
+                             charger_type       = COALESCE(charger_type, $13, CASE WHEN $10 THEN 'ac' WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' END),
                              source             = CASE WHEN source = 'telemetry' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'rivian_api') END,
                              rivian_charger_type = COALESCE(rivian_charger_type, $14),
                              currency_code       = COALESCE(currency_code, $15),
@@ -1212,6 +1221,14 @@ fn normalize_api_charger_type(value: Option<&str>) -> Option<&'static str> {
 }
 
 fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option<&'static str> {
+    // is_home must win over vendor.  "Tesla" as a vendor name is ambiguous: it
+    // could be a Tesla Supercharger (DC) or a Tesla Wall Connector at home (AC).
+    // Checking vendor first caused Wall Connector sessions to be mis-tagged as
+    // 'dc', which disabled the 22 kW AC cap in the charge curve query and let
+    // SOC-gap spikes from overnight sleep periods show as 200+ kW.
+    if is_home == Some(true) {
+        return Some("ac");
+    }
     if vendor
         .map(|name| {
             matches!(
@@ -1222,9 +1239,6 @@ fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option
         .unwrap_or(false)
     {
         return Some("dc");
-    }
-    if is_home == Some(true) {
-        return Some("ac");
     }
     None
 }

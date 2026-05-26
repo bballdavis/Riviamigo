@@ -34,7 +34,7 @@ export function ChargeSessionContent() {
     id: `charge-session-curve-${sessionId}`,
     componentType: 'chart' as const,
     definitionId: 'catalog',
-    title: 'Charge Rate Curve',
+    title: 'Charge Curve',
     layout: { x: 0, y: 0, w: 12, h: 8 },
     options: {
       page: 'charging',
@@ -42,6 +42,7 @@ export function ChargeSessionContent() {
       chartIds: ['charge-session-curve'],
       showPicker: false,
       curveSmoothing: 0.2,
+      headerSubtitle: 'Charge rate (kW) and cumulative energy (kWh) over time',
     },
   };
 
@@ -104,23 +105,21 @@ export function ChargeSessionContent() {
             </StatCardGrid>
 
             {/* Charge curve + cumulative energy on a shared time axis.
-                Explicit container height so the widget fills it properly
-                without a settings-button gap above the chart area. */}
+                DashboardChartWidget renders its own compact header (title +
+                settings button) so the card only needs to host the widget. */}
             <div className="bg-bg-surface border border-border rounded-xl p-5">
-              <div className="mb-3">
-                <h2 className="text-sm font-medium text-fg-secondary uppercase tracking-wider">Charge Curve</h2>
-                <p className="mt-0.5 text-xs text-fg-tertiary">Charge rate (kW) and cumulative energy (kWh) over time</p>
-              </div>
-              <div style={{ height: 360 }}>
-                <DashboardChartWidget
-                  instance={chargeCurveInstance}
-                  ctx={{
-                    vehicleId: defaultVehicleId,
-                    from: session?.started_at ?? '',
-                    to: session?.ended_at ?? session?.started_at ?? '',
-                    chargeSessionId: sessionId,
-                  }}
-                />
+              <div style={{ height: 400 }}>
+                {session && (
+                  <DashboardChartWidget
+                    instance={chargeCurveInstance}
+                    ctx={{
+                      vehicleId: defaultVehicleId,
+                      from: session.started_at,
+                      to: session.ended_at ?? session.started_at,
+                      chargeSessionId: sessionId,
+                    }}
+                  />
+                )}
               </div>
             </div>
           </>

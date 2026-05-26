@@ -91,7 +91,8 @@ describe('Charge session detail page', () => {
     expect(screen.getByText('12 samples matched')).toBeInTheDocument();
     expect(screen.getByText('88.4 km added')).toBeInTheDocument();
     expect(screen.getByText('Austin')).toBeInTheDocument();
-    expect(screen.getByText('Charge rate (kW) and cumulative energy (kWh) over time')).toBeInTheDocument();
+    // Chart title/subtitle are rendered inside DashboardChartWidget (mocked);
+    // assert only on the testid that the mock emits.
     expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
   });
 

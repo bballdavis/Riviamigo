@@ -45,6 +45,8 @@ interface DashboardChartOptions {
   page?: DashboardChartPage;
   showPicker?: boolean;
   curveSmoothing?: number | boolean;
+  /** Optional subtitle shown in the compact header when showPicker is false. */
+  headerSubtitle?: string;
 }
 
 interface ResolvedDashboardChartOptions {
@@ -53,6 +55,7 @@ interface ResolvedDashboardChartOptions {
   page?: DashboardChartPage;
   showPicker: boolean;
   curveSmoothing: number;
+  headerSubtitle?: string;
 }
 
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
@@ -75,6 +78,7 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
     showPicker: options.showPicker ?? fallbackIds.length > 1,
     curveSmoothing: normalizeCurveSmoothing(options.curveSmoothing),
     ...(page ? { page } : {}),
+    ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
   };
 }
 
@@ -198,6 +202,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       {options.showPicker && chartOptions.length > 1 ? (
+        // Full picker row (chart selector + settings button).
         <ChartPicker
           value={activeChartId}
           options={chartOptions}
@@ -207,12 +212,23 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           className="shrink-0"
           trailing={settingsButton}
         />
-      ) : (
-        // Absolutely positioned so it doesn't consume flow height and doesn't
-        // create a gap between the section header above and the chart below.
-        <div className="absolute right-0 top-0 z-10">
-          {settingsButton}
+      ) : instance.title ? (
+        // Compact header: title + optional subtitle on the left, settings button on
+        // the right. Keeps the button in flow so it doesn't overlap the chart canvas.
+        <div className="mb-2 flex shrink-0 items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">
+              {instance.title}
+            </p>
+            {options.headerSubtitle && (
+              <p className="mt-0.5 text-xs text-fg-tertiary">{options.headerSubtitle}</p>
+            )}
+          </div>
+          <div className="shrink-0">{settingsButton}</div>
         </div>
+      ) : (
+        // No title and no picker — float the button so it doesn't consume height.
+        <div className="absolute right-0 top-0 z-10">{settingsButton}</div>
       )}
       <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
         <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothing={smoothing} />
@@ -428,16 +444,28 @@ function ChargeSessionCurveChart({
   smoothing: number;
   startedAt: string | null;
 }) {
-  const rows = data.filter((point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw));
+  const allRows = data.filter((point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw));
 
   // Build time-based points when minutes_elapsed is available. This produces a
   // single chart with charge rate (left Y, kW) and cumulative energy (right Y, kWh)
   // on the same time axis — much easier to read than a SOC-on-X layout.
   const { points, rateValues, energyValues, useTime } = React.useMemo(() => {
     const startMs = startedAt ? new Date(startedAt).getTime() : null;
-    const timed = startMs != null && rows.some((p) => p.minutes_elapsed != null);
+    const timed = startMs != null && allRows.some((p) => p.minutes_elapsed != null);
 
-    // Compute cumulative energy (kWh) across all rows.
+    // Drop trailing zero-power points: when ended_at is later than when charging
+    // actually stopped, we accumulate a long flat zero tail. Keep only one point
+    // past the last active reading so the dropoff is still visible.
+    const lastActiveIdx = allRows.reduce(
+      (last, p, i) => ((p.power_kw ?? 0) > 0.1 ? i : last),
+      -1,
+    );
+    const rows =
+      lastActiveIdx >= 0 && lastActiveIdx < allRows.length - 2
+        ? allRows.slice(0, lastActiveIdx + 2)
+        : allRows;
+
+    // Compute cumulative energy (kWh) across the trimmed rows.
     let cumulative = 0;
     const energyVals: number[] = rows.map((p, i) => {
       if (i > 0) {
@@ -481,13 +509,14 @@ function ChargeSessionCurveChart({
       rateValues: rows.map((p) => p.power_kw),
       energyValues: energyVals,
     };
-  }, [rows, startedAt]);
+  }, [allRows, startedAt]);
 
   return (
     <RichTimeSeriesChart
       points={points}
       series={[
-        { key: 'rate', label: 'Charge Rate', values: rateValues, yScale: 'y' },
+        // Energy Added rendered first (bottom layer) so the area fill sits behind
+        // the Charge Rate line, which is drawn second (top layer).
         {
           key: 'energy',
           label: 'Energy Added',
@@ -495,6 +524,13 @@ function ChargeSessionCurveChart({
           values: energyValues,
           mode: 'area',
           yScale: 'y2',
+        },
+        {
+          key: 'rate',
+          label: 'Charge Rate',
+          color: CHART_COLORS.accent,
+          values: rateValues,
+          yScale: 'y',
         },
       ]}
       loading={loading}
