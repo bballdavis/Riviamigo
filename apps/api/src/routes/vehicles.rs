@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     errors::AppError,
-    ingestion::rivian_auth::RivianVehicleSummary,
+    ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
     middleware::auth::{AppState, AuthUser},
 };
 
@@ -667,6 +667,8 @@ async fn add_vehicle(
         ));
     }
 
+    let mut tx = state.pool.begin().await?;
+
     let vehicle_id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO riviamigo.vehicles
            (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
@@ -680,7 +682,7 @@ async fn add_vehicle(
     .bind(body.name.as_deref())
     .bind(body.home_lat)
     .bind(body.home_lng)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -693,7 +695,7 @@ async fn add_vehicle(
     )
     .bind(vehicle_id)
     .bind(encrypted.as_slice())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     // Set as default vehicle if user has none
@@ -703,10 +705,9 @@ async fn add_vehicle(
     )
     .bind(vehicle_id)
     .bind(auth.user_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
-    cache_vehicle_images(&state.pool, vehicle_id, &tokens).await;
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
          VALUES ($1, 'authorized', NULL, NULL, now())
@@ -717,8 +718,12 @@ async fn add_vehicle(
              updated_at = now()",
     )
     .bind(vehicle_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
+
+    cache_vehicle_images(&state.pool, vehicle_id, &tokens).await;
 
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
     info!(
@@ -728,8 +733,8 @@ async fn add_vehicle(
         "vehicle.add.persisted"
     );
 
-    // Spawn worker
-    // (supervisor handle is stored in AppState in main — passed via extension)
+    state.supervisor.send(SupervisorCommand::StartWorker { vehicle_id }).await;
+
     Ok(Json(serde_json::json!({"vehicle_id": vehicle_id})))
 }
 
@@ -834,6 +839,8 @@ async fn delete_vehicle(
         .bind(auth.user_id)
         .execute(&state.pool)
         .await?;
+
+    state.supervisor.send(SupervisorCommand::StopWorker { vehicle_id: vid }).await;
 
     Ok(Json(serde_json::json!({ "ok": true, "default_vehicle_id": next_default })))
 }
@@ -1674,6 +1681,7 @@ mod tests {
             nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
         }
     }
 
@@ -1741,6 +1749,7 @@ mod tests {
             nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
         };
 
         crate::routes::build_router(state)

@@ -46,6 +46,9 @@ async fn main() -> anyhow::Result<()> {
 
     let age_key = active_keys.age_key;
 
+    let supervisor =
+        ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone()).await?;
+
     let state = AppState {
         pool: pool.clone(),
         redis: redis.clone(),
@@ -54,10 +57,8 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
         nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        supervisor,
     };
-
-    let _supervisor =
-        ingestion::start_workers(pool.clone(), redis, age_key, config.clone()).await?;
     let _backup_scheduler = services::backups::start_backup_scheduler(pool.clone(), config.clone());
 
     let app = routes::build_router(state);

@@ -1127,13 +1127,33 @@ async fn write_telemetry(
                     $56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,
                     $76,$77,$78,$79,$80,$81,$82,$83)
             ON CONFLICT (vehicle_id, ts) DO UPDATE
-            SET drive_mode = EXCLUDED.drive_mode
-            WHERE EXCLUDED.drive_mode IS NOT NULL
-              AND EXCLUDED.drive_mode <> 'unknown'
-              AND (
-                timeseries.telemetry.drive_mode IS NULL
-                OR timeseries.telemetry.drive_mode = 'unknown'
-              )"#,
+            SET
+              latitude                  = COALESCE(EXCLUDED.latitude, timeseries.telemetry.latitude),
+              longitude                 = COALESCE(EXCLUDED.longitude, timeseries.telemetry.longitude),
+              altitude_m                = COALESCE(EXCLUDED.altitude_m, timeseries.telemetry.altitude_m),
+              speed_mph                 = COALESCE(EXCLUDED.speed_mph, timeseries.telemetry.speed_mph),
+              battery_level             = COALESCE(EXCLUDED.battery_level, timeseries.telemetry.battery_level),
+              battery_capacity_wh       = COALESCE(EXCLUDED.battery_capacity_wh, timeseries.telemetry.battery_capacity_wh),
+              distance_to_empty_mi      = COALESCE(EXCLUDED.distance_to_empty_mi, timeseries.telemetry.distance_to_empty_mi),
+              battery_limit             = COALESCE(EXCLUDED.battery_limit, timeseries.telemetry.battery_limit),
+              power_state               = COALESCE(EXCLUDED.power_state, timeseries.telemetry.power_state),
+              charger_state             = COALESCE(EXCLUDED.charger_state, timeseries.telemetry.charger_state),
+              charger_status            = COALESCE(EXCLUDED.charger_status, timeseries.telemetry.charger_status),
+              time_to_end_of_charge_min = COALESCE(EXCLUDED.time_to_end_of_charge_min, timeseries.telemetry.time_to_end_of_charge_min),
+              drive_mode                = CASE
+                                           WHEN EXCLUDED.drive_mode IS NOT NULL AND EXCLUDED.drive_mode <> 'unknown' THEN EXCLUDED.drive_mode
+                                           ELSE COALESCE(timeseries.telemetry.drive_mode, EXCLUDED.drive_mode)
+                                         END,
+              gear_status               = COALESCE(EXCLUDED.gear_status, timeseries.telemetry.gear_status),
+              cabin_temp_c              = COALESCE(EXCLUDED.cabin_temp_c, timeseries.telemetry.cabin_temp_c),
+              driver_temp_c             = COALESCE(EXCLUDED.driver_temp_c, timeseries.telemetry.driver_temp_c),
+              outside_temp_c            = COALESCE(EXCLUDED.outside_temp_c, timeseries.telemetry.outside_temp_c),
+              hvac_active               = COALESCE(EXCLUDED.hvac_active, timeseries.telemetry.hvac_active),
+              power_kw                  = COALESCE(EXCLUDED.power_kw, timeseries.telemetry.power_kw),
+              regen_power_kw            = COALESCE(EXCLUDED.regen_power_kw, timeseries.telemetry.regen_power_kw),
+              heading_deg               = COALESCE(EXCLUDED.heading_deg, timeseries.telemetry.heading_deg),
+              odometer_miles            = COALESCE(EXCLUDED.odometer_miles, timeseries.telemetry.odometer_miles),
+              is_online                 = COALESCE(EXCLUDED.is_online, timeseries.telemetry.is_online)"#,
     )
         .bind(e.ts)
         .bind(e.vehicle_id)

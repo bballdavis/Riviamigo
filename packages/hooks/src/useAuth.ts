@@ -3,10 +3,14 @@ import { persist } from 'zustand/middleware';
 import { api } from './api';
 
 interface AuthState {
+  // Access token is kept in-memory only — never written to localStorage.
+  // This prevents XSS from exfiltrating long-lived credentials.
   accessToken: string | null;
   userId: string | null;
   defaultVehicleId: string | null;
   isAuthenticated: boolean;
+  // True while an initial refresh is in flight on page load.
+  isBootstrapping: boolean;
 
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
@@ -24,10 +28,11 @@ export const useAuth = create<AuthState>()(
       userId: null,
       defaultVehicleId: null,
       isAuthenticated: false,
+      isBootstrapping: true,
 
       setTokens: (accessToken, defaultVehicleId) => {
         api.setToken(accessToken);
-        set({ accessToken, defaultVehicleId, isAuthenticated: true });
+        set({ accessToken, defaultVehicleId, isAuthenticated: true, isBootstrapping: false });
       },
 
       setDefaultVehicleId: (vehicleId) => {
@@ -36,7 +41,13 @@ export const useAuth = create<AuthState>()(
 
       clearSession: () => {
         api.setToken(null);
-        set({ accessToken: null, userId: null, defaultVehicleId: null, isAuthenticated: false });
+        set({
+          accessToken: null,
+          userId: null,
+          defaultVehicleId: null,
+          isAuthenticated: false,
+          isBootstrapping: false,
+        });
       },
 
       login: async (email, password) => {
@@ -46,6 +57,7 @@ export const useAuth = create<AuthState>()(
           accessToken: tokens.access_token,
           defaultVehicleId: tokens.default_vehicle_id ?? null,
           isAuthenticated: true,
+          isBootstrapping: false,
         });
       },
 
@@ -56,6 +68,7 @@ export const useAuth = create<AuthState>()(
           accessToken: tokens.access_token,
           defaultVehicleId: tokens.default_vehicle_id ?? null,
           isAuthenticated: true,
+          isBootstrapping: false,
         });
       },
 
@@ -72,26 +85,24 @@ export const useAuth = create<AuthState>()(
             accessToken: tokens.access_token,
             defaultVehicleId: tokens.default_vehicle_id ?? null,
             isAuthenticated: true,
+            isBootstrapping: false,
           });
           return true;
         } catch {
-          get().logout();
+          // Refresh failed — session is gone. Ensure clearSession is awaited
+          // so callers reading isAuthenticated after this see consistent state.
+          await get().logout();
           return false;
         }
       },
     }),
     {
       name: 'rm-auth',
+      // Only persist non-sensitive preferences. accessToken stays in memory.
       partialize: (s) => ({
-        accessToken: s.accessToken,
         defaultVehicleId: s.defaultVehicleId,
+        userId: s.userId,
       }),
-      onRehydrateStorage: () => (state) => {
-        if (state?.accessToken) {
-          api.setToken(state.accessToken);
-          state.isAuthenticated = true;
-        }
-      },
     }
   )
 );
@@ -103,6 +114,7 @@ api.onAuthChange((tokens) => {
       userId: null,
       defaultVehicleId: null,
       isAuthenticated: false,
+      isBootstrapping: false,
     });
     return;
   }
@@ -111,5 +123,6 @@ api.onAuthChange((tokens) => {
     accessToken: tokens.access_token,
     defaultVehicleId: tokens.default_vehicle_id ?? null,
     isAuthenticated: true,
+    isBootstrapping: false,
   });
 });

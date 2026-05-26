@@ -8,7 +8,7 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{errors::AppError, routes::api_keys::hash_api_key};
+use crate::{errors::AppError, ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -59,6 +59,8 @@ pub struct AppState {
     pub nominatim_next_call: Arc<tokio::sync::Mutex<Instant>>,
     /// Short-lived in-memory cache: normalised query -> (cached_at, json result).
     pub nominatim_cache: Arc<tokio::sync::RwLock<HashMap<String, (Instant, serde_json::Value)>>>,
+    /// Handle for sending commands to the ingestion supervisor.
+    pub supervisor: SupervisorHandle,
 }
 
 #[async_trait::async_trait]

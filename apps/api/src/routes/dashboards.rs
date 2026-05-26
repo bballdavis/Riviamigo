@@ -344,10 +344,12 @@ fn check_write_access(d: &Dashboard, user_id: Uuid, is_admin: bool) -> Result<()
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let role = sqlx::query_scalar!(
+        "SELECT role FROM riviamigo.users WHERE id = $1",
+        user_id
+    )
+    .fetch_optional(&state.pool)
+    .await?;
 
     match role.as_deref() {
         Some("admin") => Ok(()),
