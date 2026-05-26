@@ -22,6 +22,11 @@ export interface TripRow {
   start_lng?: number | null;
   end_lat?: number | null;
   end_lng?: number | null;
+  // Reverse-geocoded labels returned by the API
+  start_address?: string | null;
+  end_address?: string | null;
+  start_place?: string | null;
+  end_place?: string | null;
 }
 
 const col = createColumnHelper<TripRow>();

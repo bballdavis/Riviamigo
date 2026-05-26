@@ -59,7 +59,7 @@ export function StatCard({
       {hasDelta && (
         <div className={cn(
           'mt-2 flex items-center gap-1 text-xs font-medium',
-          isNeutral ? 'text-fg-tertiary' : isPositive ? 'text-[#10B981]' : 'text-[#F87171]'
+          isNeutral ? 'text-fg-tertiary' : isPositive ? 'text-status-positive' : 'text-status-danger'
         )}>
           {isNeutral ? (
             <Minus className="h-3 w-3" />

@@ -55,7 +55,6 @@ async fn main() -> anyhow::Result<()> {
         jwt_keys,
         age_key: age_key.clone(),
         config: config.clone(),
-        nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
         nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         supervisor,
     };

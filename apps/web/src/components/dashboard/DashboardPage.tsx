@@ -65,17 +65,17 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
     const isPending = updateDashboard.isPending || updateAdminDashboard.isPending || createDashboard.isPending;
 
     async function handleSave() {
-      if (!localConfig) { exitEdit(); return; }
+      if (!localConfig || !savedConfig) { exitEdit(); return; }
       try {
-        const isSystemDefault = savedConfig?.isDefault && !savedConfig?.ownerId;
+        const isSystemDefault = savedConfig.isDefault && !savedConfig.ownerId;
 
         if (isSystemDefault && isAdmin) {
           await updateAdminDashboard.mutateAsync({
             ...localConfig,
-            id: savedConfig!.id,
-            ownerId: savedConfig!.ownerId,
+            id: savedConfig.id,
+            ownerId: savedConfig.ownerId,
             isDefault: true,
-            isLocked: savedConfig!.isLocked,
+            isLocked: savedConfig.isLocked,
           });
         } else {
           const ownedCopy = savedConfig?.ownerId != null
@@ -158,7 +158,7 @@ export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: Das
   ) : undefined;
 }
 
-export function CurrentVehicleStatePanel({ status, images, vehicleName }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined; vehicleName?: string }) {
+export function CurrentVehicleStatePanel({ status, images, vehicleName }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined; vehicleName?: string | undefined }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
@@ -202,7 +202,10 @@ export function CurrentVehicleStatePanel({ status, images, vehicleName }: { stat
   }, []);
 
   return (
-    <section className="mb-4 overflow-hidden rounded-2xl border border-border bg-[radial-gradient(circle_at_20%_20%,rgba(253,131,4,0.16),transparent_32%),linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] p-4 shadow-lg shadow-black/10">
+    <section
+      className="mb-4 overflow-hidden rounded-2xl border border-border p-4 shadow-sm"
+      style={{ background: 'radial-gradient(circle at 20% 20%, color-mix(in oklab, var(--rm-accent) 16%, transparent) 32%, transparent), linear-gradient(135deg, var(--rm-bg-surface), var(--rm-bg-elevated))' }}
+    >
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
@@ -406,7 +409,7 @@ function VehicleOverheadLayers({
   base: string;
   overlays: string[];
   darkClassName: string;
-  vehicleName?: string;
+  vehicleName?: string | undefined;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
@@ -418,7 +421,7 @@ function VehicleOverheadLayers({
     <div className={`absolute inset-0 ${darkClassName}`}>
       <img
         src={base}
-        alt={vehicleName ?? ''}
+        alt={vehicleName ?? 'Rivian vehicle'}
         className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
         style={imageStyle}
       />

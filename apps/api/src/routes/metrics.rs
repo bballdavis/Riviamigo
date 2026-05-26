@@ -625,9 +625,10 @@ async fn telemetry_daily_series(
         return Err(AppError::Validation(format!("unknown telemetry column: {column}")));
     }
     let aggregate = match aggregation {
-        "max" => "MAX",
-        "sum" => "SUM",
-        _ => "AVG",
+        "avg" | "mean" => "AVG",
+        "max"          => "MAX",
+        "sum"          => "SUM",
+        other => return Err(AppError::Validation(format!("unknown aggregation: {other}"))),
     };
     let sql = format!(
         "SELECT date_trunc('day', ts) AS ts, {aggregate}({column})::float8 AS value \

@@ -28,10 +28,8 @@ function useIsMobile() {
 }
 
 function TripCard({ trip, isSelected, onClick }: { trip: TripRow; isSelected: boolean; onClick: () => void }) {
-  const startLabel = (trip as unknown as Record<string, unknown>)['start_place'] as string | undefined
-    ?? (trip as unknown as Record<string, unknown>)['start_address'] as string | undefined;
-  const endLabel = (trip as unknown as Record<string, unknown>)['end_place'] as string | undefined
-    ?? (trip as unknown as Record<string, unknown>)['end_address'] as string | undefined;
+  const startLabel = trip.start_place ?? trip.start_address;
+  const endLabel   = trip.end_place   ?? trip.end_address;
 
   return (
     <button
@@ -98,7 +96,7 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const [_setMapStyle, setMapStyleOverride] = useState<MapStyleMode | null>(null);
   const effectiveMapStyle: MapStyleMode = _setMapStyle ?? mapStyle;
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, 1, 50);
-  const trips = (data?.items ?? []) as unknown as TripRow[];
+  const trips = (data?.items ?? []) as TripRow[];
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
 
   React.useEffect(() => {
@@ -211,7 +209,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
     staleTime: 5 * 60 * 1000,
   });
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
-  const trips = (data?.items ?? []) as unknown as TripRow[];
+  const trips = (data?.items ?? []) as TripRow[];
   const columns = React.useMemo(
     () => createTripColumns(placesQuery.data ?? []),
     [placesQuery.data],

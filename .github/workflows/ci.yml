@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '0 8 * * 1'   # Every Monday 08:00 UTC
 
+# Minimal permissions by default; individual jobs escalate only what they need.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   PNPM_VERSION: '9'

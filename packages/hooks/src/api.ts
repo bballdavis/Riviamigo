@@ -120,7 +120,11 @@ export function resolveApiBaseUrl(
   return configuredBaseUrl;
 }
 
-const BASE = resolveApiBaseUrl();
+let _base: string | undefined;
+function getBase(): string {
+  if (_base === undefined) _base = resolveApiBaseUrl();
+  return _base;
+}
 
 interface ApiFailureDetail {
   status: number;
@@ -195,7 +199,7 @@ class ApiClient {
     retryOnUnauthorized = true,
     reportErrors = true
   ): Promise<T> {
-    let url = `${BASE}${path}`;
+    let url = `${getBase()}${path}`;
     if (params) {
       const q = new URLSearchParams(
         Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
@@ -786,19 +790,25 @@ function normalizeTrip(raw: unknown): Trip {
   };
 }
 
+const VALID_CHARGER_TYPES = new Set<string>(['AC', 'DC', 'DCFC']);
+
 function normalizeChargeSession(raw: unknown): ChargeSession {
   const row = isRecord(raw) ? raw : {};
+  const id = String(row.id ?? '');
+  if (!id) throw new Error('normalizeChargeSession: missing id in response');
   const lat = finiteNumber(row.location_lat);
   const lng = finiteNumber(row.location_lng);
   const coordinateLocation =
     lat !== undefined && lng !== undefined ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : null;
   return {
-    id: String(row.id ?? ''),
+    id,
     vehicle_id: String(row.vehicle_id ?? ''),
     started_at: String(row.started_at ?? ''),
     ended_at: row.ended_at == null ? null : String(row.ended_at),
     location_name: typeof row.location_name === 'string' ? row.location_name : (row.is_home === true ? 'Home' : coordinateLocation),
-    charger_type: typeof row.charger_type === 'string' ? row.charger_type as ChargeSession['charger_type'] : null,
+    charger_type: typeof row.charger_type === 'string' && VALID_CHARGER_TYPES.has(row.charger_type)
+      ? row.charger_type as ChargeSession['charger_type']
+      : null,
     energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? finiteNumber(row.kwh_added) ?? (
       finiteNumber(row.energy_added_wh) !== undefined ? finiteNumber(row.energy_added_wh)! / 1000 : null
     ),

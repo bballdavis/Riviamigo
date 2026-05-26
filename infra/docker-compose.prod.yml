@@ -38,6 +38,13 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
 
   timescaledb:
     image: timescale/timescaledb:2.16.1-pg16
@@ -56,6 +63,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          memory: 512M
 
   nginx:
     image: nginx:1.27-alpine
@@ -72,6 +86,13 @@ services:
       - proxy
     depends_on:
       - api
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          memory: 32M
 
 volumes:
   pgdata:

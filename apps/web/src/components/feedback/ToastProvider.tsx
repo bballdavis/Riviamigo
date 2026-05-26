@@ -72,7 +72,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-[0_12px_40px_rgba(0,0,0,0.2)] backdrop-blur-md ${TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'].container}`}
+            className={`rounded-xl border bg-bg-surface/95 px-4 py-3 text-base text-fg shadow-lg backdrop-blur-md ${TOAST_VARIANT_CLASSNAMES[toast.variant ?? 'default'].container}`}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
