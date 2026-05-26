@@ -16,15 +16,17 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
 
-  return <CurrentVehicleStatePanel status={status} images={activeVehicle?.images} />;
+  return <CurrentVehicleStatePanel status={status} images={activeVehicle?.images} vehicleName={activeVehicle?.display_name} />;
 }
 
 function CurrentVehicleStatePanel({
   status,
   images,
+  vehicleName,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
+  vehicleName?: string;
 }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
@@ -105,7 +107,7 @@ function CurrentVehicleStatePanel({
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {baseOverheadFallback ? (
               <VehicleArtFrame source={baseOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" />
+                <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} />
                 <VehicleOverheadLayers base={baseOverheadDark ?? baseOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" />
                 <VehicleLabel className="left-[27%] top-[0%]" value={tires.rl} />
                 <VehicleLabel className="left-[82%] top-[0%]" value={tires.fl} />
@@ -219,7 +221,7 @@ function VehicleArtFrame({
   );
 }
 
-function VehicleOverheadLayers({ base, overlays, darkClassName }: { base: string; overlays: string[]; darkClassName: string }) {
+function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: { base: string; overlays: string[]; darkClassName: string; vehicleName?: string }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
     width: 'var(--vehicle-frame-height)',
@@ -227,7 +229,7 @@ function VehicleOverheadLayers({ base, overlays, darkClassName }: { base: string
   } as React.CSSProperties;
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
-      <img src={base} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
+      <img src={base} alt={vehicleName ?? ''} className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
       {overlays.map((overlayUrl) => <img key={overlayUrl} src={overlayUrl} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />)}
     </div>
   );

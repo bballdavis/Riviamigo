@@ -35,7 +35,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
               'transition-colors duration-150',
               'focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent',
               error
-                ? 'border-[#F87171]/50 focus:ring-[#F87171] focus:border-[#F87171]'
+                ? 'border-status-danger/50 focus:ring-status-danger focus:border-status-danger'
                 : 'border-border hover:border-border-strong',
               iconLeft ? 'pl-9' : 'pl-3',
               iconRight ? 'pr-9' : 'pr-3',
@@ -49,7 +49,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             </span>
           )}
         </div>
-        {error && <p className="text-xs text-[#F87171]">{error}</p>}
+        {error && <p className="text-xs text-status-danger">{error}</p>}
         {hint && !error && <p className="text-xs text-fg-tertiary">{hint}</p>}
       </div>
     );

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useTrips } from '@riviamigo/hooks';
+import { api, useTrips, useDocumentTheme } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { Badge } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
@@ -87,18 +87,16 @@ import {
   registerTripsInStore,
 } from './tripSelectionStore';
 
-function getAppMapStyle(): MapStyleMode {
-  if (typeof document === 'undefined') return 'dark';
-  return document.documentElement.classList.contains('light') ? 'light' : 'dark';
-}
-
 // How many track requests to fire at once. Keep batching to avoid thundering
 // herd of simultaneous requests; stale time is infinite so tracks are cached forever.
 const TRACK_BATCH_SIZE = 8;
 
 function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { selectedIds } = useTripSelection();
-  const [mapStyle, setMapStyle] = useState<MapStyleMode>(getAppMapStyle);
+  const isDark = useDocumentTheme();
+  const mapStyle: MapStyleMode = isDark ? 'dark' : 'light';
+  const [_setMapStyle, setMapStyleOverride] = useState<MapStyleMode | null>(null);
+  const effectiveMapStyle: MapStyleMode = _setMapStyle ?? mapStyle;
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, 1, 50);
   const trips = (data?.items ?? []) as unknown as TripRow[];
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
@@ -106,21 +104,6 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   React.useEffect(() => {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`);
   }, [ctx.vehicleId, ctx.from, ctx.to]);
-
-  React.useEffect(() => {
-    if (typeof document === 'undefined') return;
-
-    const html = document.documentElement;
-    const updateMapStyle = () => {
-      setMapStyle(html.classList.contains('light') ? 'light' : 'dark');
-    };
-
-    updateMapStyle();
-    const observer = new MutationObserver(updateMapStyle);
-    observer.observe(html, { attributes: true, attributeFilter: ['class'] });
-
-    return () => observer.disconnect();
-  }, []);
 
   // ── Batched track fetching ───────────────────────────────────────────────
   // Firing one request per trip simultaneously hits the API rate-limiter when
@@ -177,7 +160,7 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
         } satisfies TripMapRoute;
       })
       .filter((route) => route.track.length > 1)
-  ), [trackDataVersion, trackQueries, trips]);
+  ), [trackDataVersion, trips]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -189,15 +172,15 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
             selectedRouteIds={selectedIds}
             onRouteClick={toggleTripSelection}
             height={height}
-            mapStyle={mapStyle}
+            mapStyle={effectiveMapStyle}
             className="h-full w-full"
           />
           <button
-            onClick={() => setMapStyle((style: MapStyleMode) => style === 'dark' ? 'light' : 'dark')}
-            aria-label={mapStyle === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
+            onClick={() => setMapStyleOverride((s) => (s ?? mapStyle) === 'dark' ? 'light' : 'dark')}
+            aria-label={effectiveMapStyle === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
             className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent shadow-lg transition-colors hover:bg-bg-elevated"
           >
-            {mapStyle === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {effectiveMapStyle === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
         </div>
       </div>

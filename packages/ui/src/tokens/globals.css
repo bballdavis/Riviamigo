@@ -90,6 +90,13 @@
   --rm-charging-dc:      #A78BFA;
   --rm-charging-dcfc:    #C084FC;
 
+  --rm-map-route-0: #38BDF8;
+  --rm-map-route-1: #34D399;
+  --rm-map-route-2: #A78BFA;
+  --rm-map-route-3: #F472B6;
+  --rm-map-route-4: #F59E0B;
+  --rm-map-route-5: #F87171;
+
   --rm-glow-sm:        0 0 0 1px rgba(253, 131, 4, 0.10);
   --rm-glow-md:        0 1px 2px rgba(253, 131, 4, 0.15);
   --rm-glow-lg:        0 2px 8px rgba(253, 131, 4, 0.20);

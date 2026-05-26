@@ -353,6 +353,11 @@ async fn list_sessions_response(
     let page = p.page.unwrap_or(1).max(1);
     let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
 
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await?;
+
     let rows = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
@@ -393,7 +398,7 @@ async fn list_sessions_response(
     .bind(to)
     .bind(limit)
     .bind(offset)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let total: i64 = sqlx::query_scalar::<_, i64>(
@@ -402,8 +407,10 @@ async fn list_sessions_response(
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.rollback().await?;
 
     Ok(Json(serde_json::json!({
         "data": rows,

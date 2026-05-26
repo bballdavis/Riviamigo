@@ -10,10 +10,10 @@ export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
 const variants: Record<NonNullable<BadgeProps['variant']>, string> = {
   default: 'bg-bg-elevated text-fg-secondary border border-border',
   accent:  'bg-accent-muted text-accent border border-accent/20',
-  success: 'bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20',
-  warning: 'bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20',
-  danger:  'bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20',
-  info:    'bg-[#60A5FA]/10 text-[#60A5FA] border border-[#60A5FA]/20',
+  success: 'bg-status-positive/10 text-status-positive border border-status-positive/20',
+  warning: 'bg-status-warning/10 text-status-warning border border-status-warning/20',
+  danger:  'bg-status-danger/10 text-status-danger border border-status-danger/20',
+  info:    'bg-status-info/10 text-status-info border border-status-info/20',
 };
 
 const sizes: Record<NonNullable<BadgeProps['size']>, string> = {

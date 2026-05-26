@@ -101,11 +101,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: apps/api
     env:
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo
+      REDIS_URL: redis://localhost:6379
 
     steps:
       - uses: actions/checkout@v4
@@ -179,6 +189,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
 
       - name: Semgrep SAST
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: semgrep/semgrep-action@v1
         with:
           config: >-
@@ -205,7 +216,7 @@ jobs:
         continue-on-error: true
 
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: 'riviamigo-api:${{ github.sha }}'
           format: 'table'
@@ -232,8 +243,18 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
+      REDIS_URL: redis://localhost:6379
     defaults:
       run:
         working-directory: apps/api

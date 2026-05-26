@@ -101,12 +101,13 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
     const q = query.trim();
     if (q.length < 2) { setResults([]); return; }
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     const handle = window.setTimeout(async () => {
       try {
         const params = new URLSearchParams({ query: q, limit: '40' });
         if (collection) params.set('prefix', collection);
-        const res = await fetch(`https://api.iconify.design/search?${params.toString()}`);
+        const res = await fetch(`https://api.iconify.design/search?${params.toString()}`, { signal: controller.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as { icons?: string[] };
         if (!cancelled) setResults(Array.isArray(data.icons) ? data.icons : []);
@@ -116,7 +117,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
         if (!cancelled) setLoading(false);
       }
     }, 200);
-    return () => { cancelled = true; window.clearTimeout(handle); };
+    return () => { cancelled = true; window.clearTimeout(handle); controller.abort(); };
   }, [open, query, collection]);
 
   const recentList = useMemo(() => recent.slice(0, RECENT_MAX), [recent]);

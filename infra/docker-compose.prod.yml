@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   api:
     image: riviamigo-api:${IMAGE_TAG:-latest}

@@ -316,12 +316,12 @@ export function getWebSocketBaseUrl(
       const isLoopbackTarget = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
       const isLoopbackViewer = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1';
       if (!isLoopbackTarget || isLoopbackViewer) {
-        return url.toString().replace(/^http/, 'ws').replace(/\/$/, '');
+        return url.toString().replace(/^https?/, (m) => m === 'https' ? 'wss' : 'ws').replace(/\/$/, '');
       }
     } catch {
-      return configuredBaseUrl.replace(/^http/, 'ws').replace(/\/$/, '');
+      return configuredBaseUrl.replace(/^https?/, (m) => m === 'https' ? 'wss' : 'ws').replace(/\/$/, '');
     }
   }
 
-  return location.origin.replace(/^http/, 'ws');
+  return location.origin.replace(/^https?/, (m) => m === 'https' ? 'wss' : 'ws');
 }

@@ -4,6 +4,7 @@ import {
   Heart, Menu, X, MoreVertical,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useDocumentTheme } from '../hooks/useDocumentTheme';
 
 export interface NavItem {
   key: string;
@@ -57,23 +58,7 @@ export function Sidebar({
     [collapsed, collapsedProp, onCollapsedChange]
   );
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const [isDark, setIsDark] = React.useState(() => {
-    if (typeof window === 'undefined') return true;
-    const html = document.documentElement;
-    return html.classList.contains('dark') || !html.classList.contains('light');
-  });
-
-  React.useEffect(() => {
-    const html = document.documentElement;
-    const updateTheme = () => {
-      setIsDark(html.classList.contains('dark') || !html.classList.contains('light'));
-    };
-
-    updateTheme();
-    const observer = new MutationObserver(updateTheme);
-    observer.observe(html, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
+  const isDark = useDocumentTheme();
 
   return (
     <>

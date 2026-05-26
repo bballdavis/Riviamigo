@@ -7,6 +7,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use std::time::Duration;
+
 use crate::{
     errors::AppError,
     ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
@@ -460,7 +462,7 @@ async fn connect(
         "vehicle.connect.start"
     );
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
     match crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password)
         .await
         .map_err(|e| {
@@ -570,7 +572,7 @@ async fn connect_otp(
         app_session_token: pending.app_session_token,
     };
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
     let tokens =
         crate::ingestion::rivian_auth::rivian_login_otp(&client, &challenge, &body.otp_code)
             .await
@@ -770,7 +772,7 @@ async fn refresh_vehicle_credentials(
     .await?
     .ok_or_else(|| AppError::Validation("complete /vehicles/connect first".into()))?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
     let account_vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
         .await
         .map_err(|e| {
@@ -1280,7 +1282,7 @@ async fn cache_vehicle_images(
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
 ) {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
     match crate::ingestion::rivian_auth::rivian_vehicle_images(&client, tokens).await {
         Ok(images) => {
             let image_count = images.len();

@@ -60,6 +60,14 @@ export const tailwindBase: Partial<Config> = {
           towing:   'var(--rm-dm-towing)',
           unknown:  'var(--rm-dm-unknown)',
         },
+        'map-route': {
+          0: 'var(--rm-map-route-0)',
+          1: 'var(--rm-map-route-1)',
+          2: 'var(--rm-map-route-2)',
+          3: 'var(--rm-map-route-3)',
+          4: 'var(--rm-map-route-4)',
+          5: 'var(--rm-map-route-5)',
+        },
       },
       fontFamily: {
         display: ['"Space Grotesk Variable"', '"Space Grotesk"', 'system-ui', 'sans-serif'],

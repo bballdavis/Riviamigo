@@ -65,7 +65,7 @@ export function ChargeCurveChart({
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
           dot={false}
-          activeDot={{ r: 4, strokeWidth: 2, stroke: '#0A0A0F' }}
+          activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg)' }}
           isAnimationActive={false}
         />
       </LineChart>

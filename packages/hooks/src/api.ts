@@ -5,7 +5,7 @@
 
 import type {
   Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
-  EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
+  StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
@@ -245,6 +245,13 @@ class ApiClient {
 
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
+  }
+
+  // ── Public escape-hatch for packages that can't depend on `request` directly ──
+
+  /** Proxy for packages/dashboards (and similar) that can't import `request` directly. */
+  async apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return this.request<T>(method, path, body);
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -607,6 +614,10 @@ class ApiClient {
   }
 
   // ── Efficiency ────────────────────────────────────────────────────────────
+
+  async getStats(vehicleId: string): Promise<StatsSummary> {
+    return this.request<StatsSummary>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
+  }
 
   async getEfficiencySummary(vehicleId: string, from: string, to: string) {
     const summary = await this.request<{
