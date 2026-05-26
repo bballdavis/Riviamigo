@@ -124,7 +124,13 @@ async fn list_trips(
         .search
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
+
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await?;
 
     let rows = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
@@ -141,12 +147,12 @@ async fn list_trips(
          LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
          AND ($6::text IS NULL OR \
-              COALESCE(sg.name, '') ILIKE '%' || $6 || '%' OR \
-              COALESCE(eg.name, '') ILIKE '%' || $6 || '%' OR \
-              COALESCE(sa.display_name, '') ILIKE '%' || $6 || '%' OR \
-              COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' OR \
-              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%') \
+              COALESCE(sg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
+              COALESCE(eg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
+              COALESCE(sa.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
+              COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
+              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\') \
          ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
     )
     .bind(vid)
@@ -154,8 +160,8 @@ async fn list_trips(
     .bind(to)
     .bind(limit)
     .bind(offset)
-    .bind(search)
-    .fetch_all(&state.pool)
+    .bind(search.as_deref())
+    .fetch_all(&mut *tx)
     .await?;
 
     let total: i64 = sqlx::query_scalar(
@@ -167,19 +173,21 @@ async fn list_trips(
          LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
          AND ($4::text IS NULL OR \
-              COALESCE(sg.name, '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(eg.name, '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%')",
+              COALESCE(sg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              COALESCE(eg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')",
     )
     .bind(vid)
     .bind(from)
     .bind(to)
-    .bind(search)
-    .fetch_one(&state.pool)
+    .bind(search.as_deref())
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.rollback().await?;
 
     Ok(Json(serde_json::json!({
         "data": rows,

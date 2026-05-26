@@ -158,7 +158,7 @@ export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: Das
   ) : undefined;
 }
 
-export function CurrentVehicleStatePanel({ status, images }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined }) {
+export function CurrentVehicleStatePanel({ status, images, vehicleName }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined; vehicleName?: string }) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
@@ -262,6 +262,7 @@ export function CurrentVehicleStatePanel({ status, images }: { status: VehicleSt
                   base={baseOverheadLight ?? baseOverheadFallback}
                   overlays={overlaysLight}
                   darkClassName="dark:hidden"
+                  vehicleName={vehicleName}
                 />
                 <VehicleOverheadLayers
                   base={baseOverheadDark ?? baseOverheadFallback}
@@ -400,10 +401,12 @@ function VehicleOverheadLayers({
   base,
   overlays,
   darkClassName,
+  vehicleName,
 }: {
   base: string;
   overlays: string[];
   darkClassName: string;
+  vehicleName?: string;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
@@ -415,7 +418,7 @@ function VehicleOverheadLayers({
     <div className={`absolute inset-0 ${darkClassName}`}>
       <img
         src={base}
-        alt=""
+        alt={vehicleName ?? ''}
         className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
         style={imageStyle}
       />

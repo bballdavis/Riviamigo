@@ -258,7 +258,7 @@ export function TripMapChart({
           type: 'line',
           source: sourceId,
           paint: {
-            'line-color': '#000000',
+            'line-color': 'transparent',
             'line-width': 18,
             'line-opacity': 0,
           },
@@ -275,7 +275,8 @@ export function TripMapChart({
         });
       }
 
-      map.setPaintProperty(lineId, 'line-color', selected ? '#F59E0B' : (route.color ?? ROUTE_COLORS[index % ROUTE_COLORS.length]));
+      const selectedColor = getComputedStyle(document.documentElement).getPropertyValue('--rm-status-warning').trim() || '#F59E0B';
+      map.setPaintProperty(lineId, 'line-color', selected ? selectedColor : (route.color ?? ROUTE_COLORS[index % ROUTE_COLORS.length]));
       map.setPaintProperty(lineId, 'line-width', selected ? 5 : 3);
       map.setPaintProperty(lineId, 'line-opacity', dimUnselected ? 0.28 : 0.9);
     });
@@ -308,7 +309,14 @@ export function TripMapChart({
   );
 }
 
-const ROUTE_COLORS = ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'];
+function getRouteColors(): string[] {
+  const styles = getComputedStyle(document.documentElement);
+  return [0, 1, 2, 3, 4, 5].map(
+    (i) => styles.getPropertyValue(`--rm-map-route-${i}`).trim() || ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'][i]!
+  );
+}
+
+const ROUTE_COLORS = getRouteColors();
 
 function getRouteBounds(routeList: TripMapRoute[]) {
   const allPoints = routeList.flatMap((route) => route.track);
