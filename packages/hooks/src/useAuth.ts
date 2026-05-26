@@ -48,6 +48,10 @@ export const useAuth = create<AuthState>()(
           isAuthenticated: false,
           isBootstrapping: false,
         });
+        // Notify any listeners (e.g. queryClient) that the session has ended.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('riviamigo:session-cleared'));
+        }
       },
 
       login: async (email, password) => {

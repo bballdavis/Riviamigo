@@ -29,6 +29,17 @@
   --rm-charging-dc:      #A78BFA;
   --rm-charging-dcfc:    #C084FC;
 
+  /* Drive-mode badge palette */
+  --rm-dm-everyday:  #10B981;
+  --rm-dm-conserve:  #60A5FA;
+  --rm-dm-terrain:   #22D3EE;
+  --rm-dm-sand:      #FBBF24;
+  --rm-dm-rock:      #A78BFA;
+  --rm-dm-rally:     #E879F9;
+  --rm-dm-drift:     #FB7185;
+  --rm-dm-towing:    #FB923C;
+  --rm-dm-unknown:   var(--rm-text-tertiary);
+
   --rm-glow-sm:        0 0 20px rgba(253, 131, 4, 0.15);
   --rm-glow-md:        0 0 40px rgba(253, 131, 4, 0.20);
   --rm-glow-lg:        0 0 60px rgba(253, 131, 4, 0.25);

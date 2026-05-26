@@ -113,6 +113,12 @@ async fn register(
         .into_response())
 }
 
+// A well-formed Argon2 hash of a random dummy password. Used to perform a
+// constant-time Argon2 verification even when the email doesn't exist, so
+// the response time doesn't reveal whether the account exists.
+const DUMMY_HASH: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$cm9vdHJvb3Ryb290cm9v$6/Ds/Z5DKq/r+z5xFo0O3sDmN5RBUQ2A6yb7z1WB1Wg";
+
 async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginBody>,
@@ -123,18 +129,23 @@ async fn login(
         email.trim()
     )
     .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    .await?;
 
-    if let Err(e) = verify_password(&body.password, &row.password_hash) {
-        audit_log(
-            state.pool.clone(),
-            "login_failure",
-            None,
-            format!("failed login for {}", email),
-        );
+    // Always run the Argon2 verification to avoid timing oracle for user enumeration.
+    let hash = row.as_ref().map(|r| r.password_hash.as_str()).unwrap_or(DUMMY_HASH);
+    if let Err(e) = verify_password(&body.password, hash) {
+        if row.is_some() {
+            audit_log(
+                state.pool.clone(),
+                "login_failure",
+                None,
+                format!("failed login for {}", email),
+            );
+        }
         return Err(e);
     }
+
+    let row = row.ok_or(AppError::Unauthorized)?;
 
     let token = issue_access_token(row.id, row.default_vehicle_id, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, row.id).await?;

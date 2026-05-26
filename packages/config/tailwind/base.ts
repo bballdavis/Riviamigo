@@ -49,6 +49,17 @@ export const tailwindBase: Partial<Config> = {
           danger:   'var(--rm-status-danger)',
           info:     'var(--rm-status-info)',
         },
+        dm: {
+          everyday: 'var(--rm-dm-everyday)',
+          conserve: 'var(--rm-dm-conserve)',
+          terrain:  'var(--rm-dm-terrain)',
+          sand:     'var(--rm-dm-sand)',
+          rock:     'var(--rm-dm-rock)',
+          rally:    'var(--rm-dm-rally)',
+          drift:    'var(--rm-dm-drift)',
+          towing:   'var(--rm-dm-towing)',
+          unknown:  'var(--rm-dm-unknown)',
+        },
       },
       fontFamily: {
         display: ['"Space Grotesk Variable"', '"Space Grotesk"', 'system-ui', 'sans-serif'],
