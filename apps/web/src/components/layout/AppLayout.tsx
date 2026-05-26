@@ -21,7 +21,9 @@ function getCompactBatteryIcon(socPercent: number) {
 
 export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const navigate = useNavigate();
-  const { accessToken, defaultVehicleId, logout } = useAuth();
+  const accessToken = useAuth((s) => s.accessToken);
+  const defaultVehicleId = useAuth((s) => s.defaultVehicleId);
+  const logout = useAuth((s) => s.logout);
   const { status: liveStatus, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
   const { data: currentStatus } = useCurrentVehicleStatus(defaultVehicleId);
   const status = currentStatus ?? liveStatus;

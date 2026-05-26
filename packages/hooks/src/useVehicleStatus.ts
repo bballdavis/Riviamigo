@@ -101,7 +101,8 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
   const reconnectAttemptsRef = useRef(0);
   const connectionKeyRef = useRef<string | null>(null);
   const shouldReconnectRef = useRef(true);
-  const { setStatus, setConnected } = useLiveStatusStore();
+  const setStatus = useLiveStatusStore((s) => s.setStatus);
+  const setConnected = useLiveStatusStore((s) => s.setConnected);
   const [connectionState, setConnectionState] = useState<VehicleConnectionState>('idle');
 
   const cleanupSocket = useCallback(() => {
