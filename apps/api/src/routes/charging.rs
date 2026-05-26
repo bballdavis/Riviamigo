@@ -102,6 +102,7 @@ struct NetworkBreakdownRow {
 
 #[derive(Debug, sqlx::FromRow)]
 struct SessionBoundsRow {
+    id: Uuid,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
     charger_type: Option<String>,
@@ -381,8 +382,8 @@ async fn list_sessions_response(
              SELECT COUNT(*)::int8 AS sample_count \
              FROM timeseries.telemetry t \
              WHERE t.vehicle_id = cs.vehicle_id \
-               AND t.ts BETWEEN cs.started_at - interval '30 minutes' \
-                            AND COALESCE(cs.ended_at, cs.started_at) + interval '30 minutes' \
+               AND t.ts BETWEEN cs.started_at \
+                            AND COALESCE(cs.ended_at, cs.started_at) \
          ) telem ON true \
          WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
          ORDER BY cs.started_at DESC LIMIT $4 OFFSET $5"
@@ -452,8 +453,8 @@ async fn get_session_response(
              SELECT COUNT(*)::int8 AS sample_count \
              FROM timeseries.telemetry t \
              WHERE t.vehicle_id = cs.vehicle_id \
-               AND t.ts BETWEEN cs.started_at - interval '30 minutes' \
-                            AND COALESCE(cs.ended_at, cs.started_at) + interval '30 minutes' \
+               AND t.ts BETWEEN cs.started_at \
+                            AND COALESCE(cs.ended_at, cs.started_at) \
          ) telem ON true \
             WHERE cs.id=$1 AND cs.vehicle_id=$2"
     )
@@ -466,6 +467,7 @@ async fn get_session_response(
     let curve = load_curve(
         &state.pool,
         vehicle_id,
+        session.id,
         session.started_at,
         session.ended_at,
         session.charger_type.as_deref(),
@@ -487,7 +489,7 @@ async fn get_session_curve_response(
     require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionBoundsRow>(
-        "SELECT started_at, ended_at, charger_type FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
+        "SELECT id, started_at, ended_at, charger_type FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
     )
     .bind(id)
     .bind(vehicle_id)
@@ -499,6 +501,7 @@ async fn get_session_curve_response(
         load_curve(
             &state.pool,
             vehicle_id,
+            session.id,
             session.started_at,
             session.ended_at,
             session.charger_type.as_deref(),
@@ -862,6 +865,7 @@ mod tests {
 async fn load_curve(
     pool: &sqlx::PgPool,
     vehicle_id: Uuid,
+    session_id: Uuid,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
     charger_type: Option<&str>,
@@ -908,20 +912,27 @@ async fn load_curve(
     .await?;
 
     if rows.len() < 2 {
+        // Fallback: use Rivian live-session history points stored during active
+        // polling.  Filter strictly by charge_session_id — querying by time
+        // window would pull in DC fast-charge data from other sessions that
+        // happen to overlap this session's timestamps, producing wildly
+        // inflated power readings on home AC sessions.  Apply the same
+        // context-aware cap as the primary path.
         let fallback = sqlx::query_as::<_, CurveRow>(
             r#"SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
-                      power_kw AS charge_rate_kw,
+                      LEAST(CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
+                            GREATEST(0.0, power_kw)) AS charge_rate_kw,
                       NULL::float8 AS soc
                FROM riviamigo.rivian_charge_curve_points
-               WHERE vehicle_id=$1
-                 AND ts >= $2
-                 AND ts <= $3
+               WHERE charge_session_id = $3
                  AND power_kw IS NOT NULL
+                 AND power_kw > 0
                ORDER BY ts"#,
         )
         .bind(vehicle_id)
         .bind(started_at)
-        .bind(ended_at)
+        .bind(session_id)
+        .bind(is_dc)
         .fetch_all(pool)
         .await?;
         if !fallback.is_empty() {

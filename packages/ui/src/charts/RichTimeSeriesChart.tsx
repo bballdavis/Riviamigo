@@ -48,19 +48,17 @@ function toSeconds(value: string | number | Date) {
 function formatDateForSpan(seconds: number, spanSeconds: number) {
   const d = new Date(seconds * 1000);
   if (spanSeconds <= 6 * 3600) {
+    // Sub-6h: time only with minutes — e.g. "9:30 PM"
     return d.toLocaleString([], { hour: 'numeric', minute: '2-digit' });
   }
   if (spanSeconds <= 3 * 86400) {
-    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric' });
+    // Sub-3d: date + time with minutes — e.g. "May 9, 9:30 PM"
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
   if (spanSeconds <= 90 * 86400) {
     return d.toLocaleString([], { month: 'short', day: 'numeric' });
   }
   return d.toLocaleString([], { month: 'short', year: '2-digit' });
-}
-
-function formatDateFallback(seconds: number) {
-  return formatDateForSpan(seconds, 30 * 86400);
 }
 
 function formatValue(value: number | null | undefined, unit?: string) {
@@ -513,7 +511,10 @@ export function RichTimeSeriesChart({
               if (xValueFormatterRef.current) {
                 tooltipHeader = xValueFormatterRef.current(timestamp as number);
               } else if (xTimeRef.current) {
-                tooltipHeader = formatDateFallback(timestamp as number);
+                // Use actual data span so tooltip granularity matches axis labels.
+                const xs = u.data[0] as number[];
+                const span = xs.length > 1 ? xs[xs.length - 1]! - xs[0]! : 86400;
+                tooltipHeader = formatDateForSpan(timestamp as number, span);
               } else {
                 tooltipHeader = formatNumericAxis(timestamp as number, xUnitRef.current);
               }
