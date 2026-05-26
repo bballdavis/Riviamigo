@@ -809,6 +809,7 @@ mod tests {
             nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
         };
 
         crate::routes::build_router(state)

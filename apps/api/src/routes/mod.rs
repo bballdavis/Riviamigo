@@ -75,7 +75,11 @@ pub fn build_router(state: AppState) -> Router {
             http::Method::PATCH,
             http::Method::DELETE,
         ]))
-        .allow_headers(AllowHeaders::mirror_request())
+        .allow_headers(AllowHeaders::list([
+            http::header::AUTHORIZATION,
+            http::header::CONTENT_TYPE,
+            http::header::ACCEPT,
+        ]))
         .allow_credentials(true);
 
     // Rate-limit configs
@@ -87,14 +91,12 @@ pub fn build_router(state: AppState) -> Router {
             .finish()
             .unwrap(),
     );
-    // Protected data routes: very generous limits for SPA usage. A single page load
-    // easily makes 50-100 concurrent requests when all widgets, metrics, dashboards,
-    // WebSockets, and retries are counted. 1000 req/sec still strongly deters abuse
-    // while accommodating realistic single-user activity.
+    // Protected data routes: generous burst for SPA page loads (50-100 concurrent widget
+    // requests), but still rate-limited to deter API-key abuse.
     let data_config = Arc::new(
         GovernorConfigBuilder::default()
-            .per_second(1000)
-            .burst_size(1000)
+            .per_second(50)
+            .burst_size(100)
             .finish()
             .unwrap(),
     );

@@ -195,7 +195,11 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       }
 
       reconnectAttemptsRef.current += 1;
-      setConnectionState(reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS ? 'failed' : 'connecting');
+      if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+        setConnectionState('failed');
+        return;
+      }
+      setConnectionState('connecting');
       reconnectRef.current = setTimeout(() => {
         backoffRef.current = Math.min(backoffRef.current * 2, MAX_RECONNECT_DELAY_MS);
         connect();

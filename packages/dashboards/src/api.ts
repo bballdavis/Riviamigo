@@ -122,8 +122,22 @@ const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
 ];
 
 function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConfig {
-  const preserved = config.widgets.filter((widget) => !CHARGING_SWAP_WIDGET_KEYS.has(`${widget.componentType}:${widget.definitionId}`));
-  return { ...config, widgets: [...CHARGING_SWAP_WIDGETS, ...preserved] };
+  // Build a set of widget IDs already in the saved config so user edits are preserved.
+  const existingIds = new Set(config.widgets.map((w) => w.id));
+
+  // Only inject defaults that the user hasn't already saved (by ID).
+  const missingDefaults = CHARGING_SWAP_WIDGETS.filter((w) => !existingIds.has(w.id));
+
+  // Strip any legacy hard-coded widgets the user hasn't touched, then prepend the
+  // missing defaults. Widgets the user has edited (same UUID) are kept in place.
+  const userWidgets = config.widgets.filter((w) => {
+    const key = `${w.componentType}:${w.definitionId}`;
+    // Keep user widget if it's NOT a swap widget, OR if it IS a swap widget that
+    // was already present in the saved config (meaning the user edited it).
+    return !CHARGING_SWAP_WIDGET_KEYS.has(key) || existingIds.has(w.id);
+  });
+
+  return { ...config, widgets: [...missingDefaults, ...userWidgets] };
 }
 
 function sensorWidget(

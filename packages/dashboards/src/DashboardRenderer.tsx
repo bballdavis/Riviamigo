@@ -56,7 +56,6 @@ export function DashboardRenderer({
 }
 
 function DashboardGrid({
-  config,
   widgets,
   ctx,
 }: {
@@ -64,9 +63,11 @@ function DashboardGrid({
   widgets: DashboardConfig['widgets'];
   ctx: WidgetCtx;
 }) {
+  // Use the plug-aware grid whenever any widget carries visibility metadata —
+  // no slug check here; the widget options drive the behavior.
   const hasChargingSwap = widgets.some((widget) => getChargingConnectionVisibility(widget));
 
-  if (config.slug === 'charging' && hasChargingSwap) {
+  if (hasChargingSwap) {
     return <ChargingConnectionSwapGrid widgets={widgets} ctx={ctx} />;
   }
 

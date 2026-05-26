@@ -176,17 +176,24 @@ async fn get_trend(
     let to = p.to.unwrap_or_else(Utc::now);
 
     let rows = sqlx::query_as::<_, TrendPoint>(
-        "SELECT
-           started_at::date AS day,
-           avg(efficiency_wh_per_mile) AS day_avg_wh_mi,
-           avg(avg(efficiency_wh_per_mile)) OVER (
-             ORDER BY started_at::date
+        "WITH daily AS (
+           SELECT
+             started_at::date AS day,
+             avg(efficiency_wh_per_mile) AS day_avg_wh_mi
+           FROM riviamigo.trips
+           WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
+             AND efficiency_wh_per_mile IS NOT NULL
+           GROUP BY started_at::date
+         )
+         SELECT
+           day,
+           day_avg_wh_mi,
+           avg(day_avg_wh_mi) OVER (
+             ORDER BY day
              ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
            ) AS rolling_7d_wh_mi
-         FROM riviamigo.trips
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND efficiency_wh_per_mile IS NOT NULL
-         GROUP BY started_at::date ORDER BY 1",
+         FROM daily
+         ORDER BY 1",
     )
     .bind(vid)
     .bind(from)
@@ -311,6 +318,7 @@ mod tests {
             nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
         };
 
         crate::routes::build_router(state)

@@ -425,8 +425,29 @@ fn build_artifact_path(
 }
 
 async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), AppError> {
-    let output = Command::new("pg_dump")
-        .arg(format!("--dbname={}", config.database_url))
+    // Parse connection components from the URL so the password is not exposed
+    // on the process command line (visible via `ps`).
+    let url = url::Url::parse(&config.database_url)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid DATABASE_URL: {e}")))?;
+
+    let mut cmd = Command::new("pg_dump");
+    if let Some(host) = url.host_str() {
+        cmd.arg(format!("--host={host}"));
+    }
+    if let Some(port) = url.port() {
+        cmd.arg(format!("--port={port}"));
+    }
+    if !url.username().is_empty() {
+        cmd.arg(format!("--username={}", url.username()));
+    }
+    let dbname = url.path().trim_start_matches('/');
+    if !dbname.is_empty() {
+        cmd.arg(format!("--dbname={dbname}"));
+    }
+    if let Some(password) = url.password() {
+        cmd.env("PGPASSWORD", password);
+    }
+    let output = cmd
         .arg("--format=custom")
         .arg("--no-owner")
         .arg("--no-privileges")

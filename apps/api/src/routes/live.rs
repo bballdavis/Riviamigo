@@ -50,6 +50,7 @@ pub(crate) fn extract_jwt_from_headers(
 
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_issuer(&["riviamigo.app"]);
+    validation.leeway = 0;
 
     decode::<Claims>(token, &jwt_keys.decoding, &validation)
         .map_err(|_| AppError::Unauthorized)

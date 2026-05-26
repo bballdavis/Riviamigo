@@ -197,7 +197,8 @@ impl TripDetectorState {
 
             // Regen energy: negative regen_power_kw × Δt
             if let (Some(last_t), Some(kw)) = (self.last_ts, event.regen_power_kw) {
-                let dt_hours = (ts - last_t).num_milliseconds() as f64 / 3_600_000.0;
+                // Clamp dt to 0 so out-of-order events don't corrupt the accumulator.
+                let dt_hours = ((ts - last_t).num_milliseconds() as f64 / 3_600_000.0).max(0.0);
                 if kw < 0.0 {
                     self.regen_wh_acc += kw.abs() * 1000.0 * dt_hours;
                 }

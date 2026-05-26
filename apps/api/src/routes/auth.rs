@@ -176,30 +176,43 @@ async fn refresh(
         .ok_or(AppError::Unauthorized)?;
 
     let hash = sha2_hash(token);
-    let row = sqlx::query!(
-        "SELECT user_id FROM riviamigo.refresh_tokens \
-         WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()",
-        hash.as_slice()
+
+    // Revoke the presented token and return its user_id atomically.
+    let user_id: Uuid = sqlx::query_scalar(
+        "UPDATE riviamigo.refresh_tokens
+         SET revoked_at = now()
+         WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
+         RETURNING user_id",
     )
+    .bind(hash.as_slice())
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::Unauthorized)?;
 
     let default_vehicle_id = sqlx::query_scalar!(
         "SELECT default_vehicle_id FROM riviamigo.users WHERE id = $1",
-        row.user_id
+        user_id
     )
     .fetch_optional(&state.pool)
     .await?
     .flatten();
 
-    let access_token = issue_access_token(row.user_id, default_vehicle_id, &state.jwt_keys)?;
-    Ok(Json(AccessTokenResponse {
-        access_token,
-        expires_in: 900,
-        default_vehicle_id,
-    })
-    .into_response())
+    // Issue a fresh refresh token on every use so a leaked token is limited to one use.
+    let new_refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let access_token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
+
+    let max_age = 30 * 24 * 3600;
+    let cookie = refresh_cookie(&new_refresh, max_age);
+
+    Ok((
+        [(axum::http::header::SET_COOKIE, cookie)],
+        Json(AccessTokenResponse {
+            access_token,
+            expires_in: 900,
+            default_vehicle_id,
+        }),
+    )
+        .into_response())
 }
 
 async fn logout(
@@ -289,7 +302,7 @@ fn audit_log(
     detail: String,
 ) {
     tokio::spawn(async move {
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) \
              VALUES ($1, $2, $3, now())",
         )
@@ -297,7 +310,10 @@ fn audit_log(
         .bind(user_id)
         .bind(detail)
         .execute(&pool)
-        .await;
+        .await
+        {
+            tracing::warn!(error = %e, event, "audit_log insert failed");
+        }
     });
 }
 
@@ -385,6 +401,7 @@ mod tests {
             nominatim_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
         };
 
         crate::routes::build_router(state)
