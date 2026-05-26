@@ -52,7 +52,14 @@ pub async fn bootstrap_keys(
     tracing::info!("generating new JWT RSA-2048 keypair and AGE X25519 identity");
     let generated = generate_keys().context("key generation failed")?;
 
+    // Use an advisory lock so concurrent boots don't both generate separate keypairs.
+    // Only one session will insert; the others will see ON CONFLICT DO NOTHING and
+    // then re-read the winner's row below.
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(1234567890)")
+        .execute(&mut *tx)
+        .await
+        .context("acquiring key bootstrap lock")?;
     for (k, v) in [
         ("jwt_private_key", generated.jwt_private_pem.as_str()),
         ("jwt_public_key", generated.jwt_public_pem.as_str()),
@@ -69,8 +76,28 @@ pub async fn bootstrap_keys(
     }
     tx.commit().await?;
 
+    // Re-read to ensure all instances use the winning keypair.
+    let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT
+            (SELECT value FROM riviamigo.system_config WHERE key = 'jwt_private_key'),
+            (SELECT value FROM riviamigo.system_config WHERE key = 'jwt_public_key'),
+            (SELECT value FROM riviamigo.system_config WHERE key = 'age_key')",
+    )
+    .fetch_one(pool)
+    .await
+    .context("re-reading persisted keys")?;
+
+    let (priv_pem, pub_pem, age) = match row {
+        (Some(a), Some(b), Some(c)) => (a, b, c),
+        _ => anyhow::bail!("keys missing from system_config after insert"),
+    };
+
     tracing::info!("generated keys persisted to database");
-    Ok(generated)
+    Ok(BootstrappedKeys {
+        jwt_private_pem: priv_pem,
+        jwt_public_pem: pub_pem,
+        age_key: age,
+    })
 }
 
 pub(crate) fn generate_keys() -> anyhow::Result<BootstrappedKeys> {

@@ -298,7 +298,7 @@ pub async fn recompute_charge_session_cost(
     // Fetch per-interval telemetry readings so TOU cost reflects actual
     // charging activity rather than the session window as a whole.
     let timed_kwh_readings = if let Some(ended_at) = session.ended_at {
-        fetch_session_energy_readings(
+        match fetch_session_energy_readings(
             pool,
             session.vehicle_id,
             session.started_at,
@@ -306,7 +306,18 @@ pub async fn recompute_charge_session_cost(
             session.id,
         )
         .await
-        .unwrap_or_default()
+        {
+            Ok(readings) => readings,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id = %session.id,
+                    vehicle_id = %session.vehicle_id,
+                    "failed to fetch energy readings; falling back to time-weighted TOU"
+                );
+                vec![]
+            }
+        }
     } else {
         vec![]
     };
@@ -449,6 +460,7 @@ mod tests {
             duration_minutes: 60,
             started_at: Utc::now(),
             ended_at: None,
+            timed_kwh_readings: vec![],
         };
         let result = apply_cost_inputs(&inputs, Some(&profile));
         assert_eq!(result.cost_method, "profile_pending");

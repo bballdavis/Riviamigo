@@ -14,7 +14,7 @@ pub enum SupervisorCommand {
     Shutdown,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SupervisorHandle {
     tx: mpsc::Sender<SupervisorCommand>,
 }
@@ -22,6 +22,12 @@ pub struct SupervisorHandle {
 impl SupervisorHandle {
     pub async fn send(&self, cmd: SupervisorCommand) {
         let _ = self.tx.send(cmd).await;
+    }
+
+    /// Creates a handle whose commands are silently dropped — for use in tests.
+    pub fn noop() -> Self {
+        let (tx, _rx) = mpsc::channel(1);
+        Self { tx }
     }
 }
 
