@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -54,6 +54,15 @@ impl CostProfile {
 
         true
     }
+}
+
+/// A single measured energy delivery interval used for accurate TOU cost
+/// attribution. Each point represents the kWh actually delivered at a specific
+/// timestamp (typically one 1-minute telemetry bucket).
+#[derive(Debug, Clone)]
+pub struct TimedEnergyPoint {
+    pub ts: DateTime<Utc>,
+    pub kwh: f64,
 }
 
 pub fn validate_tou_periods(periods: &[TouPeriod]) -> Result<(), String> {
@@ -211,6 +220,48 @@ fn compute_tou_cost(
     }
 
     Some(total_kwh * (weighted_rate / overlap_minutes))
+}
+
+/// Compute TOU cost from actual per-interval energy readings instead of
+/// time-weighting the session window. This is the accurate path when telemetry
+/// is available: if a 15-hour session window spans paid and free periods but
+/// actual charging only occurred during free hours, the cost is $0.
+///
+/// Each `TimedEnergyPoint` carries the UTC timestamp of the interval and the
+/// kWh delivered during that interval (e.g. one 1-minute telemetry bucket).
+/// Returns `None` only when `readings` is empty or TOU periods are missing.
+pub fn compute_tou_cost_from_readings(
+    profile: &CostProfile,
+    readings: &[TimedEnergyPoint],
+) -> Option<f64> {
+    if readings.is_empty() {
+        return None;
+    }
+    let tz: Tz = profile.timezone.as_deref().unwrap_or("UTC").parse().ok()?;
+    let periods = profile.tou_periods();
+    if periods.is_empty() {
+        return None;
+    }
+
+    let total: f64 = readings
+        .iter()
+        .map(|r| {
+            let local = r.ts.with_timezone(&tz);
+            let minute_of_day = local.hour() * 60 + local.minute();
+            // Find the TOU period that contains this minute of the day.
+            let rate = periods
+                .iter()
+                .find(|p| {
+                    (p.start_minute as u32) <= minute_of_day
+                        && minute_of_day < (p.end_minute as u32)
+                })
+                .map(|p| p.rate)
+                .unwrap_or(0.0);
+            r.kwh * rate
+        })
+        .sum();
+
+    Some(total + profile.session_fee)
 }
 
 fn resolve_local_datetime(
