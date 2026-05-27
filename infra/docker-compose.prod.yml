@@ -37,6 +37,9 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
+      # /tmp covers the default BACKUP_ARTIFACT_DIR (/tmp/riviamigo-backups).
+      # If you override BACKUP_ARTIFACT_DIR to a path outside /tmp, add it here
+      # as an additional tmpfs mount (or use a named volume).
       - /tmp
     deploy:
       resources:
@@ -72,20 +75,29 @@ services:
           memory: 512M
 
   nginx:
-    image: nginx:1.27-alpine
+    image: riviamigo-web:${IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: infra/nginx/Dockerfile
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # TLS certificates are the only host-supplied runtime secret; everything
+      # else (nginx config + web app) is baked into the image at build time.
       - /etc/ssl/riviamigo:/etc/ssl/riviamigo:ro
-      - ../apps/web/dist:/app/dist:ro
     networks:
       - internal
       - proxy
     depends_on:
       - api
+    # Read-only root FS: nginx needs a writable /tmp for temp files and
+    # /var/run for the pid file.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
     deploy:
       resources:
         limits:

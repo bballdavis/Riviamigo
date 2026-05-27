@@ -1,4 +1,4 @@
-export { api } from './api';
+export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
 export { useAuth } from './useAuth';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';

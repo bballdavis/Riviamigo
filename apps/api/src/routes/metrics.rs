@@ -643,3 +643,56 @@ async fn telemetry_daily_series(
         .fetch_all(pool)
         .await?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `MetricSource::Telemetry(column)` in the METRICS registry must
+    /// appear in `ALLOWED_TELEMETRY_COLUMNS` — otherwise the `get_value` and
+    /// `get_series` handlers would always return a validation error for that
+    /// metric, silently making it unavailable.
+    #[test]
+    fn all_telemetry_metric_columns_are_in_allowlist() {
+        let unguarded: Vec<&str> = METRICS
+            .iter()
+            .filter_map(|m| {
+                if let MetricSource::Telemetry(col) = m.source {
+                    if !ALLOWED_TELEMETRY_COLUMNS.contains(&col) {
+                        Some(col)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            unguarded.is_empty(),
+            "MetricDef::Telemetry columns missing from ALLOWED_TELEMETRY_COLUMNS: {unguarded:?}"
+        );
+    }
+
+    /// `ALLOWED_TELEMETRY_COLUMNS` must not contain duplicate entries — a
+    /// duplicate would be a sign of a copy-paste error with no runtime impact,
+    /// but catches future refactoring mistakes.
+    #[test]
+    fn allowed_telemetry_columns_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for col in ALLOWED_TELEMETRY_COLUMNS {
+            assert!(seen.insert(*col), "duplicate column in ALLOWED_TELEMETRY_COLUMNS: {col}");
+        }
+    }
+
+    /// Metric IDs must be unique — duplicate IDs would cause `find_metric` to
+    /// always return the first match, silently shadowing the later definition.
+    #[test]
+    fn metric_ids_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for m in METRICS {
+            assert!(seen.insert(m.id), "duplicate metric id: {}", m.id);
+        }
+    }
+}
