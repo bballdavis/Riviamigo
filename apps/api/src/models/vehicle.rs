@@ -13,6 +13,10 @@ pub struct Vehicle {
     pub color: Option<String>,
     pub battery_config: Option<String>,
     pub battery_capacity_wh: Option<f64>,
+    // TODO: home_latitude/home_longitude are superseded by home_geofence_id
+    // (riviamigo.geofences, added in migration 0008). These columns remain for
+    // backward compat with existing add_vehicle callers but should be migrated
+    // to use the geofence geometry and then dropped in a future release.
     pub home_latitude: Option<f64>,
     pub home_longitude: Option<f64>,
     pub name: Option<String>,
