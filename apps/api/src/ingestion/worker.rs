@@ -151,6 +151,7 @@ pub async fn run_vehicle_worker(
         Some(id) => id,
         None => {
             tracing::error!(vehicle_id=%vehicle_id, "no rivian_vehicle_id");
+            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
             return;
         }
     };
@@ -229,6 +230,7 @@ pub async fn run_vehicle_worker(
         Ok(c) => c,
         Err(e) => {
             tracing::error!(err=%e, "redis connect failed");
+            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
             return;
         }
     };
@@ -287,7 +289,9 @@ pub async fn run_vehicle_worker(
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
         let topic = format!("vehicle:{}:status", vehicle_id);
-        let _ = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await;
+        if let Err(e) = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await {
+            tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
+        }
 
         // Update runtime state
         upsert_seen(

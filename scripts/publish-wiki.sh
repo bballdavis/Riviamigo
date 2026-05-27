@@ -21,7 +21,15 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   echo "DRY RUN — no changes will be pushed"
 fi
 
-# Detect remote
+# ── Auth precheck ────────────────────────────────────────────────────────────
+# Verify the GitHub CLI is authenticated before attempting the clone, so the
+# user gets a clear error message rather than a confusing git clone failure.
+if ! gh auth status >/dev/null 2>&1; then
+  echo "ERROR: GitHub CLI is not authenticated. Run: gh auth login" >&2
+  exit 1
+fi
+
+# ── Detect remote ────────────────────────────────────────────────────────────
 REMOTE_URL=$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo "")
 if [[ -z "$REMOTE_URL" ]]; then
   echo "ERROR: Could not determine git remote URL" >&2
@@ -38,7 +46,9 @@ if ! git clone "$WIKI_URL" "$TMPDIR/wiki" 2>/dev/null; then
   exit 1
 fi
 
+# ── Copy pages with collision detection ──────────────────────────────────────
 echo "Copying wiki-draft pages ..."
+declare -A seen_wiki_names
 for file in "$WIKI_DRAFTS"/*.md; do
   [[ -f "$file" ]] || continue
   basename_file=$(basename "$file")
@@ -46,6 +56,11 @@ for file in "$WIKI_DRAFTS"/*.md; do
   [[ "$basename_file" == "README.md" ]] && continue
   # Strip leading NN- numeric prefix from filename
   wiki_name=$(echo "$basename_file" | sed 's/^[0-9]*-//')
+  if [[ -n "${seen_wiki_names[$wiki_name]+_}" ]]; then
+    echo "ERROR: wiki name collision — both '${seen_wiki_names[$wiki_name]}' and '$basename_file' would produce '$wiki_name'" >&2
+    exit 1
+  fi
+  seen_wiki_names[$wiki_name]="$basename_file"
   cp "$file" "$TMPDIR/wiki/$wiki_name"
   echo "  + $basename_file -> $wiki_name"
 done
@@ -61,6 +76,13 @@ if git diff --cached --quiet; then
   echo "No changes to push."
   exit 0
 fi
+
+# ── Commit with explicit author so the script works in CI without global git config ──
+GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-Riviamigo Docs Bot}"
+GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-noreply@riviamigo.local}"
+GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
 git commit -m "docs: sync wiki from docs/wiki-drafts [automated]"
 git push

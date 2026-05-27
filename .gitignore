@@ -36,19 +36,15 @@ infra/resolv.conf
 *.swp
 *.swo
 *~
-.DS_Store
 
 # Vite
 apps/web/.vite/
-apps/web/dist/
 apps/web/vite.config.js
-
-# Turbo cache
-.turbo/cache/
 
 # pnpm
 pnpm-debug.log*
 
-#agents
-.claude*
+# AI agent local state (not project config — CLAUDE.md is intentionally tracked)
+.claude/
+.codex/
 .codex*
