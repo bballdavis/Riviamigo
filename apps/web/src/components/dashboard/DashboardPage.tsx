@@ -451,12 +451,6 @@ function formatTire(psi: number | null | undefined, status?: string | null) {
   return status ? prettify(status) : '-';
 }
 
-function formatCharging(chargerState: string | null | undefined, chargerStatus: string | null | undefined) {
-  if (chargerStatus === 'chrgr_sts_not_connected') return 'Not charging';
-  if (chargerState && !['unknown', 'disconnected'].includes(chargerState.toLowerCase())) return prettify(chargerState);
-  if (chargerStatus) return prettify(chargerStatus);
-  return 'Not charging';
-}
 
 function formatDrive(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
   if (driveMode) return driveMode;

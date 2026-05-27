@@ -233,11 +233,12 @@ async fn clone_dashboard(
     .fetch_one(&state.pool)
     .await
     .map_err(|e: sqlx::Error| {
-        if e.to_string().contains("unique") {
-            AppError::Validation("You already have a dashboard with that slug".into())
-        } else {
-            AppError::Database(e)
+        if let Some(db) = e.as_database_error() {
+            if db.constraint().is_some() {
+                return AppError::Validation("You already have a dashboard with that slug".into());
+            }
         }
+        AppError::Database(e)
     })?;
 
     Ok((StatusCode::CREATED, Json(row)))
@@ -439,5 +440,116 @@ mod tests {
         .unwrap();
 
         assert_eq!(api_config["widgets"], frontend_config["widgets"]);
+    }
+
+    // ── integration tests (require DATABASE_URL) ─────────────────────────────
+
+    /// Regression test: `require_admin` must use the `riviamigo.` schema prefix.
+    /// Without the prefix the query fails with "relation 'users' does not exist"
+    /// and returns 500 instead of 403.
+    ///
+    /// This test registers a non-admin user and verifies that the admin-only
+    /// `POST /v1/admin/dashboards` endpoint returns 403, not 500.
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn require_admin_returns_403_not_500_for_non_admin() {
+        use std::sync::Arc;
+        use axum::{body::Body, http::{Request, StatusCode}};
+        use tower::ServiceExt;
+        use crate::middleware::auth::{AppState, JwtKeys};
+
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for integration tests");
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+
+        let pool = crate::db::pool::create_pool(&database_url).await.expect("pool");
+        let redis = redis::Client::open(&*redis_url).expect("redis");
+
+        // Generate a test RSA keypair without touching the DB.
+        let (private_pem, public_pem) = {
+            use rsa::{pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding}, RsaPrivateKey};
+            let priv_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+            (
+                priv_key.to_pkcs8_pem(LineEnding::LF).unwrap().to_string(),
+                priv_key.to_public_key().to_public_key_pem(LineEnding::LF).unwrap(),
+            )
+        };
+        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).unwrap());
+
+        let config = crate::config::Config {
+            database_url: database_url.clone(),
+            redis_url: redis_url.clone(),
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec![],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+            backup_artifact_dir: std::env::temp_dir()
+                .join("riviamigo-dashboard-test")
+                .to_string_lossy()
+                .into_owned(),
+            backup_driver: "json".into(),
+            backup_poll_interval_seconds: 60,
+            rivian_ws_reconnect_initial_seconds: 10,
+            rivian_ws_reconnect_max_seconds: 900,
+            rivian_raw_event_retention_days: 7,
+            rivian_persist_raw_events: false,
+            rivian_suppress_duplicate_telemetry: true,
+            riviamigo_env: None,
+            cookie_insecure: Some("1".into()),
+        };
+
+        let state = AppState {
+            pool: pool.clone(),
+            redis,
+            jwt_keys: jwt_keys.clone(),
+            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ".into(),
+            config,
+            nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
+        };
+        let app = crate::routes::build_router(state);
+
+        // Register a fresh non-admin user.
+        let email = format!("require-admin-test-{}@example.com", uuid::Uuid::new_v4());
+        let reg_req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/register")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({"email": email, "password": "strongpassword123"})).unwrap()
+            ))
+            .unwrap();
+        let reg_resp = app.clone().oneshot(reg_req).await.unwrap();
+        assert!(reg_resp.status().is_success(), "registration failed: {}", reg_resp.status());
+
+        let reg_body = axum::body::to_bytes(reg_resp.into_body(), usize::MAX).await.unwrap();
+        let tokens: serde_json::Value = serde_json::from_slice(&reg_body).unwrap();
+        let access_token = tokens["access_token"].as_str().expect("access_token in response");
+
+        // Non-admin trying to create a global dashboard must get 403 (not 500).
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/admin/dashboards")
+            .header("authorization", format!("Bearer {access_token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"slug":"require-admin-test-slug","name":"Test","config":{}}"#))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "non-admin must get 403; 500 would indicate the riviamigo. prefix is missing"
+        );
+
+        // Clean up the test user.
+        let _ = sqlx::query("DELETE FROM riviamigo.users WHERE email = $1")
+            .bind(&email)
+            .execute(&pool)
+            .await;
     }
 }

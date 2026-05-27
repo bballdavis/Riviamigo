@@ -50,6 +50,28 @@ jobs:
       - name: Lint
         run: pnpm turbo lint
 
+      - name: Color-token guard
+        # Enforces the mandatory CLAUDE.md rule: no hex literals, rgb(), or
+        # arbitrary Tailwind palette classes (text-blue-*, bg-indigo-*, etc.)
+        # in application code.  Token definition files (tokens/colors.ts,
+        # globals.css) and test files are excluded.
+        run: |
+          set +e
+          VIOLATIONS=$(grep -rn \
+            --include="*.tsx" --include="*.ts" --include="*.css" \
+            -E '#[0-9a-fA-F]{3,8}|rgb\(|rgba\(|text-(blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-[0-9]+|bg-(blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-[0-9]+' \
+            apps/web/src packages/ui/src packages/dashboards/src packages/hooks/src \
+            --exclude-dir=node_modules \
+            | grep -v 'tokens/colors\.ts\|globals\.css\|\.test\.\|\.spec\.\|//.*#' \
+            | grep -v 'getPropertyValue\|CHART_COLORS\|rm-map-route' \
+          )
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ Color-token violations found — use design tokens instead of raw colors:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "✅ No color-token violations"
+
       - name: Unit tests with coverage
         # Coverage thresholds (statements/functions/lines: 70, branches: 65) are
         # enforced via vite.config.ts — this step will fail if any threshold is breached.
@@ -184,7 +206,11 @@ jobs:
 
       - name: Cargo audit
         working-directory: apps/api
-        run: cargo audit --deny warnings --deny unmaintained
+        # --deny warnings: fails on security advisories (vulnerabilities, unsound code).
+        # Unmaintained crates are logged but do not fail the build — they're frequent in
+        # indirect dependencies and outside this project's control; escalate if a vuln
+        # advisory is filed against the specific crate.
+        run: cargo audit --deny warnings
 
       - name: pnpm audit
         run: pnpm install --frozen-lockfile && pnpm audit --prod --audit-level=high

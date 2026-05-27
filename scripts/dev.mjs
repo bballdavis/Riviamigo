@@ -182,6 +182,17 @@ async function killPid(pid) {
   } catch {
     return;
   }
+  // Give the process up to 3 s to exit gracefully, then escalate to SIGKILL.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0); // throws if the process is gone
+    } catch {
+      return; // process exited
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
 }
 
 function runWithInput(command, args, input, options = {}) {

@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react';
 
-// Module-level counter — `Date.now()` only has ms precision, so two toasts
-// fired in the same millisecond would share the same key and trigger a React
-// duplicate-key warning.
-let _nextToastId = 0;
+// Use crypto.randomUUID() for toast IDs so they remain unique across HMR
+// reloads (a module-level counter resets to 0 every time the module is
+// re-evaluated, risking duplicate React keys if old toasts are still mounted).
+function nextToastId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 interface ToastPayload {
   title: string;
@@ -13,7 +17,7 @@ interface ToastPayload {
 }
 
 interface Toast extends ToastPayload {
-  id: number;
+  id: string;
 }
 
 const TOAST_VARIANT_CLASSNAMES: Record<NonNullable<ToastPayload['variant']> | 'default', {
@@ -50,7 +54,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       const detail = (event as CustomEvent<ToastPayload>).detail;
       if (!detail?.message) return;
 
-      const id = ++_nextToastId;
+      const id = nextToastId();
       setToasts((current) => [...current.slice(-2), { ...detail, id }]);
       window.setTimeout(() => {
         setToasts((current) => current.filter((toast) => toast.id !== id));

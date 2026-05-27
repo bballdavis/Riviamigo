@@ -288,6 +288,11 @@ async fn get_mileage(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
+    let from = p
+        .from
+        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(730));
+    let to = p.to.unwrap_or_else(Utc::now);
+
     let rows = sqlx::query_as::<_, BatteryMileagePoint>(
         "SELECT
              time_bucket('1 week', ts) AS ts,
@@ -296,10 +301,13 @@ async fn get_mileage(
              avg(distance_to_empty_mi) AS range_mi
          FROM timeseries.telemetry
          WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
+           AND ts >= $2 AND ts <= $3
          GROUP BY time_bucket('1 week', ts)
          ORDER BY max(odometer_miles) NULLS LAST",
     )
     .bind(vid)
+    .bind(from)
+    .bind(to)
     .fetch_all(&state.pool)
     .await?;
 

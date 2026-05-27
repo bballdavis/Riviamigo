@@ -379,17 +379,10 @@ async fn list_sessions_response(
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
                 cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
-                COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
+                0::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
-         LEFT JOIN LATERAL ( \
-             SELECT COUNT(*)::int8 AS sample_count \
-             FROM timeseries.telemetry t \
-             WHERE t.vehicle_id = cs.vehicle_id \
-               AND t.ts BETWEEN cs.started_at \
-                            AND COALESCE(cs.ended_at, cs.started_at) \
-         ) telem ON true \
          WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
          ORDER BY cs.started_at DESC LIMIT $4 OFFSET $5"
     )

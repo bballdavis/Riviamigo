@@ -126,6 +126,12 @@ function getBase(): string {
   return _base;
 }
 
+/** Override the API base URL — useful in tests and server-side rendering contexts.
+ *  Pass `undefined` to clear the override and re-derive from env on next call. */
+export function setApiBaseUrl(url: string | undefined): void {
+  _base = url;
+}
+
 interface ApiFailureDetail {
   status: number;
   code: string;

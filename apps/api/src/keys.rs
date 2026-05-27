@@ -41,6 +41,16 @@ pub async fn bootstrap_keys(
     .context("reading system_config")?;
 
     if let (Some(priv_pem), Some(pub_pem), Some(age)) = row {
+        // Validate that the persisted keys are parseable before trusting them.
+        // A corrupted row would otherwise cause a confusing late failure inside
+        // JwtKeys::new or during the first token sign/verify.
+        jsonwebtoken::EncodingKey::from_rsa_pem(priv_pem.as_bytes())
+            .map_err(|e| anyhow::anyhow!("persisted jwt_private_key in system_config is corrupt — clear it and restart to regenerate: {e}"))?;
+        jsonwebtoken::DecodingKey::from_rsa_pem(pub_pem.as_bytes())
+            .map_err(|e| anyhow::anyhow!("persisted jwt_public_key in system_config is corrupt — clear it and restart to regenerate: {e}"))?;
+        age.trim()
+            .parse::<age::x25519::Identity>()
+            .map_err(|e| anyhow::anyhow!("persisted age_key in system_config is corrupt — clear it and restart to regenerate: {e}"))?;
         tracing::info!("loaded JWT and AGE keys from database");
         return Ok(BootstrappedKeys {
             jwt_private_pem: priv_pem,
