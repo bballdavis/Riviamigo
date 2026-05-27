@@ -275,7 +275,7 @@ export function TripMapChart({
         });
       }
 
-      const selectedColor = getComputedStyle(document.documentElement).getPropertyValue('--rm-status-warning').trim() || '#F59E0B';
+      const selectedColor = getComputedStyle(document.documentElement).getPropertyValue('--rm-status-warning').trim();
       map.setPaintProperty(lineId, 'line-color', selected ? selectedColor : (route.color ?? ROUTE_COLORS[index % ROUTE_COLORS.length]));
       map.setPaintProperty(lineId, 'line-width', selected ? 5 : 3);
       map.setPaintProperty(lineId, 'line-opacity', dimUnselected ? 0.28 : 0.9);
@@ -312,7 +312,7 @@ export function TripMapChart({
 function getRouteColors(): string[] {
   const styles = getComputedStyle(document.documentElement);
   return [0, 1, 2, 3, 4, 5].map(
-    (i) => styles.getPropertyValue(`--rm-map-route-${i}`).trim() || ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'][i]!
+    (i) => styles.getPropertyValue(`--rm-map-route-${i}`).trim()
   );
 }
 

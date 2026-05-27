@@ -469,6 +469,10 @@ async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), Ap
     Err(AppError::Internal(anyhow::anyhow!(message)))
 }
 
+/// Writes a JSON **manifest** file — metadata only (driver, database, trigger,
+/// created_at). No table data is exported. This driver is intentionally lightweight:
+/// it records *that* a backup was requested and documents the environment, but the
+/// actual data resides in TimescaleDB. Use the `pg_dump` driver for full data backups.
 async fn execute_json_backup(
     pool: &PgPool,
     config: &Config,
