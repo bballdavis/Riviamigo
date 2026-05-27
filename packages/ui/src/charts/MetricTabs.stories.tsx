@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import React, { useState } from 'react';
-import { MetricTabs } from '../primitives/MetricTabs';
+import { MetricTabs, type MetricTab } from '../primitives/MetricTabs';
 import { Battery, TrendingDown, Moon, Activity } from 'lucide-react';
 
 const meta = {
@@ -19,8 +19,8 @@ const TABS = [
   { key: 'degrad',  label: 'Degradation',      icon: <TrendingDown className="w-3.5 h-3.5" /> },
 ];
 
-function InteractiveWrapper({ tabs = TABS }: { tabs?: typeof TABS }) {
-  const [active, setActive] = useState(tabs[0].key);
+function InteractiveWrapper({ tabs = TABS }: { tabs?: MetricTab[] }) {
+  const [active, setActive] = useState(tabs[0]?.key ?? '');
   return (
     <MetricTabs tabs={tabs} active={active} onChange={setActive} title="Battery" subtitle="30-day history">
       <div className="h-48 flex items-center justify-center text-fg-tertiary text-sm">
