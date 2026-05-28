@@ -400,7 +400,7 @@ async function waitForViteUrl(child, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   let output = '';
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, rejectPromise) => {
     const cleanup = () => {
       child.stdout?.off('data', onData);
       child.stderr?.off('data', onData);
@@ -418,13 +418,13 @@ async function waitForViteUrl(child, timeoutMs = 30000) {
       output += text;
       const url = extractViteLocalUrl(output);
       if (url) {
-        settle(resolve, url);
+        settle(resolvePromise, url);
       }
     };
 
     const onExit = (code, signal) => {
       settle(
-        reject,
+        rejectPromise,
         new Error(`web dev server exited before announcing a URL (${signal ? `signal ${signal}` : `exit code ${code}`}).`),
       );
     };
@@ -432,7 +432,7 @@ async function waitForViteUrl(child, timeoutMs = 30000) {
     const timer = setInterval(() => {
       if (Date.now() >= deadline) {
         child.kill(isWindows ? undefined : 'SIGTERM');
-        settle(reject, new Error('Timed out waiting for Vite to announce a local URL.'));
+        settle(rejectPromise, new Error('Timed out waiting for Vite to announce a local URL.'));
       }
     }, 250);
 

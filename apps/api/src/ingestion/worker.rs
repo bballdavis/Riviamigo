@@ -170,7 +170,7 @@ pub async fn run_vehicle_worker(
     let tokens_clone = tokens.clone();
     let riv_id_clone = rivian_vehicle_id.clone();
     let ws_config = config.clone();
-    tokio::spawn(async move {
+    let ws_handle = tokio::spawn(async move {
         ws_client::run_ws_loop(
             vehicle_id,
             riv_id_clone,
@@ -249,7 +249,29 @@ pub async fn run_vehicle_worker(
     let mut counter_batch = CounterBatch::new(vehicle_id);
     let mut counter_flush_tick: u64 = 0;
 
-    while let Some(inbound) = ev_rx.recv().await {
+    // Wrap the WS handle in an Option so we can fuse it after it resolves.
+    let mut ws_handle = std::pin::pin!(ws_handle);
+    loop {
+        let inbound = tokio::select! {
+            // Normal event path.
+            msg = ev_rx.recv() => match msg {
+                Some(ev) => ev,
+                None => break,
+            },
+            // Monitor the WS task; log if it exits unexpectedly.
+            result = &mut ws_handle => {
+                match result {
+                    Ok(()) => tracing::warn!(vehicle_id=%vehicle_id, "WS task exited cleanly (not expected during normal operation)"),
+                    Err(e) if e.is_panic() => tracing::error!(vehicle_id=%vehicle_id, "WS task panicked — no further WS events will be received"),
+                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "WS task exited with error"),
+                }
+                // After the WS handle resolves, continue draining poll-loop events.
+                while let Some(ev) = ev_rx.recv().await {
+                    handle_inbound_accounting(&pool, vehicle_id, &config, &ev, &mut counter_batch).await;
+                }
+                break;
+            }
+        };
         handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch).await;
         raw_cleanup_tick += 1;
         counter_flush_tick += 1;
