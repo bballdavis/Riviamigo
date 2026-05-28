@@ -7,6 +7,7 @@ import { formatKwh, formatDuration, formatCurrency, formatPercent } from '../lib
 export interface ChargeSessionRow {
   id: string;
   started_at: string;
+  session_day_local?: string | null;
   duration_min: number | null;
   energy_added_kwh: number | null;
   soc_start: number | null;
@@ -42,6 +43,13 @@ const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success'> = {
   dcfc: 'accent', dc: 'info', ac: 'success',
 };
 
+function formatSessionDayLabel(row: ChargeSessionRow): string {
+  if (row.session_day_local) {
+    return format(parseISO(`${row.session_day_local}T00:00:00`), 'MMM d, yyyy');
+  }
+  return format(parseISO(row.started_at), 'MMM d, yyyy');
+}
+
 export const chargingColumns = [
   col.accessor('started_at', {
     header: 'Date / Time',
@@ -54,7 +62,7 @@ export const chargingColumns = [
           : null;
       return (
         <div className="flex flex-col gap-px">
-          <span className="text-sm font-medium text-fg leading-tight">{format(start, 'MMM d, yyyy')}</span>
+          <span className="text-sm font-medium text-fg leading-tight">{formatSessionDayLabel(row)}</span>
           <span className="text-xs text-fg-tertiary leading-tight">
             {format(start, 'h:mm a')}
             {endDate ? ` – ${format(endDate, 'h:mm a')}` : null}

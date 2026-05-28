@@ -1009,23 +1009,42 @@ async fn fetch_charge_history_inner(
             .fetch_optional(pool)
             .await?;
 
-        if matched_session_id.is_none() {
-            // Try to match by start-time window.  A ±5 min window is too tight
-            // for home sessions with a TOU/scheduled charging delay: the car is
-            // plugged in hours before the schedule window opens, so the
-            // telemetry-detected session start (when charger_state transitions
-            // to Charging) can differ substantially from the Rivian API's
-            // startInstant.  Use ±60 minutes to capture most scheduling delays
-            // while staying narrow enough to avoid matching sessions on the same
-            // day.  Among any candidates, the UPDATE takes the first match
-            // returned by the DB (ordered by started_at proximity is implicit
-            // via the LIMIT-free update — acceptable for typical patterns).
+                if matched_session_id.is_none() {
+                        // Try to match by start-time window. A ±5 min window is too tight
+                        // for home sessions with scheduled charging delay, so keep ±60 min
+                        // but require a deterministic winner by timestamp proximity.
+                        // If multiple candidates are similarly close, skip matching rather
+                        // than risk attaching a Rivian session ID to the wrong local row.
             let time_matched = if let Some(start) = s.start_instant {
                 let window_start = start - chrono::Duration::minutes(60);
                 let window_end = start + chrono::Duration::minutes(60);
 
                 sqlx::query_scalar::<_, Uuid>(
-                        "UPDATE riviamigo.charge_sessions SET
+                                                "WITH ranked AS (
+                                                         SELECT id,
+                                                                        ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz))) AS delta_secs,
+                                                                        ROW_NUMBER() OVER (
+                                                                                ORDER BY ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz))) ASC,
+                                                                                                 started_at ASC,
+                                                                                                 id ASC
+                                                                        ) AS rn,
+                                                                        LEAD(ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz)))) OVER (
+                                                                                ORDER BY ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz))) ASC,
+                                                                                                 started_at ASC,
+                                                                                                 id ASC
+                                                                        ) AS next_delta_secs
+                                                             FROM riviamigo.charge_sessions
+                                                            WHERE vehicle_id = $1
+                                                                AND rivian_session_id IS NULL
+                                                                AND started_at BETWEEN $8 AND $9
+                                                 ),
+                                                 candidate AS (
+                                                         SELECT id
+                                                             FROM ranked
+                                                            WHERE rn = 1
+                                                                AND (next_delta_secs IS NULL OR (next_delta_secs - delta_secs) >= 900)
+                                                 )
+                                                 UPDATE riviamigo.charge_sessions SET
                              rivian_session_id  = $2,
                              ended_at           = COALESCE(ended_at, $12),
                              kwh_added          = COALESCE(kwh_added, $21),
@@ -1045,10 +1064,9 @@ async fn fetch_charge_history_inner(
                              rivian_vehicle_name = COALESCE(rivian_vehicle_name, $18),
                              is_public           = COALESCE(is_public, $19),
                              rivian_meta         = COALESCE(rivian_meta, $20)
-                         WHERE vehicle_id = $1
-                           AND rivian_session_id IS NULL
-                                                     AND started_at BETWEEN $8 AND $9
-                                                 RETURNING id",
+                                                     FROM candidate
+                                                    WHERE riviamigo.charge_sessions.id = candidate.id
+                                                 RETURNING riviamigo.charge_sessions.id",
                     )
                     .bind(vehicle_id)
                     .bind(rivian_id)

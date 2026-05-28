@@ -815,6 +815,7 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     id,
     vehicle_id: String(row.vehicle_id ?? ''),
     started_at: String(row.started_at ?? ''),
+    session_day_local: typeof row.session_day_local === 'string' ? row.session_day_local : null,
     ended_at: row.ended_at == null ? null : String(row.ended_at),
     location_name: typeof row.location_name === 'string' ? row.location_name : (row.is_home === true ? 'Home' : coordinateLocation),
     charger_type: typeof row.charger_type === 'string' && VALID_CHARGER_TYPES.has(row.charger_type)

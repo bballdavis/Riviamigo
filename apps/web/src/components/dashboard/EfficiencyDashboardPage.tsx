@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@riviamigo/hooks';
+import { api, useAuth } from '@riviamigo/hooks';
 import { useCreateDashboard, useUpdateDashboard, useUpdateAdminDashboard } from '@riviamigo/dashboards';
 import { createDefaultDashboardEditActions, renderDefaultDashboardTitleAction, type DashboardPageProps } from './DashboardPage';
 import { DashboardPageShell } from './DashboardPageShell';
@@ -10,7 +10,8 @@ export function EfficiencyDashboardPage({ navKey, slug, title }: DashboardPagePr
   const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me() });
+  const isAuthenticated = useAuth((state) => state.isAuthenticated);
+  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me(), enabled: isAuthenticated });
   const isAdmin = me.data?.role === 'admin';
 
   return (

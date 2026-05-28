@@ -85,6 +85,8 @@ import {
   registerTripsInStore,
 } from './tripSelectionStore';
 
+const ROWS_PER_PAGE_OPTIONS = [15, 25, 50, 100] as const;
+
 // How many track requests to fire at once. Keep batching to avoid thundering
 // herd of simultaneous requests; stale time is infinite so tracks are cached forever.
 const TRACK_BATCH_SIZE = 8;
@@ -274,13 +276,17 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
               Rows
               <select
                 value={pageSize}
-                onChange={(event) => setPageSize(Number(event.target.value))}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (ROWS_PER_PAGE_OPTIONS.includes(next as (typeof ROWS_PER_PAGE_OPTIONS)[number])) {
+                    setPageSize(next);
+                  }
+                }}
                 className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
               >
-                <option value={15}>15</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
+                {ROWS_PER_PAGE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
               </select>
             </label>
           )}
