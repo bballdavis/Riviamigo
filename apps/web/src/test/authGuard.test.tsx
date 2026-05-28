@@ -135,12 +135,19 @@ describe('AuthGuard — bootstrap', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it('navigates to /login when refresh() returns false', async () => {
+  it('navigates to /login after repeated bootstrap refresh failures', async () => {
+    vi.useFakeTimers();
     const refresh = vi.fn().mockResolvedValue(false);
     setAuth({ isBootstrapping: true, isAuthenticated: false, refresh });
     render(<AuthGuard><span>content</span></AuthGuard>);
-    await act(async () => {});
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' });
+    expect(refresh).toHaveBeenCalledTimes(5);
+    vi.useRealTimers();
   });
 
   it('does not call refresh() when already authenticated', () => {

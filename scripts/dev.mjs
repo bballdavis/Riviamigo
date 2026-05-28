@@ -165,6 +165,10 @@ function apiEnv() {
     S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
     PORT: String(ports.api),
     ALLOWED_ORIGINS: webOrigins().join(','),
+    // Dev stack is served over http://localhost (and often LAN IPs), so
+    // refresh cookies must not be marked Secure or browser reload will drop
+    // session continuity and trigger repeated 401/WS reconnect churn.
+    COOKIE_INSECURE: '1',
   };
 }
 
@@ -491,6 +495,11 @@ async function startWeb() {
   const viteBin = resolve(webDir, 'node_modules/.bin', isWindows ? 'vite.cmd' : 'vite');
   const web = spawnProcess(viteBin, ['--port', String(ports.web)], {
     cwd: webDir,
+    env: {
+      // Route websocket traffic directly to the API in dev so refresh/reconnect
+      // churn does not flow through Vite's ws proxy error path.
+      VITE_WS_URL: process.env.VITE_WS_URL ?? `http://localhost:${ports.api}`,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: isWindows,
   });

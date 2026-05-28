@@ -1,6 +1,6 @@
 services:
   timescaledb:
-    image: timescale/timescaledb:2.16.1-pg16
+    image: timescale/timescaledb:2.26.3-pg16
     environment:
       POSTGRES_DB: riviamigo
       POSTGRES_USER: riviamigo
@@ -55,6 +55,7 @@ services:
       S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
       PORT: 3001
       ALLOWED_ORIGINS: http://localhost:5173
+      COOKIE_INSECURE: "1"
       RUST_LOG: riviamigo_api=info,tower_http=info
       # JWT_SECRET, JWT_PUBLIC_KEY, AGE_ENCRYPTION_KEY are intentionally omitted.
       # On first boot the API auto-generates an RSA-2048 keypair and age X25519 key

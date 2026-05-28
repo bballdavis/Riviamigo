@@ -288,7 +288,7 @@ where
                     // Transient 401s can survive a single CSRF refresh.  Don't
                     // flip needs_reauth on the first occurrence — only after we
                     // see this happen consecutively over a meaningful window.
-                    tracing::warn!(
+                    tracing::info!(
                         vehicle_id=%vehicle_id,
                         operation=operation_name,
                         "operation still unauthenticated after CSRF refresh"
@@ -2255,13 +2255,20 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await
-    {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
+    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+        if is_auth_error(&e) {
+            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment skipped: authentication required");
+        } else {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment failed");
+        }
     }
 
     if let Err(e) = fetch_battery_static_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static failed");
+        if is_auth_error(&e) {
+            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static skipped: authentication required");
+        } else {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static failed");
+        }
     }
 
     if let Err(e) = fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await
@@ -2294,7 +2301,11 @@ pub async fn run_startup_polls(
                         tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
                     }
                     Err(e) => {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
+                        if is_auth_error(&e) {
+                            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history skipped: authentication required")
+                        } else {
+                            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
+                        }
                     }
                 }
             }
@@ -2308,13 +2319,23 @@ pub async fn run_startup_polls(
             Ok(n) => {
                 tracing::info!(vehicle_id=%vehicle_id, enriched=%n, "incremental charge history sync complete")
             }
-            Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed"),
+            Err(e) => {
+                if is_auth_error(&e) {
+                    tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history skipped: authentication required")
+                } else {
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charge_history failed")
+                }
+            }
         }
     }
 
     if let Err(e) = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await
     {
-        tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
+        if is_auth_error(&e) {
+            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule skipped: authentication required");
+        } else {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
+        }
     }
 
     // NOTE: `getDepartureSchedules` does not exist in Rivian's schema — departure

@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
@@ -44,10 +45,26 @@ vi.mock('@riviamigo/hooks', () => ({
   },
   useAuth: (selector: (state: { setDefaultVehicleId: (vehicleId: string) => void }) => unknown) =>
     selector({ setDefaultVehicleId: apiMocks.setDefaultVehicleId }),
+  useVehicles: () => ({ data: [] }),
 }));
 
 import { ConnectContent } from '../connect';
 import { ConnectOtpContent } from '../connect.otp';
+
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      {ui}
+    </QueryClientProvider>,
+  );
+}
 
 beforeEach(() => {
   routerMocks.navigate.mockClear();
@@ -60,7 +77,7 @@ beforeEach(() => {
 
 describe('ConnectContent', () => {
   it('shows the add vehicle progress stages', () => {
-    render(<ConnectContent />);
+    renderWithQueryClient(<ConnectContent />);
 
     expect(screen.getByText('Add a Vehicle')).toBeInTheDocument();
     expect(screen.getByLabelText('Add vehicle progress')).toBeInTheDocument();
@@ -78,7 +95,7 @@ describe('ConnectContent', () => {
     });
 
     const user = userEvent.setup();
-    render(<ConnectContent />);
+    renderWithQueryClient(<ConnectContent />);
 
     await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
     await user.type(screen.getByPlaceholderText('Password'), 'secret123');
@@ -109,7 +126,7 @@ describe('ConnectContent', () => {
     apiMocks.addVehicle.mockResolvedValue({ vehicle_id: 'local-vehicle-1' });
 
     const user = userEvent.setup();
-    render(<ConnectContent />);
+    renderWithQueryClient(<ConnectContent />);
 
     await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
     await user.type(screen.getByPlaceholderText('Password'), 'secret123');
@@ -137,7 +154,7 @@ describe('ConnectContent', () => {
     });
 
     const user = userEvent.setup();
-    render(<ConnectContent />);
+    renderWithQueryClient(<ConnectContent />);
 
     await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
     await user.type(screen.getByPlaceholderText('Password'), 'secret123');
@@ -174,7 +191,7 @@ describe('ConnectContent', () => {
     });
 
     const user = userEvent.setup();
-    render(<ConnectContent />);
+    renderWithQueryClient(<ConnectContent />);
 
     await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
     await user.type(screen.getByPlaceholderText('Password'), 'secret123');
@@ -206,7 +223,7 @@ describe('ConnectOtpContent', () => {
     apiMocks.addVehicle.mockResolvedValue({ vehicle_id: 'local-vehicle-2' });
 
     const user = userEvent.setup();
-    render(<ConnectOtpContent />);
+    renderWithQueryClient(<ConnectOtpContent />);
 
     expect(screen.getByText('Credentials accepted')).toBeInTheDocument();
     expect(screen.getByText('MFA required')).toBeInTheDocument();
@@ -237,7 +254,7 @@ describe('ConnectOtpContent', () => {
     });
 
     const user = userEvent.setup();
-    render(<ConnectOtpContent />);
+    renderWithQueryClient(<ConnectOtpContent />);
 
     await user.type(screen.getByPlaceholderText('123456'), '654321');
     await user.click(screen.getByRole('button', { name: /verify and connect/i }));
@@ -273,7 +290,7 @@ describe('ConnectOtpContent', () => {
     });
 
     const user = userEvent.setup();
-    render(<ConnectOtpContent />);
+    renderWithQueryClient(<ConnectOtpContent />);
 
     await user.type(screen.getByPlaceholderText('123456'), '654321');
     await user.click(screen.getByRole('button', { name: /verify and connect/i }));

@@ -50,7 +50,7 @@ services:
           memory: 128M
 
   timescaledb:
-    image: timescale/timescaledb:2.16.1-pg16
+    image: timescale/timescaledb:2.26.3-pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: riviamigo

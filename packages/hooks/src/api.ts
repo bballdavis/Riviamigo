@@ -723,6 +723,11 @@ class ApiClient {
     });
 
     if (typeof window !== 'undefined') {
+      const onLoginRoute = window.location.pathname === '/login';
+      if (onLoginRoute && detail.path !== '/v1/auth/login' && detail.path !== '/v1/auth/register') {
+        return;
+      }
+
       const { title, message } = friendlyApiError(detail);
       window.dispatchEvent(new CustomEvent('riviamigo:toast', {
         detail: {

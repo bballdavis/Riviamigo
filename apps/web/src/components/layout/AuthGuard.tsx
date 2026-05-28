@@ -28,9 +28,33 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   // On mount, bootstrap the session from the HttpOnly cookie if not yet authenticated.
   useEffect(() => {
     if (isAuthenticated) return;
-    refresh().then((ok) => {
-      if (!ok) navigate({ to: '/login' });
-    });
+    let cancelled = false;
+    const retryDelaysMs = [0, 250, 500, 1000, 2000];
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const bootstrap = async () => {
+      for (const delayMs of retryDelaysMs) {
+        if (cancelled) return;
+        if (delayMs > 0) {
+          await sleep(delayMs);
+          if (cancelled) return;
+        }
+
+        const ok = await refresh();
+        if (ok) return;
+      }
+
+      if (!cancelled) {
+        navigate({ to: '/login' });
+      }
+    };
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount only
 

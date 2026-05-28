@@ -41,6 +41,15 @@ export default defineConfig({
         target: process.env.VITE_API_URL ?? process.env.VITE_RIVIAMIGO_API_BASE_URL ?? 'http://localhost:3001',
         changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (error) => {
+            const code = (error as NodeJS.ErrnoException).code;
+            // During refresh/reconnect churn, backend-closed sockets can
+            // produce noisy ECONNRESET events that are expected in dev.
+            if (code === 'ECONNRESET') return;
+            console.error('[vite] ws proxy error:', error);
+          });
+        },
       },
     },
   },
