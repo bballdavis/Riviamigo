@@ -96,6 +96,7 @@ export interface ChargeSession {
   id: string;
   vehicle_id: string;
   started_at: string;
+  session_day_local?: string | null;
   ended_at: string | null;
   location_name: string | null;
   charger_type: ChargerType | null;

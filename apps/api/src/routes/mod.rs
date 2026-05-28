@@ -91,12 +91,12 @@ pub fn build_router(state: AppState) -> Router {
             .finish()
             .unwrap(),
     );
-    // Protected data routes: generous burst for SPA page loads (50-100 concurrent widget
-    // requests), but still rate-limited to deter API-key abuse.
+    // Protected data routes: allow a higher burst for dashboard pages that fan
+    // out many concurrent widget queries, while still capping sustained abuse.
     let data_config = Arc::new(
         GovernorConfigBuilder::default()
-            .per_second(50)
-            .burst_size(100)
+            .per_second(120)
+            .burst_size(240)
             .finish()
             .unwrap(),
     );

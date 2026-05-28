@@ -58,6 +58,8 @@ struct VehicleParam {
 struct SessionRow {
     id: Uuid,
     started_at: DateTime<Utc>,
+    #[sqlx(default)]
+    session_day_local: Option<String>,
     ended_at: Option<DateTime<Utc>>,
     location_lat: Option<f64>,
     location_lng: Option<f64>,
@@ -359,7 +361,9 @@ async fn list_sessions_response(
         .await?;
 
     let rows = sqlx::query_as::<_, SessionRow>(
-        "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
+        "SELECT cs.id, cs.started_at, \
+            TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local, \
+            cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
                     CASE \
@@ -383,14 +387,16 @@ async fn list_sessions_response(
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
-         WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-         ORDER BY cs.started_at DESC LIMIT $4 OFFSET $5"
+            LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
+            WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+            ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5"
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
     .bind(limit)
     .bind(offset)
+    .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -425,7 +431,9 @@ async fn get_session_response(
     require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionRow>(
-        "SELECT cs.id, cs.started_at, cs.ended_at, cs.location_lat, cs.location_lng, \
+        "SELECT cs.id, cs.started_at, \
+            TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local, \
+            cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
                     CASE \
@@ -449,6 +457,7 @@ async fn get_session_response(
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         LEFT JOIN riviamigo.user_preferences up ON up.user_id = $3 \
          LEFT JOIN LATERAL ( \
              SELECT COUNT(*)::int8 AS sample_count \
              FROM timeseries.telemetry t \
@@ -460,6 +469,7 @@ async fn get_session_response(
     )
         .bind(id)
         .bind(vehicle_id)
+        .bind(user_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
