@@ -2,6 +2,11 @@ metadata_dir = "/var/lib/garage/meta"
 data_dir = "/var/lib/garage/data"
 replication_factor = 1
 rpc_bind_addr = "0.0.0.0:3901"
+
+# ⚠️  DEV ONLY — all-zero RPC secret is intentional for local development.
+# Generate a unique 64-hex-char secret for every production deployment:
+#   openssl rand -hex 32
+# Never reuse this value outside of a local development environment.
 rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [s3_api]
