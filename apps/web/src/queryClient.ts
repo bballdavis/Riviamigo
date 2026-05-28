@@ -39,6 +39,8 @@ export const queryClient = new QueryClient({
         const status = Number(e.status);
         // Never retry auth failures — the user is logged out.
         if (status === 401 || status === 403 || e.code === 'AUTH_EXPIRED') return false;
+        // Retrying throttled requests causes request storms and more throttling.
+        if (status === 429) return false;
         return failureCount < 2;
       },
       staleTime: 30 * 1000,

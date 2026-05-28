@@ -1,13 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 
+const TRIPS_LIST_QUERY_VERSION = 'v2';
+
 export function useTrips(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
   return useQuery({
-    queryKey: ['trips', 'list', vehicleId, from, to, page, perPage, search],
+    // Version the key to avoid hydrating stale list payloads from older app builds.
+    queryKey: ['trips', 'list', TRIPS_LIST_QUERY_VERSION, vehicleId, from, to, page, perPage, search],
     queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage, search),
     enabled: !!vehicleId,
     staleTime: 60 * 1000,
-    placeholderData: (previous) => previous,
   });
 }
 

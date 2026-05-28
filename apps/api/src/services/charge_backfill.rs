@@ -3,6 +3,8 @@ use uuid::Uuid;
 
 use crate::ingestion::{rivian_poll, session_store};
 
+const BACKFILL_STALE_AFTER_MINUTES: i64 = 120;
+
 #[derive(Debug, Clone)]
 pub struct ClaimedChargeBackfill {
     pub vehicle_id: Uuid,
@@ -83,10 +85,14 @@ pub async fn claim(
          FROM riviamigo.vehicle_credentials c
          WHERE v.id = $1
            AND c.vehicle_id = v.id
-           AND COALESCE(v.history_backfill_status, '') <> 'running'
+                     AND (
+                                 COALESCE(v.history_backfill_status, '') <> 'running'
+                                 OR v.updated_at < now() - ($2::int * interval '1 minute')
+                             )
          RETURNING v.rivian_vehicle_id, c.encrypted_tokens",
     )
     .bind(vehicle_id)
+        .bind(BACKFILL_STALE_AFTER_MINUTES as i32)
     .fetch_optional(pool)
     .await?;
 
@@ -98,14 +104,27 @@ pub async fn claim(
         });
     }
 
-    let current_status: Option<String> =
-        sqlx::query_scalar("SELECT history_backfill_status FROM riviamigo.vehicles WHERE id = $1")
+    let current_status: Option<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as("SELECT history_backfill_status, updated_at FROM riviamigo.vehicles WHERE id = $1")
             .bind(vehicle_id)
             .fetch_optional(pool)
-            .await?
-            .flatten();
+            .await?;
 
-    if current_status.as_deref() == Some("running") {
+    let is_fresh_running = current_status
+        .and_then(|(status, updated_at)| {
+            status.map(|s| {
+                s == "running"
+                    && updated_at
+                        .map(|ts| {
+                            ts > chrono::Utc::now()
+                                - chrono::Duration::minutes(BACKFILL_STALE_AFTER_MINUTES)
+                        })
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+
+    if is_fresh_running {
         Err(ChargeBackfillError::AlreadyRunning)
     } else {
         Err(ChargeBackfillError::CredentialsNotFound)

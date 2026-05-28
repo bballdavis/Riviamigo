@@ -27,6 +27,13 @@ const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success'> = {
   dcfc: 'accent', dc: 'info', ac: 'success',
 };
 
+function formatSessionDay(session: ChargeSessionRow): string {
+  if (session.session_day_local) {
+    return format(parseISO(`${session.session_day_local}T00:00:00`), 'MMM d, yyyy');
+  }
+  return format(parseISO(session.started_at), 'MMM d, yyyy');
+}
+
 function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; onClick: () => void }) {
   return (
     <button
@@ -37,7 +44,7 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
       <div className="flex items-center justify-between gap-2 mb-1">
         <div className="flex flex-col gap-0.5">
           <span className="text-xs font-medium text-fg">
-            {format(parseISO(session.started_at), 'MMM d, yyyy')}
+            {formatSessionDay(session)}
           </span>
           <span className="text-xs text-fg-tertiary">
             {format(parseISO(session.started_at), 'h:mm a')}
