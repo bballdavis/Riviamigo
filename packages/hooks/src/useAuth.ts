@@ -93,9 +93,6 @@ export const useAuth = create<AuthState>()(
           });
           return true;
         } catch {
-          // Refresh failed — session is gone. Ensure clearSession is awaited
-          // so callers reading isAuthenticated after this see consistent state.
-          await get().logout();
           return false;
         }
       },

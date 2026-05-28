@@ -115,7 +115,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       timescaledb:
-        image: timescale/timescaledb:2.16.1-pg16
+        image: timescale/timescaledb:2.26.3-pg16
         env:
           POSTGRES_DB: riviamigo
           POSTGRES_USER: riviamigo
@@ -261,7 +261,7 @@ jobs:
     needs: backend
     services:
       timescaledb:
-        image: timescale/timescaledb:2.16.1-pg16
+        image: timescale/timescaledb:2.26.3-pg16
         env:
           POSTGRES_DB: riviamigo_smoke
           POSTGRES_USER: riviamigo
