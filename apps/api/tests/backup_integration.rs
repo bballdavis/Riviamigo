@@ -1,8 +1,9 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use axum::{
     body::{to_bytes, Body},
+    extract::ConnectInfo,
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE, COOKIE},
         HeaderMap, Method, Request, StatusCode,
@@ -16,6 +17,7 @@ use uuid::Uuid;
 
 use riviamigo_api::{
     config::Config,
+    ingestion::supervisor::SupervisorHandle,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
     routes,
@@ -65,12 +67,12 @@ impl TestApp {
 
         let state = AppState {
             pool: pool.clone(),
-            redis: redis::Client::open("redis://127.0.0.1:16379/").expect("redis client"),
+            redis: redis::Client::open("redis://127.0.0.1:6379/").expect("redis client"),
             jwt_keys,
             age_key: keys.age_key,
             config: Config {
                 database_url: db_url,
-                redis_url: "redis://127.0.0.1:16379/".into(),
+                redis_url: "redis://127.0.0.1:6379/".into(),
                 jwt_secret: None,
                 jwt_public_key: None,
                 age_encryption_key: None,
@@ -90,8 +92,8 @@ impl TestApp {
                 riviamigo_env: None,
                 cookie_insecure: None,
             },
-            nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            supervisor: SupervisorHandle::noop(),
         };
 
         Self {
@@ -116,13 +118,17 @@ impl TestApp {
             req = req.header(COOKIE, cookie_value);
         }
 
-        let request = if let Some(json_body) = body {
+        let mut request = if let Some(json_body) = body {
             req.header(CONTENT_TYPE, "application/json")
                 .body(Body::from(json_body.to_string()))
                 .expect("request body")
         } else {
             req.body(Body::empty()).expect("empty request")
         };
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
 
         let response = self
             .router

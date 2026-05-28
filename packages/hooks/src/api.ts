@@ -110,7 +110,11 @@ export function resolveApiBaseUrl(
 
   try {
     const url = new URL(configuredBaseUrl, location.origin);
-    if (isLoopbackHostname(url.hostname) && !isLoopbackHostname(location.hostname)) {
+    // Route loopback targets through the app origin so dev traffic uses the
+    // Vite proxy (`/v1`) rather than direct cross-origin calls to :3001.
+    // This avoids CORS preflight amplification and keeps WS/HTTP behavior
+    // consistent for both localhost and LAN clients.
+    if (isLoopbackHostname(url.hostname)) {
       return '';
     }
   } catch {
@@ -279,7 +283,9 @@ class ApiClient {
   }
 
   async refresh(): Promise<AuthTokens> {
-    return this.request('POST', '/v1/auth/refresh');
+    // Refresh can legitimately return 401 when no refresh cookie exists
+    // (first load, logged out, expired session). Keep this path quiet.
+    return this.request('POST', '/v1/auth/refresh', undefined, undefined, true, false);
   }
 
   async me(): Promise<AuthMeResponse> {
@@ -709,6 +715,8 @@ class ApiClient {
   }
 
   private reportFailure(detail: ApiFailureDetail) {
+    if (detail.path === '/v1/auth/refresh' && detail.status === 401) return;
+
     if (detail.code === 'AUTH_EXPIRED') {
       if (this.authExpiredReported) return;
       this.authExpiredReported = true;

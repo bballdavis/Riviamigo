@@ -8,7 +8,11 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 });
 
 const mockNavigate = vi.fn();
-const mockSession = vi.hoisted(() => ({ cost_usd: 8.75 as number | null }));
+const mockSession = vi.hoisted(() => ({
+  cost_usd: 8.75 as number | null,
+  source: 'telemetry+rivian_api' as string,
+  telemetry_sample_count: 12 as number,
+}));
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -39,8 +43,8 @@ vi.mock('@riviamigo/hooks', () => ({
       peak_power_kw: 11.5,
       cost_usd: mockSession.cost_usd,
       duration_min: 75,
-      source: 'telemetry+rivian_api',
-      telemetry_sample_count: 12,
+      source: mockSession.source,
+      telemetry_sample_count: mockSession.telemetry_sample_count,
       network_vendor: 'Rivian',
       range_added_km: 88.4,
       rivian_paid_total: 8.75,
@@ -73,6 +77,8 @@ import { ChargeSessionContent } from '../charging.$sessionId';
 describe('Charge session detail page', () => {
   beforeEach(() => {
     mockSession.cost_usd = 8.75;
+    mockSession.source = 'telemetry+rivian_api';
+    mockSession.telemetry_sample_count = 12;
   });
 
   it('renders session details and the charge curve chart', () => {
@@ -111,5 +117,14 @@ describe('Charge session detail page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to charging' }));
 
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
+  });
+
+  it('labels rivian_api sessions with telemetry evidence as telemetry plus api', () => {
+    mockSession.source = 'rivian_api';
+    mockSession.telemetry_sample_count = 6;
+    render(<ChargeSessionContent />);
+
+    expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
+    expect(screen.queryByText('Rivian API backfill')).not.toBeInTheDocument();
   });
 });
