@@ -158,7 +158,11 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
 
   return (
     <Card padding="md" className="grid gap-x-6 gap-y-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-      <SourceFact icon={<Database className="h-4 w-4" />} label="Source" value={formatSourceLabel(session.source)} />
+      <SourceFact
+        icon={<Database className="h-4 w-4" />}
+        label="Source"
+        value={formatSourceLabel(session.source, telemetryCount)}
+      />
       <SourceFact icon={<RadioTower className="h-4 w-4" />} label="Telemetry" value={telemetryLabel} />
       <SourceFact icon={<Zap className="h-4 w-4" />} label="Network" value={networkLabel} />
       {evidence.map((fact) => (
@@ -168,7 +172,8 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
   );
 }
 
-function formatSourceLabel(source: string | null | undefined) {
+function formatSourceLabel(source: string | null | undefined, telemetryCount: number) {
+  if (source === 'rivian_api' && telemetryCount > 0) return 'Telemetry + Rivian API';
   if (source === 'rivian_api') return 'Rivian API backfill';
   if (source === 'telemetry+rivian_api') return 'Telemetry + Rivian API';
   return 'Live telemetry';

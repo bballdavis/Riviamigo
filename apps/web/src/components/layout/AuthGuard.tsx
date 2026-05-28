@@ -24,30 +24,17 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isBootstrapping, accessToken, refresh, clearSession } = useAuth();
   const navigate = useNavigate();
   const hydratedForRef = useRef<string | null>(null);
+  const bootstrapStartedRef = useRef(false);
 
   // On mount, bootstrap the session from the HttpOnly cookie if not yet authenticated.
   useEffect(() => {
-    if (isAuthenticated) return;
+    if (isAuthenticated || bootstrapStartedRef.current) return;
+    bootstrapStartedRef.current = true;
     let cancelled = false;
-    const retryDelaysMs = [0, 250, 500, 1000, 2000];
-
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     const bootstrap = async () => {
-      for (const delayMs of retryDelaysMs) {
-        if (cancelled) return;
-        if (delayMs > 0) {
-          await sleep(delayMs);
-          if (cancelled) return;
-        }
-
-        const ok = await refresh();
-        if (ok) return;
-      }
-
-      if (!cancelled) {
-        navigate({ to: '/login' });
-      }
+      const ok = await refresh();
+      if (!ok && !cancelled) navigate({ to: '/login' });
     };
 
     void bootstrap();
