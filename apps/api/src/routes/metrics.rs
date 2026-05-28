@@ -429,10 +429,10 @@ async fn summary_value(
 
     let value = match metric {
         "total_miles" => sqlx::query_scalar(
-            "SELECT od.odometer_miles::float8 \
+            "SELECT od.odometer_end::float8 \
              FROM timeseries.odometer_daily od \
              WHERE od.vehicle_id = $1 \
-             ORDER BY od.bucket DESC LIMIT 1",
+               ORDER BY od.day DESC LIMIT 1",
         )
         .bind(vid)
         .fetch_optional(pool)

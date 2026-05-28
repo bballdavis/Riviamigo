@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { rootRoute } from './__root';
 import { api, useAuth, useVehicles } from '@riviamigo/hooks';
@@ -30,6 +31,7 @@ function ConnectOtpPage() {
 
 export function ConnectOtpContent() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { challenge_id, email, mode, vehicle_id } = useSearch({ from: '/connect/otp' });
   const setDefaultVehicleId = useAuth((state) => state.setDefaultVehicleId);
   const { data: connectedVehicles } = useVehicles();
@@ -68,6 +70,7 @@ export function ConnectOtpContent() {
       }
       await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
       setDefaultVehicleId(refreshVehicleId);
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
       setSuccessVehicleName(formatVehicleName(matchingVehicle));
       setVehicles([]);
       return;
@@ -95,6 +98,7 @@ export function ConnectOtpContent() {
       vin: vehicle.vin,
     });
     setDefaultVehicleId(added.vehicle_id);
+    queryClient.invalidateQueries({ queryKey: ['vehicles'] });
     setSuccessVehicleName(formatVehicleName(vehicle));
     setVehicles([]);
   }
