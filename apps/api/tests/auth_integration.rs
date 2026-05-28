@@ -1,8 +1,9 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use axum::{
     body::{to_bytes, Body},
+    extract::ConnectInfo,
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE},
         HeaderMap, Method, Request, StatusCode,
@@ -16,6 +17,7 @@ use uuid::Uuid;
 
 use riviamigo_api::{
     config::Config,
+    ingestion::supervisor::SupervisorHandle,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
     models::cost_profile::compute_cost,
@@ -66,12 +68,12 @@ impl TestApp {
 
         let state = AppState {
             pool: pool.clone(),
-            redis: redis::Client::open("redis://127.0.0.1:16379/").expect("redis client"),
+            redis: redis::Client::open("redis://127.0.0.1:6379/").expect("redis client"),
             jwt_keys,
             age_key: keys.age_key,
             config: Config {
                 database_url: db_url,
-                redis_url: "redis://127.0.0.1:16379/".into(),
+                redis_url: "redis://127.0.0.1:6379/".into(),
                 jwt_secret: None,
                 jwt_public_key: None,
                 age_encryption_key: None,
@@ -94,8 +96,8 @@ impl TestApp {
                 riviamigo_env: None,
                 cookie_insecure: None,
             },
-            nominatim_next_call: Arc::new(tokio::sync::Mutex::new(Instant::now())),
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            supervisor: SupervisorHandle::noop(),
         };
 
         Self {
@@ -120,13 +122,17 @@ impl TestApp {
             req = req.header(COOKIE, cookie_value);
         }
 
-        let request = if let Some(json_body) = body {
+        let mut request = if let Some(json_body) = body {
             req.header(CONTENT_TYPE, "application/json")
                 .body(Body::from(json_body.to_string()))
                 .expect("request body")
         } else {
             req.body(Body::empty()).expect("empty request")
         };
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
 
         let response = self
             .router
@@ -143,7 +149,8 @@ impl TestApp {
         let body = if bytes.is_empty() {
             Value::Null
         } else {
-            serde_json::from_slice(&bytes).expect("json body")
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }))
         };
 
         TestResponse {
@@ -172,9 +179,17 @@ async fn register_and_login(app: &TestApp, email: &str) -> String {
         )
         .await;
 
+    if response.status != StatusCode::OK && response.status != StatusCode::CREATED {
+        panic!(
+            "register failed: status={} body={}",
+            response.status,
+            response.body
+        );
+    }
+
     response.body["access_token"]
         .as_str()
-        .expect("access token")
+        .unwrap_or_else(|| panic!("missing access token: body={}", response.body))
         .to_string()
 }
 
@@ -774,4 +789,64 @@ async fn charging_sessions_surface_home_geofence_location() {
 
     assert_eq!(cost_res.status, StatusCode::OK);
     assert_eq!(cost_res.body["total_cost_usd"], json!(4.9));
+}
+
+#[tokio::test]
+async fn charging_sessions_include_local_charging_window_day() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "charging-daykey@example.com").await;
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "charging-daykey@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+
+    let vehicle_id =
+        insert_vehicle(&app.pool, user_id, "charging-daykey-vehicle", "DayKey Truck").await;
+
+    sqlx::query!(
+        "UPDATE riviamigo.user_preferences SET home_timezone = $1 WHERE user_id = $2",
+        "America/Chicago",
+        user_id,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("update timezone");
+
+    // 2026-05-24 00:30 in America/Chicago => charging-window day key should be 2026-05-23
+    let started_at = chrono::DateTime::parse_from_rfc3339("2026-05-24T05:30:00Z")
+        .expect("parse started_at")
+        .with_timezone(&chrono::Utc);
+    let ended_at = chrono::DateTime::parse_from_rfc3339("2026-05-24T07:00:00Z")
+        .expect("parse ended_at")
+        .with_timezone(&chrono::Utc);
+
+    sqlx::query!(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (vehicle_id, started_at, ended_at, kwh_added, duration_minutes)
+           VALUES ($1, $2, $3, $4, $5)"#,
+        vehicle_id,
+        started_at,
+        ended_at,
+        18.0_f64,
+        90_i32,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("insert charge session");
+
+    let res = app
+        .request(
+            Method::GET,
+            &format!("/v1/vehicles/{vehicle_id}/charging-sessions"),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["data"][0]["session_day_local"], json!("2026-05-23"));
 }

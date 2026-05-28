@@ -13,6 +13,7 @@ jwt_public.pem
 age_key.txt
 target/
 **/target-tests/
+**/target-tests-regression/
 apps/api/Cargo.lock
 # apps/api/.sqlx/ — intentionally tracked; required for SQLX_OFFLINE=true builds
 *.lock.tmp
