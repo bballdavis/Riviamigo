@@ -20,7 +20,7 @@
       "title": "Overview Charts",
       "options": {
         "page": "overview",
-        "chartId": "soc-history",
+        "chartId": "projected-range-mileage",
         "chartIds": [
           "soc-history",
           "range-history",
@@ -31,7 +31,6 @@
           "efficiency-temperature",
           "efficiency-mode",
           "phantom-drain",
-          "battery-degradation",
           "battery-capacity-mileage",
           "projected-range-mileage"
         ],

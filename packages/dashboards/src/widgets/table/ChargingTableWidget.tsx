@@ -23,8 +23,8 @@ function useIsMobile() {
   return isMobile;
 }
 
-const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success'> = {
-  dcfc: 'accent', dc: 'info', ac: 'success',
+const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success' | 'warning'> = {
+  dcfc: 'warning', dc: 'warning', ac: 'success', ac_l2: 'success',
 };
 
 function formatSessionDay(session: ChargeSessionRow): string {

@@ -4,7 +4,7 @@ import { api } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
-import { HelpCircle, Home, Pencil, Plus, Zap, Trash2 } from 'lucide-react';
+import { HelpCircle, Home, Loader2, Pencil, Plus, Zap, Trash2 } from 'lucide-react';
 
 type PlanType = 'per_kwh' | 'tou';
 type PlaceType = 'home' | 'work' | 'poi';
@@ -110,8 +110,10 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const [draft, setDraft] = React.useState<PlaceDraft>(() => emptyDraft(unitSystem));
   const [editingPlaceId, setEditingPlaceId] = React.useState<string | null>(null);
   const [addressQuery, setAddressQuery] = React.useState('');
+  const [savedPlacesQuery, setSavedPlacesQuery] = React.useState('');
   const [selectedAddress, setSelectedAddress] = React.useState<PlaceAddress | null>(null);
   const deferredAddressQuery = React.useDeferredValue(addressQuery.trim());
+  const deferredSavedPlacesQuery = React.useDeferredValue(savedPlacesQuery.trim().toLowerCase());
   const previousUnitSystem = React.useRef(unitSystem);
 
   const places = useQuery({
@@ -188,9 +190,31 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     && !addressChangedFromSelection
     && chargeRateValid();
 
-  const placeSuggestions = deferredAddressQuery.length >= 3 && (!selectedAddress || addressChangedFromSelection)
+  const shouldSearchSuggestions = deferredAddressQuery.length >= 3 && (!selectedAddress || addressChangedFromSelection);
+  const placeSuggestions = shouldSearchSuggestions
     ? (addressSearch.data ?? [])
     : [];
+  const isSearchingSuggestions = shouldSearchSuggestions && addressSearch.isFetching;
+  const hasNoSuggestions = shouldSearchSuggestions && !isSearchingSuggestions && placeSuggestions.length === 0;
+  const filteredPlaces = React.useMemo(() => {
+    const allPlaces = places.data ?? [];
+    if (!deferredSavedPlacesQuery) {
+      return allPlaces;
+    }
+
+    return allPlaces.filter((place) => {
+      const fields = [
+        place.name,
+        place.address?.display_name,
+        place.address?.city,
+        place.address?.state,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+
+      return fields.some((field) => field.includes(deferredSavedPlacesQuery));
+    });
+  }, [places.data, deferredSavedPlacesQuery]);
 
   function updateDraft<K extends keyof PlaceDraft>(key: K, value: PlaceDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -315,10 +339,16 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                 </label>
               </div>
 
-              {placeSuggestions.length > 0 && (
+              {(shouldSearchSuggestions && (isSearchingSuggestions || placeSuggestions.length > 0 || hasNoSuggestions)) && (
                 <div className="rounded-lg border border-border bg-bg-elevated/50 p-2">
                   <div className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">Suggestions</div>
                   <div className="grid gap-2">
+                    {isSearchingSuggestions && (
+                      <div className="flex items-center gap-2 rounded-lg border border-border bg-bg px-3 py-2 text-sm text-fg-tertiary">
+                        <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                        <span>Searching addresses...</span>
+                      </div>
+                    )}
                     {placeSuggestions.map((suggestion) => (
                       <button
                         key={`${suggestion.osm_id ?? suggestion.display_name}-${suggestion.latitude}-${suggestion.longitude}`}
@@ -332,6 +362,11 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                         </div>
                       </button>
                     ))}
+                    {hasNoSuggestions && (
+                      <div className="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-fg-tertiary">
+                        No matching addresses found. Try a broader search.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -566,11 +601,22 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       <Card>
         <CardHeader>
           <CardTitle>Saved Places</CardTitle>
-          <Badge variant="default">{places.data?.length ?? 0}</Badge>
+          <div className="flex min-w-0 items-center gap-2">
+            <label className="sr-only" htmlFor="saved-places-search">Search saved places</label>
+            <input
+              id="saved-places-search"
+              type="search"
+              value={savedPlacesQuery}
+              onChange={(event) => setSavedPlacesQuery(event.target.value)}
+              placeholder="Search saved places"
+              className="h-8 w-40 min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-xs text-fg outline-none focus:border-accent sm:w-56"
+            />
+            <Badge variant="default">{filteredPlaces.length}</Badge>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="grid gap-2">
-            {(places.data ?? []).map((place) => (
+            {filteredPlaces.map((place) => (
               <div key={place.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/30 p-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-fg">{place.name}</div>
@@ -605,6 +651,12 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
             {(places.data?.length ?? 0) === 0 && (
               <div className="rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">
                 No saved places yet. Add home, work, or favorite chargers here.
+              </div>
+            )}
+
+            {(places.data?.length ?? 0) > 0 && filteredPlaces.length === 0 && (
+              <div className="rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">
+                No saved places match your search.
               </div>
             )}
           </div>

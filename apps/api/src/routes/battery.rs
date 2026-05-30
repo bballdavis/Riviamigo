@@ -173,6 +173,8 @@ pub struct BatteryMileagePoint {
     pub odometer_mi: Option<f64>,
     pub usable_kwh: Option<f64>,
     pub range_mi: Option<f64>,
+    pub projected_max_range_mi: Option<f64>,
+    pub degradation_pct: Option<f64>,
 }
 
 async fn get_degradation(
@@ -292,13 +294,20 @@ async fn get_mileage(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(730));
     let to = p.to.unwrap_or_else(Utc::now);
+    let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
 
     let rows = sqlx::query_as::<_, BatteryMileagePoint>(
         "SELECT
              time_bucket('1 week', ts) AS ts,
              max(odometer_miles) AS odometer_mi,
              max(battery_capacity_wh) / 1000.0 AS usable_kwh,
-             avg(distance_to_empty_mi) AS range_mi
+             avg(distance_to_empty_mi) AS range_mi,
+             avg(distance_to_empty_mi) AS projected_max_range_mi,
+             CASE
+                 WHEN $4 > 0
+                 THEN GREATEST(0.0, 100.0 - (max(battery_capacity_wh) / $4 * 100.0))
+                 ELSE NULL
+             END AS degradation_pct
          FROM timeseries.telemetry
          WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
            AND ts >= $2 AND ts <= $3
@@ -308,6 +317,7 @@ async fn get_mileage(
     .bind(vid)
     .bind(from)
     .bind(to)
+    .bind(usable_new_wh.unwrap_or(0.0))
     .fetch_all(&state.pool)
     .await?;
 
