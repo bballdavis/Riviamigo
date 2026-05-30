@@ -489,7 +489,9 @@ async fn fetch_places(
                         id: cost_profile_id,
                         name: row.cost_profile_name.unwrap_or_else(|| place_name.clone()),
                         billing_type: normalize_place_billing_type(
-                            row.cost_profile_billing_type.as_deref().unwrap_or("per_kwh"),
+                            row.cost_profile_billing_type
+                                .as_deref()
+                                .unwrap_or("per_kwh"),
                         )
                         .to_string(),
                         rate: row.cost_profile_rate.unwrap_or(0.0),

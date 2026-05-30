@@ -8,8 +8,7 @@
 
 use anyhow::Result;
 use riviamigo_api::{
-    db::vehicles::get_vehicle_owner_id,
-    services::cost::recompute_charge_session_cost,
+    db::vehicles::get_vehicle_owner_id, services::cost::recompute_charge_session_cost,
     services::geofences::match_geofence,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -478,14 +477,18 @@ async fn repair_api_summary_metadata(pool: &sqlx::PgPool) -> Result<u64> {
 }
 
 async fn repair_charge_session_costs(pool: &sqlx::PgPool) -> Result<u64> {
-    let session_ids = sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM riviamigo.charge_sessions")
-    .fetch_all(pool)
-    .await?;
+    let session_ids =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM riviamigo.charge_sessions")
+            .fetch_all(pool)
+            .await?;
 
     let mut repaired = 0u64;
 
     for session_id in session_ids {
-        if recompute_charge_session_cost(pool, session_id).await?.is_some() {
+        if recompute_charge_session_cost(pool, session_id)
+            .await?
+            .is_some()
+        {
             repaired += 1;
         }
     }

@@ -13,6 +13,7 @@ use crate::{
     errors::AppError,
     ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
     middleware::auth::{AppState, AuthUser},
+    routes::range_normalization::normalize_remaining_range_miles,
 };
 
 pub fn router() -> Router<AppState> {
@@ -21,7 +22,10 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id", delete(delete_vehicle))
-        .route("/vehicles/:id/credentials", put(refresh_vehicle_credentials))
+        .route(
+            "/vehicles/:id/credentials",
+            put(refresh_vehicle_credentials),
+        )
         .route("/vehicles/:id/status", get(vehicle_status))
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
@@ -368,41 +372,6 @@ struct RawVehicleCoverageRow {
     software_samples: i64,
 }
 
-const PLAUSIBLE_MAX_MI_PER_KWH: f64 = 3.4;
-
-fn normalize_remaining_range_miles(
-    raw_range_mi: Option<f64>,
-    battery_level_pct: Option<f64>,
-    battery_capacity_wh: Option<f64>,
-) -> Option<f64> {
-    let raw_range_mi = raw_range_mi.filter(|value| value.is_finite())?;
-    let battery_level_pct = battery_level_pct.filter(|value| value.is_finite())?;
-    if battery_level_pct <= 0.0 {
-        return Some(raw_range_mi);
-    }
-
-    let battery_capacity_kwh = battery_capacity_wh
-        .and_then(|wh| wh.is_finite().then_some(wh))
-        .map(|wh| if wh > 1000.0 { wh / 1000.0 } else { wh });
-    let Some(battery_capacity_kwh) = battery_capacity_kwh else {
-        return Some(raw_range_mi);
-    };
-
-    let plausible_max_range = battery_capacity_kwh * PLAUSIBLE_MAX_MI_PER_KWH;
-    let raw_max_range = raw_range_mi / battery_level_pct * 100.0;
-    if raw_max_range <= plausible_max_range {
-        return Some(raw_range_mi);
-    }
-
-    let converted_from_km = raw_range_mi / 1.609_344;
-    let converted_max_range = converted_from_km / battery_level_pct * 100.0;
-    if converted_max_range <= plausible_max_range {
-        return Some(converted_from_km);
-    }
-
-    Some(raw_range_mi)
-}
-
 #[derive(Serialize)]
 struct ConnectResponse {
     status: &'static str,
@@ -462,7 +431,10 @@ async fn connect(
         "vehicle.connect.start"
     );
 
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
     match crate::ingestion::rivian_auth::rivian_login(&client, &body.email, &body.password)
         .await
         .map_err(|e| {
@@ -562,7 +534,9 @@ async fn connect_otp(
             stored_user_id = %pending.user_id,
             "vehicle.connect_otp.challenge_user_mismatch"
         );
-        return Err(AppError::Validation("challenge_id expired or invalid".into()));
+        return Err(AppError::Validation(
+            "challenge_id expired or invalid".into(),
+        ));
     }
 
     let challenge = crate::ingestion::rivian_auth::RivianOtpChallenge {
@@ -572,7 +546,10 @@ async fn connect_otp(
         app_session_token: pending.app_session_token,
     };
 
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
     let tokens =
         crate::ingestion::rivian_auth::rivian_login_otp(&client, &challenge, &body.otp_code)
             .await
@@ -637,9 +614,7 @@ async fn add_vehicle(
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:connect:{}", auth.user_id);
     let tokens = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
-        &state,
-        &mut conn,
-        &key,
+        &state, &mut conn, &key,
     )
     .await?;
     let tokens = tokens.ok_or_else(|| {
@@ -735,7 +710,10 @@ async fn add_vehicle(
         "vehicle.add.persisted"
     );
 
-    state.supervisor.send(SupervisorCommand::StartWorker { vehicle_id }).await;
+    state
+        .supervisor
+        .send(SupervisorCommand::StartWorker { vehicle_id })
+        .await;
 
     Ok(Json(serde_json::json!({"vehicle_id": vehicle_id})))
 }
@@ -758,29 +736,37 @@ async fn refresh_vehicle_credentials(
 
     if let Some(requested) = body.rivian_vehicle_id.as_deref() {
         if requested != rivian_vehicle_id {
-            return Err(AppError::Validation("selected Rivian vehicle does not match this local vehicle".into()));
+            return Err(AppError::Validation(
+                "selected Rivian vehicle does not match this local vehicle".into(),
+            ));
         }
     }
 
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let key = format!("rivian:connect:{}", auth.user_id);
     let tokens = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
-        &state,
-        &mut conn,
-        &key,
+        &state, &mut conn, &key,
     )
     .await?
     .ok_or_else(|| AppError::Validation("complete /vehicles/connect first".into()))?;
 
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
     let account_vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
         .await
         .map_err(|e| {
             warn!(vehicle_id = %vid, user_id = %auth.user_id, error = %e, "vehicle.refresh_credentials.fetch_user_vehicles_failed");
             AppError::RivianApi("Unable to verify Rivian vehicle access".into())
         })?;
-    if !account_vehicles.iter().any(|vehicle| vehicle.id == rivian_vehicle_id) {
-        return Err(AppError::Validation("Rivian account does not include this vehicle".into()));
+    if !account_vehicles
+        .iter()
+        .any(|vehicle| vehicle.id == rivian_vehicle_id)
+    {
+        return Err(AppError::Validation(
+            "Rivian account does not include this vehicle".into(),
+        ));
     }
 
     let identity = age_identity(&state)?;
@@ -842,9 +828,14 @@ async fn delete_vehicle(
         .execute(&state.pool)
         .await?;
 
-    state.supervisor.send(SupervisorCommand::StopWorker { vehicle_id: vid }).await;
+    state
+        .supervisor
+        .send(SupervisorCommand::StopWorker { vehicle_id: vid })
+        .await;
 
-    Ok(Json(serde_json::json!({ "ok": true, "default_vehicle_id": next_default })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "default_vehicle_id": next_default }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1160,13 +1151,21 @@ async fn vehicle_status(
         vehicle_id: vid,
         is_online: row.as_ref().and_then(|r| r.is_online).unwrap_or(false),
         last_event_at: row.as_ref().and_then(|r| r.last_event_at),
-        last_updated: latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
+        last_updated: latest
+            .ts
+            .or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
         worker_health: row.as_ref().and_then(|r| r.worker_health.clone()),
         auth_state: row.as_ref().and_then(|r| r.auth_state.clone()),
         auth_reason_code: row.as_ref().and_then(|r| r.auth_reason_code.clone()),
         battery_level: latest.battery_level,
         range_miles: normalized_range_miles,
-        battery_capacity_kwh: latest.battery_capacity_wh.map(|w| if w > 1000.0 { w / 1000.0 } else { w }),
+        battery_capacity_kwh: latest.battery_capacity_wh.map(|w| {
+            if w > 1000.0 {
+                w / 1000.0
+            } else {
+                w
+            }
+        }),
         battery_limit: latest.battery_limit,
         power_state: latest.power_state,
         charger_state: latest.charger_state,
@@ -1251,7 +1250,7 @@ async fn vehicle_status(
 
 #[cfg(test)]
 mod range_tests {
-    use super::normalize_remaining_range_miles;
+    use crate::routes::range_normalization::normalize_remaining_range_miles;
 
     #[test]
     fn leaves_plausible_miles_untouched() {
@@ -1289,7 +1288,10 @@ async fn cache_vehicle_images(
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
 ) {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
     match crate::ingestion::rivian_auth::rivian_vehicle_images(&client, tokens).await {
         Ok(images) => {
             let image_count = images.len();
@@ -1625,7 +1627,9 @@ async fn raw_vehicle_data(
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_otp, load_encrypted_redis, store_encrypted_redis, OtpBody, PendingOtpChallenge};
+    use super::{
+        connect_otp, load_encrypted_redis, store_encrypted_redis, OtpBody, PendingOtpChallenge,
+    };
     use axum::body::Body;
     use axum::extract::State;
     use axum::Json;
@@ -1648,8 +1652,7 @@ mod tests {
 
         let generated = crate::keys::generate_keys().expect("keys");
         let jwt_keys = Arc::new(
-            JwtKeys::new(&generated.jwt_private_pem, &generated.jwt_public_pem)
-                .expect("jwt keys"),
+            JwtKeys::new(&generated.jwt_private_pem, &generated.jwt_public_pem).expect("jwt keys"),
         );
 
         let config = crate::config::Config {
@@ -1692,17 +1695,16 @@ mod tests {
     }
 
     async fn make_app() -> axum::Router {
-        use std::sync::Arc;
         use crate::middleware::auth::{AppState, JwtKeys};
         use rsa::{
             pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
             RsaPrivateKey,
         };
+        use std::sync::Arc;
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
 
         let pool = crate::db::pool::create_pool(&database_url)
             .await
@@ -1712,7 +1714,10 @@ mod tests {
         let mut rng = rand::thread_rng();
         let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
         let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let private_pem = priv_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("pem")
+            .to_string();
         let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
         let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
 
@@ -1767,7 +1772,11 @@ mod tests {
         app.oneshot(req).await.unwrap().status()
     }
 
-    async fn post_status(app: axum::Router, uri: &str, body: serde_json::Value) -> http::StatusCode {
+    async fn post_status(
+        app: axum::Router,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> http::StatusCode {
         let req = Request::builder()
             .method("POST")
             .uri(uri)
@@ -1781,7 +1790,10 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn list_vehicles_requires_auth() {
         let app = make_app().await;
-        assert_eq!(get_status(app, "/v1/vehicles").await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            get_status(app, "/v1/vehicles").await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
@@ -1825,8 +1837,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires REDIS_URL"]
     async fn encrypted_redis_round_trips_connect_tokens_without_plaintext_storage() {
-        let redis_url = std::env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
         let state = make_helper_state(redis_url);
         let mut conn = state
             .redis
@@ -1852,14 +1864,13 @@ mod tests {
             .expect("redis get ciphertext");
         assert_ne!(raw, serde_json::to_vec(&tokens).expect("plain json"));
 
-        let round_trip = load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
-            &state,
-            &mut conn,
-            &key,
-        )
-        .await
-        .expect("load encrypted connect session")
-        .expect("stored connect session");
+        let round_trip =
+            load_encrypted_redis::<crate::ingestion::session_store::RivianTokenBundle>(
+                &state, &mut conn, &key,
+            )
+            .await
+            .expect("load encrypted connect session")
+            .expect("stored connect session");
 
         assert_eq!(round_trip.access_token, tokens.access_token);
         assert_eq!(round_trip.refresh_token, tokens.refresh_token);
@@ -1875,8 +1886,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires REDIS_URL"]
     async fn connect_otp_rejects_challenges_staged_for_other_users() {
-        let redis_url = std::env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
         let state = make_helper_state(redis_url);
         let owner_id = Uuid::new_v4();
         let other_user_id = Uuid::new_v4();

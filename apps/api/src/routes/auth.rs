@@ -53,7 +53,8 @@ async fn register(
     if body.email.len() > 254 {
         return Err(AppError::Validation("email too long".into()));
     }
-    if body.email.is_empty() || !body.email.contains('@') || body.password.len() < MIN_PASSWORD_LEN {
+    if body.email.is_empty() || !body.email.contains('@') || body.password.len() < MIN_PASSWORD_LEN
+    {
         return Err(AppError::Validation(
             "valid email required, password min 12 chars".into(),
         ));
@@ -132,7 +133,10 @@ async fn login(
     .await?;
 
     // Always run the Argon2 verification to avoid timing oracle for user enumeration.
-    let hash = row.as_ref().map(|r| r.password_hash.as_str()).unwrap_or(DUMMY_HASH);
+    let hash = row
+        .as_ref()
+        .map(|r| r.password_hash.as_str())
+        .unwrap_or(DUMMY_HASH);
     if let Err(e) = verify_password(&body.password, hash) {
         if row.is_some() {
             audit_log(
@@ -306,12 +310,7 @@ fn refresh_cookie(value: &str, max_age: u64) -> String {
     )
 }
 
-fn audit_log(
-    pool: sqlx::PgPool,
-    event: &'static str,
-    user_id: Option<uuid::Uuid>,
-    detail: String,
-) {
+fn audit_log(pool: sqlx::PgPool, event: &'static str, user_id: Option<uuid::Uuid>, detail: String) {
     tokio::spawn(async move {
         if let Err(e) = sqlx::query(
             "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) \
@@ -358,12 +357,11 @@ mod tests {
     /// Build a full router backed by a real database.
     /// Reads DATABASE_URL + REDIS_URL from the environment (set in CI).
     async fn make_app() -> axum::Router {
-        use std::sync::Arc;
         use crate::middleware::auth::JwtKeys;
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        use std::sync::Arc;
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
 
         let pool = crate::db::pool::create_pool(&database_url)
             .await
@@ -428,7 +426,9 @@ mod tests {
             .to_pkcs8_pem(LineEnding::LF)
             .expect("private pem")
             .to_string();
-        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("public pem");
+        let public_pem = pub_key
+            .to_public_key_pem(LineEnding::LF)
+            .expect("public pem");
         (private_pem, public_pem)
     }
 
@@ -494,7 +494,10 @@ mod tests {
     fn refresh_cookie_format_contains_httponly() {
         let cookie = refresh_cookie("mytoken", 3600);
         assert!(cookie.contains("HttpOnly"), "cookie must be HttpOnly");
-        assert!(cookie.contains("SameSite=Lax"), "cookie must have SameSite=Lax");
+        assert!(
+            cookie.contains("SameSite=Lax"),
+            "cookie must have SameSite=Lax"
+        );
         assert!(
             cookie.contains("refresh_token=mytoken"),
             "cookie must contain token value"
@@ -505,7 +508,10 @@ mod tests {
     #[test]
     fn refresh_cookie_clear_sets_zero_max_age() {
         let cookie = refresh_cookie("", 0);
-        assert!(cookie.contains("Max-Age=0"), "clearing cookie must set Max-Age=0");
+        assert!(
+            cookie.contains("Max-Age=0"),
+            "clearing cookie must set Max-Age=0"
+        );
         assert!(
             cookie.contains("refresh_token="),
             "clearing cookie must have empty value"
@@ -600,7 +606,11 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::CREATED, "register should return 201");
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "register should return 201"
+        );
         let set_cookie = resp
             .headers()
             .get("set-cookie")
@@ -679,7 +689,11 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::OK, "valid login should return 200");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "valid login should return 200"
+        );
         let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();

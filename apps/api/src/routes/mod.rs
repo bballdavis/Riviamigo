@@ -37,6 +37,7 @@ pub mod locations;
 pub mod metrics;
 pub mod overview;
 pub mod places;
+mod range_normalization;
 pub mod rivian_stewardship;
 pub mod schedules;
 pub mod state_timeline;

@@ -11,7 +11,9 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::cost_profile::{compute_cost, compute_tou_cost_from_readings, CostProfile, TimedEnergyPoint};
+use crate::models::cost_profile::{
+    compute_cost, compute_tou_cost_from_readings, CostProfile, TimedEnergyPoint,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChargeCostComputation {
@@ -233,7 +235,10 @@ async fn fetch_session_energy_readings(
     if !rows.is_empty() {
         return Ok(rows
             .into_iter()
-            .map(|r| TimedEnergyPoint { ts: r.ts, kwh: r.energy_kwh })
+            .map(|r| TimedEnergyPoint {
+                ts: r.ts,
+                kwh: r.energy_kwh,
+            })
             .collect());
     }
 
@@ -255,7 +260,10 @@ async fn fetch_session_energy_readings(
 
     Ok(fallback
         .into_iter()
-        .map(|r| TimedEnergyPoint { ts: r.ts, kwh: r.energy_kwh })
+        .map(|r| TimedEnergyPoint {
+            ts: r.ts,
+            kwh: r.energy_kwh,
+        })
         .collect())
 }
 
@@ -326,7 +334,10 @@ pub async fn recompute_charge_session_cost(
         is_rivian_network: session.is_rivian_network,
         is_home: session.is_home,
         rivian_paid_total: session.rivian_paid_total,
-        energy_added_kwh: session.energy_added_wh.map(|wh| wh / 1000.0).or(session.kwh_added),
+        energy_added_kwh: session
+            .energy_added_wh
+            .map(|wh| wh / 1000.0)
+            .or(session.kwh_added),
         energy_used_kwh: session.energy_used_wh.map(|wh| wh / 1000.0),
         duration_minutes,
         started_at: session.started_at,
@@ -526,7 +537,10 @@ mod tests {
         ]);
         // Charge 11 pm – 5 am Chicago time (fully overnight)
         let start = Utc.with_ymd_and_hms(2026, 5, 12, 4, 0, 0).single().unwrap(); // 11pm CDT
-        let end = Utc.with_ymd_and_hms(2026, 5, 12, 10, 0, 0).single().unwrap(); // 5am CDT
+        let end = Utc
+            .with_ymd_and_hms(2026, 5, 12, 10, 0, 0)
+            .single()
+            .unwrap(); // 5am CDT
         let inputs = CostInputs {
             is_rivian_network: Some(false),
             is_home: Some(true),
@@ -562,17 +576,47 @@ mod tests {
         // Session window: 2026-05-09 19:01 CDT → 2026-05-10 10:41 CDT
         // CDT = UTC-5, so: 2026-05-10 00:01 UTC → 2026-05-10 15:41 UTC
         let start = Utc.with_ymd_and_hms(2026, 5, 10, 0, 1, 0).single().unwrap();
-        let end   = Utc.with_ymd_and_hms(2026, 5, 10, 15, 41, 0).single().unwrap();
+        let end = Utc
+            .with_ymd_and_hms(2026, 5, 10, 15, 41, 0)
+            .single()
+            .unwrap();
 
         // Actual charging: 9:30 PM – 11:30 PM CDT = 02:30–04:30 UTC
         // All in Evening (8 pm – midnight) and Overnight (midnight – 6 am) → rate = 0.
         let readings = vec![
-            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 2, 30, 0).single().unwrap(), kwh: 5.0 }, // 9:30 PM CDT – Evening
-            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 3, 0,  0).single().unwrap(), kwh: 8.0 }, // 10:00 PM CDT – Evening
-            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 4, 0,  0).single().unwrap(), kwh: 8.0 }, // 11:00 PM CDT – Evening
-            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 4, 30, 0).single().unwrap(), kwh: 8.0 }, // 11:30 PM CDT – Evening
-            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 5, 0,  0).single().unwrap(), kwh: 5.0 }, // midnight CDT – Overnight
-            TimedEnergyPoint { ts: Utc.with_ymd_and_hms(2026, 5, 10, 5, 30, 0).single().unwrap(), kwh: 5.0 }, // 12:30 AM CDT – Overnight
+            TimedEnergyPoint {
+                ts: Utc
+                    .with_ymd_and_hms(2026, 5, 10, 2, 30, 0)
+                    .single()
+                    .unwrap(),
+                kwh: 5.0,
+            }, // 9:30 PM CDT – Evening
+            TimedEnergyPoint {
+                ts: Utc.with_ymd_and_hms(2026, 5, 10, 3, 0, 0).single().unwrap(),
+                kwh: 8.0,
+            }, // 10:00 PM CDT – Evening
+            TimedEnergyPoint {
+                ts: Utc.with_ymd_and_hms(2026, 5, 10, 4, 0, 0).single().unwrap(),
+                kwh: 8.0,
+            }, // 11:00 PM CDT – Evening
+            TimedEnergyPoint {
+                ts: Utc
+                    .with_ymd_and_hms(2026, 5, 10, 4, 30, 0)
+                    .single()
+                    .unwrap(),
+                kwh: 8.0,
+            }, // 11:30 PM CDT – Evening
+            TimedEnergyPoint {
+                ts: Utc.with_ymd_and_hms(2026, 5, 10, 5, 0, 0).single().unwrap(),
+                kwh: 5.0,
+            }, // midnight CDT – Overnight
+            TimedEnergyPoint {
+                ts: Utc
+                    .with_ymd_and_hms(2026, 5, 10, 5, 30, 0)
+                    .single()
+                    .unwrap(),
+                kwh: 5.0,
+            }, // 12:30 AM CDT – Overnight
         ];
         let total_kwh: f64 = readings.iter().map(|r| r.kwh).sum(); // 39.0
 
@@ -590,6 +634,10 @@ mod tests {
         let result = apply_cost_inputs(&inputs, Some(&profile));
         assert_eq!(result.cost_method, "profile");
         // Time-weighted (old) path would give ~$4.50. Reading-based path must give $0.
-        assert_eq!(result.cost_usd, Some(0.0), "expected $0 since all charging is in free periods");
+        assert_eq!(
+            result.cost_usd,
+            Some(0.0),
+            "expected $0 since all charging is in free periods"
+        );
     }
 }

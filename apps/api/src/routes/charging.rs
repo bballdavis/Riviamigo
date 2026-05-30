@@ -270,7 +270,7 @@ async fn get_curve_analysis(
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
     let to = p.to.unwrap_or_else(Utc::now);
 
-        let rows = sqlx::query_as::<_, CurveAnalysisRow>(
+    let rows = sqlx::query_as::<_, CurveAnalysisRow>(
                 r#"WITH session_windows AS (
                SELECT cs.id,
                       cs.started_at,

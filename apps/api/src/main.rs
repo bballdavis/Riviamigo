@@ -47,7 +47,8 @@ async fn main() -> anyhow::Result<()> {
     let age_key = active_keys.age_key;
 
     let supervisor =
-        ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone()).await?;
+        ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone())
+            .await?;
 
     let state = AppState {
         pool: pool.clone(),
@@ -65,7 +66,11 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;
     tracing::info!("listening on {addr}");
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

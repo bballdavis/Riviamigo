@@ -4,7 +4,7 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
+  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
@@ -425,12 +425,16 @@ class ApiClient {
     return this.request('GET', '/v1/battery/health', undefined, { vehicle_id: vehicleId });
   }
 
-  async getBatteryMileage(vehicleId: string): Promise<BatteryMileagePoint[]> {
+  async getBatteryMileage(vehicleId: string, from?: string, to?: string): Promise<BatteryMileagePoint[]> {
     const rows = await this.request<Array<Record<string, unknown>>>(
       'GET',
       '/v1/battery/mileage',
       undefined,
-      { vehicle_id: vehicleId },
+      {
+        vehicle_id: vehicleId,
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+      },
     );
 
     return rows.map((row) => ({
@@ -490,6 +494,22 @@ class ApiClient {
     return this.request<{ ts: string; value: number | null }[]>(
       'GET', `/v1/trips/${tripId}/elevation`, undefined, { vehicle_id: vehicleId }
     );
+  }
+
+  async getTripPowerProfile(tripId: string, vehicleId: string) {
+    const rows = await this.request<Array<Record<string, unknown>>>(
+      'GET', `/v1/trips/${tripId}/power`, undefined, { vehicle_id: vehicleId }
+    );
+
+    return rows
+      .map((row) => ({
+        ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
+        power_kw: finiteNumber(row.power_kw) ?? null,
+        regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
+        speed_mph: finiteNumber(row.speed_mph) ?? null,
+        battery_level: finiteNumber(row.battery_level) ?? null,
+      }))
+      .filter((row) => typeof row.ts === 'string') satisfies TripPowerPoint[];
   }
 
   // ── Charging ──────────────────────────────────────────────────────────────

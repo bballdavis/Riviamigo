@@ -92,6 +92,14 @@ export interface TrackPoint {
   altitude_m: number | null;
 }
 
+export interface TripPowerPoint {
+  ts: string;
+  power_kw: number | null;
+  regen_power_kw: number | null;
+  speed_mph: number | null;
+  battery_level: number | null;
+}
+
 export interface ChargeSession {
   id: string;
   vehicle_id: string;
