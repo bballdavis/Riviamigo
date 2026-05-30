@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -148,6 +148,7 @@ async fn search_places(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<AddressRecord>>, AppError> {
+    let total_start = std::time::Instant::now();
     let query = params.q.trim().to_lowercase();
     if query.len() < 3 {
         return Ok(Json(Vec::new()));
@@ -164,24 +165,22 @@ async fn search_places(
                     .iter()
                     .filter_map(|v| value_to_address_record(v.clone()))
                     .collect();
+                debug!(
+                    query = %query,
+                    cache_hit = true,
+                    suggestion_count = suggestions.len(),
+                    total_ms = total_start.elapsed().as_millis() as u64,
+                    "places.address_search_completed"
+                );
                 return Ok(Json(suggestions));
             }
         }
     }
 
-    // --- rate-limit: ≥ 1100 ms between Nominatim calls --------------------
-    // Share the process-wide gate with the ingestion worker so the combined
-    // call rate across all codepaths never exceeds Nominatim's 1 req/sec limit.
-    let sleep_for = {
-        let mut next = crate::ingestion::worker::nominatim_gate().lock().await;
-        let now = std::time::Instant::now();
-        let wait = next.saturating_duration_since(now);
-        *next = now + wait + Duration::from_millis(1100);
-        wait
-    };
-    if !sleep_for.is_zero() {
-        tokio::time::sleep(sleep_for).await;
-    }
+    let slot = crate::services::nominatim::acquire_slot(
+        crate::services::nominatim::NominatimLane::InteractiveSearch,
+    )
+    .await;
 
     // --- Nominatim request -----------------------------------------------
     let client = reqwest::Client::builder()
@@ -192,6 +191,7 @@ async fn search_places(
         })?;
 
     let limit = params.limit.unwrap_or(5).clamp(1, 10).to_string();
+    let upstream_start = std::time::Instant::now();
     let response = match client
         .get("https://nominatim.openstreetmap.org/search")
         .header(
@@ -209,20 +209,35 @@ async fn search_places(
     {
         Ok(r) => r,
         Err(error) => {
+            crate::services::nominatim::report_outcome(None, None).await;
             warn!(error = %error, query = %query, "places.address_search_request_failed");
             return Ok(Json(Vec::new()));
         }
     };
+    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
+    let status = response.status();
+    let retry_after = crate::services::nominatim::retry_after_from_headers(response.headers());
+    crate::services::nominatim::report_outcome(Some(status.as_u16()), retry_after).await;
 
-    // Surface 429 as a log warning but don't fail the request
-    let response = match response.error_for_status() {
-        Ok(r) => r,
-        Err(error) => {
-            warn!(error = %error, query = %query, "places.address_search_http_error");
-            return Ok(Json(Vec::new()));
-        }
-    };
+    if !status.is_success() {
+        let adaptive_extra_ms = crate::services::nominatim::adaptive_extra_ms().await;
+        warn!(
+            query = %query,
+            status = %status,
+            lane = ?slot.lane,
+            queued_ms = slot.queued_ms,
+            gate_wait_ms = slot.gate_wait_ms,
+            scheduled_interval_ms = slot.effective_interval_ms,
+            adaptive_extra_ms,
+            upstream_ms,
+            retry_after_s = retry_after.map(|duration| duration.as_secs()),
+            total_ms = total_start.elapsed().as_millis() as u64,
+            "places.address_search_http_error"
+        );
+        return Ok(Json(Vec::new()));
+    }
 
+    let decode_start = std::time::Instant::now();
     let rows: Vec<Value> = match response.json().await {
         Ok(r) => r,
         Err(error) => {
@@ -230,6 +245,7 @@ async fn search_places(
             return Ok(Json(Vec::new()));
         }
     };
+    let decode_ms = decode_start.elapsed().as_millis() as u64;
 
     // --- populate cache --------------------------------------------------
     {
@@ -249,6 +265,22 @@ async fn search_places(
         .into_iter()
         .filter_map(value_to_address_record)
         .collect();
+
+    let adaptive_extra_ms = crate::services::nominatim::adaptive_extra_ms().await;
+
+    debug!(
+        query = %query,
+        cache_hit = false,
+        lane = ?slot.lane,
+        queued_ms = slot.queued_ms,
+        gate_wait_ms = slot.gate_wait_ms,
+        scheduled_interval_ms = slot.effective_interval_ms,
+        adaptive_extra_ms,
+        upstream_ms,
+        decode_ms,
+        total_ms = total_start.elapsed().as_millis() as u64,
+        "places.address_search_completed"
+    );
 
     Ok(Json(suggestions))
 }

@@ -31,17 +31,6 @@ use crate::{
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 
-/// Shared rate-limit gate for Nominatim reverse geocoding in the ingestion worker.
-/// Ensures ≥ 1100 ms between calls across all concurrent trip-close events.
-static NOMINATIM_NEXT_CALL: std::sync::OnceLock<tokio::sync::Mutex<std::time::Instant>> =
-    std::sync::OnceLock::new();
-
-/// Process-wide rate-limit gate for Nominatim. Shared by the ingestion worker
-/// AND the places API route so the combined call rate never exceeds 1 req/sec.
-pub fn nominatim_gate() -> &'static tokio::sync::Mutex<std::time::Instant> {
-    NOMINATIM_NEXT_CALL.get_or_init(|| tokio::sync::Mutex::new(std::time::Instant::now()))
-}
-
 struct MatchedLocation {
     geofence_id: Option<Uuid>,
     address_id: Option<Uuid>,
@@ -1766,17 +1755,10 @@ async fn match_point(
 /// and return the row's UUID.  Returns `None` on any network / DB error so
 /// callers can degrade gracefully.
 async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<Uuid> {
-    // ── rate limit ────────────────────────────────────────────────────────
-    let sleep_for = {
-        let mut next = nominatim_gate().lock().await;
-        let now = std::time::Instant::now();
-        let wait = next.saturating_duration_since(now);
-        *next = now + wait + std::time::Duration::from_millis(1100);
-        wait
-    };
-    if !sleep_for.is_zero() {
-        tokio::time::sleep(sleep_for).await;
-    }
+    let slot = crate::services::nominatim::acquire_slot(
+        crate::services::nominatim::NominatimLane::BackgroundReverseGeocode,
+    )
+    .await;
 
     // ── HTTP request ──────────────────────────────────────────────────────
     let client = match reqwest::Client::builder()
@@ -1809,13 +1791,28 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
     {
         Ok(r) => r,
         Err(e) => {
+            crate::services::nominatim::report_outcome(None, None).await;
             tracing::warn!(error=%e, lat=%lat, lon=%lon, "worker.reverse_geocode_request_failed");
             return None;
         }
     };
 
-    if !resp.status().is_success() {
-        tracing::warn!(status=%resp.status(), lat=%lat, lon=%lon, "worker.reverse_geocode_http_error");
+    let status = resp.status();
+    let retry_after = crate::services::nominatim::retry_after_from_headers(resp.headers());
+    crate::services::nominatim::report_outcome(Some(status.as_u16()), retry_after).await;
+
+    if !status.is_success() {
+        tracing::warn!(
+            status=%status,
+            lat=%lat,
+            lon=%lon,
+            lane=?slot.lane,
+            queued_ms=slot.queued_ms,
+            gate_wait_ms=slot.gate_wait_ms,
+            scheduled_interval_ms=slot.effective_interval_ms,
+            retry_after_s = retry_after.map(|duration| duration.as_secs()),
+            "worker.reverse_geocode_http_error"
+        );
         return None;
     }
 

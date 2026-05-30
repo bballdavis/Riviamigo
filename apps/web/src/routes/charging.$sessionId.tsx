@@ -117,6 +117,7 @@ export function ChargeSessionContent() {
                       from: session.started_at,
                       to: session.ended_at ?? session.started_at,
                       chargeSessionId: sessionId,
+                      chargeSessionEnergyKwh: session.energy_added_kwh ?? null,
                     }}
                   />
                 )}

@@ -56,7 +56,7 @@ pub struct AppState {
     pub age_key: String,
     pub config: crate::config::Config,
     /// Short-lived in-memory cache for address search results: normalised query -> (cached_at, json).
-    /// Rate limiting is handled by the process-wide `ingestion::worker::nominatim_gate()`.
+    /// Rate limiting is handled by the shared scheduler in `services::nominatim`.
     pub nominatim_cache: Arc<tokio::sync::RwLock<HashMap<String, (Instant, serde_json::Value)>>>,
     /// Handle for sending commands to the ingestion supervisor.
     pub supervisor: SupervisorHandle,

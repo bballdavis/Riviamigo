@@ -570,22 +570,24 @@ export function BackupSection() {
           ) : (
             <div className="divide-y divide-border">
               {overview.data.recent_runs.map((run) => (
-                <div key={run.id} className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-fg">{run.trigger}</p>
-                      <Badge variant={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : 'default'}>{run.status}</Badge>
-                    </div>
-                    <p className="mt-1 font-mono text-xs text-fg-tertiary">{run.id}</p>
-                    <p className="mt-1 text-xs text-fg-tertiary">
-                      Requested {new Date(run.created_at).toLocaleString()}
-                      {run.completed_at ? ` / Completed ${new Date(run.completed_at).toLocaleString()}` : ''}
-                    </p>
-                    {run.error_message && <p className="mt-1 text-xs text-status-danger">{run.error_message}</p>}
+                <div key={run.id} className="py-2">
+                  <div className="flex items-center gap-3">
+                    <span className="shrink-0 text-xs text-fg-tertiary tabular-nums">
+                      {new Date(run.created_at).toLocaleString()}
+                    </span>
+                    <span className="text-xs font-medium capitalize text-fg-secondary">{run.trigger}</span>
+                    {run.error_message && (
+                      <span className="min-w-0 truncate text-xs text-status-danger" title={run.error_message}>
+                        {run.error_message}
+                      </span>
+                    )}
+                    <Badge
+                      className="ml-auto shrink-0"
+                      variant={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : 'default'}
+                    >
+                      {run.status}
+                    </Badge>
                   </div>
-                  {run.artifact_key && (
-                    <p className="text-xs font-mono text-fg-tertiary">{run.artifact_key}</p>
-                  )}
                 </div>
               ))}
             </div>

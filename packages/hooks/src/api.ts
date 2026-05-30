@@ -426,7 +426,21 @@ class ApiClient {
   }
 
   async getBatteryMileage(vehicleId: string): Promise<BatteryMileagePoint[]> {
-    return this.request('GET', '/v1/battery/mileage', undefined, { vehicle_id: vehicleId });
+    const rows = await this.request<Array<Record<string, unknown>>>(
+      'GET',
+      '/v1/battery/mileage',
+      undefined,
+      { vehicle_id: vehicleId },
+    );
+
+    return rows.map((row) => ({
+      ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
+      odometer_mi: finiteNumber(row.odometer_mi) ?? null,
+      usable_kwh: finiteNumber(row.usable_kwh) ?? null,
+      range_mi: finiteNumber(row.range_mi) ?? null,
+      projected_max_range_mi: finiteNumber(row.projected_max_range_mi) ?? null,
+      degradation_pct: finiteNumber(row.degradation_pct) ?? null,
+    })) satisfies BatteryMileagePoint[];
   }
 
   // ── Trips ─────────────────────────────────────────────────────────────────

@@ -175,6 +175,8 @@ vi.mock('lucide-react', () => ({
   Clock3: () => <svg data-testid="icon-clock" />,
   HardDrive: () => <svg data-testid="icon-hard-drive" />,
   History: () => <svg data-testid="icon-history" />,
+  Home: () => <svg data-testid="icon-home" />,
+  Loader2: () => <svg data-testid="icon-loader" />,
   Server: () => <svg data-testid="icon-server" />,
   Timer: () => <svg data-testid="icon-timer" />,
   KeyRound: () => <svg data-testid="icon-key" />,
@@ -258,6 +260,99 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getByText('123 Main St, Denver, CO')).toBeInTheDocument();
+    });
+  });
+
+  it('shows an in-flight searching indicator for place search', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.searchPlaceAddresses).mockImplementationOnce(() => new Promise(() => {}));
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Places'));
+    fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Searching addresses...')).toBeInTheDocument();
+    });
+  });
+
+  it('shows a no-matches message when place search resolves empty', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.searchPlaceAddresses).mockResolvedValueOnce([]);
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Places'));
+    fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: 'unlikely query xyz' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('No matching addresses found. Try a broader search.')).toBeInTheDocument();
+    });
+  });
+
+  it('filters saved places dynamically from the header search input', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.listPlaces).mockResolvedValueOnce([
+      {
+        id: 'p-home',
+        name: 'Home Garage',
+        latitude: 39.7392,
+        longitude: -104.9903,
+        radius_m: 75,
+        is_home: true,
+        is_work: false,
+        address: {
+          id: 'a-home',
+          display_name: '123 Main St, Denver, CO',
+          osm_id: 123,
+          latitude: 39.7392,
+          longitude: -104.9903,
+          road: 'Main St',
+          city: 'Denver',
+          state: 'CO',
+          postcode: '80202',
+          country: 'United States',
+          raw: null,
+        },
+        charging: null,
+      },
+      {
+        id: 'p-work',
+        name: 'Office Lot',
+        latitude: 39.7500,
+        longitude: -104.9990,
+        radius_m: 75,
+        is_home: false,
+        is_work: true,
+        address: {
+          id: 'a-work',
+          display_name: '400 Market St, Boulder, CO',
+          osm_id: 456,
+          latitude: 39.7500,
+          longitude: -104.9990,
+          road: 'Market St',
+          city: 'Boulder',
+          state: 'CO',
+          postcode: '80301',
+          country: 'United States',
+          raw: null,
+        },
+        charging: null,
+      },
+    ]);
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Places'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Home Garage')).toBeInTheDocument();
+      expect(screen.getByText('Office Lot')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Search saved places'), { target: { value: 'home' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Home Garage')).toBeInTheDocument();
+      expect(screen.queryByText('Office Lot')).not.toBeInTheDocument();
     });
   });
 

@@ -44,6 +44,9 @@ interface MapApi {
   setStyle(style: unknown): void;
 }
 
+const FALLBACK_SELECTED_ROUTE_COLOR = '#F59E0B';
+const FALLBACK_ROUTE_COLORS = ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'];
+
 const TILE_URLS: Record<MapStyleMode, string> = {
   dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
   light: 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
@@ -204,6 +207,8 @@ export function TripMapChart({
     nextSelectedRouteIds: string[],
     routeClickRef: React.MutableRefObject<TripMapChartProps['onRouteClick']>,
   ) {
+    const routeColors = getRouteColors();
+    const selectedColor = getCssColor('--rm-status-warning', FALLBACK_SELECTED_ROUTE_COLOR);
     const nextRouteIds = new Set(nextRoutes.map((route) => route.id));
 
     syncedRouteIdsRef.current.forEach((routeId) => {
@@ -223,6 +228,7 @@ export function TripMapChart({
       const hitId = `${sourceId}-hit`;
       const selected = nextSelectedRouteIds.includes(route.id);
       const dimUnselected = nextSelectedRouteIds.length > 0 && !selected;
+      const routeColor = route.color?.trim() || routeColors[index % routeColors.length];
       const geojson = {
         type: 'Feature' as const,
         geometry: {
@@ -245,7 +251,7 @@ export function TripMapChart({
           type: 'line',
           source: sourceId,
           paint: {
-            'line-color': route.color ?? ROUTE_COLORS[index % ROUTE_COLORS.length],
+            'line-color': routeColor,
             'line-width': 3,
             'line-opacity': 0.9,
           },
@@ -275,8 +281,9 @@ export function TripMapChart({
         });
       }
 
-      const selectedColor = getComputedStyle(document.documentElement).getPropertyValue('--rm-status-warning').trim();
-      map.setPaintProperty(lineId, 'line-color', selected ? selectedColor : (route.color ?? ROUTE_COLORS[index % ROUTE_COLORS.length]));
+      if (!map.getLayer(lineId)) return;
+
+      map.setPaintProperty(lineId, 'line-color', selected ? selectedColor : routeColor);
       map.setPaintProperty(lineId, 'line-width', selected ? 5 : 3);
       map.setPaintProperty(lineId, 'line-opacity', dimUnselected ? 0.28 : 0.9);
     });
@@ -310,13 +317,15 @@ export function TripMapChart({
 }
 
 function getRouteColors(): string[] {
-  const styles = getComputedStyle(document.documentElement);
-  return [0, 1, 2, 3, 4, 5].map(
-    (i) => styles.getPropertyValue(`--rm-map-route-${i}`).trim()
-  );
+  return FALLBACK_ROUTE_COLORS.map((fallbackColor, i) => getCssColor(`--rm-map-route-${i}`, fallbackColor));
 }
 
-const ROUTE_COLORS = getRouteColors();
+function getCssColor(variableName: string, fallbackColor: string) {
+  if (typeof document === 'undefined') return fallbackColor;
+
+  const color = getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
+  return color || fallbackColor;
+}
 
 function getRouteBounds(routeList: TripMapRoute[]) {
   const allPoints = routeList.flatMap((route) => route.track);

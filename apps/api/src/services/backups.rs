@@ -142,16 +142,35 @@ pub async fn run_backup_now(
     requested_by: Option<Uuid>,
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
-    if !acquire_backup_lock(pool).await? {
+    // Acquire a dedicated connection so the advisory lock and its matching
+    // unlock always run on the exact same PostgreSQL backend session.
+    // Using different pool connections for lock vs unlock causes the unlock to
+    // silently no-op (pg_advisory_unlock returns false for a session that never
+    // held the lock), permanently leaking the lock until the connection is closed.
+    let mut lock_conn = pool.acquire().await.map_err(AppError::from)?;
+
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(BACKUP_ADVISORY_LOCK_ID)
+        .fetch_one(&mut *lock_conn)
+        .await
+        .map_err(AppError::from)?;
+
+    if !locked {
         return Err(AppError::Conflict(
             "A backup job is already running.".into(),
         ));
     }
 
     let result = run_backup_inner(pool, config, requested_by, trigger).await;
-    if let Err(unlock_error) = release_backup_lock(pool).await {
+
+    let unlock_result: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        .bind(BACKUP_ADVISORY_LOCK_ID)
+        .fetch_one(&mut *lock_conn)
+        .await;
+    if let Err(unlock_error) = unlock_result {
         tracing::error!(error = %unlock_error, "backup.lock.release_failed");
     }
+
     result
 }
 
@@ -557,22 +576,6 @@ async fn prune_retained_artifacts(pool: &PgPool, retention_count: i32) -> Result
             .await?;
     }
 
-    Ok(())
-}
-
-async fn acquire_backup_lock(pool: &PgPool) -> Result<bool, AppError> {
-    sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(BACKUP_ADVISORY_LOCK_ID)
-        .fetch_one(pool)
-        .await
-        .map_err(AppError::from)
-}
-
-async fn release_backup_lock(pool: &PgPool) -> Result<(), AppError> {
-    let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-        .bind(BACKUP_ADVISORY_LOCK_ID)
-        .fetch_one(pool)
-        .await?;
     Ok(())
 }
 

@@ -209,6 +209,8 @@ export interface BatteryMileagePoint {
   odometer_mi: number | null;
   usable_kwh: number | null;
   range_mi: number | null;
+  projected_max_range_mi: number | null;
+  degradation_pct: number | null;
 }
 
 export interface VehicleHealthTires {
