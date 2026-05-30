@@ -1,9 +1,10 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle } from '@riviamigo/ui/primitives';
+import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle, DEFAULT_NAV_ITEMS, type NavItem } from '@riviamigo/ui/primitives';
 import { getUnitSystem } from '@riviamigo/ui/lib/utils';
 import { useAuth, useCurrentVehicleStatus, useVehicleStatus } from '@riviamigo/hooks';
 import { Loader2, LogOut, Settings, Wifi, WifiOff } from 'lucide-react';
+import { Moon } from 'lucide-react';
 import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff } from 'react-icons/tb';
 
 interface AppLayoutProps {
@@ -94,6 +95,25 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     : undefined;
   const collapsedFooterRow = '-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[24px_24px] items-center justify-between';
   const collapsedFooterCell = 'flex h-8 w-6 items-center justify-center';
+  const sidebarItems = React.useMemo<NavItem[]>(() => {
+    const inBatterySection = activeKey === 'battery' || activeKey.startsWith('battery.');
+    if (!inBatterySection) return DEFAULT_NAV_ITEMS;
+
+    return DEFAULT_NAV_ITEMS.map((item) => {
+      if (item.key !== 'battery') return item;
+      return {
+        ...item,
+        children: [
+          {
+            key: 'battery.phantom-drain',
+            label: 'Phantom Drain',
+            href: '/battery/phantom-drain',
+            icon: <Moon className="h-3.5 w-3.5" />,
+          },
+        ],
+      };
+    });
+  }, [activeKey]);
 
   async function handleLogout() {
     await logout();
@@ -107,6 +127,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       <Sidebar
         activeKey={activeKey}
         onNavigate={(href) => navigate({ to: href })}
+        items={sidebarItems}
         collapsed={sidebarCollapsed}
         onCollapsedChange={setPersistedSidebarCollapsed}
         bottomSlot={({ collapsed }) => {

@@ -106,8 +106,8 @@ async fn put_charging_schedule(
         &client,
         &state.age_key,
     )
-        .await
-        .map_err(|e| AppError::RivianApi(e.to_string()))?;
+    .await
+    .map_err(|e| AppError::RivianApi(e.to_string()))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -345,4 +345,3 @@ async fn get_ota_details(
 
     Ok(Json(row))
 }
-

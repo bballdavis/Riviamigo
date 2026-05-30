@@ -360,21 +360,54 @@ mod tests {
     fn validate_tou_rejects_cents_typed_as_dollars() {
         // The exact regression: user typed "32.2499" meaning ¢/kWh.
         let bad = vec![
-            TouPeriod { label: "Night".into(), start_minute: 0, end_minute: 360, rate: 0.0 },
-            TouPeriod { label: "Day".into(), start_minute: 360, end_minute: 1200, rate: 32.2499 },
-            TouPeriod { label: "Night2".into(), start_minute: 1200, end_minute: 1440, rate: 0.0 },
+            TouPeriod {
+                label: "Night".into(),
+                start_minute: 0,
+                end_minute: 360,
+                rate: 0.0,
+            },
+            TouPeriod {
+                label: "Day".into(),
+                start_minute: 360,
+                end_minute: 1200,
+                rate: 32.2499,
+            },
+            TouPeriod {
+                label: "Night2".into(),
+                start_minute: 1200,
+                end_minute: 1440,
+                rate: 0.0,
+            },
         ];
         let err = validate_tou_periods(&bad).expect_err("should reject cents-as-dollars");
-        assert!(err.contains("too high"), "error should mention rate is too high, got: {err}");
+        assert!(
+            err.contains("too high"),
+            "error should mention rate is too high, got: {err}"
+        );
     }
 
     #[test]
     fn validate_tou_accepts_realistic_peak_rate() {
         // 32¢/kWh peak — a realistic California/Texas summer rate.
         let good = vec![
-            TouPeriod { label: "Off-peak".into(), start_minute: 0, end_minute: 360, rate: 0.10 },
-            TouPeriod { label: "Peak".into(), start_minute: 360, end_minute: 1200, rate: 0.322499 },
-            TouPeriod { label: "Off-peak".into(), start_minute: 1200, end_minute: 1440, rate: 0.10 },
+            TouPeriod {
+                label: "Off-peak".into(),
+                start_minute: 0,
+                end_minute: 360,
+                rate: 0.10,
+            },
+            TouPeriod {
+                label: "Peak".into(),
+                start_minute: 360,
+                end_minute: 1200,
+                rate: 0.322499,
+            },
+            TouPeriod {
+                label: "Off-peak".into(),
+                start_minute: 1200,
+                end_minute: 1440,
+                rate: 0.10,
+            },
         ];
         assert!(validate_tou_periods(&good).is_ok());
     }

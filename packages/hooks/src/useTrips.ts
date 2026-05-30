@@ -52,3 +52,13 @@ export function useElevationProfile(tripId: string | null, vehicleId: string | n
     placeholderData: (previous) => previous,
   });
 }
+
+export function useTripPowerProfile(tripId: string | null, vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['trips', 'power', tripId, vehicleId],
+    queryFn: () => api.getTripPowerProfile(tripId!, vehicleId!),
+    enabled: !!tripId && !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}

@@ -65,12 +65,9 @@ fn fmt_errors(errors: &[GqlError]) -> String {
 pub struct AuthError;
 
 fn errors_indicate_auth(errors: &[GqlError]) -> bool {
-    errors.iter().any(|e| {
-        e.extensions
-            .as_ref()
-            .and_then(|x| x.code.as_deref())
-            == Some("UNAUTHENTICATED")
-    })
+    errors
+        .iter()
+        .any(|e| e.extensions.as_ref().and_then(|x| x.code.as_deref()) == Some("UNAUTHENTICATED"))
 }
 
 fn json_number_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
@@ -1009,12 +1006,12 @@ async fn fetch_charge_history_inner(
             .fetch_optional(pool)
             .await?;
 
-                if matched_session_id.is_none() {
-                        // Try to match by start-time window. A ±5 min window is too tight
-                        // for home sessions with scheduled charging delay, so keep ±60 min
-                        // but require a deterministic winner by timestamp proximity.
-                        // If multiple candidates are similarly close, skip matching rather
-                        // than risk attaching a Rivian session ID to the wrong local row.
+        if matched_session_id.is_none() {
+            // Try to match by start-time window. A ±5 min window is too tight
+            // for home sessions with scheduled charging delay, so keep ±60 min
+            // but require a deterministic winner by timestamp proximity.
+            // If multiple candidates are similarly close, skip matching rather
+            // than risk attaching a Rivian session ID to the wrong local row.
             let time_matched = if let Some(start) = s.start_instant {
                 let window_start = start - chrono::Duration::minutes(60);
                 let window_end = start + chrono::Duration::minutes(60);
@@ -2273,7 +2270,8 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+    if let Err(e) = fetch_vehicle_enrichment_for_vehicle(vehicle_id, &pool, &client, &age_key).await
+    {
         if is_auth_error(&e) {
             tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_vehicle_enrichment skipped: authentication required");
         } else {
@@ -2430,7 +2428,10 @@ mod tests {
     #[test]
     fn known_paid_networks_are_identified() {
         assert_eq!(infer_is_rivian_network(Some("Rivian")), Some(true));
-        assert_eq!(infer_is_rivian_network(Some("Electrify America")), Some(true));
+        assert_eq!(
+            infer_is_rivian_network(Some("Electrify America")),
+            Some(true)
+        );
         assert_eq!(infer_is_rivian_network(Some("EVgo")), Some(true));
         assert_eq!(infer_is_rivian_network(Some("ChargePoint")), Some(true));
         assert_eq!(infer_is_rivian_network(Some("Tesla")), Some(true));
@@ -2439,7 +2440,10 @@ mod tests {
     #[test]
     fn unknown_vendor_is_not_a_paid_network() {
         // Defensive: an unrecognized vendor name should not be assumed paid.
-        assert_eq!(infer_is_rivian_network(Some("Some Random EVSE")), Some(false));
+        assert_eq!(
+            infer_is_rivian_network(Some("Some Random EVSE")),
+            Some(false)
+        );
     }
 
     #[test]

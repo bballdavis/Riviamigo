@@ -16,9 +16,10 @@ async fn main() -> Result<()> {
 }
 
 async fn recompute_charging_costs(pool: &PgPool) -> Result<()> {
-    let session_ids = sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM riviamigo.charge_sessions")
-    .fetch_all(pool)
-    .await?;
+    let session_ids =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM riviamigo.charge_sessions")
+            .fetch_all(pool)
+            .await?;
 
     for session_id in session_ids {
         let _ = recompute_charge_session_cost(pool, session_id).await?;

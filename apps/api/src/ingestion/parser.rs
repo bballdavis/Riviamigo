@@ -108,13 +108,13 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
 
         charge_port_open: extract_str(state, "/chargePortState/value")
             .map(|s| matches!(s.to_lowercase().as_str(), "open" | "ajar")),
-        charger_derate_active: extract_bool(state, "/chargerDerateStatus/value")
-            .or_else(|| extract_str(state, "/chargerDerateStatus/value")
-                .map(|s| !matches!(s.to_lowercase().as_str(), "inactive" | "none" | "off"))),
+        charger_derate_active: extract_bool(state, "/chargerDerateStatus/value").or_else(|| {
+            extract_str(state, "/chargerDerateStatus/value")
+                .map(|s| !matches!(s.to_lowercase().as_str(), "inactive" | "none" | "off"))
+        }),
         cabin_precon_status: extract_str(state, "/cabinPreconditioningStatus/value")
             .map(String::from),
-        cabin_precon_type: extract_str(state, "/cabinPreconditioningType/value")
-            .map(String::from),
+        cabin_precon_type: extract_str(state, "/cabinPreconditioningType/value").map(String::from),
         pet_mode_active: extract_str(state, "/petModeStatus/value")
             .map(|s| matches!(s.to_lowercase().as_str(), "on" | "active")),
         pet_mode_temp_ok: extract_str(state, "/petModeTemperatureStatus/value")
