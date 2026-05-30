@@ -1,7 +1,7 @@
 {
   "id": "charging-curve-analysis",
-  "title": "Charging Curve Trend",
-  "description": "Scatter of derived charge rate by state of charge with AC and DC regression lines.",
+  "title": "DC Charging Curve Trend",
+  "description": "Scatter of derived DC charge rate by state of charge with a DC regression line.",
   "pages": ["charging"],
   "source": "charging_curve_analysis",
   "mode": "scatter",

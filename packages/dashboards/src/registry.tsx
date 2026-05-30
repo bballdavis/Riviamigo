@@ -8,6 +8,7 @@ export interface WidgetCtx {
   from: string;
   to: string;
   chargeSessionId?: string | null;
+  chargeSessionEnergyKwh?: number | null;
 }
 
 export interface WidgetDef {

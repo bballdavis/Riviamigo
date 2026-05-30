@@ -1,7 +1,7 @@
 {
   "id": "projected-range-mileage",
   "title": "Projected Range by Mileage",
-  "description": "Projected range plotted against odometer mileage.",
+  "description": "Projected max range over time with a secondary mileage axis.",
   "pages": ["overview", "battery"],
   "source": "projected_range_mileage",
   "mode": "line",

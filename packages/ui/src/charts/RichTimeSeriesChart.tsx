@@ -47,8 +47,8 @@ function toSeconds(value: string | number | Date) {
 
 function formatDateForSpan(seconds: number, spanSeconds: number) {
   const d = new Date(seconds * 1000);
-  if (spanSeconds <= 6 * 3600) {
-    // Sub-6h: time only with minutes — e.g. "9:30 PM"
+  if (spanSeconds <= 24 * 3600) {
+    // Sub-24h: time only with minutes — e.g. "9:30 PM"
     return d.toLocaleString([], { hour: 'numeric', minute: '2-digit' });
   }
   if (spanSeconds <= 3 * 86400) {
@@ -363,6 +363,8 @@ export function RichTimeSeriesChart({
         if (seriesMode === 'bar') {
           const barCount = xValues.length;
           const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : 80;
+          next.width = 0;
+          next.fill = color;
           next.paths = uPlot.paths.bars!({ size: [0.64, maxBarPx] });
         }
         if (seriesMode === 'scatter') next.paths = () => null;

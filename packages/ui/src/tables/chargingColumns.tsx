@@ -39,9 +39,17 @@ export interface ChargeSessionRow {
 
 const col = createColumnHelper<ChargeSessionRow>();
 
-const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success'> = {
-  dcfc: 'accent', dc: 'info', ac: 'success',
+const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success' | 'warning'> = {
+  dcfc: 'warning', dc: 'warning', ac: 'success', ac_l2: 'success',
 };
+
+function normalizeAcDcType(chargerType: string | null | undefined): 'ac' | 'dc' | null {
+  if (!chargerType) return null;
+  const normalized = chargerType.toLowerCase();
+  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
+  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
+  return null;
+}
 
 function formatSessionDayLabel(row: ChargeSessionRow): string {
   if (row.session_day_local) {
@@ -55,6 +63,7 @@ export const chargingColumns = [
     header: 'Date / Time',
     cell: (info) => {
       const row = info.row.original;
+      const acDcType = normalizeAcDcType(row.charger_type);
       const start = parseISO(info.getValue());
       const endDate =
         row.duration_min != null
@@ -62,7 +71,14 @@ export const chargingColumns = [
           : null;
       return (
         <div className="flex flex-col gap-px">
-          <span className="text-sm font-medium text-fg leading-tight">{formatSessionDayLabel(row)}</span>
+          <span className="flex items-center justify-between gap-2 text-sm font-medium text-fg leading-tight">
+            <span>{formatSessionDayLabel(row)}</span>
+            {acDcType && (
+              <Badge variant={acDcType === 'dc' ? 'warning' : 'success'} size="sm">
+                {acDcType.toUpperCase()}
+              </Badge>
+            )}
+          </span>
           <span className="text-xs text-fg-tertiary leading-tight">
             {format(start, 'h:mm a')}
             {endDate ? ` – ${format(endDate, 'h:mm a')}` : null}

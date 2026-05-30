@@ -4,7 +4,9 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -67,7 +69,7 @@ struct TripRow {
     outside_temp_c: Option<f64>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Deserialize, Serialize, sqlx::FromRow)]
 struct TrackPoint {
     ts: DateTime<Utc>,
     lat: Option<f64>,
@@ -264,6 +266,19 @@ async fn get_track(
         "15 seconds"
     };
 
+    let cache_key = format!("trips:track:v1:{vid}:{id}:{bucket}");
+    let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
+
+    if let Some(conn) = redis_conn.as_mut() {
+        let cached: Option<String> = conn.get(&cache_key).await.ok();
+        if let Some(payload) = cached {
+            if let Ok(points) = serde_json::from_str::<Vec<TrackPoint>>(&payload) {
+                debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.track_cache");
+                return Ok(Json(points));
+            }
+        }
+    }
+
     // Dynamically pick bucket — use 1hr agg for very long trips as fallback
     let points: Vec<TrackPoint> = match bucket {
         "1 second" => sqlx::query_as::<_, TrackPoint>(
@@ -290,6 +305,14 @@ async fn get_track(
         .fetch_all(&state.pool)
         .await?,
     };
+
+    if let Some(conn) = redis_conn.as_mut() {
+        if let Ok(payload) = serde_json::to_string(&points) {
+            let _: Result<(), redis::RedisError> = conn.set_ex(&cache_key, payload, 12 * 60 * 60).await;
+        }
+    }
+
+    debug!(trip_id = %id, vehicle_id = %vid, cache_hit = false, point_count = points.len(), "trips.track_cache");
 
     Ok(Json(points))
 }

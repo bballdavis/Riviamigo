@@ -10,6 +10,7 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
+import { formatTemp } from '@riviamigo/ui/lib/utils';
 
 // ── uPlot mock ────────────────────────────────────────────────────────────────
 vi.mock('uplot', () => {
@@ -182,7 +183,13 @@ vi.mock('@riviamigo/ui/charts', () => ({
     data.length === 0 ? (
       <div>{emptyTitle}</div>
     ) : (
-      <div data-testid="efficiency-pill-chart" />
+      <div data-testid="efficiency-pill-chart">
+        {data.map((point) => (
+          <div key={point.label} data-testid="efficiency-pill-label">
+            {point.label}
+          </div>
+        ))}
+      </div>
     ),
   RichTimeSeriesChart: ({
     points,
@@ -278,6 +285,25 @@ describe('DashboardChartWidget — charging_sessions_energy', () => {
 
   it('shows empty state when no sessions', () => {
     mockChargeSessions.mockReturnValueOnce({ data: { items: [], total: 0, page: 1, per_page: 25, total_pages: 0 }, isLoading: false });
+    mockChargingSummary.mockReturnValueOnce({
+      data: {
+        weekly: [],
+        total_energy_kwh: 0,
+        total_cost_usd: 0,
+        session_count: 0,
+        home_kwh: 0,
+        away_kwh: 0,
+        ac_kwh: 0,
+        dc_kwh: 0,
+        charging_cycles: null,
+        charging_efficiency_pct: null,
+        total_energy_used_kwh: null,
+        max_charge_limit_pct: null,
+        max_charge_rate_kw: null,
+        typed_session_count: 0,
+      },
+      isLoading: false,
+    });
     renderChart('charging-sessions-energy');
     expectChartEmpty('No charging sessions for this period');
   });
@@ -342,6 +368,25 @@ describe('DashboardChartWidget — efficiency_temperature', () => {
   it('renders chart when temp data is present', () => {
     renderChart('efficiency-temperature');
     expectChartHasData('No outside-temperature telemetry is available for this range yet');
+  });
+
+  it('sorts temperature buckets from highest to lowest', () => {
+    mockEfficiencyVsTemp.mockReturnValueOnce({
+      data: [
+        { temp_c_low: 0, temp_c_high: 5, avg_efficiency_wh_mi: 330, trip_count: 1 },
+        { temp_c_low: 20, temp_c_high: 25, avg_efficiency_wh_mi: 290, trip_count: 2 },
+        { temp_c_low: 10, temp_c_high: 15, avg_efficiency_wh_mi: 310, trip_count: 3 },
+      ],
+      isLoading: false,
+    });
+
+    renderChart('efficiency-temperature');
+
+    expect(screen.getAllByTestId('efficiency-pill-label').map((node) => node.textContent)).toEqual([
+      formatTemp(20),
+      formatTemp(10),
+      formatTemp(0),
+    ]);
   });
 
   it('shows empty state when no temp data', () => {
