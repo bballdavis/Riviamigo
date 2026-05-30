@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
+import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { api, useTrips, useDocumentTheme } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
@@ -27,20 +29,37 @@ function useIsMobile() {
   return isMobile;
 }
 
-function TripCard({ trip, isSelected, onClick }: { trip: TripRow; isSelected: boolean; onClick: () => void }) {
+function TripCard({
+  trip,
+  isSelected,
+  onClick,
+  onInfoClick,
+}: {
+  trip: TripRow;
+  isSelected: boolean;
+  onClick: () => void;
+  onInfoClick: () => void;
+}) {
   const startLabel = trip.start_place ?? trip.start_address;
   const endLabel   = trip.end_place   ?? trip.end_address;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`w-full text-left rounded-xl border px-3 py-2.5 transition-colors ${
+    <div
+      className={`relative w-full rounded-xl border px-3 py-2.5 transition-colors ${
         isSelected
           ? 'border-accent/50 bg-accent/10 ring-1 ring-inset ring-accent/30'
           : 'border-border bg-bg-elevated/60 hover:bg-bg-elevated'
       }`}
     >
+      <button
+        type="button"
+        onClick={onInfoClick}
+        className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
+        aria-label="Open trip details"
+      >
+        <LuBadgeInfo className="h-4 w-4" />
+      </button>
+      <button type="button" onClick={onClick} className="w-full text-left pr-9">
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <span className="text-xs text-fg-tertiary">
           {format(parseISO(trip.started_at), 'MMM d, h:mm a')}
@@ -74,7 +93,8 @@ function TripCard({ trip, isSelected, onClick }: { trip: TripRow; isSelected: bo
           </span>
         )}
       </div>
-    </button>
+      </button>
+    </div>
   );
 }
 import {
@@ -162,13 +182,20 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
       .filter((route) => route.track.length > 1)
   ), [trackDataVersion, trips]);
 
+  const visibleRoutes = React.useMemo(
+    () => (selectedIds.length > 0
+      ? routes.filter((route) => selectedIds.includes(route.id))
+      : routes),
+    [routes, selectedIds],
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div ref={ref} className="relative min-h-0 flex-1">
         <div className="relative overflow-hidden rounded-lg border border-border bg-bg-surface" style={{ height }}>
           <TripMapChart
             track={[]}
-            routes={routes}
+            routes={visibleRoutes}
             selectedRouteIds={selectedIds}
             onRouteClick={toggleTripSelection}
             height={height}
@@ -198,6 +225,7 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
 }
 
 function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+  const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
   const [search, setSearch] = useState('');
@@ -213,7 +241,11 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
   const trips = (data?.items ?? []) as TripRow[];
   const columns = React.useMemo(
-    () => createTripColumns(placesQuery.data ?? []),
+    () => createTripColumns(placesQuery.data ?? [], {
+      onInfoClick: (tripId) => {
+        navigate({ to: '/trips/$tripId', params: { tripId } });
+      },
+    }),
     [placesQuery.data],
   );
 
@@ -307,6 +339,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
                   trip={trip}
                   isSelected={selectedIds.includes(trip.id)}
                   onClick={() => toggleTripSelection(trip.id)}
+                  onInfoClick={() => navigate({ to: '/trips/$tripId', params: { tripId: trip.id } })}
                 />
               ))
           }
@@ -321,6 +354,7 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
           getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
           emptyTitle="No trips found"
           emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
+          columnVisibilityMenu
           className="overflow-x-auto"
         />
       )}

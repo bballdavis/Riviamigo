@@ -131,10 +131,7 @@ impl ChargeDetectorState {
                     && self.peak_charge_kw < AC_L2_MAX_KW
                     && kw_abs > self.peak_charge_kw * 5.0;
 
-                if kw_abs > 0.0
-                    && kw_abs <= PLAUSIBLE_MAX_CHARGE_KW
-                    && !is_dc_spike_on_ac_session
-                {
+                if kw_abs > 0.0 && kw_abs <= PLAUSIBLE_MAX_CHARGE_KW && !is_dc_spike_on_ac_session {
                     if let Some(last_t) = self.last_power_ts {
                         let dt_hours = (ts - last_t).num_milliseconds() as f64 / 3_600_000.0;
                         self.energy_used_wh_acc += kw_abs * 1_000.0 * dt_hours;

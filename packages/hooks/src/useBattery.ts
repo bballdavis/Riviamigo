@@ -51,10 +51,10 @@ export function useBatteryHealth(vehicleId: string | null) {
   });
 }
 
-export function useBatteryMileage(vehicleId: string | null) {
+export function useBatteryMileage(vehicleId: string | null, from: string, to: string) {
   return useQuery({
-    queryKey: ['battery', 'mileage', vehicleId],
-    queryFn: () => api.getBatteryMileage(vehicleId!),
+    queryKey: ['battery', 'mileage', vehicleId, from, to],
+    queryFn: () => api.getBatteryMileage(vehicleId!, from, to),
     enabled: !!vehicleId,
     staleTime: 60 * 60 * 1000,
     placeholderData: (previous) => previous,

@@ -5,12 +5,16 @@ use axum::{
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    routes::range_normalization::{
+        normalize_remaining_range_miles_strict, projected_full_charge_range_miles,
+    },
 };
 
 /// Returns the vehicle's stored factory capacity (from vehicles.battery_capacity_wh), falling
@@ -177,6 +181,76 @@ pub struct BatteryMileagePoint {
     pub degradation_pct: Option<f64>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct BatteryMileageSampleRow {
+    bucket: DateTime<Utc>,
+    odometer_miles: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    distance_to_empty_mi: Option<f64>,
+    battery_level: Option<f64>,
+}
+
+#[derive(Debug, Default)]
+struct BatteryMileageBucket {
+    odometer_mi: Option<f64>,
+    usable_kwh: Option<f64>,
+    range_sum: f64,
+    range_count: usize,
+    projected_sum: f64,
+    projected_count: usize,
+}
+
+impl BatteryMileageBucket {
+    fn observe(&mut self, sample: &BatteryMileageSampleRow) {
+        if let Some(odometer_miles) = sample.odometer_miles.filter(|value| value.is_finite()) {
+            self.odometer_mi = Some(
+                self.odometer_mi
+                    .map_or(odometer_miles, |current| current.max(odometer_miles)),
+            );
+        }
+
+        if let Some(capacity_wh) = sample
+            .battery_capacity_wh
+            .filter(|value| value.is_finite() && *value > 0.0)
+        {
+            let capacity_kwh = if capacity_wh > 1000.0 {
+                capacity_wh / 1000.0
+            } else {
+                capacity_wh
+            };
+            self.usable_kwh = Some(
+                self.usable_kwh
+                    .map_or(capacity_kwh, |current| current.max(capacity_kwh)),
+            );
+        }
+
+        let normalized_remaining_range = normalize_remaining_range_miles_strict(
+            sample.distance_to_empty_mi,
+            sample.battery_level,
+            sample.battery_capacity_wh,
+        );
+        if let Some(range_mi) = normalized_remaining_range {
+            self.range_sum += range_mi;
+            self.range_count += 1;
+        }
+
+        if let Some(projected_max_range_mi) =
+            projected_full_charge_range_miles(normalized_remaining_range, sample.battery_level)
+        {
+            self.projected_sum += projected_max_range_mi;
+            self.projected_count += 1;
+        }
+    }
+
+    fn average_range(&self) -> Option<f64> {
+        (self.range_count > 0).then_some(self.range_sum / self.range_count as f64)
+    }
+
+    fn average_projected_range(&self) -> Option<f64> {
+        (self.projected_count > 0).then_some(self.projected_sum / self.projected_count as f64)
+    }
+}
+
 async fn get_degradation(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -296,30 +370,52 @@ async fn get_mileage(
     let to = p.to.unwrap_or_else(Utc::now);
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
 
-    let rows = sqlx::query_as::<_, BatteryMileagePoint>(
+    let samples = sqlx::query_as::<_, BatteryMileageSampleRow>(
         "SELECT
-             time_bucket('1 week', ts) AS ts,
-             max(odometer_miles) AS odometer_mi,
-             max(battery_capacity_wh) / 1000.0 AS usable_kwh,
-             avg(distance_to_empty_mi) AS range_mi,
-             avg(distance_to_empty_mi) AS projected_max_range_mi,
-             CASE
-                 WHEN $4 > 0
-                 THEN GREATEST(0.0, 100.0 - (max(battery_capacity_wh) / $4 * 100.0))
-                 ELSE NULL
-             END AS degradation_pct
+             time_bucket('1 week', ts) AS bucket,
+             odometer_miles,
+             battery_capacity_wh,
+             distance_to_empty_mi,
+             battery_level
          FROM timeseries.telemetry
-         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
-           AND ts >= $2 AND ts <= $3
-         GROUP BY time_bucket('1 week', ts)
-         ORDER BY max(odometer_miles) NULLS LAST",
+         WHERE vehicle_id = $1
+           AND battery_capacity_wh > 10000
+           AND ts >= $2
+           AND ts <= $3
+         ORDER BY bucket, ts",
     )
     .bind(vid)
     .bind(from)
     .bind(to)
-    .bind(usable_new_wh.unwrap_or(0.0))
     .fetch_all(&state.pool)
     .await?;
+
+    let mut buckets: BTreeMap<DateTime<Utc>, BatteryMileageBucket> = BTreeMap::new();
+    for sample in &samples {
+        buckets.entry(sample.bucket).or_default().observe(sample);
+    }
+
+    let usable_new_wh = usable_new_wh.unwrap_or(0.0);
+    let rows = buckets
+        .into_iter()
+        .map(|(ts, bucket)| {
+            let degradation_pct = match (bucket.usable_kwh, usable_new_wh > 0.0) {
+                (Some(usable_kwh), true) => {
+                    Some((100.0 - (usable_kwh * 1000.0 / usable_new_wh * 100.0)).max(0.0))
+                }
+                _ => None,
+            };
+
+            BatteryMileagePoint {
+                ts,
+                odometer_mi: bucket.odometer_mi,
+                usable_kwh: bucket.usable_kwh,
+                range_mi: bucket.average_range(),
+                projected_max_range_mi: bucket.average_projected_range(),
+                degradation_pct,
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(Json(rows))
 }
@@ -357,17 +453,16 @@ mod tests {
     // Run with: cargo test -- --ignored
 
     async fn make_app() -> axum::Router {
-        use std::sync::Arc;
         use crate::middleware::auth::{AppState, JwtKeys};
         use rsa::{
             pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
             RsaPrivateKey,
         };
+        use std::sync::Arc;
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
 
         let pool = crate::db::pool::create_pool(&database_url)
             .await
@@ -377,7 +472,10 @@ mod tests {
         let mut rng = rand::thread_rng();
         let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
         let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let private_pem = priv_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("pem")
+            .to_string();
         let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
         let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
 
@@ -436,14 +534,20 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn battery_soc_requires_auth() {
         let app = make_app().await;
-        assert_eq!(get_status(app, "/v1/battery/soc").await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            get_status(app, "/v1/battery/soc").await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn battery_range_requires_auth() {
         let app = make_app().await;
-        assert_eq!(get_status(app, "/v1/battery/range").await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            get_status(app, "/v1/battery/range").await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
@@ -500,5 +604,39 @@ mod tests {
         let from = chrono::Utc::now() - chrono::Duration::days(180);
         let to = chrono::Utc::now();
         assert_eq!(resolution(from, to), "1day");
+    }
+
+    #[test]
+    fn mileage_bucket_projects_from_normalized_range() {
+        use super::{BatteryMileageBucket, BatteryMileageSampleRow};
+
+        let mut bucket = BatteryMileageBucket::default();
+        bucket.observe(&BatteryMileageSampleRow {
+            bucket: chrono::Utc::now(),
+            odometer_miles: Some(10_500.0),
+            battery_capacity_wh: Some(135_000.0),
+            distance_to_empty_mi: Some(210.0),
+            battery_level: Some(70.0),
+        });
+
+        assert_eq!(bucket.average_range(), Some(210.0));
+        assert_eq!(bucket.average_projected_range(), Some(300.0));
+    }
+
+    #[test]
+    fn mileage_bucket_drops_impossible_outliers_in_strict_mode() {
+        use super::{BatteryMileageBucket, BatteryMileageSampleRow};
+
+        let mut bucket = BatteryMileageBucket::default();
+        bucket.observe(&BatteryMileageSampleRow {
+            bucket: chrono::Utc::now(),
+            odometer_miles: Some(10_500.0),
+            battery_capacity_wh: Some(135_000.0),
+            distance_to_empty_mi: Some(620.0),
+            battery_level: Some(65.0),
+        });
+
+        assert_eq!(bucket.average_range(), None);
+        assert_eq!(bucket.average_projected_range(), None);
     }
 }

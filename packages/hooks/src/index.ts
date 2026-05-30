@@ -3,7 +3,7 @@ export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, Depart
 export { useAuth } from './useAuth';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
 export { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
-export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile } from './useTrips';
+export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile, useTripPowerProfile } from './useTrips';
 export { useChargeSessions, useChargeSession, useChargeCurve, useChargeCurveAnalysis, useChargingSummary, useChargingSchedule, useUpdateChargingSchedule, useDepartureSchedules, useCreateDepartureSchedule, useUpdateDepartureSchedule, useDeleteDepartureSchedule, useLiveSession } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
 export { useSummaryStats } from './useStats';

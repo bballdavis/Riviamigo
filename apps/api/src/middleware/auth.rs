@@ -8,7 +8,9 @@ use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{errors::AppError, ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key};
+use crate::{
+    errors::AppError, ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -145,7 +147,7 @@ async fn authenticate_api_key(
         "UPDATE riviamigo.api_keys \
          SET last_used_at = now(), updated_at = now() \
          WHERE key_hash = $1 \
-           AND (last_used_at IS NULL OR last_used_at < now() - INTERVAL '1 minute')"
+           AND (last_used_at IS NULL OR last_used_at < now() - INTERVAL '1 minute')",
     )
     .bind(hash.as_slice())
     .execute(&state.pool)

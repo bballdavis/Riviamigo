@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use axum::{
     body::{to_bytes, Body},

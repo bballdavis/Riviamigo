@@ -15,6 +15,7 @@ export interface TripMapChartProps {
   routes?: TripMapRoute[];
   selectedRouteIds?: string[];
   onRouteClick?: (routeId: string) => void;
+  activePoint?: LatLng | null;
   startPoint?: LatLng;
   endPoint?: LatLng;
   height?: number;
@@ -46,6 +47,8 @@ interface MapApi {
 
 const FALLBACK_SELECTED_ROUTE_COLOR = '#F59E0B';
 const FALLBACK_ROUTE_COLORS = ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'];
+const ACTIVE_POINT_SOURCE_ID = 'trip-active-point';
+const ACTIVE_POINT_LAYER_ID = 'trip-active-point-layer';
 
 const TILE_URLS: Record<MapStyleMode, string> = {
   dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
@@ -76,6 +79,7 @@ export function TripMapChart({
   routes,
   selectedRouteIds = [],
   onRouteClick,
+  activePoint,
   height = 320,
   className,
   mapStyle = 'dark',
@@ -148,6 +152,7 @@ export function TripMapChart({
 
         isLoadedRef.current = true;
         syncRoutes(mapRef.current, routeList, selectedRouteIds, onRouteClickRef);
+        syncActivePoint(mapRef.current, activePoint);
         requestAnimationFrame(() => {
           mapRef.current?.resize();
         });
@@ -177,13 +182,19 @@ export function TripMapChart({
     if (!isLoadedRef.current || !mapRef.current) return;
 
     const map = mapRef.current;
-    const snapshot = { routes: routeList, selectedIds: selectedRouteIds, clickRef: onRouteClickRef };
+    const snapshot = {
+      routes: routeList,
+      selectedIds: selectedRouteIds,
+      clickRef: onRouteClickRef,
+      activePoint,
+    };
 
     function onStyleLoad() {
       isLoadedRef.current = true;
       lastRouteSignatureRef.current = '';
       syncedRouteIdsRef.current = [];
       syncRoutes(map, snapshot.routes, snapshot.selectedIds, snapshot.clickRef);
+      syncActivePoint(map, snapshot.activePoint);
     }
 
     map.setStyle(buildMapLibreStyle(mapStyle));
@@ -200,6 +211,11 @@ export function TripMapChart({
 
     syncRoutes(mapRef.current, routeList, selectedRouteIds, onRouteClickRef);
   }, [routeList, routeSignature, selectedRouteIds]);
+
+  React.useEffect(() => {
+    if (!isLoadedRef.current || !mapRef.current) return;
+    syncActivePoint(mapRef.current, activePoint);
+  }, [activePoint]);
 
   function syncRoutes(
     map: MapApi,
@@ -314,6 +330,44 @@ export function TripMapChart({
       />
     )
   );
+}
+
+function syncActivePoint(map: MapApi, point: LatLng | null | undefined) {
+  if (!point) {
+    if (map.getLayer(ACTIVE_POINT_LAYER_ID)) map.removeLayer(ACTIVE_POINT_LAYER_ID);
+    if (map.getSource(ACTIVE_POINT_SOURCE_ID)) map.removeSource(ACTIVE_POINT_SOURCE_ID);
+    return;
+  }
+
+  const geojson = {
+    type: 'Feature' as const,
+    geometry: {
+      type: 'Point' as const,
+      coordinates: [point.lng, point.lat],
+    },
+    properties: {},
+  };
+
+  const source = map.getSource(ACTIVE_POINT_SOURCE_ID);
+  if (source) {
+    source.setData(geojson);
+  } else {
+    map.addSource(ACTIVE_POINT_SOURCE_ID, { type: 'geojson', data: geojson });
+  }
+
+  if (!map.getLayer(ACTIVE_POINT_LAYER_ID)) {
+    map.addLayer({
+      id: ACTIVE_POINT_LAYER_ID,
+      type: 'circle',
+      source: ACTIVE_POINT_SOURCE_ID,
+      paint: {
+        'circle-radius': 6,
+        'circle-color': getCssColor('--rm-accent', FALLBACK_SELECTED_ROUTE_COLOR),
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#FFFFFF',
+      },
+    });
+  }
 }
 
 function getRouteColors(): string[] {

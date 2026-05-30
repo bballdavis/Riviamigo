@@ -1077,7 +1077,12 @@ fn is_synthetic_control(message_type: Option<&str>) -> bool {
     )
 }
 
-async fn persist_raw_event(pool: &PgPool, batch: &mut CounterBatch, vehicle_id: Uuid, inbound: &WsInboundEvent) {
+async fn persist_raw_event(
+    pool: &PgPool,
+    batch: &mut CounterBatch,
+    vehicle_id: Uuid,
+    inbound: &WsInboundEvent,
+) {
     let payload_json = serde_json::from_str::<serde_json::Value>(&inbound.raw).ok();
     let result = sqlx::query(
         r#"
@@ -1103,12 +1108,10 @@ async fn persist_raw_event(pool: &PgPool, batch: &mut CounterBatch, vehicle_id: 
 async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
     // Use a non-blocking advisory lock (id 0x726d_5241 = "rmRA") so that
     // concurrent workers skip the DELETE rather than pile up on the same rows.
-    let got_lock: bool = sqlx::query_scalar(
-        "SELECT pg_try_advisory_lock(0x726d5241::bigint)",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(false);
+    let got_lock: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(0x726d5241::bigint)")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
     if !got_lock {
         return;
     }

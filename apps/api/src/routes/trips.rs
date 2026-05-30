@@ -308,7 +308,8 @@ async fn get_track(
 
     if let Some(conn) = redis_conn.as_mut() {
         if let Ok(payload) = serde_json::to_string(&points) {
-            let _: Result<(), redis::RedisError> = conn.set_ex(&cache_key, payload, 12 * 60 * 60).await;
+            let _: Result<(), redis::RedisError> =
+                conn.set_ex(&cache_key, payload, 12 * 60 * 60).await;
         }
     }
 
@@ -459,17 +460,16 @@ mod tests {
     // Run with: cargo test -- --ignored
 
     async fn make_app() -> axum::Router {
-        use std::sync::Arc;
         use crate::middleware::auth::{AppState, JwtKeys};
         use rsa::{
             pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
             RsaPrivateKey,
         };
+        use std::sync::Arc;
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
 
         let pool = crate::db::pool::create_pool(&database_url)
             .await
@@ -479,7 +479,10 @@ mod tests {
         let mut rng = rand::thread_rng();
         let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
         let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF).expect("pem").to_string();
+        let private_pem = priv_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("pem")
+            .to_string();
         let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
         let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
 
@@ -553,8 +556,7 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn trip_track_requires_auth() {
         let app = make_app().await;
-        let status =
-            get_status(app, &format!("/v1/trips/{}/track", uuid::Uuid::new_v4())).await;
+        let status = get_status(app, &format!("/v1/trips/{}/track", uuid::Uuid::new_v4())).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
@@ -562,8 +564,7 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn trip_speed_requires_auth() {
         let app = make_app().await;
-        let status =
-            get_status(app, &format!("/v1/trips/{}/speed", uuid::Uuid::new_v4())).await;
+        let status = get_status(app, &format!("/v1/trips/{}/speed", uuid::Uuid::new_v4())).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
@@ -571,8 +572,11 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn trip_elevation_requires_auth() {
         let app = make_app().await;
-        let status =
-            get_status(app, &format!("/v1/trips/{}/elevation", uuid::Uuid::new_v4())).await;
+        let status = get_status(
+            app,
+            &format!("/v1/trips/{}/elevation", uuid::Uuid::new_v4()),
+        )
+        .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

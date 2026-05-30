@@ -1,8 +1,11 @@
 import * as React from 'react';
 import {
-  LayoutDashboard, Battery, Route, Zap, TrendingUp,
+  Battery, TrendingUp,
   Heart, Menu, X, MoreVertical,
 } from 'lucide-react';
+import { TbCarSuv } from 'react-icons/tb';
+import { FaChargingStation } from 'react-icons/fa6';
+import { BiTrip } from 'react-icons/bi';
 import { cn } from '../lib/utils';
 import { useDocumentTheme } from '../hooks/useDocumentTheme';
 
@@ -11,15 +14,22 @@ export interface NavItem {
   label: string;
   href: string;
   icon: React.ReactNode;
+  children?: NavItem[];
 }
 
 const DEFAULT_NAV_ITEMS: NavItem[] = [
-  { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <LayoutDashboard className="h-4 w-4" /> },
+  { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <TbCarSuv className="h-4 w-4" /> },
   { key: 'battery',    label: 'Battery',    href: '/battery',   icon: <Battery className="h-4 w-4" /> },
-  { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <Zap className="h-4 w-4" /> },
-  { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <Route className="h-4 w-4" /> },
+  { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <FaChargingStation className="h-4 w-4" /> },
+  { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <BiTrip className="h-4 w-4" /> },
   { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className="h-4 w-4" /> },
   { key: 'health',     label: 'Health',     href: '/health',    icon: <Heart className="h-4 w-4" /> },
+  { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <TbCarSuv className={NAV_ICON_CLASS} /> },
+  { key: 'battery',    label: 'Battery',    href: '/battery',   icon: <Battery className={NAV_ICON_CLASS} /> },
+  { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <FaChargingStation className={NAV_ICON_CLASS} /> },
+  { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <BiTrip className={NAV_ICON_CLASS} /> },
+  { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className={NAV_ICON_CLASS} /> },
+  { key: 'health',     label: 'Health',     href: '/health',    icon: <Heart className={NAV_ICON_CLASS} /> },
 ];
 
 export interface SidebarProps {
@@ -59,6 +69,11 @@ export function Sidebar({
   );
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const isDark = useDocumentTheme();
+
+  function isItemActive(item: NavItem) {
+    if (item.key === activeKey) return true;
+    return (item.children ?? []).some((child) => child.key === activeKey);
+  }
 
   return (
     <>
@@ -155,30 +170,58 @@ export function Sidebar({
         {/* Nav items */}
         <nav className={cn('flex-1 py-3 overflow-y-auto', collapsed && 'flex flex-col items-center')}>
           {items.map((item) => {
-            const isActive = item.key === activeKey;
+            const isActive = isItemActive(item);
+            const activeChildKey = (item.children ?? []).find((child) => child.key === activeKey)?.key;
             return (
-              <button
-                key={item.key}
-                onClick={() => {
-                  onNavigate(item.href);
-                  setMobileOpen(false);
-                }}
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2 mx-2 rounded-lg text-sm font-medium',
-                  'transition-all duration-150',
-                  collapsed ? 'justify-center w-10 mx-auto' : 'w-[calc(100%-16px)]',
-                  isActive
-                    ? 'bg-accent-muted text-accent'
-                    : 'text-fg-secondary hover:text-fg hover:bg-bg-elevated'
+              <div key={item.key} className={cn('w-full', collapsed && 'flex justify-center')}>
+                <button
+                  onClick={() => {
+                    onNavigate(item.href);
+                    setMobileOpen(false);
+                  }}
+                  title={collapsed ? item.label : undefined}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-3 py-2 mx-2 rounded-lg text-sm font-medium',
+                    'transition-all duration-150',
+                    collapsed ? 'justify-center w-10 mx-auto' : 'w-[calc(100%-16px)]',
+                    isActive
+                      ? 'bg-accent-muted text-accent'
+                      : 'text-fg-secondary hover:text-fg hover:bg-bg-elevated'
+                  )}
+                >
+                  <span className="shrink-0 inline-flex h-5 w-5 items-center justify-center leading-none">{item.icon}</span>
+                  {!collapsed && <span className="leading-none">{item.label}</span>}
+                  {isActive && !collapsed && (
+                    <span className="ml-auto w-1 h-4 rounded-full bg-accent" />
+                  )}
+                </button>
+
+                {!collapsed && item.children && item.children.length > 0 && (
+                  <div className="mt-1 mb-1 ml-5 mr-2 border-l border-border pl-2">
+                    {item.children.map((child) => {
+                      const childIsActive = child.key === activeChildKey;
+                      return (
+                        <button
+                          key={child.key}
+                          onClick={() => {
+                            onNavigate(child.href);
+                            setMobileOpen(false);
+                          }}
+                          className={cn(
+                            'w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
+                            childIsActive
+                              ? 'bg-accent-muted text-accent'
+                              : 'text-fg-tertiary hover:bg-bg-elevated hover:text-fg-secondary'
+                          )}
+                        >
+                          <span className="shrink-0">{child.icon}</span>
+                          <span>{child.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
-              >
-                <span className="shrink-0">{item.icon}</span>
-                {!collapsed && <span>{item.label}</span>}
-                {isActive && !collapsed && (
-                  <span className="ml-auto w-1 h-4 rounded-full bg-accent" />
-                )}
-              </button>
+              </div>
             );
           })}
         </nav>

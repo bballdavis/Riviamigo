@@ -345,12 +345,9 @@ fn check_write_access(d: &Dashboard, user_id: Uuid, is_admin: bool) -> Result<()
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role = sqlx::query_scalar!(
-        "SELECT role FROM riviamigo.users WHERE id = $1",
-        user_id
-    )
-    .fetch_optional(&state.pool)
-    .await?;
+    let role = sqlx::query_scalar!("SELECT role FROM riviamigo.users WHERE id = $1", user_id)
+        .fetch_optional(&state.pool)
+        .await?;
 
     match role.as_deref() {
         Some("admin") => Ok(()),
@@ -453,25 +450,36 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn require_admin_returns_403_not_500_for_non_admin() {
-        use std::sync::Arc;
-        use axum::{body::Body, http::{Request, StatusCode}};
-        use tower::ServiceExt;
         use crate::middleware::auth::{AppState, JwtKeys};
+        use axum::{
+            body::Body,
+            http::{Request, StatusCode},
+        };
+        use std::sync::Arc;
+        use tower::ServiceExt;
 
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
         let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".into());
 
-        let pool = crate::db::pool::create_pool(&database_url).await.expect("pool");
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("pool");
         let redis = redis::Client::open(&*redis_url).expect("redis");
 
         // Generate a test RSA keypair without touching the DB.
         let (private_pem, public_pem) = {
-            use rsa::{pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding}, RsaPrivateKey};
+            use rsa::{
+                pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+                RsaPrivateKey,
+            };
             let priv_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
             (
                 priv_key.to_pkcs8_pem(LineEnding::LF).unwrap().to_string(),
-                priv_key.to_public_key().to_public_key_pem(LineEnding::LF).unwrap(),
+                priv_key
+                    .to_public_key()
+                    .to_public_key_pem(LineEnding::LF)
+                    .unwrap(),
             )
         };
         let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).unwrap());
@@ -506,7 +514,8 @@ mod tests {
             pool: pool.clone(),
             redis,
             jwt_keys: jwt_keys.clone(),
-            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ".into(),
+            age_key: "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+                .into(),
             config,
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             supervisor: crate::ingestion::supervisor::SupervisorHandle::noop(),
@@ -520,15 +529,26 @@ mod tests {
             .uri("/v1/auth/register")
             .header("content-type", "application/json")
             .body(Body::from(
-                serde_json::to_vec(&serde_json::json!({"email": email, "password": "strongpassword123"})).unwrap()
+                serde_json::to_vec(
+                    &serde_json::json!({"email": email, "password": "strongpassword123"}),
+                )
+                .unwrap(),
             ))
             .unwrap();
         let reg_resp = app.clone().oneshot(reg_req).await.unwrap();
-        assert!(reg_resp.status().is_success(), "registration failed: {}", reg_resp.status());
+        assert!(
+            reg_resp.status().is_success(),
+            "registration failed: {}",
+            reg_resp.status()
+        );
 
-        let reg_body = axum::body::to_bytes(reg_resp.into_body(), usize::MAX).await.unwrap();
+        let reg_body = axum::body::to_bytes(reg_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let tokens: serde_json::Value = serde_json::from_slice(&reg_body).unwrap();
-        let access_token = tokens["access_token"].as_str().expect("access_token in response");
+        let access_token = tokens["access_token"]
+            .as_str()
+            .expect("access_token in response");
 
         // Non-admin trying to create a global dashboard must get 403 (not 500).
         let req = Request::builder()
@@ -536,7 +556,9 @@ mod tests {
             .uri("/v1/admin/dashboards")
             .header("authorization", format!("Bearer {access_token}"))
             .header("content-type", "application/json")
-            .body(Body::from(r#"{"slug":"require-admin-test-slug","name":"Test","config":{}}"#))
+            .body(Body::from(
+                r#"{"slug":"require-admin-test-slug","name":"Test","config":{}}"#,
+            ))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();

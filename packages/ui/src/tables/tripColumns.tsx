@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
 import { format, parseISO } from 'date-fns';
+import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { Badge } from '../primitives/Badge';
 import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '../lib/utils';
@@ -31,8 +32,12 @@ export interface TripRow {
 
 const col = createColumnHelper<TripRow>();
 
-export function createTripColumns(places: Place[] = []) {
-  return [
+interface CreateTripColumnsOptions {
+  onInfoClick?: (tripId: string) => void;
+}
+
+export function createTripColumns(places: Place[] = [], options: CreateTripColumnsOptions = {}) {
+  const columns = [
     col.accessor('started_at', {
       header: 'Date',
       cell: (info) => (
@@ -70,11 +75,11 @@ export function createTripColumns(places: Place[] = []) {
       },
     }),
     col.accessor('efficiency_wh_mi', {
-      header: 'Avg Efficiency',
+      header: 'Avg. Effic.',
       cell: (info) => {
         const v = info.getValue();
         return v !== null ? (
-          <span className="font-mono text-fg whitespace-nowrap">{formatEfficiency(v)}</span>
+          <span className="font-mono text-fg whitespace-nowrap text-xs">{formatEfficiency(v)}</span>
         ) : (
           <span className="text-fg-tertiary">-</span>
         );
@@ -87,13 +92,41 @@ export function createTripColumns(places: Place[] = []) {
         const mode = info.getValue();
         if (!mode) return <span className="text-fg-tertiary">-</span>;
         return (
-          <Badge size="sm" className={getDriveModeBadgeClass(mode)} title={formatDriveMode(mode)}>
+          <Badge size="sm" className={`max-w-[6.5rem] truncate ${getDriveModeBadgeClass(mode)}`} title={formatDriveMode(mode)}>
             {formatDriveMode(mode)}
           </Badge>
         );
       },
     }),
   ];
+
+  if (options.onInfoClick) {
+    columns.push(
+      col.display({
+        id: 'details',
+        header: '',
+        enableSorting: false,
+        cell: (info) => (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              aria-label="Open trip details"
+              title="Open trip details"
+              onClick={(event) => {
+                event.stopPropagation();
+                options.onInfoClick?.(info.row.original.id);
+              }}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
+            >
+              <LuBadgeInfo className="h-4 w-4" />
+            </button>
+          </div>
+        ),
+      }),
+    );
+  }
+
+  return columns;
 }
 
 export const tripColumns = createTripColumns();

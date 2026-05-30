@@ -543,6 +543,9 @@ mod tests {
     #[test]
     fn haversine_austin_san_antonio() {
         let d = haversine_miles(30.267_153, -97.743_061, 29.424_122, -98.493_629);
-        assert!((d - 73.6).abs() < 1.0, "Expected ~73.6 straight-line miles, got {d}");
+        assert!(
+            (d - 73.6).abs() < 1.0,
+            "Expected ~73.6 straight-line miles, got {d}"
+        );
     }
 }

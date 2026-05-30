@@ -92,7 +92,7 @@ pub async fn claim(
          RETURNING v.rivian_vehicle_id, c.encrypted_tokens",
     )
     .bind(vehicle_id)
-        .bind(BACKFILL_STALE_AFTER_MINUTES as i32)
+    .bind(BACKFILL_STALE_AFTER_MINUTES as i32)
     .fetch_optional(pool)
     .await?;
 
@@ -105,10 +105,12 @@ pub async fn claim(
     }
 
     let current_status: Option<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as("SELECT history_backfill_status, updated_at FROM riviamigo.vehicles WHERE id = $1")
-            .bind(vehicle_id)
-            .fetch_optional(pool)
-            .await?;
+        sqlx::query_as(
+            "SELECT history_backfill_status, updated_at FROM riviamigo.vehicles WHERE id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_optional(pool)
+        .await?;
 
     let is_fresh_running = current_status
         .and_then(|(status, updated_at)| {

@@ -402,7 +402,9 @@ async fn latest_telemetry_value(
     column: &str,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
     if !ALLOWED_TELEMETRY_COLUMNS.contains(&column) {
-        return Err(AppError::Validation(format!("unknown telemetry column: {column}")));
+        return Err(AppError::Validation(format!(
+            "unknown telemetry column: {column}"
+        )));
     }
     let sql = format!(
         "SELECT {column}::float8 AS value, ts FROM timeseries.telemetry \
@@ -622,13 +624,19 @@ async fn telemetry_daily_series(
     aggregation: &str,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
     if !ALLOWED_TELEMETRY_COLUMNS.contains(&column) {
-        return Err(AppError::Validation(format!("unknown telemetry column: {column}")));
+        return Err(AppError::Validation(format!(
+            "unknown telemetry column: {column}"
+        )));
     }
     let aggregate = match aggregation {
         "avg" | "mean" => "AVG",
-        "max"          => "MAX",
-        "sum"          => "SUM",
-        other => return Err(AppError::Validation(format!("unknown aggregation: {other}"))),
+        "max" => "MAX",
+        "sum" => "SUM",
+        other => {
+            return Err(AppError::Validation(format!(
+                "unknown aggregation: {other}"
+            )))
+        }
     };
     let sql = format!(
         "SELECT date_trunc('day', ts) AS ts, {aggregate}({column})::float8 AS value \
@@ -682,7 +690,10 @@ mod tests {
     fn allowed_telemetry_columns_has_no_duplicates() {
         let mut seen = std::collections::HashSet::new();
         for col in ALLOWED_TELEMETRY_COLUMNS {
-            assert!(seen.insert(*col), "duplicate column in ALLOWED_TELEMETRY_COLUMNS: {col}");
+            assert!(
+                seen.insert(*col),
+                "duplicate column in ALLOWED_TELEMETRY_COLUMNS: {col}"
+            );
         }
     }
 

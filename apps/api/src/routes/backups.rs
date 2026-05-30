@@ -874,12 +874,9 @@ fn combine_local(timezone: Tz, date: NaiveDate, time: NaiveTime) -> chrono::Date
 }
 
 async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> {
-    let role = sqlx::query_scalar!(
-        "SELECT role FROM riviamigo.users WHERE id = $1",
-        user_id
-    )
-    .fetch_optional(&state.pool)
-    .await?;
+    let role = sqlx::query_scalar!("SELECT role FROM riviamigo.users WHERE id = $1", user_id)
+        .fetch_optional(&state.pool)
+        .await?;
 
     match role.as_deref() {
         Some("admin") => Ok(()),

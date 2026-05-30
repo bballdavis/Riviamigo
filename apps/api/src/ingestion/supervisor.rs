@@ -11,7 +11,10 @@ use crate::{config::Config, ingestion::worker::run_vehicle_worker};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     use tokio::time::timeout;
 
     /// Build a minimal `Config` suitable for unit tests (no real DB connections made).
@@ -73,8 +76,12 @@ mod tests {
     async fn noop_handle_accepts_all_commands_without_panicking() {
         let handle = SupervisorHandle::noop();
         let id = Uuid::new_v4();
-        handle.send(SupervisorCommand::StartWorker { vehicle_id: id }).await;
-        handle.send(SupervisorCommand::StopWorker { vehicle_id: id }).await;
+        handle
+            .send(SupervisorCommand::StartWorker { vehicle_id: id })
+            .await;
+        handle
+            .send(SupervisorCommand::StopWorker { vehicle_id: id })
+            .await;
         handle.send(SupervisorCommand::Shutdown).await;
     }
 
@@ -101,7 +108,9 @@ mod tests {
         // Drive the supervisor loop in a background task.
         tokio::spawn(async move { sup.run().await });
 
-        handle.send(SupervisorCommand::StopWorker { vehicle_id }).await;
+        handle
+            .send(SupervisorCommand::StopWorker { vehicle_id })
+            .await;
 
         // Give the worker time to process the broadcast and set the flag.
         timeout(Duration::from_secs(2), async {
@@ -139,14 +148,21 @@ mod tests {
         tokio::spawn(async move { sup.run().await });
 
         // This second StartWorker should be ignored (vehicle already registered).
-        sup_handle.send(SupervisorCommand::StartWorker { vehicle_id }).await;
-        sup_handle.send(SupervisorCommand::StopWorker { vehicle_id }).await;
+        sup_handle
+            .send(SupervisorCommand::StartWorker { vehicle_id })
+            .await;
+        sup_handle
+            .send(SupervisorCommand::StopWorker { vehicle_id })
+            .await;
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Only one shutdown signal should have arrived (from the one real worker).
-        assert_eq!(signal_count.load(Ordering::SeqCst), 1,
-            "duplicate StartWorker must not result in extra shutdown signals");
+        assert_eq!(
+            signal_count.load(Ordering::SeqCst),
+            1,
+            "duplicate StartWorker must not result in extra shutdown signals"
+        );
     }
 
     // ── Shutdown drains all workers ───────────────────────────────────────────

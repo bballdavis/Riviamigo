@@ -51,6 +51,22 @@ function normalizeAcDcType(chargerType: string | null | undefined): 'ac' | 'dc' 
   return null;
 }
 
+function deriveAcDcType(row: ChargeSessionRow): 'ac' | 'dc' | null {
+  const explicit = normalizeAcDcType(row.charger_type);
+  if (explicit) return explicit;
+
+  const vendor = (row.network_vendor ?? '').trim().toLowerCase();
+  if (vendor && ['tesla', 'rivian', 'electrify america', 'evgo'].includes(vendor)) {
+    return 'dc';
+  }
+
+  if (row.peak_power_kw != null && Number.isFinite(row.peak_power_kw)) {
+    return row.peak_power_kw < 20 ? 'ac' : 'dc';
+  }
+
+  return null;
+}
+
 function formatSessionDayLabel(row: ChargeSessionRow): string {
   if (row.session_day_local) {
     return format(parseISO(`${row.session_day_local}T00:00:00`), 'MMM d, yyyy');
@@ -63,7 +79,6 @@ export const chargingColumns = [
     header: 'Date / Time',
     cell: (info) => {
       const row = info.row.original;
-      const acDcType = normalizeAcDcType(row.charger_type);
       const start = parseISO(info.getValue());
       const endDate =
         row.duration_min != null
@@ -71,14 +86,7 @@ export const chargingColumns = [
           : null;
       return (
         <div className="flex flex-col gap-px">
-          <span className="flex items-center justify-between gap-2 text-sm font-medium text-fg leading-tight">
-            <span>{formatSessionDayLabel(row)}</span>
-            {acDcType && (
-              <Badge variant={acDcType === 'dc' ? 'warning' : 'success'} size="sm">
-                {acDcType.toUpperCase()}
-              </Badge>
-            )}
-          </span>
+          <span className="text-sm font-medium text-fg leading-tight">{formatSessionDayLabel(row)}</span>
           <span className="text-xs text-fg-tertiary leading-tight">
             {format(start, 'h:mm a')}
             {endDate ? ` – ${format(endDate, 'h:mm a')}` : null}
@@ -117,11 +125,12 @@ export const chargingColumns = [
     header: 'Type',
     enableSorting: false,
     cell: (info) => {
-      const t = info.getValue();
-      if (!t) return <span className="text-fg-tertiary">—</span>;
+      const row = info.row.original;
+      const inferred = deriveAcDcType(row);
+      if (!inferred) return <span className="text-fg-tertiary">—</span>;
       return (
-        <Badge variant={CHARGER_VARIANT[t] ?? 'default'} size="sm">
-          {t.toUpperCase()}
+        <Badge variant={CHARGER_VARIANT[inferred] ?? 'default'} size="sm">
+          {inferred.toUpperCase()}
         </Badge>
       );
     },

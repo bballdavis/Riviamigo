@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 
 use axum::{
     body::{to_bytes, Body},
@@ -182,8 +182,7 @@ async fn register_and_login(app: &TestApp, email: &str) -> String {
     if response.status != StatusCode::OK && response.status != StatusCode::CREATED {
         panic!(
             "register failed: status={} body={}",
-            response.status,
-            response.body
+            response.status, response.body
         );
     }
 
@@ -724,10 +723,16 @@ async fn charging_sessions_surface_home_geofence_location() {
     assert_eq!(matched.id, geofence_id);
     assert!(matched.is_home);
 
-    let resolved_profile = resolve_profile(&app.pool, None, Some(geofence_id), vehicle_id, chrono::Utc::now())
-        .await
-        .expect("resolve cost profile")
-        .expect("home geofence cost profile should resolve");
+    let resolved_profile = resolve_profile(
+        &app.pool,
+        None,
+        Some(geofence_id),
+        vehicle_id,
+        chrono::Utc::now(),
+    )
+    .await
+    .expect("resolve cost profile")
+    .expect("home geofence cost profile should resolve");
     assert_eq!(resolved_profile.id, cost_profile_id);
 
     let resolved_cost = compute_cost(
@@ -803,8 +808,13 @@ async fn charging_sessions_include_local_charging_window_day() {
     .await
     .expect("user id");
 
-    let vehicle_id =
-        insert_vehicle(&app.pool, user_id, "charging-daykey-vehicle", "DayKey Truck").await;
+    let vehicle_id = insert_vehicle(
+        &app.pool,
+        user_id,
+        "charging-daykey-vehicle",
+        "DayKey Truck",
+    )
+    .await;
 
     sqlx::query!(
         "UPDATE riviamigo.user_preferences SET home_timezone = $1 WHERE user_id = $2",
@@ -848,5 +858,8 @@ async fn charging_sessions_include_local_charging_window_day() {
         .await;
 
     assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(res.body["data"][0]["session_day_local"], json!("2026-05-23"));
+    assert_eq!(
+        res.body["data"][0]["session_day_local"],
+        json!("2026-05-23")
+    );
 }

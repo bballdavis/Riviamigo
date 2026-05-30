@@ -102,6 +102,14 @@ export function ChargeSessionContent() {
                 label="Cost"
                 value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : '-'}
               />
+              <StatCard
+                label="AC / DC"
+                value={session ? formatAcDcLabel(session) : '-'}
+              />
+              <StatCard
+                label="Network"
+                value={session ? formatNetworkSummary(session) : '-'}
+              />
             </StatCardGrid>
 
             {/* Charge curve + cumulative energy on a shared time axis.
@@ -132,16 +140,30 @@ export function ChargeSessionContent() {
 
 type ChargeSessionDetail = NonNullable<ReturnType<typeof useChargeSession>['data']>;
 
+function formatAcDcLabel(session: ChargeSessionDetail) {
+  const normalized = (session.charger_type ?? '').toLowerCase();
+  if (normalized === 'dc' || normalized === 'dcfc') return 'DC';
+  if (normalized === 'ac' || normalized === 'ac_l2') return 'AC';
+  if (session.peak_power_kw != null && Number.isFinite(session.peak_power_kw)) {
+    return session.peak_power_kw < 20 ? 'AC' : 'DC';
+  }
+  return '-';
+}
+
+function formatNetworkSummary(session: ChargeSessionDetail) {
+  return session.network_vendor
+    ?? (session.location_name?.toLowerCase().includes('home') ? 'Home' : null)
+    ?? session.charger_id
+    ?? session.rivian_charger_type
+    ?? '-';
+}
+
 function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
   const telemetryCount = session.telemetry_sample_count ?? 0;
   const telemetryLabel = telemetryCount > 0
     ? `${telemetryCount.toLocaleString()} samples matched`
     : 'No telemetry samples matched';
-  const networkLabel = session.network_vendor
-    ?? (session.location_name?.toLowerCase().includes('home') ? 'Home' : null)
-    ?? session.charger_id
-    ?? session.rivian_charger_type
-    ?? (session.charger_type ? session.charger_type.toUpperCase() : 'Unknown');
+  const networkLabel = formatNetworkSummary(session) === '-' ? 'Unknown' : formatNetworkSummary(session);
   const evidence = [
     session.range_added_km != null
       ? { icon: <Route className="h-4 w-4" />, label: 'Range', value: `${session.range_added_km.toFixed(1)} km added` }

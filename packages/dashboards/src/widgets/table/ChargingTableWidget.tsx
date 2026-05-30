@@ -27,6 +27,30 @@ const CHARGER_VARIANT: Record<string, 'accent' | 'info' | 'success' | 'warning'>
   dcfc: 'warning', dc: 'warning', ac: 'success', ac_l2: 'success',
 };
 
+function normalizeAcDcType(chargerType: string | null | undefined): 'ac' | 'dc' | null {
+  if (!chargerType) return null;
+  const normalized = chargerType.toLowerCase();
+  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
+  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
+  return null;
+}
+
+function deriveAcDcType(session: ChargeSessionRow): 'ac' | 'dc' | null {
+  const explicit = normalizeAcDcType(session.charger_type);
+  if (explicit) return explicit;
+
+  const vendor = (session.network_vendor ?? '').trim().toLowerCase();
+  if (vendor && ['tesla', 'rivian', 'electrify america', 'evgo'].includes(vendor)) {
+    return 'dc';
+  }
+
+  if (session.peak_power_kw != null && Number.isFinite(session.peak_power_kw)) {
+    return session.peak_power_kw < 20 ? 'ac' : 'dc';
+  }
+
+  return null;
+}
+
 function formatSessionDay(session: ChargeSessionRow): string {
   if (session.session_day_local) {
     return format(parseISO(`${session.session_day_local}T00:00:00`), 'MMM d, yyyy');
@@ -35,6 +59,8 @@ function formatSessionDay(session: ChargeSessionRow): string {
 }
 
 function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; onClick: () => void }) {
+  const type = deriveAcDcType(session);
+
   return (
     <button
       type="button"
@@ -53,9 +79,9 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
               : null}
           </span>
         </div>
-        {session.charger_type && (
-          <Badge variant={CHARGER_VARIANT[session.charger_type] ?? 'default'} size="sm">
-            {session.charger_type.toUpperCase()}
+        {type && (
+          <Badge variant={CHARGER_VARIANT[type] ?? 'default'} size="sm">
+            {type.toUpperCase()}
           </Badge>
         )}
       </div>
@@ -209,6 +235,8 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
             onRowClick={handleRowClick}
             emptyTitle="No charging sessions"
             emptyDescription={search ? 'No sessions match that location.' : 'Sessions will appear here after your vehicle has charged.'}
+            columnVisibilityMenu
+            defaultHiddenColumns={['network_vendor']}
             className="overflow-x-auto overflow-y-auto"
           />
         </div>

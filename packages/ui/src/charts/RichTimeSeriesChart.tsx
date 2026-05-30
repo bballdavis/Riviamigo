@@ -81,6 +81,15 @@ function estimateYLabelWidth(labels: string[]): number {
   return Math.min(maxLen * 7 + 16, 110);
 }
 
+function dedupeAdjacentLabels(labels: string[]): string[] {
+  let last = '';
+  return labels.map((label) => {
+    if (label === last) return '';
+    last = label;
+    return label;
+  });
+}
+
 function createVariableSplinePathBuilder(smoothingAmount: number): uPlot.Series.PathBuilder {
   const blend = Math.max(0, Math.min(1, smoothingAmount));
 
@@ -438,7 +447,8 @@ export function RichTimeSeriesChart({
         return estimateYLabelWidth(values as string[]);
       },
       gap: 8,
-      values: (_u, vals) => vals.map((v) => yValueFormatterRef.current(v, yUnitRef.current)),
+      values: (_u, vals) =>
+        dedupeAdjacentLabels(vals.map((v) => yValueFormatterRef.current(v, yUnitRef.current))),
     };
 
     // Right Y axis — only added when at least one series uses scale 'y2'.
@@ -455,7 +465,7 @@ export function RichTimeSeriesChart({
           },
           gap: 8,
           values: (_u, vals) =>
-            vals.map((v) => yValueFormatterRef.current(v, yRightUnitRef.current)),
+            dedupeAdjacentLabels(vals.map((v) => yValueFormatterRef.current(v, yRightUnitRef.current))),
         }
       : null;
 
