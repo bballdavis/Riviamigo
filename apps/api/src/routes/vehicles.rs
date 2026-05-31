@@ -10,6 +10,7 @@ use uuid::Uuid;
 use std::time::Duration;
 
 use crate::{
+    db::vehicles::{get_default_vehicle_id, require_vehicle_role},
     errors::AppError,
     ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
     middleware::auth::{AppState, AuthUser},
@@ -22,6 +23,9 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id", delete(delete_vehicle))
+        .route("/vehicles/:id/default", post(set_default_vehicle))
+        .route("/vehicles/:id/members", get(list_vehicle_members).post(add_vehicle_member))
+        .route("/vehicles/:id/members/:user_id", put(update_vehicle_member).delete(remove_vehicle_member))
         .route(
             "/vehicles/:id/credentials",
             put(refresh_vehicle_credentials),
@@ -180,6 +184,7 @@ struct VehicleListRow {
     worker_health_msg: Option<String>,
     auth_state: Option<String>,
     auth_reason_code: Option<String>,
+    membership_role: String,
 }
 
 #[derive(Deserialize)]
@@ -630,37 +635,99 @@ async fn add_vehicle(
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(|e| AppError::Internal(e))?;
 
-    let existing_vehicle_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM riviamigo.vehicles WHERE user_id = $1 AND rivian_vehicle_id = $2",
-    )
-    .bind(auth.user_id)
-    .bind(&rivian_vehicle_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    if existing_vehicle_id.is_some() {
-        return Err(AppError::Conflict(
-            "vehicle already exists; refresh credentials from vehicle settings".into(),
-        ));
-    }
+    let existing_vehicle_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM riviamigo.vehicles WHERE rivian_vehicle_id = $1")
+            .bind(&rivian_vehicle_id)
+            .fetch_optional(&state.pool)
+            .await?;
 
     let mut tx = state.pool.begin().await?;
 
-    let vehicle_id: Uuid = sqlx::query_scalar(
-        r#"INSERT INTO riviamigo.vehicles
-           (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id"#,
-    )
-    .bind(auth.user_id)
-    .bind(&rivian_vehicle_id)
-    .bind(body.model.as_deref().unwrap_or("R1T"))
-    .bind(body.trim.as_deref())
-    .bind(body.vin.as_deref())
-    .bind(body.name.as_deref())
-    .bind(body.home_lat)
-    .bind(body.home_lng)
-    .fetch_one(&mut *tx)
-    .await?;
+    let vehicle_id = if let Some(existing_vehicle_id) = existing_vehicle_id {
+        let already_member = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM riviamigo.vehicle_memberships
+                WHERE vehicle_id = $1 AND user_id = $2
+            )",
+        )
+        .bind(existing_vehicle_id)
+        .bind(auth.user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if already_member {
+            return Err(AppError::Conflict(
+                "vehicle already exists; refresh credentials from vehicle settings".into(),
+            ));
+        }
+
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+             VALUES ($1, $2, 'owner', FALSE)",
+        )
+        .bind(existing_vehicle_id)
+        .bind(auth.user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_user_settings
+             (vehicle_id, user_id, display_name)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (vehicle_id, user_id) DO UPDATE
+             SET display_name = COALESCE(EXCLUDED.display_name, riviamigo.vehicle_user_settings.display_name),
+                 updated_at = now()",
+        )
+        .bind(existing_vehicle_id)
+        .bind(auth.user_id)
+        .bind(body.name.as_deref())
+        .execute(&mut *tx)
+        .await?;
+
+        existing_vehicle_id
+    } else {
+        let vehicle_id: Uuid = sqlx::query_scalar(
+            r#"INSERT INTO riviamigo.vehicles
+               (user_id, rivian_vehicle_id, model, trim, vin, name, home_latitude, home_longitude)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id"#,
+        )
+        .bind(auth.user_id)
+        .bind(&rivian_vehicle_id)
+        .bind(body.model.as_deref().unwrap_or("R1T"))
+        .bind(body.trim.as_deref())
+        .bind(body.vin.as_deref())
+        .bind(body.name.as_deref())
+        .bind(body.home_lat)
+        .bind(body.home_lng)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+             VALUES ($1, $2, 'owner', FALSE)",
+        )
+        .bind(vehicle_id)
+        .bind(auth.user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_user_settings
+             (vehicle_id, user_id, display_name)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (vehicle_id, user_id) DO UPDATE
+             SET display_name = COALESCE(EXCLUDED.display_name, riviamigo.vehicle_user_settings.display_name),
+                 updated_at = now()",
+        )
+        .bind(vehicle_id)
+        .bind(auth.user_id)
+        .bind(body.name.as_deref())
+        .execute(&mut *tx)
+        .await?;
+
+        vehicle_id
+    };
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at) \
@@ -675,7 +742,22 @@ async fn add_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    // Set as default vehicle if user has none
+    // Set as default vehicle if user has none.
+    sqlx::query(
+        "UPDATE riviamigo.vehicle_memberships
+         SET is_default = TRUE, updated_at = now()
+         WHERE vehicle_id = $1
+           AND user_id = $2
+           AND NOT EXISTS (
+               SELECT 1 FROM riviamigo.vehicle_memberships
+               WHERE user_id = $2 AND is_default = TRUE
+           )",
+    )
+    .bind(vehicle_id)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query(
         "UPDATE riviamigo.users SET default_vehicle_id = $1 \
          WHERE id = $2 AND default_vehicle_id IS NULL",
@@ -724,15 +806,13 @@ async fn refresh_vehicle_credentials(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
     Json(body): Json<RefreshCredentialsBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
 
-    let rivian_vehicle_id: String = sqlx::query_scalar(
-        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1 AND user_id = $2",
-    )
-    .bind(vid)
-    .bind(auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let rivian_vehicle_id: String =
+        sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
+            .bind(vid)
+            .fetch_one(&state.pool)
+            .await?;
 
     if let Some(requested) = body.rivian_vehicle_id.as_deref() {
         if requested != rivian_vehicle_id {
@@ -807,20 +887,14 @@ async fn delete_vehicle(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
 
-    sqlx::query("DELETE FROM riviamigo.vehicles WHERE id = $1 AND user_id = $2")
+    sqlx::query("DELETE FROM riviamigo.vehicles WHERE id = $1")
         .bind(vid)
-        .bind(auth.user_id)
         .execute(&state.pool)
         .await?;
 
-    let next_default: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM riviamigo.vehicles WHERE user_id = $1 ORDER BY created_at LIMIT 1",
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let next_default = get_default_vehicle_id(&state.pool, auth.user_id).await?;
 
     sqlx::query("UPDATE riviamigo.users SET default_vehicle_id = $1 WHERE id = $2")
         .bind(next_default)
@@ -850,7 +924,7 @@ async fn update_battery_config(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateBatteryConfigBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
     let capacity_wh = body.battery_capacity_kwh.map(|kwh| kwh * 1000.0);
     sqlx::query(
         "UPDATE riviamigo.vehicles
@@ -871,22 +945,236 @@ struct UpdateVehicleNameBody {
     name: String,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct VehicleMemberRow {
+    user_id: Uuid,
+    email: String,
+    role: String,
+    is_default: bool,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize)]
+struct AddVehicleMemberBody {
+    email: String,
+    role: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateVehicleMemberBody {
+    role: String,
+}
+
 async fn update_vehicle_name(
     State(state): State<AppState>,
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateVehicleNameBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
     let trimmed = body.name.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Validation("name must not be blank".into()));
     }
-    sqlx::query("UPDATE riviamigo.vehicles SET name = $2 WHERE id = $1")
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id, display_name)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE
+         SET display_name = EXCLUDED.display_name,
+             updated_at = now()",
+    )
+    .bind(vid)
+    .bind(auth.user_id)
+    .bind(trimmed)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn set_default_vehicle(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let mut tx = state.pool.begin().await?;
+
+    sqlx::query(
+        "UPDATE riviamigo.vehicle_memberships
+         SET is_default = FALSE, updated_at = now()
+         WHERE user_id = $1",
+    )
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let updated = sqlx::query(
+        "UPDATE riviamigo.vehicle_memberships
+         SET is_default = TRUE, updated_at = now()
+         WHERE user_id = $1 AND vehicle_id = $2",
+    )
+    .bind(auth.user_id)
+    .bind(vid)
+    .execute(&mut *tx)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(AppError::Forbidden);
+    }
+
+    sqlx::query("UPDATE riviamigo.users SET default_vehicle_id = $1 WHERE id = $2")
         .bind(vid)
-        .bind(trimmed)
-        .execute(&state.pool)
+        .bind(auth.user_id)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
+    Ok(Json(serde_json::json!({ "ok": true, "default_vehicle_id": vid })))
+}
+
+async fn list_vehicle_members(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    let rows = sqlx::query_as::<_, VehicleMemberRow>(
+        "SELECT vm.user_id, u.email, vm.role, vm.is_default, vm.created_at
+         FROM riviamigo.vehicle_memberships vm
+         JOIN riviamigo.users u ON u.id = vm.user_id
+         WHERE vm.vehicle_id = $1
+         ORDER BY CASE vm.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END, u.email",
+    )
+    .bind(vid)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "members": rows,
+    })))
+}
+
+async fn add_vehicle_member(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<AddVehicleMemberBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
+
+    let email = body.email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return Err(AppError::Validation("valid email required".into()));
+    }
+    if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
+        return Err(AppError::Validation("role must be owner, manager, or viewer".into()));
+    }
+
+    let target_user_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::Validation("user must already have an account".into()))?;
+
+    let result = sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, $3, FALSE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE
+         SET role = EXCLUDED.role,
+             updated_at = now()",
+    )
+    .bind(vid)
+    .bind(target_user_id)
+    .bind(body.role.as_str())
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::Conflict("member already exists".into()));
+    }
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (vehicle_id, user_id) DO NOTHING",
+    )
+    .bind(vid)
+    .bind(target_user_id)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn update_vehicle_member(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path((vid, member_user_id)): axum::extract::Path<(Uuid, Uuid)>,
+    Json(body): Json<UpdateVehicleMemberBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
+
+    if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
+        return Err(AppError::Validation("role must be owner, manager, or viewer".into()));
+    }
+
+    let updated = sqlx::query(
+        "UPDATE riviamigo.vehicle_memberships
+         SET role = $3, updated_at = now()
+         WHERE vehicle_id = $1 AND user_id = $2",
+    )
+    .bind(vid)
+    .bind(member_user_id)
+    .bind(body.role.as_str())
+    .execute(&state.pool)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn remove_vehicle_member(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path((vid, member_user_id)): axum::extract::Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
+
+    let member_role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND user_id = $2",
+    )
+    .bind(vid)
+    .bind(member_user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if member_role == "owner" {
+        let owner_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND role = 'owner'",
+        )
+        .bind(vid)
+        .fetch_one(&state.pool)
+        .await?;
+        if owner_count <= 1 {
+            return Err(AppError::Validation("vehicle must keep at least one owner".into()));
+        }
+    }
+
+    sqlx::query(
+        "DELETE FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND user_id = $2",
+    )
+    .bind(vid)
+    .bind(member_user_id)
+    .execute(&state.pool)
+    .await?;
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -895,14 +1183,18 @@ async fn list_vehicles(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query_as::<_, VehicleListRow>(
-        "SELECT v.id, v.rivian_vehicle_id, v.model, v.trim, v.vin, v.color, v.name, v.battery_capacity_wh, \
+        "SELECT v.id, v.rivian_vehicle_id, v.model, v.trim, v.vin, v.color, \
+                COALESCE(vus.display_name, v.name) AS name, v.battery_capacity_wh, \
                 v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
                 v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
-            vrs.worker_health, vrs.worker_health_msg, vrs.auth_state, vrs.auth_reason_code \
+                vrs.worker_health, vrs.worker_health_msg, vrs.auth_state, vrs.auth_reason_code, \
+                vm.role AS membership_role \
          FROM riviamigo.vehicles v \
+         JOIN riviamigo.vehicle_memberships vm ON vm.vehicle_id = v.id \
+         LEFT JOIN riviamigo.vehicle_user_settings vus ON vus.vehicle_id = v.id AND vus.user_id = vm.user_id \
          LEFT JOIN riviamigo.vehicle_runtime_state vrs ON vrs.vehicle_id = v.id \
-         WHERE v.user_id = $1 ORDER BY v.created_at",
+         WHERE vm.user_id = $1 ORDER BY v.created_at",
     )
     .bind(auth.user_id)
     .fetch_all(&state.pool)
@@ -943,6 +1235,7 @@ async fn list_vehicles(
             "battery_capacity_kwh":     r.battery_capacity_wh.map(|w| w / 1000.0),
             "battery_config":           r.battery_config,
             "display_name":             r.name.as_deref().unwrap_or(&r.model),
+            "membership_role":          r.membership_role,
             "created_at":               r.created_at,
             "images":                   images,
             "history_backfill_status":  r.history_backfill_status,
@@ -981,98 +1274,116 @@ async fn vehicle_status(
     .fetch_optional(&state.pool)
     .await?;
 
-    // Single-pass aggregate over the recent 30-day window instead of one
-    // correlated sub-query per column. TimescaleDB can prune chunks outside
-    // the WHERE range and the last() aggregate picks the most-recent non-null
-    // value for each field in one scan.
     let latest = sqlx::query_as::<_, LatestVehicleTelemetry>(
         r#"
         SELECT
-          last(ts, ts)                                                                                        AS ts,
-          last(latitude,                   ts) FILTER (WHERE latitude                   IS NOT NULL)          AS latitude,
-          last(longitude,                  ts) FILTER (WHERE longitude                  IS NOT NULL)          AS longitude,
-          last(altitude_m,                 ts) FILTER (WHERE altitude_m                 IS NOT NULL)          AS altitude_m,
-          last(speed_mph,                  ts) FILTER (WHERE speed_mph                  IS NOT NULL)          AS speed_mph,
-          last(battery_level,              ts) FILTER (WHERE battery_level              IS NOT NULL)          AS battery_level,
-          last(battery_capacity_wh,        ts) FILTER (WHERE battery_capacity_wh        IS NOT NULL)          AS battery_capacity_wh,
-          last(distance_to_empty_mi,       ts) FILTER (WHERE distance_to_empty_mi       IS NOT NULL)          AS distance_to_empty_mi,
-          last(battery_limit,              ts) FILTER (WHERE battery_limit              IS NOT NULL)          AS battery_limit,
-          last(power_state,                ts) FILTER (WHERE power_state                IS NOT NULL)          AS power_state,
-          last(charger_state,              ts) FILTER (WHERE charger_state              IS NOT NULL)          AS charger_state,
-          last(ts,                         ts) FILTER (WHERE charger_state              IS NOT NULL)          AS charger_state_ts,
-          last(charger_status,             ts) FILTER (WHERE charger_status             IS NOT NULL)          AS charger_status,
-          last(time_to_end_of_charge_min,  ts) FILTER (WHERE time_to_end_of_charge_min  IS NOT NULL)          AS time_to_end_of_charge_min,
-          last(drive_mode,                 ts) FILTER (WHERE drive_mode                 IS NOT NULL)          AS drive_mode,
-          last(gear_status,                ts) FILTER (WHERE gear_status                IS NOT NULL)          AS gear_status,
-          last(cabin_temp_c,               ts) FILTER (WHERE cabin_temp_c               IS NOT NULL)          AS cabin_temp_c,
-          last(driver_temp_c,              ts) FILTER (WHERE driver_temp_c              IS NOT NULL)          AS driver_temp_c,
-          last(outside_temp_c,             ts) FILTER (WHERE outside_temp_c             IS NOT NULL)          AS outside_temp_c,
-          last(heading_deg,                ts) FILTER (WHERE heading_deg                IS NOT NULL)          AS heading_deg,
-          last(odometer_miles,             ts) FILTER (WHERE odometer_miles             IS NOT NULL)          AS odometer_miles,
-          last(tire_fl_psi,                ts) FILTER (WHERE tire_fl_psi                IS NOT NULL)          AS tire_fl_psi,
-          last(tire_fr_psi,                ts) FILTER (WHERE tire_fr_psi                IS NOT NULL)          AS tire_fr_psi,
-          last(tire_rl_psi,                ts) FILTER (WHERE tire_rl_psi                IS NOT NULL)          AS tire_rl_psi,
-          last(tire_rr_psi,                ts) FILTER (WHERE tire_rr_psi                IS NOT NULL)          AS tire_rr_psi,
-          last(tire_fl_status,             ts) FILTER (WHERE tire_fl_status             IS NOT NULL)          AS tire_fl_status,
-          last(tire_fr_status,             ts) FILTER (WHERE tire_fr_status             IS NOT NULL)          AS tire_fr_status,
-          last(tire_rl_status,             ts) FILTER (WHERE tire_rl_status             IS NOT NULL)          AS tire_rl_status,
-          last(tire_rr_status,             ts) FILTER (WHERE tire_rr_status             IS NOT NULL)          AS tire_rr_status,
-          last(door_front_left_locked,     ts) FILTER (WHERE door_front_left_locked     IS NOT NULL)          AS door_front_left_locked,
-          last(door_front_right_locked,    ts) FILTER (WHERE door_front_right_locked    IS NOT NULL)          AS door_front_right_locked,
-          last(door_rear_left_locked,      ts) FILTER (WHERE door_rear_left_locked      IS NOT NULL)          AS door_rear_left_locked,
-          last(door_rear_right_locked,     ts) FILTER (WHERE door_rear_right_locked     IS NOT NULL)          AS door_rear_right_locked,
-          last(door_front_left_closed,     ts) FILTER (WHERE door_front_left_closed     IS NOT NULL)          AS door_front_left_closed,
-          last(door_front_right_closed,    ts) FILTER (WHERE door_front_right_closed    IS NOT NULL)          AS door_front_right_closed,
-          last(door_rear_left_closed,      ts) FILTER (WHERE door_rear_left_closed      IS NOT NULL)          AS door_rear_left_closed,
-          last(door_rear_right_closed,     ts) FILTER (WHERE door_rear_right_closed     IS NOT NULL)          AS door_rear_right_closed,
-          last(closure_frunk_locked,       ts) FILTER (WHERE closure_frunk_locked       IS NOT NULL)          AS closure_frunk_locked,
-          last(closure_frunk_closed,       ts) FILTER (WHERE closure_frunk_closed       IS NOT NULL)          AS closure_frunk_closed,
-          last(closure_liftgate_locked,    ts) FILTER (WHERE closure_liftgate_locked    IS NOT NULL)          AS closure_liftgate_locked,
-          last(closure_liftgate_closed,    ts) FILTER (WHERE closure_liftgate_closed    IS NOT NULL)          AS closure_liftgate_closed,
-          last(closure_tailgate_locked,    ts) FILTER (WHERE closure_tailgate_locked    IS NOT NULL)          AS closure_tailgate_locked,
-          last(closure_tailgate_closed,    ts) FILTER (WHERE closure_tailgate_closed    IS NOT NULL)          AS closure_tailgate_closed,
-          last(ota_current_version,        ts) FILTER (WHERE ota_current_version        IS NOT NULL)          AS ota_current_version,
-          last(ota_available_version,      ts) FILTER (WHERE ota_available_version      IS NOT NULL)          AS ota_available_version,
-          last(ota_status,                 ts) FILTER (WHERE ota_status                 IS NOT NULL)          AS ota_status,
-          last(ota_current_status,         ts) FILTER (WHERE ota_current_status         IS NOT NULL)          AS ota_current_status,
-          last(hv_thermal_event,           ts) FILTER (WHERE hv_thermal_event           IS NOT NULL)          AS hv_thermal_event,
-          last(twelve_volt_health,         ts) FILTER (WHERE twelve_volt_health         IS NOT NULL)          AS twelve_volt_health,
-          last(charge_port_open,           ts) FILTER (WHERE charge_port_open           IS NOT NULL)          AS charge_port_open,
-          last(charger_derate_active,      ts) FILTER (WHERE charger_derate_active      IS NOT NULL)          AS charger_derate_active,
-          last(cabin_precon_status,        ts) FILTER (WHERE cabin_precon_status        IS NOT NULL)          AS cabin_precon_status,
-          last(cabin_precon_type,          ts) FILTER (WHERE cabin_precon_type          IS NOT NULL)          AS cabin_precon_type,
-          last(pet_mode_active,            ts) FILTER (WHERE pet_mode_active            IS NOT NULL)          AS pet_mode_active,
-          last(pet_mode_temp_ok,           ts) FILTER (WHERE pet_mode_temp_ok           IS NOT NULL)          AS pet_mode_temp_ok,
-          last(defrost_active,             ts) FILTER (WHERE defrost_active             IS NOT NULL)          AS defrost_active,
-          last(steering_wheel_heat,        ts) FILTER (WHERE steering_wheel_heat        IS NOT NULL)          AS steering_wheel_heat,
-          last(seat_fl_heat,               ts) FILTER (WHERE seat_fl_heat               IS NOT NULL)          AS seat_fl_heat,
-          last(seat_fr_heat,               ts) FILTER (WHERE seat_fr_heat               IS NOT NULL)          AS seat_fr_heat,
-          last(seat_rl_heat,               ts) FILTER (WHERE seat_rl_heat               IS NOT NULL)          AS seat_rl_heat,
-          last(seat_rr_heat,               ts) FILTER (WHERE seat_rr_heat               IS NOT NULL)          AS seat_rr_heat,
-          last(seat_fl_vent,               ts) FILTER (WHERE seat_fl_vent               IS NOT NULL)          AS seat_fl_vent,
-          last(seat_fr_vent,               ts) FILTER (WHERE seat_fr_vent               IS NOT NULL)          AS seat_fr_vent,
-          last(tonneau_locked,             ts) FILTER (WHERE tonneau_locked             IS NOT NULL)          AS tonneau_locked,
-          last(tonneau_closed,             ts) FILTER (WHERE tonneau_closed             IS NOT NULL)          AS tonneau_closed,
-          last(side_bin_left_locked,       ts) FILTER (WHERE side_bin_left_locked       IS NOT NULL)          AS side_bin_left_locked,
-          last(side_bin_right_locked,      ts) FILTER (WHERE side_bin_right_locked      IS NOT NULL)          AS side_bin_right_locked,
-          last(window_fl_closed,           ts) FILTER (WHERE window_fl_closed           IS NOT NULL)          AS window_fl_closed,
-          last(window_fr_closed,           ts) FILTER (WHERE window_fr_closed           IS NOT NULL)          AS window_fr_closed,
-          last(window_rl_closed,           ts) FILTER (WHERE window_rl_closed           IS NOT NULL)          AS window_rl_closed,
-          last(window_rr_closed,           ts) FILTER (WHERE window_rr_closed           IS NOT NULL)          AS window_rr_closed,
-          last(gear_guard_locked,          ts) FILTER (WHERE gear_guard_locked          IS NOT NULL)          AS gear_guard_locked,
-          last(gear_guard_video_status,    ts) FILTER (WHERE gear_guard_video_status    IS NOT NULL)          AS gear_guard_video_status,
-          last(wiper_fluid_low,            ts) FILTER (WHERE wiper_fluid_low            IS NOT NULL)          AS wiper_fluid_low,
-          last(brake_fluid_low,            ts) FILTER (WHERE brake_fluid_low            IS NOT NULL)          AS brake_fluid_low,
-          last(alarm_active,               ts) FILTER (WHERE alarm_active               IS NOT NULL)          AS alarm_active,
-          last(service_mode,               ts) FILTER (WHERE service_mode               IS NOT NULL)          AS service_mode
-        FROM timeseries.telemetry
+          ts, latitude, longitude, altitude_m, speed_mph,
+          battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+          power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+          drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
+          heading_deg, odometer_miles,
+          tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+          tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+          door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+          door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+          closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
+          closure_tailgate_locked, closure_tailgate_closed,
+          ota_current_version, ota_available_version, ota_status, ota_current_status,
+          hv_thermal_event, twelve_volt_health,
+          charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+          pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+          seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat,
+          seat_fl_vent, seat_fr_vent,
+          tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+          window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+          gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
+          alarm_active, service_mode
+        FROM riviamigo.vehicle_latest_status
         WHERE vehicle_id = $1
-          AND ts >= NOW() - INTERVAL '30 days'
         "#,
     )
     .bind(vid)
-    .fetch_one(&state.pool)
-    .await?;
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(LatestVehicleTelemetry {
+        ts: None,
+        latitude: None,
+        longitude: None,
+        altitude_m: None,
+        speed_mph: None,
+        battery_level: None,
+        battery_capacity_wh: None,
+        distance_to_empty_mi: None,
+        battery_limit: None,
+        power_state: None,
+        charger_state: None,
+        charger_state_ts: None,
+        charger_status: None,
+        time_to_end_of_charge_min: None,
+        drive_mode: None,
+        gear_status: None,
+        cabin_temp_c: None,
+        driver_temp_c: None,
+        outside_temp_c: None,
+        heading_deg: None,
+        odometer_miles: None,
+        tire_fl_psi: None,
+        tire_fr_psi: None,
+        tire_rl_psi: None,
+        tire_rr_psi: None,
+        tire_fl_status: None,
+        tire_fr_status: None,
+        tire_rl_status: None,
+        tire_rr_status: None,
+        door_front_left_locked: None,
+        door_front_right_locked: None,
+        door_rear_left_locked: None,
+        door_rear_right_locked: None,
+        door_front_left_closed: None,
+        door_front_right_closed: None,
+        door_rear_left_closed: None,
+        door_rear_right_closed: None,
+        closure_frunk_locked: None,
+        closure_frunk_closed: None,
+        closure_liftgate_locked: None,
+        closure_liftgate_closed: None,
+        closure_tailgate_locked: None,
+        closure_tailgate_closed: None,
+        ota_current_version: None,
+        ota_available_version: None,
+        ota_status: None,
+        ota_current_status: None,
+        hv_thermal_event: None,
+        twelve_volt_health: None,
+        charge_port_open: None,
+        charger_derate_active: None,
+        cabin_precon_status: None,
+        cabin_precon_type: None,
+        pet_mode_active: None,
+        pet_mode_temp_ok: None,
+        defrost_active: None,
+        steering_wheel_heat: None,
+        seat_fl_heat: None,
+        seat_fr_heat: None,
+        seat_rl_heat: None,
+        seat_rr_heat: None,
+        seat_fl_vent: None,
+        seat_fr_vent: None,
+        tonneau_locked: None,
+        tonneau_closed: None,
+        side_bin_left_locked: None,
+        side_bin_right_locked: None,
+        window_fl_closed: None,
+        window_fr_closed: None,
+        window_rl_closed: None,
+        window_rr_closed: None,
+        gear_guard_locked: None,
+        gear_guard_video_status: None,
+        wiper_fluid_low: None,
+        brake_fluid_low: None,
+        alarm_active: None,
+        service_mode: None,
+    });
 
     let tire_values = [
         latest.tire_fl_psi,

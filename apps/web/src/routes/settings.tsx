@@ -3,7 +3,7 @@ import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
 import { api, useAuth, useVehicles } from '@riviamigo/hooks';
-import type { ApiAccessLevel, UnitPreferences, VehicleImages } from '@riviamigo/types';
+import type { ApiAccessLevel, UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   formatMiles,
   formatPressure,
@@ -23,7 +23,7 @@ import { BackupSection } from '../components/settings/BackupSection';
 import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import {
-  Car, CircleHelp, Clipboard, Database, DatabaseBackup, KeyRound, ListChecks, LogOut, MapPin, Pencil, Plus, RefreshCw, Ruler, Save, ShieldCheck, Trash2, X,
+  Car, CircleHelp, Clipboard, Database, DatabaseBackup, KeyRound, ListChecks, LogOut, MapPin, Pencil, Plus, RefreshCw, Ruler, Save, ShieldCheck, Star, Trash2, Users, X,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -115,6 +115,18 @@ function formatSuppressionRate(suppressed: number | undefined, persisted: number
   return `${Math.round(((suppressed ?? 0) / total) * 100)}%`;
 }
 
+function formatMembershipRole(role: VehicleMember['role'] | undefined) {
+  if (role === 'owner') return 'Owner';
+  if (role === 'manager') return 'Manager';
+  return 'Viewer';
+}
+
+function membershipBadgeVariant(role: VehicleMember['role'] | undefined): 'success' | 'warning' | 'default' {
+  if (role === 'owner') return 'success';
+  if (role === 'manager') return 'warning';
+  return 'default';
+}
+
 function ThemeVehicleImage({
   images,
   placement,
@@ -170,6 +182,9 @@ export function SettingsContent() {
   const [editNameValue, setEditNameValue] = React.useState('');
   const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
+  const [sharingVehicleId, setSharingVehicleId] = React.useState<string | null>(null);
+  const [shareEmail, setShareEmail] = React.useState('');
+  const [shareRole, setShareRole] = React.useState<VehicleMember['role']>('viewer');
   const isAdmin = me.data?.role === 'admin';
   const sections = React.useMemo(
     () => isAdmin
@@ -229,6 +244,19 @@ export function SettingsContent() {
     }
   }, [apiAccessLevel, isAdmin]);
 
+  const vehicleMembers = useQuery({
+    queryKey: ['vehicle-members', sharingVehicleId],
+    queryFn: () => api.listVehicleMembers(sharingVehicleId!),
+    enabled: activeSection === 'vehicles' && !!sharingVehicleId,
+  });
+
+  React.useEffect(() => {
+    if (!sharingVehicleId) return;
+    if (!(vehicles ?? []).some((vehicle) => vehicle.id === sharingVehicleId)) {
+      setSharingVehicleId(null);
+    }
+  }, [sharingVehicleId, vehicles]);
+
   const createApiKey = useMutation({
     mutationFn: () => api.createApiKey({
       vehicle_id: apiKeyVehicleId,
@@ -267,6 +295,45 @@ export function SettingsContent() {
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id ?? null);
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+
+  const setDefaultVehicle = useMutation({
+    mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
+    onSuccess: (result) => {
+      setDefaultVehicleId(result.default_vehicle_id);
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['me'] });
+    },
+  });
+
+  const addVehicleMember = useMutation({
+    mutationFn: ({ vehicleId, email, role }: { vehicleId: string; email: string; role: VehicleMember['role'] }) =>
+      api.addVehicleMember(vehicleId, { email, role }),
+    onSuccess: (_, variables) => {
+      setShareEmail('');
+      setShareRole('viewer');
+      queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+
+  const updateVehicleMember = useMutation({
+    mutationFn: ({ vehicleId, userId, role }: { vehicleId: string; userId: string; role: VehicleMember['role'] }) =>
+      api.updateVehicleMember(vehicleId, userId, { role }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+
+  const removeVehicleMember = useMutation({
+    mutationFn: ({ vehicleId, userId }: { vehicleId: string; userId: string }) =>
+      api.removeVehicleMember(vehicleId, userId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['me'] });
     },
   });
 
@@ -448,6 +515,10 @@ export function SettingsContent() {
                     {vehicles?.map((v) => {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
                       const isEditingBattery = editingBatteryVehicleId === v.id;
+                      const isSharingExpanded = sharingVehicleId === v.id;
+                      const membershipRole = v.membership_role ?? 'viewer';
+                      const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
+                      const canManageMembers = membershipRole === 'owner';
 
                       const needsReauth = v.auth_state === 'needs_reauth';
                       const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
@@ -506,6 +577,12 @@ export function SettingsContent() {
                             <div className="flex min-w-0 flex-1 flex-col">
                               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
                                 <p className="text-lg font-medium text-fg">{v.display_name}</p>
+                                <Badge variant={membershipBadgeVariant(membershipRole)} size="sm">
+                                  {formatMembershipRole(membershipRole)}
+                                </Badge>
+                                {isActive && (
+                                  <Badge variant="success" size="sm" dot>Default vehicle</Badge>
+                                )}
                                 {needsReauth && (
                                   <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
                                 )}
@@ -521,45 +598,78 @@ export function SettingsContent() {
                             </div>
 
                             {/* Action buttons */}
-                            <div className="flex shrink-0 items-center gap-1.5 self-center">
-                              <Tooltip content="Refresh Rivian login">
+                            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 self-center">
+                              {!isActive && (
                                 <Button
-                                  aria-label={`Refresh Rivian login for ${v.display_name}`}
                                   variant="secondary"
                                   size="sm"
-                                  className={[
-                                    'h-8 w-8 px-0',
-                                    needsReauth
-                                      ? 'border-[var(--rm-status-warning)] text-[var(--rm-status-warning)] hover:border-[var(--rm-status-warning)] hover:text-[var(--rm-status-warning)]'
-                                      : '',
-                                  ].join(' ')}
-                                  onClick={() => navigate({ to: '/connect', search: { mode: 'refresh', vehicle_id: v.id } })}
+                                  className="h-8 px-2.5"
+                                  loading={setDefaultVehicle.isPending && setDefaultVehicle.variables === v.id}
+                                  onClick={() => setDefaultVehicle.mutate(v.id)}
                                 >
-                                  <RefreshCw className="h-3.5 w-3.5" />
+                                  <Star className="mr-1.5 h-3.5 w-3.5" />
+                                  Set Default
                                 </Button>
-                              </Tooltip>
-                              <Tooltip content="Edit vehicle">
+                              )}
+                              {canManageMembers && (
                                 <Button
-                                  aria-label={`Edit ${v.display_name}`}
                                   variant="secondary"
                                   size="sm"
-                                  className="h-8 w-8 px-0"
-                                  onClick={() => startEditVehicle(v.id, v.battery_capacity_kwh)}
+                                  className="h-8 px-2.5"
+                                  onClick={() => {
+                                    setSharingVehicleId((current) => current === v.id ? null : v.id);
+                                    setShareEmail('');
+                                    setShareRole('viewer');
+                                  }}
                                 >
-                                  <Pencil className="h-3.5 w-3.5" />
+                                  <Users className="mr-1.5 h-3.5 w-3.5" />
+                                  {isSharingExpanded ? 'Hide Sharing' : 'Manage Sharing'}
                                 </Button>
-                              </Tooltip>
-                              <Tooltip content="Delete vehicle">
-                                <Button
-                                  aria-label={`Delete ${v.display_name}`}
-                                  variant="danger"
-                                  size="sm"
-                                  className="h-8 w-8 px-0"
-                                  onClick={() => { setDeleteConfirmId(v.id); setDeleteConfirmText(''); }}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
-                              </Tooltip>
+                              )}
+                              {canManageVehicle && (
+                                <Tooltip content="Refresh Rivian login">
+                                  <Button
+                                    aria-label={`Refresh Rivian login for ${v.display_name}`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className={[
+                                      'h-8 w-8 px-0',
+                                      needsReauth
+                                        ? 'border-[var(--rm-status-warning)] text-[var(--rm-status-warning)] hover:border-[var(--rm-status-warning)] hover:text-[var(--rm-status-warning)]'
+                                        : '',
+                                    ].join(' ')}
+                                    onClick={() => navigate({ to: '/connect', search: { mode: 'refresh', vehicle_id: v.id } })}
+                                  >
+                                    <RefreshCw className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
+                              {canManageVehicle && (
+                                <Tooltip content="Edit vehicle">
+                                  <Button
+                                    aria-label={`Edit ${v.display_name}`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="h-8 w-8 px-0"
+                                    onClick={() => startEditVehicle(v.id, v.battery_capacity_kwh)}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
+                              {membershipRole === 'owner' && (
+                                <Tooltip content="Delete vehicle">
+                                  <Button
+                                    aria-label={`Delete ${v.display_name}`}
+                                    variant="danger"
+                                    size="sm"
+                                    className="h-8 w-8 px-0"
+                                    onClick={() => { setDeleteConfirmId(v.id); setDeleteConfirmText(''); }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
                             </div>
                           </div>
 
@@ -651,6 +761,122 @@ export function SettingsContent() {
                                     Defaults can be overridden if your vehicle came with a different pack.
                                   </p>
                                 )}
+                              </div>
+                            </div>
+                          )}
+                          {isSharingExpanded && (
+                            <div className="mt-3 border-t border-border/70 pt-3">
+                              <div className="grid gap-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-medium text-fg">Vehicle Access</p>
+                                    <p className="text-xs text-fg-tertiary">
+                                      Owners can add existing Riviamigo users, adjust roles, and remove access.
+                                    </p>
+                                  </div>
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    loading={vehicleMembers.isFetching}
+                                    onClick={() => vehicleMembers.refetch()}
+                                  >
+                                    Refresh
+                                  </Button>
+                                </div>
+
+                                <div className="grid gap-2 rounded-xl border border-border bg-bg-elevated/35 p-3 md:grid-cols-[minmax(0,1.6fr)_11rem_auto]">
+                                  <input
+                                    value={shareEmail}
+                                    onChange={(event) => setShareEmail(event.target.value)}
+                                    placeholder="user@example.com"
+                                    className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
+                                  />
+                                  <select
+                                    value={shareRole}
+                                    onChange={(event) => setShareRole(event.target.value as VehicleMember['role'])}
+                                    className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
+                                  >
+                                    <option value="viewer">Viewer</option>
+                                    <option value="manager">Manager</option>
+                                    <option value="owner">Owner</option>
+                                  </select>
+                                  <Button
+                                    size="sm"
+                                    className="h-9"
+                                    loading={addVehicleMember.isPending}
+                                    disabled={!shareEmail.trim()}
+                                    onClick={() => addVehicleMember.mutate({ vehicleId: v.id, email: shareEmail.trim(), role: shareRole })}
+                                  >
+                                    Add Member
+                                  </Button>
+                                </div>
+
+                                <div className="grid gap-2">
+                                  {vehicleMembers.isLoading && (
+                                    <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-sm text-fg-tertiary">
+                                      Loading members...
+                                    </div>
+                                  )}
+                                  {!vehicleMembers.isLoading && (vehicleMembers.data?.length ?? 0) === 0 && (
+                                    <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-sm text-fg-tertiary">
+                                      No members found for this vehicle yet.
+                                    </div>
+                                  )}
+                                  {vehicleMembers.data?.map((member) => {
+                                    const isCurrentUser = member.user_id === me.data?.user_id;
+                                    return (
+                                      <div
+                                        key={member.user_id}
+                                        className="grid gap-2 rounded-xl border border-border bg-bg-elevated/25 p-3 md:grid-cols-[minmax(0,1fr)_10rem_auto]"
+                                      >
+                                        <div className="min-w-0">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <p className="truncate text-sm font-medium text-fg">{member.email}</p>
+                                            <Badge variant={membershipBadgeVariant(member.role)} size="sm">
+                                              {formatMembershipRole(member.role)}
+                                            </Badge>
+                                            {member.is_default && (
+                                              <Badge variant="success" size="sm">Default here</Badge>
+                                            )}
+                                            {isCurrentUser && (
+                                              <Badge variant="default" size="sm">You</Badge>
+                                            )}
+                                          </div>
+                                          <p className="mt-1 text-xs text-fg-tertiary">
+                                            Added {new Date(member.created_at).toLocaleDateString()}
+                                          </p>
+                                        </div>
+                                        <select
+                                          value={member.role}
+                                          onChange={(event) => updateVehicleMember.mutate({
+                                            vehicleId: v.id,
+                                            userId: member.user_id,
+                                            role: event.target.value as VehicleMember['role'],
+                                          })}
+                                          className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
+                                          disabled={updateVehicleMember.isPending}
+                                        >
+                                          <option value="viewer">Viewer</option>
+                                          <option value="manager">Manager</option>
+                                          <option value="owner">Owner</option>
+                                        </select>
+                                        <Button
+                                          variant="danger"
+                                          size="sm"
+                                          className="h-9"
+                                          loading={
+                                            removeVehicleMember.isPending
+                                            && removeVehicleMember.variables?.vehicleId === v.id
+                                            && removeVehicleMember.variables?.userId === member.user_id
+                                          }
+                                          onClick={() => removeVehicleMember.mutate({ vehicleId: v.id, userId: member.user_id })}
+                                        >
+                                          {isCurrentUser ? 'Remove Me' : 'Remove'}
+                                        </Button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </div>
                           )}

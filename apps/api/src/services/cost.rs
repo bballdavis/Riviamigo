@@ -11,8 +11,11 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::cost_profile::{
-    compute_cost, compute_tou_cost_from_readings, CostProfile, TimedEnergyPoint,
+use crate::{
+    db::vehicles::get_vehicle_owner_id,
+    models::cost_profile::{
+        compute_cost, compute_tou_cost_from_readings, CostProfile, TimedEnergyPoint,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,12 +166,21 @@ pub async fn resolve_profile(
     }
 
     // Tier 3: vehicle default
-    let profile_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT cost_profile_id FROM riviamigo.vehicles WHERE id = $1")
-            .bind(vehicle_id)
-            .fetch_optional(pool)
-            .await?
-            .flatten();
+    let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
+    let profile_id: Option<Uuid> = if let Some(owner_id) = owner_id {
+        sqlx::query_scalar(
+            "SELECT default_cost_profile_id
+             FROM riviamigo.vehicle_user_settings
+             WHERE vehicle_id = $1 AND user_id = $2",
+        )
+        .bind(vehicle_id)
+        .bind(owner_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten()
+    } else {
+        None
+    };
 
     if let Some(id) = profile_id {
         if let Some(p) = fetch_profile(pool, id).await? {
@@ -360,6 +372,32 @@ pub async fn recompute_charge_session_cost(
     .bind(result.cost_usd)
     .execute(pool)
     .await?;
+
+    if let Some(owner_id) = get_vehicle_owner_id(pool, session.vehicle_id).await? {
+        sqlx::query(
+            r#"INSERT INTO riviamigo.charge_session_user_annotations
+               (charge_session_id, user_id, geofence_id, is_home, cost_profile_id, cost_method, cost_usd, currency_code, computed_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 'USD', now())
+               ON CONFLICT (charge_session_id, user_id) DO UPDATE
+               SET geofence_id = COALESCE(EXCLUDED.geofence_id, riviamigo.charge_session_user_annotations.geofence_id),
+                   is_home = COALESCE(EXCLUDED.is_home, riviamigo.charge_session_user_annotations.is_home),
+                   cost_profile_id = EXCLUDED.cost_profile_id,
+                   cost_method = EXCLUDED.cost_method,
+                   cost_usd = EXCLUDED.cost_usd,
+                   currency_code = EXCLUDED.currency_code,
+                   computed_at = now(),
+                   updated_at = now()"#,
+        )
+        .bind(session.id)
+        .bind(owner_id)
+        .bind(session.geofence_id)
+        .bind(session.is_home)
+        .bind(result.cost_profile_id)
+        .bind(&result.cost_method)
+        .bind(result.cost_usd)
+        .execute(pool)
+        .await?;
+    }
 
     Ok(Some(result))
 }

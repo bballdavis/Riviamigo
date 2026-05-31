@@ -1345,6 +1345,204 @@ async fn write_telemetry(
         .bind(e.service_mode)
     .execute(pool)
     .await?;
+    upsert_latest_status(pool, e).await?;
+    Ok(())
+}
+
+async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"INSERT INTO riviamigo.vehicle_latest_status (
+             vehicle_id, ts, latitude, longitude, altitude_m, speed_mph,
+             battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+             power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+             drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
+             heading_deg, odometer_miles,
+             tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+             tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+             door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+             door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+             closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
+             closure_tailgate_locked, closure_tailgate_closed,
+             ota_current_version, ota_available_version, ota_status, ota_current_status,
+             hv_thermal_event, twelve_volt_health,
+             charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+             pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+             seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
+             tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+             window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+             gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
+             alarm_active, service_mode, updated_at
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+             $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
+             $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,
+             $51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
+             $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
+             $71,$72,$73,$74,$75,$76,$77,$78,now()
+           )
+           ON CONFLICT (vehicle_id) DO UPDATE SET
+             ts = GREATEST(EXCLUDED.ts, riviamigo.vehicle_latest_status.ts),
+             latitude = COALESCE(EXCLUDED.latitude, riviamigo.vehicle_latest_status.latitude),
+             longitude = COALESCE(EXCLUDED.longitude, riviamigo.vehicle_latest_status.longitude),
+             altitude_m = COALESCE(EXCLUDED.altitude_m, riviamigo.vehicle_latest_status.altitude_m),
+             speed_mph = COALESCE(EXCLUDED.speed_mph, riviamigo.vehicle_latest_status.speed_mph),
+             battery_level = COALESCE(EXCLUDED.battery_level, riviamigo.vehicle_latest_status.battery_level),
+             battery_capacity_wh = COALESCE(EXCLUDED.battery_capacity_wh, riviamigo.vehicle_latest_status.battery_capacity_wh),
+             distance_to_empty_mi = COALESCE(EXCLUDED.distance_to_empty_mi, riviamigo.vehicle_latest_status.distance_to_empty_mi),
+             battery_limit = COALESCE(EXCLUDED.battery_limit, riviamigo.vehicle_latest_status.battery_limit),
+             power_state = COALESCE(EXCLUDED.power_state, riviamigo.vehicle_latest_status.power_state),
+             charger_state = COALESCE(EXCLUDED.charger_state, riviamigo.vehicle_latest_status.charger_state),
+             charger_state_ts = COALESCE(EXCLUDED.charger_state_ts, riviamigo.vehicle_latest_status.charger_state_ts),
+             charger_status = COALESCE(EXCLUDED.charger_status, riviamigo.vehicle_latest_status.charger_status),
+             time_to_end_of_charge_min = COALESCE(EXCLUDED.time_to_end_of_charge_min, riviamigo.vehicle_latest_status.time_to_end_of_charge_min),
+             drive_mode = COALESCE(NULLIF(EXCLUDED.drive_mode, 'unknown'), riviamigo.vehicle_latest_status.drive_mode),
+             gear_status = COALESCE(EXCLUDED.gear_status, riviamigo.vehicle_latest_status.gear_status),
+             cabin_temp_c = COALESCE(EXCLUDED.cabin_temp_c, riviamigo.vehicle_latest_status.cabin_temp_c),
+             driver_temp_c = COALESCE(EXCLUDED.driver_temp_c, riviamigo.vehicle_latest_status.driver_temp_c),
+             outside_temp_c = COALESCE(EXCLUDED.outside_temp_c, riviamigo.vehicle_latest_status.outside_temp_c),
+             heading_deg = COALESCE(EXCLUDED.heading_deg, riviamigo.vehicle_latest_status.heading_deg),
+             odometer_miles = COALESCE(EXCLUDED.odometer_miles, riviamigo.vehicle_latest_status.odometer_miles),
+             tire_fl_psi = COALESCE(EXCLUDED.tire_fl_psi, riviamigo.vehicle_latest_status.tire_fl_psi),
+             tire_fr_psi = COALESCE(EXCLUDED.tire_fr_psi, riviamigo.vehicle_latest_status.tire_fr_psi),
+             tire_rl_psi = COALESCE(EXCLUDED.tire_rl_psi, riviamigo.vehicle_latest_status.tire_rl_psi),
+             tire_rr_psi = COALESCE(EXCLUDED.tire_rr_psi, riviamigo.vehicle_latest_status.tire_rr_psi),
+             tire_fl_status = COALESCE(EXCLUDED.tire_fl_status, riviamigo.vehicle_latest_status.tire_fl_status),
+             tire_fr_status = COALESCE(EXCLUDED.tire_fr_status, riviamigo.vehicle_latest_status.tire_fr_status),
+             tire_rl_status = COALESCE(EXCLUDED.tire_rl_status, riviamigo.vehicle_latest_status.tire_rl_status),
+             tire_rr_status = COALESCE(EXCLUDED.tire_rr_status, riviamigo.vehicle_latest_status.tire_rr_status),
+             door_front_left_locked = COALESCE(EXCLUDED.door_front_left_locked, riviamigo.vehicle_latest_status.door_front_left_locked),
+             door_front_right_locked = COALESCE(EXCLUDED.door_front_right_locked, riviamigo.vehicle_latest_status.door_front_right_locked),
+             door_rear_left_locked = COALESCE(EXCLUDED.door_rear_left_locked, riviamigo.vehicle_latest_status.door_rear_left_locked),
+             door_rear_right_locked = COALESCE(EXCLUDED.door_rear_right_locked, riviamigo.vehicle_latest_status.door_rear_right_locked),
+             door_front_left_closed = COALESCE(EXCLUDED.door_front_left_closed, riviamigo.vehicle_latest_status.door_front_left_closed),
+             door_front_right_closed = COALESCE(EXCLUDED.door_front_right_closed, riviamigo.vehicle_latest_status.door_front_right_closed),
+             door_rear_left_closed = COALESCE(EXCLUDED.door_rear_left_closed, riviamigo.vehicle_latest_status.door_rear_left_closed),
+             door_rear_right_closed = COALESCE(EXCLUDED.door_rear_right_closed, riviamigo.vehicle_latest_status.door_rear_right_closed),
+             closure_frunk_locked = COALESCE(EXCLUDED.closure_frunk_locked, riviamigo.vehicle_latest_status.closure_frunk_locked),
+             closure_frunk_closed = COALESCE(EXCLUDED.closure_frunk_closed, riviamigo.vehicle_latest_status.closure_frunk_closed),
+             closure_liftgate_locked = COALESCE(EXCLUDED.closure_liftgate_locked, riviamigo.vehicle_latest_status.closure_liftgate_locked),
+             closure_liftgate_closed = COALESCE(EXCLUDED.closure_liftgate_closed, riviamigo.vehicle_latest_status.closure_liftgate_closed),
+             closure_tailgate_locked = COALESCE(EXCLUDED.closure_tailgate_locked, riviamigo.vehicle_latest_status.closure_tailgate_locked),
+             closure_tailgate_closed = COALESCE(EXCLUDED.closure_tailgate_closed, riviamigo.vehicle_latest_status.closure_tailgate_closed),
+             ota_current_version = COALESCE(EXCLUDED.ota_current_version, riviamigo.vehicle_latest_status.ota_current_version),
+             ota_available_version = COALESCE(EXCLUDED.ota_available_version, riviamigo.vehicle_latest_status.ota_available_version),
+             ota_status = COALESCE(EXCLUDED.ota_status, riviamigo.vehicle_latest_status.ota_status),
+             ota_current_status = COALESCE(EXCLUDED.ota_current_status, riviamigo.vehicle_latest_status.ota_current_status),
+             hv_thermal_event = COALESCE(EXCLUDED.hv_thermal_event, riviamigo.vehicle_latest_status.hv_thermal_event),
+             twelve_volt_health = COALESCE(EXCLUDED.twelve_volt_health, riviamigo.vehicle_latest_status.twelve_volt_health),
+             charge_port_open = COALESCE(EXCLUDED.charge_port_open, riviamigo.vehicle_latest_status.charge_port_open),
+             charger_derate_active = COALESCE(EXCLUDED.charger_derate_active, riviamigo.vehicle_latest_status.charger_derate_active),
+             cabin_precon_status = COALESCE(EXCLUDED.cabin_precon_status, riviamigo.vehicle_latest_status.cabin_precon_status),
+             cabin_precon_type = COALESCE(EXCLUDED.cabin_precon_type, riviamigo.vehicle_latest_status.cabin_precon_type),
+             pet_mode_active = COALESCE(EXCLUDED.pet_mode_active, riviamigo.vehicle_latest_status.pet_mode_active),
+             pet_mode_temp_ok = COALESCE(EXCLUDED.pet_mode_temp_ok, riviamigo.vehicle_latest_status.pet_mode_temp_ok),
+             defrost_active = COALESCE(EXCLUDED.defrost_active, riviamigo.vehicle_latest_status.defrost_active),
+             steering_wheel_heat = COALESCE(EXCLUDED.steering_wheel_heat, riviamigo.vehicle_latest_status.steering_wheel_heat),
+             seat_fl_heat = COALESCE(EXCLUDED.seat_fl_heat, riviamigo.vehicle_latest_status.seat_fl_heat),
+             seat_fr_heat = COALESCE(EXCLUDED.seat_fr_heat, riviamigo.vehicle_latest_status.seat_fr_heat),
+             seat_rl_heat = COALESCE(EXCLUDED.seat_rl_heat, riviamigo.vehicle_latest_status.seat_rl_heat),
+             seat_rr_heat = COALESCE(EXCLUDED.seat_rr_heat, riviamigo.vehicle_latest_status.seat_rr_heat),
+             seat_fl_vent = COALESCE(EXCLUDED.seat_fl_vent, riviamigo.vehicle_latest_status.seat_fl_vent),
+             seat_fr_vent = COALESCE(EXCLUDED.seat_fr_vent, riviamigo.vehicle_latest_status.seat_fr_vent),
+             tonneau_locked = COALESCE(EXCLUDED.tonneau_locked, riviamigo.vehicle_latest_status.tonneau_locked),
+             tonneau_closed = COALESCE(EXCLUDED.tonneau_closed, riviamigo.vehicle_latest_status.tonneau_closed),
+             side_bin_left_locked = COALESCE(EXCLUDED.side_bin_left_locked, riviamigo.vehicle_latest_status.side_bin_left_locked),
+             side_bin_right_locked = COALESCE(EXCLUDED.side_bin_right_locked, riviamigo.vehicle_latest_status.side_bin_right_locked),
+             window_fl_closed = COALESCE(EXCLUDED.window_fl_closed, riviamigo.vehicle_latest_status.window_fl_closed),
+             window_fr_closed = COALESCE(EXCLUDED.window_fr_closed, riviamigo.vehicle_latest_status.window_fr_closed),
+             window_rl_closed = COALESCE(EXCLUDED.window_rl_closed, riviamigo.vehicle_latest_status.window_rl_closed),
+             window_rr_closed = COALESCE(EXCLUDED.window_rr_closed, riviamigo.vehicle_latest_status.window_rr_closed),
+             gear_guard_locked = COALESCE(EXCLUDED.gear_guard_locked, riviamigo.vehicle_latest_status.gear_guard_locked),
+             gear_guard_video_status = COALESCE(EXCLUDED.gear_guard_video_status, riviamigo.vehicle_latest_status.gear_guard_video_status),
+             wiper_fluid_low = COALESCE(EXCLUDED.wiper_fluid_low, riviamigo.vehicle_latest_status.wiper_fluid_low),
+             brake_fluid_low = COALESCE(EXCLUDED.brake_fluid_low, riviamigo.vehicle_latest_status.brake_fluid_low),
+             alarm_active = COALESCE(EXCLUDED.alarm_active, riviamigo.vehicle_latest_status.alarm_active),
+             service_mode = COALESCE(EXCLUDED.service_mode, riviamigo.vehicle_latest_status.service_mode),
+             updated_at = now()"#,
+    )
+    .bind(e.vehicle_id)
+    .bind(e.ts)
+    .bind(e.latitude)
+    .bind(e.longitude)
+    .bind(e.altitude_m)
+    .bind(e.speed_mph)
+    .bind(e.battery_level)
+    .bind(e.battery_capacity_wh)
+    .bind(e.distance_to_empty_mi)
+    .bind(e.battery_limit)
+    .bind(e.power_state.as_ref().map(|p| format!("{p:?}").to_lowercase()))
+    .bind(e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()))
+    .bind(e.charger_state.as_ref().map(|_| e.ts))
+    .bind(&e.charger_status)
+    .bind(e.time_to_end_of_charge_min)
+    .bind(e.drive_mode.as_ref().map(|d| d.as_str()))
+    .bind(&e.gear_status)
+    .bind(e.cabin_temp_c)
+    .bind(e.driver_temp_c)
+    .bind(e.outside_temp_c)
+    .bind(e.heading_deg)
+    .bind(e.odometer_miles)
+    .bind(e.tire_fl_psi)
+    .bind(e.tire_fr_psi)
+    .bind(e.tire_rl_psi)
+    .bind(e.tire_rr_psi)
+    .bind(&e.tire_fl_status)
+    .bind(&e.tire_fr_status)
+    .bind(&e.tire_rl_status)
+    .bind(&e.tire_rr_status)
+    .bind(e.door_front_left_locked)
+    .bind(e.door_front_right_locked)
+    .bind(e.door_rear_left_locked)
+    .bind(e.door_rear_right_locked)
+    .bind(e.door_front_left_closed)
+    .bind(e.door_front_right_closed)
+    .bind(e.door_rear_left_closed)
+    .bind(e.door_rear_right_closed)
+    .bind(e.closure_frunk_locked)
+    .bind(e.closure_frunk_closed)
+    .bind(e.closure_liftgate_locked)
+    .bind(e.closure_liftgate_closed)
+    .bind(e.closure_tailgate_locked)
+    .bind(e.closure_tailgate_closed)
+    .bind(&e.ota_current_version)
+    .bind(&e.ota_available_version)
+    .bind(&e.ota_status)
+    .bind(&e.ota_current_status)
+    .bind(&e.hv_thermal_event)
+    .bind(&e.twelve_volt_health)
+    .bind(e.charge_port_open)
+    .bind(e.charger_derate_active)
+    .bind(&e.cabin_precon_status)
+    .bind(&e.cabin_precon_type)
+    .bind(e.pet_mode_active)
+    .bind(e.pet_mode_temp_ok)
+    .bind(e.defrost_active)
+    .bind(e.steering_wheel_heat)
+    .bind(e.seat_fl_heat)
+    .bind(e.seat_fr_heat)
+    .bind(e.seat_rl_heat)
+    .bind(e.seat_rr_heat)
+    .bind(e.seat_fl_vent)
+    .bind(e.seat_fr_vent)
+    .bind(e.tonneau_locked)
+    .bind(e.tonneau_closed)
+    .bind(e.side_bin_left_locked)
+    .bind(e.side_bin_right_locked)
+    .bind(e.window_fl_closed)
+    .bind(e.window_fr_closed)
+    .bind(e.window_rl_closed)
+    .bind(e.window_rr_closed)
+    .bind(e.gear_guard_locked)
+    .bind(&e.gear_guard_video_status)
+    .bind(e.wiper_fluid_low)
+    .bind(e.brake_fluid_low)
+    .bind(e.alarm_active)
+    .bind(e.service_mode)
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -1658,9 +1856,33 @@ async fn persist_trip(
         .bind(outside_temp_c)
         .bind(trip.regen_wh)
         .bind(energy_wh)
-        .bind(energy_strategy.as_deref())
+    .bind(energy_strategy.as_deref())
     .execute(pool)
     .await?;
+
+    if let Some(user_id) = owner_id {
+        sqlx::query(
+            r#"INSERT INTO riviamigo.trip_user_annotations
+               (trip_id, user_id, start_geofence_id, end_geofence_id, start_address_id, end_address_id, matched_at)
+               VALUES ($1, $2, $3, $4, $5, $6, now())
+               ON CONFLICT (trip_id, user_id) DO UPDATE
+               SET start_geofence_id = EXCLUDED.start_geofence_id,
+                   end_geofence_id = EXCLUDED.end_geofence_id,
+                   start_address_id = EXCLUDED.start_address_id,
+                   end_address_id = EXCLUDED.end_address_id,
+                   matched_at = now(),
+                   updated_at = now()"#,
+        )
+        .bind(trip.trip_id)
+        .bind(user_id)
+        .bind(start_match.geofence_id)
+        .bind(end_match.geofence_id)
+        .bind(start_match.address_id)
+        .bind(end_match.address_id)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -1714,6 +1936,28 @@ async fn persist_charge_session(
     .bind(session.charger_type.as_deref())
     .execute(pool)
     .await?;
+
+    if let Some(user_id) = owner_id {
+        sqlx::query(
+            r#"INSERT INTO riviamigo.charge_session_user_annotations
+               (charge_session_id, user_id, geofence_id, address_id, is_home, computed_at)
+               VALUES ($1, $2, $3, $4, $5, now())
+               ON CONFLICT (charge_session_id, user_id) DO UPDATE
+               SET geofence_id = EXCLUDED.geofence_id,
+                   address_id = EXCLUDED.address_id,
+                   is_home = EXCLUDED.is_home,
+                   computed_at = now(),
+                   updated_at = now()"#,
+        )
+        .bind(session.session_id)
+        .bind(user_id)
+        .bind(location_match.geofence_id)
+        .bind(location_match.address_id)
+        .bind(location_match.is_home)
+        .execute(pool)
+        .await?;
+    }
+
     let _ = recompute_charge_session_cost(pool, session.session_id).await?;
     Ok(())
 }
