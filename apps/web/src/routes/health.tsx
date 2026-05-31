@@ -100,31 +100,33 @@ function VehicleHealthContent() {
           <>
             <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
               <Card
-                className="overflow-hidden border-accent/20"
+                className="overflow-hidden border-accent/20 p-3"
                 style={{ background: 'radial-gradient(circle at 18% 0%, color-mix(in oklab, var(--rm-accent) 18%, transparent) 32%, transparent), var(--rm-bg-surface)' }}
               >
-                <div className="flex flex-col gap-3">
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-                    <div className="flex h-full min-h-[15rem] flex-col">
+                <div className="flex flex-col gap-2">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-1">
+                    <div className="flex h-full min-h-[14.5rem] flex-col pb-1">
                       <div className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-accent-muted px-2 py-0.5 text-xs font-medium text-accent">
                         <HeartPulse className="h-3.5 w-3.5" />
-                        Health overview
+                        Health Overview
                       </div>
-                      <h2 className="mt-3 font-display text-3xl font-semibold tracking-tight text-fg">{vehicleName}</h2>
-                      <p className="mt-1 text-sm text-fg-secondary">{displayModel || 'Vehicle identity pending telemetry'}</p>
                       <div className="mt-auto">
-                        {data?.vehicle?.vin ? <p className="font-mono text-xs text-fg-tertiary">VIN {data.vehicle?.vin}</p> : null}
+                        <h2 className="font-display text-4xl font-semibold tracking-tight text-fg">{vehicleName}</h2>
+                        <p className="mt-1 text-lg text-fg-secondary">{displayModel || 'Vehicle identity pending telemetry'}</p>
+                        {data?.vehicle?.vin ? <p className="mt-1 font-mono text-sm text-fg-tertiary">VIN {data.vehicle?.vin}</p> : null}
                       </div>
                     </div>
                     {heroImageUrl ? (
-                      <img
-                        src={heroImageUrl}
-                        alt="Vehicle three-quarter view"
-                        className="h-60 w-[26rem] shrink-0 self-start object-contain lg:h-72 lg:w-[34rem]"
-                      />
+                      <div className="relative h-56 w-[24rem] shrink-0 overflow-hidden lg:h-64 lg:w-[30rem]">
+                        <img
+                          src={heroImageUrl}
+                          alt="Vehicle three-quarter view"
+                          className="absolute -right-2 -top-3 h-[110%] w-[110%] object-contain object-right-bottom lg:-right-3 lg:-top-4"
+                        />
+                      </div>
                     ) : null}
                   </div>
-                  <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="grid w-full grid-cols-4 gap-3">
                     <HeroMetric label="Collector" state={collector} kind="collector" />
                     <HeroMetric label="12V" state={twelveVolt} kind="battery" />
                     <HeroMetric label="Thermal" state={thermal} kind="thermal" />
@@ -351,17 +353,17 @@ function HeroMetric({ label, state, kind }: { label: string; state: HealthState;
   const leading = getHeroLeadingIcon(kind);
 
   return (
-    <Tooltip content={`${label}: ${state.label}`}>
-      <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-border bg-bg-glass px-3 py-2.5">
-        <span className="inline-flex min-w-0 items-center gap-1.5">
-          <span className="text-fg-tertiary">{leading}</span>
-          <span className="truncate text-[11px] font-semibold uppercase tracking-wider text-fg-tertiary">{label}</span>
-        </span>
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-bg-elevated text-fg-tertiary">
-          {indicator}
-        </span>
-      </div>
-    </Tooltip>
+    <div
+      className="flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-border bg-bg-glass px-3 py-2.5"
+      title={`${label}: ${state.label}`}
+      aria-label={`${label}: ${state.label}`}
+    >
+      <span className="inline-flex min-w-0 items-center gap-1.5">
+        <span className="text-fg-tertiary">{leading}</span>
+        <span className="truncate text-[13px] font-semibold uppercase tracking-wider text-fg-tertiary">{label}</span>
+      </span>
+      <span className="shrink-0 text-fg-tertiary">{indicator}</span>
+    </div>
   );
 }
 
@@ -664,30 +666,32 @@ function sanitizeUpdateVersion(version: string | null, currentVersion: string) {
 function selectHealthHeroImage(images: VehicleImages | undefined) {
   if (!images) return null;
   const all = images.all ?? [];
-  const directThreeQuarter = all.find((image) => {
-    const url = image.url?.toLowerCase() ?? '';
-    return url.includes('three_quarter_light') || url.includes('three_quarters_light');
-  });
-  if (directThreeQuarter?.url) return directThreeQuarter.url;
-  const darkThreeQuarter = all.find((image) => {
-    const url = image.url?.toLowerCase() ?? '';
-    return url.includes('three_quarter_dark') || url.includes('three_quarters_dark');
-  });
-  if (darkThreeQuarter?.url) return darkThreeQuarter.url;
-
-  const fromMeta = all.find((image) => {
-    const target = `${image.placement ?? ''} ${image.design ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
-    return (target.includes('three_quarter') || target.includes('three_quarters')) && target.includes('light');
-  });
-  if (fromMeta?.url) return fromMeta.url;
-
-  const anyThreeQuarter = all.find((image) => {
-    const target = `${image.url ?? ''} ${image.placement ?? ''} ${image.design ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
-    return target.includes('three_quarter') || target.includes('three_quarters');
-  });
-  if (anyThreeQuarter?.url) return anyThreeQuarter.url;
+  const scored = all
+    .map((image) => ({ image, score: scoreHealthHeroImage(image) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (scored[0]?.image.url) return scored[0].image.url;
 
   return images.side?.light ?? images.side?.dark ?? all.find((image) => String(image.placement ?? '').toLowerCase().includes('side'))?.url ?? null;
+}
+
+function scoreHealthHeroImage(image: VehicleImages['all'][number]) {
+  const url = (image.url ?? '').toLowerCase();
+  const placement = (image.placement ?? '').toLowerCase();
+  const design = (image.design ?? '').toLowerCase();
+  const meta = JSON.stringify(image.metadata ?? {}).toLowerCase();
+  const text = `${url} ${placement} ${design} ${meta}`;
+
+  let score = 0;
+  if (text.includes('three_quarter') || text.includes('three-quarters') || text.includes('three_quarters') || text.includes('3/4')) score += 120;
+  if (placement.includes('three') || placement.includes('quarter')) score += 80;
+  if (design.includes('light')) score += 15;
+  if (text.includes('front') && text.includes('side')) score += 60;
+  if (text.includes('angle')) score += 20;
+  if (placement.includes('side') && !text.includes('three')) score -= 80;
+  if (placement.includes('overhead') || placement.includes('top')) score -= 120;
+  if (placement.includes('rear')) score -= 60;
+  return score;
 }
 
 function dedupeSoftwareHistory(entries: import('@riviamigo/types').VehicleHealthSoftwareEntry[]) {
@@ -717,37 +721,37 @@ function dedupeSoftwareHistory(entries: import('@riviamigo/types').VehicleHealth
 function getHeroStateIcon(label: string, state: HealthState) {
   const lower = label.toLowerCase();
   if (lower.includes('collector')) {
-    if (state.variant === 'success') return <Cable className="h-4 w-4 text-status-positive" />;
-    if (state.variant === 'danger') return <Link2Off className="h-4 w-4 text-status-critical" />;
-    return <Radio className="h-4 w-4" />;
+    if (state.variant === 'success') return <Cable className="h-5 w-5 text-status-positive" />;
+    if (state.variant === 'danger') return <Link2Off className="h-5 w-5 text-status-critical" />;
+    return <Radio className="h-5 w-5" />;
   }
   if (lower.includes('12v')) {
-    if (state.variant === 'success') return <CheckCircle2 className="h-4 w-4 text-status-positive" />;
-    if (state.variant === 'danger' || state.variant === 'warning') return <BatteryWarning className="h-4 w-4 text-status-warning" />;
-    return <BatteryWarning className="h-4 w-4" />;
+    if (state.variant === 'success') return <CheckCircle2 className="h-5 w-5 text-status-positive" />;
+    if (state.variant === 'danger' || state.variant === 'warning') return <BatteryWarning className="h-5 w-5 text-status-warning" />;
+    return <BatteryWarning className="h-5 w-5" />;
   }
   if (lower.includes('thermal')) {
-    if (state.variant === 'success') return <CheckCircle2 className="h-4 w-4 text-status-positive" />;
-    if (state.variant === 'danger' || state.variant === 'warning') return <TriangleAlert className="h-4 w-4 text-status-warning" />;
-    return <Gauge className="h-4 w-4" />;
+    if (state.variant === 'success') return <CheckCircle2 className="h-5 w-5 text-status-positive" />;
+    if (state.variant === 'danger' || state.variant === 'warning') return <TriangleAlert className="h-5 w-5 text-status-warning" />;
+    return <Gauge className="h-5 w-5" />;
   }
   if (lower.includes('tires')) {
-    if (state.variant === 'success') return <CheckCircle2 className="h-4 w-4 text-status-positive" />;
-    if (state.variant === 'danger' || state.variant === 'warning') return <TriangleAlert className="h-4 w-4 text-status-warning" />;
-    return <CheckCircle2 className="h-4 w-4" />;
+    if (state.variant === 'success') return <CheckCircle2 className="h-5 w-5 text-status-positive" />;
+    if (state.variant === 'danger' || state.variant === 'warning') return <TriangleAlert className="h-5 w-5 text-status-warning" />;
+    return <CheckCircle2 className="h-5 w-5" />;
   }
   return iconFallback(state);
 }
 
 function iconFallback(state: HealthState) {
-  if (state.variant === 'success') return <CheckCircle2 className="h-4 w-4" />;
-  if (state.variant === 'danger' || state.variant === 'warning') return <TriangleAlert className="h-4 w-4" />;
-  return <CircleAlert className="h-4 w-4" />;
+  if (state.variant === 'success') return <CheckCircle2 className="h-5 w-5" />;
+  if (state.variant === 'danger' || state.variant === 'warning') return <TriangleAlert className="h-5 w-5" />;
+  return <CircleAlert className="h-5 w-5" />;
 }
 
 function getHeroLeadingIcon(kind: 'collector' | 'battery' | 'thermal' | 'tires') {
-  if (kind === 'collector') return <Radio className="h-3.5 w-3.5" />;
-  if (kind === 'battery') return <BatteryWarning className="h-3.5 w-3.5" />;
-  if (kind === 'thermal') return <Gauge className="h-3.5 w-3.5" />;
-  return <LockKeyhole className="h-3.5 w-3.5" />;
+  if (kind === 'collector') return <Radio className="h-5 w-5" />;
+  if (kind === 'battery') return <BatteryWarning className="h-5 w-5" />;
+  if (kind === 'thermal') return <Gauge className="h-5 w-5" />;
+  return <LockKeyhole className="h-5 w-5" />;
 }

@@ -107,9 +107,18 @@ const HealthContent = healthRoute.options.component as React.ComponentType;
 
 describe('/health page cleanup', () => {
   it('renders the hero three-quarter image and software release notes link with no fake update banner', () => {
+    mockUseQuery.mockReturnValueOnce({
+      data: {
+        all: [
+          { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png' },
+          { placement: 'front_side', design: 'light', size: null, resolution: null, url: 'https://example.com/three-quarter.png', metadata: { angle: '3/4' } },
+        ],
+        side: { light: 'https://example.com/side.png', dark: null },
+      },
+    });
     render(<HealthContent />);
     const image = screen.getByAltText('Vehicle three-quarter view');
-    expect(image).toHaveAttribute('src', 'https://example.com/three_quarter_light.png');
+    expect(image).toHaveAttribute('src', 'https://example.com/three-quarter.png');
     expect(screen.getByRole('link', { name: 'View release notes' })).toBeInTheDocument();
     expect(screen.queryByText(/Update .* available/)).not.toBeInTheDocument();
   });
