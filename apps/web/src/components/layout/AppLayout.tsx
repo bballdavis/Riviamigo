@@ -2,10 +2,11 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle, DEFAULT_NAV_ITEMS, type NavItem } from '@riviamigo/ui/primitives';
 import { getUnitSystem } from '@riviamigo/ui/lib/utils';
-import { useAuth, useCurrentVehicleStatus, useVehicleStatus } from '@riviamigo/hooks';
+import { useAuth, useCurrentVehicleStatus, useVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { Loader2, LogOut, Settings, Wifi, WifiOff } from 'lucide-react';
-import { Moon } from 'lucide-react';
-import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff } from 'react-icons/tb';
+import { GiRestingVampire } from 'react-icons/gi';
+import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff, TbCarSuv } from 'react-icons/tb';
+import { FaTruckPickup } from 'react-icons/fa6';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -25,6 +26,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const accessToken = useAuth((s) => s.accessToken);
   const defaultVehicleId = useAuth((s) => s.defaultVehicleId);
   const logout = useAuth((s) => s.logout);
+  const { data: vehicles = [] } = useVehicles();
   const { status: liveStatus, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
   const { data: currentStatus } = useCurrentVehicleStatus(defaultVehicleId);
   const status = currentStatus ?? liveStatus;
@@ -96,11 +98,19 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const collapsedFooterRow = '-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[24px_24px] items-center justify-between';
   const collapsedFooterCell = 'flex h-8 w-6 items-center justify-center';
   const sidebarItems = React.useMemo<NavItem[]>(() => {
+    const firstVehicleModel = vehicles[0]?.model?.toUpperCase() ?? '';
+    const overviewIcon = firstVehicleModel.includes('R1T')
+      ? <FaTruckPickup className="h-[1.125rem] w-[1.125rem]" />
+      : <TbCarSuv className="h-[1.125rem] w-[1.125rem]" />;
     const inBatterySection = activeKey === 'battery' || activeKey.startsWith('battery.');
-    if (!inBatterySection) return DEFAULT_NAV_ITEMS;
-
     return DEFAULT_NAV_ITEMS.map((item) => {
-      if (item.key !== 'battery') return item;
+      if (item.key === 'dashboard') {
+        return {
+          ...item,
+          icon: overviewIcon,
+        };
+      }
+      if (item.key !== 'battery' || !inBatterySection) return item;
       return {
         ...item,
         children: [
@@ -108,12 +118,12 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
             key: 'battery.phantom-drain',
             label: 'Phantom Drain',
             href: '/battery/phantom-drain',
-            icon: <Moon className="h-3.5 w-3.5" />,
+            icon: <GiRestingVampire className="h-3.5 w-3.5" />,
           },
         ],
       };
     });
-  }, [activeKey]);
+  }, [activeKey, vehicles]);
 
   async function handleLogout() {
     await logout();

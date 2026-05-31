@@ -1,6 +1,7 @@
 import { rootRoute } from './routes/__root';
 import { indexRoute } from './routes/index';
 import { batteryRoute } from './routes/battery';
+import { batteryPhantomDrainRoute } from './routes/battery.phantom-drain';
 import { tripsRoute } from './routes/trips';
 import { tripDetailRoute } from './routes/trips.$tripId';
 import { chargingRoute } from './routes/charging';
@@ -17,6 +18,7 @@ import { adminDashboardsRoute } from './routes/admin.dashboards';
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   batteryRoute,
+  batteryPhantomDrainRoute,
   tripsRoute,
   tripDetailRoute,
   chargingRoute,

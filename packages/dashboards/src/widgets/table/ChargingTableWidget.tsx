@@ -123,39 +123,25 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
   const deferredSearch = React.useDeferredValue(search);
+  const normalizedSearch = deferredSearch.trim();
   const isMobile = useIsMobile();
-  // Load all sessions (large limit) for client-side filtering
-  const { data, isLoading } = useChargeSessions(ctx.vehicleId, ctx.from, ctx.to, 1, 300);
-  const allSessions = (data?.items ?? []) as unknown as ChargeSessionRow[];
-
-  // Filter sessions by location name
-  const filteredSessions = React.useMemo(() => {
-    if (!deferredSearch.trim()) return allSessions;
-    const q = deferredSearch.toLowerCase();
-    return allSessions.filter((s) =>
-      (s.location_name ?? '').toLowerCase().includes(q)
-    );
-  }, [allSessions, deferredSearch]);
-
-  // Paginate filtered results
-  const totalPages = Math.ceil(filteredSessions.length / pageSize);
-  const paginatedSessions = React.useMemo(() => {
-    const startIdx = (page - 1) * pageSize;
-    return filteredSessions.slice(startIdx, startIdx + pageSize);
-  }, [filteredSessions, page, pageSize]);
+  const { data, isLoading } = useChargeSessions(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, normalizedSearch);
+  const sessions = (data?.items ?? []) as unknown as ChargeSessionRow[];
+  const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
+  const totalSessions = data?.total ?? 0;
 
   React.useEffect(() => {
     setPage(1);
-  }, [ctx.from, ctx.to, ctx.vehicleId, deferredSearch, pageSize]);
+  }, [ctx.from, ctx.to, ctx.vehicleId, normalizedSearch, pageSize]);
 
   function handleRowClick(row: Row<ChargeSessionRow>) {
     navigate({ to: '/charging/$sessionId', params: { sessionId: row.original.id } });
   }
 
-  const pagination = filteredSessions.length > 0 ? (
+  const pagination = totalSessions > 0 ? (
     <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
       <p className="text-xs text-fg-tertiary">
-        Page {page} of {Math.max(totalPages, 1)} · {filteredSessions.length} session{filteredSessions.length === 1 ? '' : 's'}
+        Page {page} of {Math.max(totalPages, 1)} · {totalSessions} session{totalSessions === 1 ? '' : 's'}
       </p>
       <div className="flex gap-2">
         <button
@@ -214,9 +200,9 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
             ? Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="h-16 animate-pulse rounded-xl border border-border bg-bg-elevated/60" />
               ))
-            : paginatedSessions.length === 0
+            : sessions.length === 0
             ? <p className="py-4 text-center text-xs text-fg-tertiary">{search ? 'No sessions match that location.' : 'No charging sessions found'}</p>
-            : paginatedSessions.map((session) => (
+            : sessions.map((session) => (
                 <ChargeSessionCard
                   key={session.id}
                   session={session}
@@ -228,7 +214,7 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
       ) : (
         <div className="min-h-0 flex-1 overflow-hidden">
           <DataTable
-            data={paginatedSessions}
+            data={sessions}
             columns={chargingColumns}
             loading={isLoading}
             loadingRows={pageSize}

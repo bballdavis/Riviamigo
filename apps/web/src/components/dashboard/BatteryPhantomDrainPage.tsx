@@ -1,11 +1,12 @@
 import React from 'react';
 import { usePhantomDrainPeriods } from '@riviamigo/hooks';
+import type { PhantomDrainPeriod } from '@riviamigo/types';
 import { DataTable, phantomDrainColumns } from '@riviamigo/ui/tables';
 import { formatKwh, formatPercent } from '@riviamigo/ui/lib/utils';
 import { DashboardPageShell, type DashboardPageShellRenderState } from './DashboardPageShell';
 import type { DashboardPageProps } from './DashboardPage';
 
-function summarizePeriods(periods: ReturnType<typeof usePhantomDrainPeriods>['data'] extends { periods: infer T } ? T : never) {
+function summarizePeriods(periods: PhantomDrainPeriod[]) {
   const maxDrainPct = periods.reduce((max, period) => {
     if (period.soc_lost_pct == null || Number.isNaN(period.soc_lost_pct)) return max;
     return Math.max(max, period.soc_lost_pct);

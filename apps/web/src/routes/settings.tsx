@@ -3,8 +3,16 @@ import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
 import { api, useAuth, useVehicles } from '@riviamigo/hooks';
-import type { ApiAccessLevel, VehicleImages } from '@riviamigo/types';
-import { formatMiles, formatPressure, formatTemp, getUnitSystem, setUnitSystem as saveUnitSystem, type UnitSystem } from '@riviamigo/ui/lib/utils';
+import type { ApiAccessLevel, UnitPreferences, VehicleImages } from '@riviamigo/types';
+import {
+  formatMiles,
+  formatPressure,
+  formatTemp,
+  getUnitPreferences,
+  setUnitPreferences,
+  type UnitMode,
+  type UnitSystem,
+} from '@riviamigo/ui/lib/utils';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
   Button, Badge, ThemeToggle, Tooltip,
@@ -67,6 +75,32 @@ const accessLevels: Array<{
   { value: 'admin', label: 'Admin', copy: 'Admin routes. Creation requires an admin user.' },
 ];
 
+const IMPERIAL_UNITS: UnitPreferences = {
+  mode: 'imperial',
+  distance_unit: 'miles',
+  speed_unit: 'mph',
+  temperature_unit: 'fahrenheit',
+  pressure_unit: 'psi',
+  altitude_unit: 'feet',
+  place_radius_unit: 'feet',
+  efficiency_display: 'distance_per_energy',
+};
+
+const METRIC_UNITS: UnitPreferences = {
+  mode: 'metric',
+  distance_unit: 'kilometers',
+  speed_unit: 'kmh',
+  temperature_unit: 'celsius',
+  pressure_unit: 'kpa',
+  altitude_unit: 'meters',
+  place_radius_unit: 'meters',
+  efficiency_display: 'distance_per_energy',
+};
+
+function unitSystemFromPrefs(prefs: UnitPreferences): UnitSystem {
+  return prefs.distance_unit === 'kilometers' ? 'metric' : 'imperial';
+}
+
 function formatRawNumber(value: number | null | undefined, unit = '') {
   return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : '-';
 }
@@ -125,7 +159,9 @@ export function SettingsContent() {
   const [apiAccessLevel, setApiAccessLevel] = React.useState<ApiAccessLevel>('view');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
   const [rawVehicleId, setRawVehicleId] = React.useState('');
-  const [unitSystem, setUnitSystemState] = React.useState<UnitSystem>(() => getUnitSystem());
+  const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
+  const unitSystem = unitSystemFromPrefs(unitPreferences);
+  const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
   const [rawTableView, setRawTableView] = React.useState<'table' | 'json'>('table');
   const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
   const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
@@ -159,6 +195,18 @@ export function SettingsContent() {
     queryFn: () => api.getRivianStewardship(),
     enabled: activeSection === 'raw' && isAdmin,
   });
+
+  const unitPreferencesQuery = useQuery({
+    queryKey: ['unit-preferences'],
+    queryFn: () => api.getUnitPreferences(),
+  });
+
+  React.useEffect(() => {
+    const next = unitPreferencesQuery.data?.units;
+    if (!next) return;
+    setUnitPreferencesState(next);
+    setUnitPreferences(next);
+  }, [unitPreferencesQuery.data]);
 
   React.useEffect(() => {
     if (!apiKeyVehicleId && vehicles?.[0]?.id) {
@@ -222,6 +270,15 @@ export function SettingsContent() {
     },
   });
 
+  const updateUnitPreferences = useMutation({
+    mutationFn: (units: UnitPreferences) => api.updateUnitPreferences(units),
+    onSuccess: (result) => {
+      setUnitPreferencesState(result.units);
+      setUnitPreferences(result.units);
+      queryClient.invalidateQueries({ queryKey: ['unit-preferences'] });
+    },
+  });
+
   function startEditVehicle(vehicleId: string, currentKwh: number | null | undefined) {
     setEditingBatteryVehicleId(vehicleId);
     const vehicle = vehicles?.find((v) => v.id === vehicleId);
@@ -282,9 +339,23 @@ export function SettingsContent() {
     if (createdKey) await navigator.clipboard.writeText(createdKey);
   }
 
-  function handleUnitSystemChange(next: UnitSystem) {
-    saveUnitSystem(next);
-    setUnitSystemState(next);
+  function handleUnitModeChange(nextMode: UnitMode) {
+    const next =
+      nextMode === 'imperial'
+        ? { ...IMPERIAL_UNITS }
+        : nextMode === 'metric'
+          ? { ...METRIC_UNITS }
+          : { ...unitPreferences, mode: 'custom' as const };
+    setUnitPreferencesState(next);
+    setUnitPreferences(next);
+    updateUnitPreferences.mutate(next);
+  }
+
+  function handleCustomUnitChange<K extends keyof UnitPreferences>(key: K, value: UnitPreferences[K]) {
+    const next: UnitPreferences = { ...unitPreferences, mode: 'custom', [key]: value };
+    setUnitPreferencesState(next);
+    setUnitPreferences(next);
+    updateUnitPreferences.mutate(next);
   }
 
   return (
@@ -771,10 +842,8 @@ export function SettingsContent() {
                   <CardTitle>Units</CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-4">
-                  <p className="text-sm text-fg-tertiary">
-                    Pick the measurement system used across range, speed, temperature, pressure, and place radius displays.
-                  </p>
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <p className="text-sm text-fg-tertiary">Pick a preset system or switch to Custom for per-unit control.</p>
+                  <div className="grid gap-3 md:grid-cols-3">
                     {[
                       {
                         value: 'imperial' as const,
@@ -786,13 +855,18 @@ export function SettingsContent() {
                         title: 'Metric',
                         copy: 'Kilometers, km/h, Celsius, kPa, and meters.',
                       },
+                      {
+                        value: 'custom' as const,
+                        title: 'Custom',
+                        copy: 'Choose each unit family independently.',
+                      },
                     ].map((option) => {
-                      const active = unitSystem === option.value;
+                      const active = unitPreferences.mode === option.value;
                       return (
                         <button
                           key={option.value}
                           type="button"
-                          onClick={() => handleUnitSystemChange(option.value)}
+                          onClick={() => handleUnitModeChange(option.value)}
                           className={[
                             'rounded-xl border p-4 text-left transition-colors',
                             active
@@ -813,11 +887,67 @@ export function SettingsContent() {
                       );
                     })}
                   </div>
+                  {unitPreferences.mode === 'custom' ? (
+                    <div className="rounded-xl border border-border bg-bg-elevated/35 p-3">
+                      <p className="mb-3 text-xs uppercase tracking-wider text-fg-tertiary">Custom Units</p>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <label className="grid gap-1 text-sm text-fg">
+                          <span>Distance / Range</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.distance_unit} onChange={(event) => handleCustomUnitChange('distance_unit', event.target.value as UnitPreferences['distance_unit'])}>
+                            <option value="miles">Miles (mi)</option>
+                            <option value="kilometers">Kilometers (km)</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm text-fg">
+                          <span>Speed</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.speed_unit} onChange={(event) => handleCustomUnitChange('speed_unit', event.target.value as UnitPreferences['speed_unit'])}>
+                            <option value="mph">Miles/hour (mph)</option>
+                            <option value="kmh">Kilometers/hour (km/h)</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm text-fg">
+                          <span>Temperature</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.temperature_unit} onChange={(event) => handleCustomUnitChange('temperature_unit', event.target.value as UnitPreferences['temperature_unit'])}>
+                            <option value="fahrenheit">Fahrenheit (F)</option>
+                            <option value="celsius">Celsius (C)</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm text-fg">
+                          <span>Pressure</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.pressure_unit} onChange={(event) => handleCustomUnitChange('pressure_unit', event.target.value as UnitPreferences['pressure_unit'])}>
+                            <option value="psi">PSI</option>
+                            <option value="kpa">kPa</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm text-fg">
+                          <span>Altitude</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.altitude_unit} onChange={(event) => handleCustomUnitChange('altitude_unit', event.target.value as UnitPreferences['altitude_unit'])}>
+                            <option value="feet">Feet (ft)</option>
+                            <option value="meters">Meters (m)</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm text-fg">
+                          <span>Place Radius</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.place_radius_unit} onChange={(event) => handleCustomUnitChange('place_radius_unit', event.target.value as UnitPreferences['place_radius_unit'])}>
+                            <option value="feet">Feet (ft)</option>
+                            <option value="meters">Meters (m)</option>
+                          </select>
+                        </label>
+                        <label className="grid gap-1 text-sm text-fg md:col-span-2">
+                          <span>Efficiency Display</span>
+                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.efficiency_display} onChange={(event) => handleCustomUnitChange('efficiency_display', event.target.value as UnitPreferences['efficiency_display'])}>
+                            <option value="distance_per_energy">Distance per energy (mi/kWh or km/kWh)</option>
+                            <option value="energy_per_distance">Energy per distance (Wh/mi or Wh/km)</option>
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             )}
 
-            {activeSection === 'places' && <PlacesSection unitSystem={unitSystem} />}
+            {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}
 
             {activeSection === 'backup' && isAdmin && <BackupSection />}
 

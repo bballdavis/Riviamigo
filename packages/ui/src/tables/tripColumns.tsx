@@ -1,10 +1,16 @@
 import * as React from 'react';
-import { createColumnHelper } from '@tanstack/react-table';
+import { createColumnHelper, type ColumnDef } from '@tanstack/react-table';
 import { format, parseISO } from 'date-fns';
-import { LuBadgeInfo } from 'react-icons/lu';
+import { FaInfo } from 'react-icons/fa6';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { Badge } from '../primitives/Badge';
-import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '../lib/utils';
+import {
+  formatMiles,
+  formatDuration,
+  formatPercent,
+  formatEfficiencyValue,
+  getEfficiencyUnitLabel,
+} from '../lib/utils';
 import { formatDriveMode, getDriveModeBadgeClass } from '../lib/driveMode';
 import type { Place } from '@riviamigo/types';
 
@@ -37,9 +43,13 @@ interface CreateTripColumnsOptions {
 }
 
 export function createTripColumns(places: Place[] = [], options: CreateTripColumnsOptions = {}) {
-  const columns = [
+  const columns: ColumnDef<TripRow, any>[] = [
     col.accessor('started_at', {
-      header: 'Date',
+      header: () => <span>Date</span>,
+      meta: {
+        headerClassName: 'w-[10.75rem]',
+        cellClassName: 'w-[10.75rem]',
+      },
       cell: (info) => (
         <span className="font-medium text-fg whitespace-nowrap">
           {format(parseISO(info.getValue()), 'MM/dd/yyyy, h:mm a')}
@@ -50,10 +60,20 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
     locationColumn('end', 'Destination', places),
     col.accessor('duration_min', {
       header: 'Duration',
+      meta: {
+        headerClassName: 'w-[5.25rem]',
+        cellClassName: 'w-[5.25rem] whitespace-nowrap text-center',
+        headerContentClassName: 'w-full justify-center',
+      },
       cell: (info) => formatDuration(info.getValue()),
     }),
     col.accessor('distance_mi', {
       header: 'Distance',
+      meta: {
+        headerClassName: 'w-[5.25rem]',
+        cellClassName: 'w-[5.25rem] whitespace-nowrap text-center',
+        headerContentClassName: 'w-full justify-center',
+      },
       cell: (info) => (
         <span className="font-mono text-fg">{formatMiles(info.getValue())}</span>
       ),
@@ -62,6 +82,11 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
       id: 'soc_range',
       header: 'SoC',
       enableSorting: false,
+      meta: {
+        headerClassName: 'w-[5.25rem]',
+        cellClassName: 'w-[5.25rem] whitespace-nowrap text-center',
+        headerContentClassName: 'w-full justify-center',
+      },
       cell: (info) => {
         const row = info.row.original;
         if (row.soc_start === null || row.soc_end === null) return <span className="text-fg-tertiary">-</span>;
@@ -75,11 +100,19 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
       },
     }),
     col.accessor('efficiency_wh_mi', {
-      header: 'Avg. Effic.',
+      header: () => <span className="whitespace-nowrap">Avg. Eff.</span>,
+      meta: {
+        headerClassName: 'w-[8.5rem]',
+        cellClassName: 'w-[8.5rem] whitespace-nowrap text-center',
+        headerContentClassName: 'w-full justify-center',
+      },
       cell: (info) => {
         const v = info.getValue();
         return v !== null ? (
-          <span className="font-mono text-fg whitespace-nowrap text-xs">{formatEfficiency(v)}</span>
+          <span className="inline-flex items-baseline justify-center gap-1 whitespace-nowrap font-mono text-fg">
+            <span>{formatEfficiencyValue(v)}</span>
+            <span className="text-[11px] font-normal text-fg-tertiary">{getEfficiencyUnitLabel()}</span>
+          </span>
         ) : (
           <span className="text-fg-tertiary">-</span>
         );
@@ -88,11 +121,16 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
     col.accessor('drive_mode', {
       header: 'Mode',
       enableSorting: false,
+      meta: {
+        headerClassName: 'w-[6.5rem]',
+        cellClassName: 'w-[6.5rem] text-center',
+        headerContentClassName: 'w-full justify-center',
+      },
       cell: (info) => {
         const mode = info.getValue();
         if (!mode) return <span className="text-fg-tertiary">-</span>;
         return (
-          <Badge size="sm" className={`max-w-[6.5rem] truncate ${getDriveModeBadgeClass(mode)}`} title={formatDriveMode(mode)}>
+          <Badge size="sm" className={`mx-auto max-w-[6.5rem] truncate ${getDriveModeBadgeClass(mode)}`} title={formatDriveMode(mode)}>
             {formatDriveMode(mode)}
           </Badge>
         );
@@ -106,8 +144,13 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
         id: 'details',
         header: '',
         enableSorting: false,
+        meta: {
+          headerClassName: 'w-9 text-center',
+          cellClassName: 'w-9 text-center',
+          headerContentClassName: 'w-full justify-center',
+        },
         cell: (info) => (
-          <div className="flex justify-end">
+          <div className="mx-auto h-7 w-7">
             <button
               type="button"
               aria-label="Open trip details"
@@ -116,9 +159,9 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
                 event.stopPropagation();
                 options.onInfoClick?.(info.row.original.id);
               }}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
+              className="inline-flex h-full w-full items-center justify-center rounded-md border border-border bg-bg-surface p-1 text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
             >
-              <LuBadgeInfo className="h-4 w-4" />
+              <FaInfo className="h-full w-full" />
             </button>
           </div>
         ),
@@ -136,11 +179,16 @@ function locationColumn(kind: 'start' | 'end', header: string, places: Place[]) 
     id: kind,
     header,
     enableSorting: false,
+    meta: {
+      // Start/Destination are the flexible columns and absorb width pressure.
+      headerClassName: 'min-w-0',
+      cellClassName: 'min-w-0',
+    },
     cell: (info) => {
       const trip = info.row.original;
       const location = resolveTripLocation(trip, kind, places);
       return location ? (
-        <span className="block min-w-0 flex-1 truncate font-medium text-fg text-sm" title={location.title}>
+        <span className="block w-full min-w-0 max-w-full truncate font-medium text-fg text-sm" title={location.title}>
           {location.label}
         </span>
       ) : (

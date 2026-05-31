@@ -47,6 +47,7 @@ struct SessionListParams {
     offset: Option<i64>,
     page: Option<i64>,
     per_page: Option<i64>,
+    search: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -380,6 +381,12 @@ async fn list_sessions_response(
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
     let offset = p.offset.unwrap_or((page - 1) * limit).max(0);
+    let search = p
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
 
     let mut tx = state.pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -415,6 +422,9 @@ async fn list_sessions_response(
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
             LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+                  AND ($7::text IS NULL OR \
+                         COALESCE(g.name, '') ILIKE '%' || $7 || '%' ESCAPE '\\' OR \
+                         COALESCE(a.display_name, '') ILIKE '%' || $7 || '%' ESCAPE '\\') \
             ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5"
     )
     .bind(vehicle_id)
@@ -423,15 +433,24 @@ async fn list_sessions_response(
     .bind(limit)
     .bind(offset)
     .bind(user_id)
+    .bind(search.as_deref())
     .fetch_all(&mut *tx)
     .await?;
 
     let total: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3"
+                "SELECT COUNT(*) \
+                 FROM riviamigo.charge_sessions cs \
+                 LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
+                 LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+                 WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+                     AND ($4::text IS NULL OR \
+                                COALESCE(g.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+                                COALESCE(a.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\')"
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
+        .bind(search.as_deref())
     .fetch_one(&mut *tx)
     .await?;
 

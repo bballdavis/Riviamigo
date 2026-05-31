@@ -2,12 +2,16 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { ChargingScheduleInput, DepartureScheduleInput } from './api';
 
-export function useChargeSessions(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25) {
+export function useChargeSessions(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
+  const normalizedSearch = search.trim();
   return useQuery({
-    queryKey: ['charging', 'list', vehicleId, from, to, page, perPage],
-    queryFn: () => api.listChargeSessions(vehicleId!, from, to, page, perPage),
+    queryKey: ['charging', 'list', vehicleId, from, to, page, perPage, normalizedSearch],
+    queryFn: () => api.listChargeSessions(vehicleId!, from, to, page, perPage, normalizedSearch),
     enabled: !!vehicleId,
     staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -18,6 +22,9 @@ export function useChargeSession(sessionId: string | null, vehicleId: string | n
     queryFn: () => api.getChargeSession(sessionId!, vehicleId!),
     enabled: !!sessionId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -28,6 +35,9 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
     queryFn: () => api.getChargeCurve(sessionId!, vehicleId!),
     enabled: !!sessionId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -38,6 +48,9 @@ export function useChargeCurveAnalysis(vehicleId: string | null, from: string, t
     queryFn: () => api.getChargeCurveAnalysis(vehicleId!, from, to),
     enabled: !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -48,6 +61,9 @@ export function useChargingSummary(vehicleId: string | null, from: string, to: s
     queryFn: () => api.getChargingSummary(vehicleId!, from, to),
     enabled: !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }

@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/trips/:id/speed", get(get_speed_profile))
         .route("/trips/:id/elevation", get(get_elevation_profile))
         .route("/trips/:id/power", get(get_power_profile))
+        .route("/trips/:id/series", get(get_trip_series))
         .route(
             "/vehicles/:vehicle_id/drives/:id/power",
             get(get_power_profile_path),
@@ -104,6 +105,22 @@ struct PowerProfileRow {
     regen_power_kw: Option<f64>,
     speed_mph: Option<f64>,
     battery_level: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TripSeriesRow {
+    ts: DateTime<Utc>,
+    speed_mph: Option<f64>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+    battery_level: Option<f64>,
+    outside_temp_c: Option<f64>,
+    cabin_temp_c: Option<f64>,
+    hvac_active: Option<bool>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
 }
 
 async fn list_trips(
@@ -414,6 +431,18 @@ async fn get_power_profile_path(
     power_profile_response(&state, auth.user_id, vehicle_id, id).await
 }
 
+async fn get_trip_series(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(p): Query<VehicleParam>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    trip_series_response(&state, auth.user_id, vid, id).await
+}
+
 async fn power_profile_response(
     state: &AppState,
     user_id: Uuid,
@@ -438,7 +467,55 @@ async fn power_profile_response(
                   avg(speed_mph) AS speed_mph,
                   avg(battery_level) AS battery_level
            FROM timeseries.telemetry
-           WHERE vehicle_id=$1 AND trip_id=$2 AND ts>=$3 AND ts<=$4
+            WHERE vehicle_id=$1
+              AND ts>=$3 AND ts<=$4
+              AND (trip_id=$2 OR trip_id IS NULL)
+           GROUP BY 1 ORDER BY 1"#,
+    )
+    .bind(vehicle_id)
+    .bind(trip_id)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!(points)))
+}
+
+async fn trip_series_response(
+    state: &AppState,
+    user_id: Uuid,
+    vehicle_id: Uuid,
+    trip_id: Uuid,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+
+    let trip = sqlx::query_as::<_, TripWindowRow>(
+        "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
+    )
+    .bind(trip_id)
+    .bind(vehicle_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let points = sqlx::query_as::<_, TripSeriesRow>(
+        r#"SELECT time_bucket('10 seconds'::interval, ts) AS ts,
+                  avg(speed_mph) AS speed_mph,
+                  avg(power_kw) AS power_kw,
+                  avg(regen_power_kw) AS regen_power_kw,
+                  avg(battery_level) AS battery_level,
+                  avg(outside_temp_c) AS outside_temp_c,
+                  avg(cabin_temp_c) AS cabin_temp_c,
+                  bool_or(hvac_active) AS hvac_active,
+                  avg(tire_fl_psi) AS tire_fl_psi,
+                  avg(tire_fr_psi) AS tire_fr_psi,
+                  avg(tire_rl_psi) AS tire_rl_psi,
+                  avg(tire_rr_psi) AS tire_rr_psi
+           FROM timeseries.telemetry
+                WHERE vehicle_id=$1
+                  AND ts>=$3 AND ts<=$4
+                  AND (trip_id=$2 OR trip_id IS NULL)
            GROUP BY 1 ORDER BY 1"#,
     )
     .bind(vehicle_id)
@@ -577,6 +654,14 @@ mod tests {
             &format!("/v1/trips/{}/elevation", uuid::Uuid::new_v4()),
         )
         .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn trip_series_requires_auth() {
+        let app = make_app().await;
+        let status = get_status(app, &format!("/v1/trips/{}/series", uuid::Uuid::new_v4())).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }
