@@ -2,10 +2,11 @@ use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
@@ -24,7 +25,12 @@ pub fn router() -> Router<AppState> {
 }
 
 pub fn protected_router() -> Router<AppState> {
-    Router::new().route("/auth/me", axum::routing::get(me))
+    Router::new()
+        .route("/auth/me", axum::routing::get(me))
+        .route(
+            "/auth/preferences",
+            axum::routing::get(get_preferences).put(update_preferences),
+        )
 }
 
 #[derive(Deserialize)]
@@ -44,6 +50,28 @@ struct AccessTokenResponse {
     access_token: String,
     expires_in: u64,
     default_vehicle_id: Option<Uuid>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct UnitPreferencesPayload {
+    mode: String,
+    distance_unit: String,
+    speed_unit: String,
+    temperature_unit: String,
+    pressure_unit: String,
+    altitude_unit: String,
+    place_radius_unit: String,
+    efficiency_display: String,
+}
+
+#[derive(Serialize)]
+struct PreferencesResponse {
+    units: UnitPreferencesPayload,
+}
+
+#[derive(Deserialize)]
+struct PreferencesUpdateBody {
+    units: UnitPreferencesPayload,
 }
 
 async fn register(
@@ -267,6 +295,224 @@ async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoRe
         "role":               row.role,
         "default_vehicle_id": row.default_vehicle_id
     })))
+}
+
+async fn get_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    let row = sqlx::query(
+        "SELECT unit_mode, distance_unit, temperature_unit, \
+                custom_distance_unit, custom_speed_unit, custom_temperature_unit, \
+                custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit, \
+                custom_efficiency_display \
+         FROM riviamigo.user_preferences WHERE user_id = $1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let units = if let Some(row) = row {
+        let mode = row
+            .try_get::<String, _>("unit_mode")
+            .unwrap_or_else(|_| "imperial".to_string());
+        let legacy_distance = row
+            .try_get::<String, _>("distance_unit")
+            .unwrap_or_else(|_| "miles".to_string());
+        let legacy_temp = row
+            .try_get::<String, _>("temperature_unit")
+            .unwrap_or_else(|_| "fahrenheit".to_string());
+        resolved_units_payload(
+            &mode,
+            row.try_get::<Option<String>, _>("custom_distance_unit")
+                .ok()
+                .flatten()
+                .as_deref(),
+            row.try_get::<Option<String>, _>("custom_speed_unit")
+                .ok()
+                .flatten()
+                .as_deref(),
+            row.try_get::<Option<String>, _>("custom_temperature_unit")
+                .ok()
+                .flatten()
+                .as_deref(),
+            row.try_get::<Option<String>, _>("custom_pressure_unit")
+                .ok()
+                .flatten()
+                .as_deref(),
+            row.try_get::<Option<String>, _>("custom_altitude_unit")
+                .ok()
+                .flatten()
+                .as_deref(),
+            row.try_get::<Option<String>, _>("custom_place_radius_unit")
+                .ok()
+                .flatten()
+                .as_deref(),
+            row.try_get::<Option<String>, _>("custom_efficiency_display")
+                .ok()
+                .flatten()
+                .as_deref(),
+            &legacy_distance,
+            &legacy_temp,
+        )
+    } else {
+        resolved_units_payload(
+            "imperial",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "miles",
+            "fahrenheit",
+        )
+    };
+
+    Ok(Json(PreferencesResponse { units }))
+}
+
+async fn update_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<PreferencesUpdateBody>,
+) -> Result<impl IntoResponse, AppError> {
+    let units = normalize_units_payload(body.units)?;
+    let (distance_unit, temperature_unit) = match units.mode.as_str() {
+        "metric" => ("kilometers".to_string(), "celsius".to_string()),
+        "custom" => (
+            units.distance_unit.clone(),
+            units.temperature_unit.clone(),
+        ),
+        _ => ("miles".to_string(), "fahrenheit".to_string()),
+    };
+
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (
+            user_id, unit_mode, distance_unit, temperature_unit,
+            custom_distance_unit, custom_speed_unit, custom_temperature_unit,
+            custom_pressure_unit, custom_altitude_unit, custom_place_radius_unit,
+            custom_efficiency_display, updated_at
+         ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7,
+            $8, $9, $10,
+            $11, now()
+         )
+         ON CONFLICT (user_id) DO UPDATE SET
+            unit_mode = EXCLUDED.unit_mode,
+            distance_unit = EXCLUDED.distance_unit,
+            temperature_unit = EXCLUDED.temperature_unit,
+            custom_distance_unit = EXCLUDED.custom_distance_unit,
+            custom_speed_unit = EXCLUDED.custom_speed_unit,
+            custom_temperature_unit = EXCLUDED.custom_temperature_unit,
+            custom_pressure_unit = EXCLUDED.custom_pressure_unit,
+            custom_altitude_unit = EXCLUDED.custom_altitude_unit,
+            custom_place_radius_unit = EXCLUDED.custom_place_radius_unit,
+            custom_efficiency_display = EXCLUDED.custom_efficiency_display,
+            updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(&units.mode)
+    .bind(distance_unit)
+    .bind(temperature_unit)
+    .bind(&units.distance_unit)
+    .bind(&units.speed_unit)
+    .bind(&units.temperature_unit)
+    .bind(&units.pressure_unit)
+    .bind(&units.altitude_unit)
+    .bind(&units.place_radius_unit)
+    .bind(&units.efficiency_display)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(PreferencesResponse { units }))
+}
+
+fn resolved_units_payload(
+    mode: &str,
+    custom_distance: Option<&str>,
+    custom_speed: Option<&str>,
+    custom_temperature: Option<&str>,
+    custom_pressure: Option<&str>,
+    custom_altitude: Option<&str>,
+    custom_place_radius: Option<&str>,
+    custom_efficiency_display: Option<&str>,
+    legacy_distance: &str,
+    legacy_temperature: &str,
+) -> UnitPreferencesPayload {
+    match mode {
+        "metric" => UnitPreferencesPayload {
+            mode: "metric".to_string(),
+            distance_unit: "kilometers".to_string(),
+            speed_unit: "kmh".to_string(),
+            temperature_unit: "celsius".to_string(),
+            pressure_unit: "kpa".to_string(),
+            altitude_unit: "meters".to_string(),
+            place_radius_unit: "meters".to_string(),
+            efficiency_display: "distance_per_energy".to_string(),
+        },
+        "custom" => UnitPreferencesPayload {
+            mode: "custom".to_string(),
+            distance_unit: custom_distance.unwrap_or("miles").to_string(),
+            speed_unit: custom_speed.unwrap_or("mph").to_string(),
+            temperature_unit: custom_temperature.unwrap_or("fahrenheit").to_string(),
+            pressure_unit: custom_pressure.unwrap_or("psi").to_string(),
+            altitude_unit: custom_altitude.unwrap_or("feet").to_string(),
+            place_radius_unit: custom_place_radius.unwrap_or("feet").to_string(),
+            efficiency_display: custom_efficiency_display
+                .unwrap_or("distance_per_energy")
+                .to_string(),
+        },
+        _ => {
+            let is_metric = legacy_distance.eq_ignore_ascii_case("kilometers")
+                || legacy_temperature.eq_ignore_ascii_case("celsius");
+            if is_metric {
+                UnitPreferencesPayload {
+                    mode: "metric".to_string(),
+                    distance_unit: "kilometers".to_string(),
+                    speed_unit: "kmh".to_string(),
+                    temperature_unit: "celsius".to_string(),
+                    pressure_unit: "kpa".to_string(),
+                    altitude_unit: "meters".to_string(),
+                    place_radius_unit: "meters".to_string(),
+                    efficiency_display: "distance_per_energy".to_string(),
+                }
+            } else {
+                UnitPreferencesPayload {
+                    mode: "imperial".to_string(),
+                    distance_unit: "miles".to_string(),
+                    speed_unit: "mph".to_string(),
+                    temperature_unit: "fahrenheit".to_string(),
+                    pressure_unit: "psi".to_string(),
+                    altitude_unit: "feet".to_string(),
+                    place_radius_unit: "feet".to_string(),
+                    efficiency_display: "distance_per_energy".to_string(),
+                }
+            }
+        }
+    }
+}
+
+fn normalize_units_payload(input: UnitPreferencesPayload) -> Result<UnitPreferencesPayload, AppError> {
+    let valid_mode = matches!(input.mode.as_str(), "imperial" | "metric" | "custom");
+    if !valid_mode {
+        return Err(AppError::Validation("invalid unit mode".to_string()));
+    }
+    let valid_distance = matches!(input.distance_unit.as_str(), "miles" | "kilometers");
+    let valid_speed = matches!(input.speed_unit.as_str(), "mph" | "kmh");
+    let valid_temp = matches!(input.temperature_unit.as_str(), "fahrenheit" | "celsius");
+    let valid_pressure = matches!(input.pressure_unit.as_str(), "psi" | "kpa");
+    let valid_altitude = matches!(input.altitude_unit.as_str(), "feet" | "meters");
+    let valid_radius = matches!(input.place_radius_unit.as_str(), "feet" | "meters");
+    let valid_eff =
+        matches!(input.efficiency_display.as_str(), "distance_per_energy" | "energy_per_distance");
+    if !(valid_distance && valid_speed && valid_temp && valid_pressure && valid_altitude && valid_radius && valid_eff)
+    {
+        return Err(AppError::Validation("invalid unit preference value".to_string()));
+    }
+    Ok(input)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

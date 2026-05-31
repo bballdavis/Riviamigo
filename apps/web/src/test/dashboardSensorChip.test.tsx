@@ -26,6 +26,20 @@ const metricMocks = vi.hoisted(() => ({
     total_energy_used_kwh: number | null;
     charging_efficiency_pct: number | null;
   },
+  chargingSummary: null as null | {
+    session_count: number;
+    total_energy_kwh: number | null;
+    total_cost_usd: number | null;
+    home_kwh: number | null;
+    away_kwh: number | null;
+    unknown_location_kwh: number | null;
+    ac_kwh: number | null;
+    dc_kwh: number | null;
+    charging_cycles: number | null;
+    charging_efficiency_pct: number | null;
+    max_charge_rate_kw: number | null;
+    max_charge_limit_pct: number | null;
+  },
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -39,7 +53,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
       data: metricMocks.series,
     }),
     useBatteryHealth: () => ({ data: metricMocks.batteryHealth, isLoading: false }),
-    useChargingSummary: () => ({ data: null, isLoading: false }),
+    useChargingSummary: () => ({ data: metricMocks.chargingSummary, isLoading: false }),
     useCurrentVehicleStatus: () => ({ data: null, isLoading: false }),
     useMetricCatalog: () => ({ data: [] }),
   };
@@ -98,6 +112,7 @@ describe('dashboard sensor chips', () => {
       { ts: '2026-05-03T00:00:00Z', value: 14 },
     ];
     metricMocks.batteryHealth = null;
+    metricMocks.chargingSummary = null;
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
@@ -223,5 +238,44 @@ describe('dashboard sensor chips', () => {
     expect(screen.getByText('(now/new)')).toBeInTheDocument();
     expect(screen.getByText('111.6 kWh')).toHaveClass('text-fg');
     expect(screen.getByText('/109.0 kWh')).toHaveClass('text-fg-tertiary');
+  });
+
+  it('folds unknown charging energy into away for the home share chip', () => {
+    metricMocks.chargingSummary = {
+      session_count: 6,
+      total_energy_kwh: 240,
+      total_cost_usd: 48,
+      home_kwh: 180,
+      away_kwh: 60,
+      unknown_location_kwh: 20,
+      ac_kwh: 120,
+      dc_kwh: 120,
+      charging_cycles: 4,
+      charging_efficiency_pct: 92.5,
+      max_charge_rate_kw: 164.2,
+      max_charge_limit_pct: 85,
+    };
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...config(false),
+          widgets: [
+            {
+              id: 'd9000009-0000-0000-0000-000000000003',
+              componentType: 'sensor',
+              definitionId: 'charging_home_share',
+              title: 'Home Charging',
+              options: {},
+              layout: { x: 0, y: 0, w: 3, h: 2 },
+            },
+          ],
+        }}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+      />
+    );
+
+    expect(screen.getByText('69%')).toBeInTheDocument();
+    expect(screen.getByText('Home 180.0 kWh / Away 80.0 kWh')).toBeInTheDocument();
   });
 });

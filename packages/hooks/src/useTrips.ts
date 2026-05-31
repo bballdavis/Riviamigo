@@ -4,12 +4,16 @@ import { api } from './api';
 const TRIPS_LIST_QUERY_VERSION = 'v2';
 
 export function useTrips(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
+  const normalizedSearch = search.trim();
   return useQuery({
     // Version the key to avoid hydrating stale list payloads from older app builds.
-    queryKey: ['trips', 'list', TRIPS_LIST_QUERY_VERSION, vehicleId, from, to, page, perPage, search],
-    queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage, search),
+    queryKey: ['trips', 'list', TRIPS_LIST_QUERY_VERSION, vehicleId, from, to, page, perPage, normalizedSearch],
+    queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage, normalizedSearch),
     enabled: !!vehicleId,
     staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   });
 }
 
@@ -19,6 +23,9 @@ export function useTrip(tripId: string | null, vehicleId: string | null) {
     queryFn: () => api.getTrip(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -29,6 +36,9 @@ export function useTripTrack(tripId: string | null, vehicleId: string | null) {
     queryFn: () => api.getTripTrack(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -39,6 +49,9 @@ export function useSpeedProfile(tripId: string | null, vehicleId: string | null)
     queryFn: () => api.getSpeedProfile(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -49,6 +62,9 @@ export function useElevationProfile(tripId: string | null, vehicleId: string | n
     queryFn: () => api.getElevationProfile(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -57,6 +73,19 @@ export function useTripPowerProfile(tripId: string | null, vehicleId: string | n
   return useQuery({
     queryKey: ['trips', 'power', tripId, vehicleId],
     queryFn: () => api.getTripPowerProfile(tripId!, vehicleId!),
+    enabled: !!tripId && !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useTripDetailSeries(tripId: string | null, vehicleId: string | null) {
+  return useQuery({
+    queryKey: ['trips', 'series', tripId, vehicleId],
+    queryFn: () => api.getTripDetailSeries(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
     placeholderData: (previous) => previous,

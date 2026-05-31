@@ -18,9 +18,11 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/ui/charts', () => ({
-  TripMapChart:           ({ loading }: { loading?: boolean }) => <div data-testid="trip-map-chart">{loading ? 'loading' : 'map'}</div>,
-  SpeedProfileChart:      () => <div data-testid="speed-chart" />,
-  ElevationProfileChart:  () => <div data-testid="elevation-chart" />,
+  TripMapChart:           () => <div data-testid="trip-map-chart">map</div>,
+  TripDriveChart:         () => <div data-testid="trip-drive-chart" />, 
+  SpeedHistogramChart:    () => <div data-testid="speed-histogram-chart" />,
+  TripTemperatureChart:   () => <div data-testid="trip-temperature-chart" />,
+  TripTirePressureChart:  () => <div data-testid="trip-tire-pressure-chart" />,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
@@ -36,8 +38,23 @@ vi.mock('@riviamigo/hooks', () => ({
     },
   }),
   useTripTrack:       () => ({ data: [], isLoading: false }),
-  useSpeedProfile:    () => ({ data: [], isLoading: false }),
-  useElevationProfile: () => ({ data: [], isLoading: false }),
+  useTripDetailSeries: () => ({
+    data: [{
+      ts: '2024-03-15T10:35:00Z',
+      speed_mph: 42,
+      power_kw: 38,
+      regen_power_kw: 0,
+      battery_level: 68,
+      outside_temp_c: 10,
+      cabin_temp_c: 18,
+      hvac_active: false,
+      tire_fl_psi: 48,
+      tire_fr_psi: 48,
+      tire_rl_psi: 49,
+      tire_rr_psi: 49,
+    }],
+    isLoading: false,
+  }),
 }));
 
 vi.mock('../../components/layout/AppLayout',  () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -47,20 +64,16 @@ vi.mock('../../components/layout/NoVehicleState', () => ({
 }));
 vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatMiles:      (v: number) => `${v} mi`,
-  formatKwh:        (v: number) => `${v} kWh`,
-  formatCurrency:   (v: number) => `$${v}`,
-  formatPercent:    (v: number) => `${v}%`,
+  formatMph:        (v: number) => `${v.toFixed(1)} mph`,
   formatDuration:   (v: number) => `${v} min`,
-  formatEfficiency: (v: number) => `${v} Wh/mi`,
+  formatEfficiencyValue: (v: number) => `${v}`,
+  getEfficiencyUnitLabel: () => 'Wh/mi',
 }));
 vi.mock('lucide-react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('lucide-react')>();
   return {
     ...actual,
     ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
-    Map:       () => <svg data-testid="icon-map" />,
-    Gauge:     () => <svg data-testid="icon-gauge" />,
-    Mountain:  () => <svg data-testid="icon-mountain" />,
   };
 });
 
@@ -69,54 +82,35 @@ import { TripDetailContent } from '../trips.$tripId';
 describe('Trip Detail page', () => {
   it('renders all four stat card labels', () => {
     render(<TripDetailContent />);
-    expect(screen.getByText('Distance')).toBeInTheDocument();
+    expect(screen.getByText('Distance Driven')).toBeInTheDocument();
+    expect(screen.getByText('Avg. Effic. (Wh/mi)')).toBeInTheDocument();
+    expect(screen.getByText('Avg. Speed')).toBeInTheDocument();
     expect(screen.getByText('Duration')).toBeInTheDocument();
-    expect(screen.getByText('Energy Used')).toBeInTheDocument();
-    expect(screen.getByText('Efficiency')).toBeInTheDocument();
   });
 
-  it('renders the trip map chart by default', () => {
+  it('renders map and both charts together', () => {
     render(<TripDetailContent />);
     expect(screen.getByTestId('trip-map-chart')).toBeInTheDocument();
-    expect(screen.queryByTestId('speed-chart')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('elevation-chart')).not.toBeInTheDocument();
+    expect(screen.getByText('Drive Chart')).toBeInTheDocument();
+    expect(screen.getByText('Speed Histogram')).toBeInTheDocument();
+    expect(screen.getByText('Temperature')).toBeInTheDocument();
+    expect(screen.getByText('Tire Pressure')).toBeInTheDocument();
   });
 
-  it('switches to Speed chart when Speed tab clicked', () => {
+  it('renders back icon button', () => {
     render(<TripDetailContent />);
-    fireEvent.click(screen.getByRole('button', { name: 'Speed' }));
-    expect(screen.getByTestId('speed-chart')).toBeInTheDocument();
-    expect(screen.queryByTestId('trip-map-chart')).not.toBeInTheDocument();
-  });
-
-  it('switches to Elevation chart when Elevation tab clicked', () => {
-    render(<TripDetailContent />);
-    fireEvent.click(screen.getByRole('button', { name: 'Elevation' }));
-    expect(screen.getByTestId('elevation-chart')).toBeInTheDocument();
-    expect(screen.queryByTestId('trip-map-chart')).not.toBeInTheDocument();
-  });
-
-  it('renders all three tab labels', () => {
-    render(<TripDetailContent />);
-    expect(screen.getByRole('button', { name: 'Route Map' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Speed' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Elevation' })).toBeInTheDocument();
-  });
-
-  it('renders Back button', () => {
-    render(<TripDetailContent />);
-    expect(screen.getByText('Back')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to trips' })).toBeInTheDocument();
   });
 
   it('navigates to /trips when Back is clicked', () => {
     render(<TripDetailContent />);
-    fireEvent.click(screen.getByText('Back'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to trips' }));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/trips' });
   });
 
   it('renders stat values from trip data', () => {
     render(<TripDetailContent />);
     expect(screen.getByText('42.5 mi')).toBeInTheDocument();
-    expect(screen.getByText('12.3 kWh')).toBeInTheDocument();
+    expect(screen.getByText('289')).toBeInTheDocument();
   });
 });

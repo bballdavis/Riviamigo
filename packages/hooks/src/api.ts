@@ -4,14 +4,14 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
+  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripDetailSeriesPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
-  MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse,
-  CreateBackupRestoreRequestBody, BackupRestoreRequest,
+  MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
+  CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -142,6 +142,8 @@ interface ApiFailureDetail {
   message: string;
   method: string;
   path: string;
+  rateLimitSource?: string;
+  retryAfterSeconds?: number;
 }
 
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
@@ -225,6 +227,14 @@ class ApiClient {
     });
 
     if (!res.ok) {
+      const rateLimitSource = res.headers.get('x-riviamigo-ratelimit-source') ?? undefined;
+      const retryAfterSeconds = (() => {
+        const header = res.headers.get('retry-after');
+        if (!header) return undefined;
+        const parsed = Number(header);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+      })();
+
       if (res.status === 401 && retryOnUnauthorized && this.accessToken && !AUTH_REFRESH_EXCLUDED_PATHS.has(path)) {
         try {
           const tokens = await this.refreshAccessToken();
@@ -238,6 +248,8 @@ class ApiClient {
             message: `Session expired while calling ${method} ${path}. Sign in again.`,
             method,
             path,
+            rateLimitSource,
+            retryAfterSeconds,
           };
           this.reportFailure(detail);
           throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: detail.code, detail });
@@ -252,6 +264,8 @@ class ApiClient {
         message: err.message,
         method,
         path,
+        rateLimitSource,
+        retryAfterSeconds,
       };
       if (reportErrors) this.reportFailure(detail);
       throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
@@ -290,6 +304,14 @@ class ApiClient {
 
   async me(): Promise<AuthMeResponse> {
     return this.request('GET', '/v1/auth/me');
+  }
+
+  async getUnitPreferences(): Promise<{ units: UnitPreferences }> {
+    return this.request('GET', '/v1/auth/preferences');
+  }
+
+  async updateUnitPreferences(units: UnitPreferences): Promise<{ units: UnitPreferences }> {
+    return this.request('PUT', '/v1/auth/preferences', { units });
   }
 
   // ── Vehicles ──────────────────────────────────────────────────────────────
@@ -415,6 +437,26 @@ class ApiClient {
     );
   }
 
+  async getIdleDrainPeriods(
+    vehicleId: string,
+    from: string,
+    to: string,
+    limit = 250,
+    minDurationHours = 6,
+  ): Promise<IdleDrainResponse> {
+    return this.request(
+      'GET',
+      `/v1/vehicles/${vehicleId}/idle-drain`,
+      undefined,
+      {
+        from,
+        to,
+        limit,
+        min_duration_hours: minDurationHours,
+      },
+    );
+  }
+
   async getDegradation(vehicleId: string) {
     return this.request<{ ts: string; usable_kwh: number; rated_kwh: number | null; capacity_pct: number; odometer_mi?: number | null }[]>(
       'GET', '/v1/battery/degradation', undefined, { vehicle_id: vehicleId }
@@ -512,12 +554,43 @@ class ApiClient {
       .filter((row) => typeof row.ts === 'string') satisfies TripPowerPoint[];
   }
 
+  async getTripDetailSeries(tripId: string, vehicleId: string) {
+    const rows = await this.request<Array<Record<string, unknown>>>(
+      'GET', `/v1/trips/${tripId}/series`, undefined, { vehicle_id: vehicleId }
+    );
+
+    return rows
+      .map((row) => ({
+        ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
+        speed_mph: finiteNumber(row.speed_mph) ?? null,
+        power_kw: finiteNumber(row.power_kw) ?? null,
+        regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
+        battery_level: finiteNumber(row.battery_level) ?? null,
+        outside_temp_c: finiteNumber(row.outside_temp_c) ?? null,
+        cabin_temp_c: finiteNumber(row.cabin_temp_c) ?? null,
+        hvac_active: typeof row.hvac_active === 'boolean' ? row.hvac_active : null,
+        tire_fl_psi: finiteNumber(row.tire_fl_psi) ?? null,
+        tire_fr_psi: finiteNumber(row.tire_fr_psi) ?? null,
+        tire_rl_psi: finiteNumber(row.tire_rl_psi) ?? null,
+        tire_rr_psi: finiteNumber(row.tire_rr_psi) ?? null,
+      }))
+      .filter((row) => typeof row.ts === 'string') satisfies TripDetailSeriesPoint[];
+  }
+
   // ── Charging ──────────────────────────────────────────────────────────────
 
-  async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25) {
+  async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25, search = '') {
     const offset = (page - 1) * perPage;
+    const trimmedSearch = search.trim();
     const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
-      vehicle_id: vehicleId, from, to, page, per_page: perPage, limit: perPage, offset,
+      vehicle_id: vehicleId,
+      from,
+      to,
+      page,
+      per_page: perPage,
+      limit: perPage,
+      offset,
+      ...(trimmedSearch ? { search: trimmedSearch } : {}),
     });
     const normalized = normalizePaginated(response, page, perPage);
     return {
@@ -761,6 +834,8 @@ class ApiClient {
       code: detail.code,
       method: detail.method,
       path: detail.path,
+      rateLimitSource: detail.rateLimitSource,
+      retryAfterSeconds: detail.retryAfterSeconds,
       message: truncate(detail.message, 240),
     });
 
@@ -915,7 +990,17 @@ function friendlyApiError(detail: ApiFailureDetail): { title: string; message: s
   if (status === 401) return { title: 'Session expired', message: 'Please sign in again to continue.' };
   if (status === 403) return { title: 'Access denied', message: 'You don\'t have permission to do that.' };
   if (status === 404) return { title: 'Not found', message: 'The requested resource could not be found.' };
-  if (status === 429) return { title: 'Too many requests', message: 'Please wait a moment and try again.' };
+  if (status === 429) {
+    const source = detail.rateLimitSource;
+    const waitHint = detail.retryAfterSeconds != null ? ` Try again in about ${Math.max(1, Math.ceil(detail.retryAfterSeconds))}s.` : '';
+    if (source === 'nginx') {
+      return { title: 'Too many requests', message: `Edge proxy rate limit reached.${waitHint}` };
+    }
+    if (source === 'api') {
+      return { title: 'Too many requests', message: `API rate limit reached.${waitHint}` };
+    }
+    return { title: 'Too many requests', message: `Please wait a moment and try again.${waitHint}` };
+  }
   if (status != null && status >= 500) return { title: 'Server error', message: 'Something went wrong on our end. Please try again later.' };
   return { title: 'Something went wrong', message: truncate(detail.message, 120) || 'An unexpected error occurred.' };
 }

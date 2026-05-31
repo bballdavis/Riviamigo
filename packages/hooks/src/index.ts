@@ -2,8 +2,16 @@ export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
 export { useAuth } from './useAuth';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
-export { useSocHistory, useRangeHistory, usePhantomDrain, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
-export { useTrips, useTrip, useTripTrack, useSpeedProfile, useElevationProfile, useTripPowerProfile } from './useTrips';
+export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
+export {
+	useTrips,
+	useTrip,
+	useTripTrack,
+	useSpeedProfile,
+	useElevationProfile,
+	useTripPowerProfile,
+	useTripDetailSeries,
+} from './useTrips';
 export { useChargeSessions, useChargeSession, useChargeCurve, useChargeCurveAnalysis, useChargingSummary, useChargingSchedule, useUpdateChargingSchedule, useDepartureSchedules, useCreateDepartureSchedule, useUpdateDepartureSchedule, useDeleteDepartureSchedule, useLiveSession } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
 export { useSummaryStats } from './useStats';

@@ -20,8 +20,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/ui/charts', () => ({
   TripMapChart: () => <div data-testid="trip-map-chart" />,
-  SpeedProfileChart: () => <div data-testid="speed-chart" />,
-  ElevationProfileChart: () => <div data-testid="elevation-chart" />,
+  TripDriveChart: () => <div data-testid="trip-drive-chart" />,
+  SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
+  TripTemperatureChart: () => <div data-testid="trip-temperature-chart" />,
+  TripTirePressureChart: () => <div data-testid="trip-tire-pressure-chart" />,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
@@ -43,8 +45,23 @@ vi.mock('@riviamigo/hooks', () => ({
     },
   }),
   useTripTrack: () => ({ data: [{ lat: 1, lng: 2 }], isLoading: false }),
-  useSpeedProfile: () => ({ data: [{ elapsed_s: 30, speed_mph: 45 }], isLoading: false }),
-  useElevationProfile: () => ({ data: [{ ts: '2024-01-01T12:00:00Z', value: 100 }], isLoading: false }),
+  useTripDetailSeries: () => ({
+    data: [{
+      ts: '2024-01-01T12:00:30Z',
+      speed_mph: 45,
+      power_kw: 42,
+      regen_power_kw: 0,
+      battery_level: 80,
+      outside_temp_c: 12,
+      cabin_temp_c: 20,
+      hvac_active: true,
+      tire_fl_psi: 48,
+      tire_fr_psi: 47,
+      tire_rl_psi: 49,
+      tire_rr_psi: 49,
+    }],
+    isLoading: false,
+  }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -52,33 +69,32 @@ vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: 
 vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatMiles: (v: number) => `${v} mi`,
   formatDuration: (v: number) => `${v} min`,
-  formatKwh: (v: number) => `${v} kWh`,
-  formatEfficiency: (v: number) => `${v} Wh/mi`,
+  formatMph: (v: number) => `${v.toFixed(1)} mph`,
+  formatEfficiencyValue: (v: number) => `${v}`,
+  getEfficiencyUnitLabel: () => 'Wh/mi',
 }));
 
 import { TripDetailContent } from '../trips.$tripId';
 
 describe('Trip detail page', () => {
-  it('renders trip stat cards and the map by default', () => {
+  it('renders trip stat cards and synchronized sections', () => {
     render(<TripDetailContent />);
 
-    expect(screen.getByText('Distance')).toBeInTheDocument();
+    expect(screen.getByText('Distance Driven')).toBeInTheDocument();
+    expect(screen.getByText('Avg. Effic. (Wh/mi)')).toBeInTheDocument();
+    expect(screen.getByText('Avg. Speed')).toBeInTheDocument();
     expect(screen.getByText('Duration')).toBeInTheDocument();
-    expect(screen.getByText('Energy Used')).toBeInTheDocument();
-    expect(screen.getByText('Efficiency')).toBeInTheDocument();
+    expect(screen.getByText('Drive Chart')).toBeInTheDocument();
+    expect(screen.getByText('Speed Histogram')).toBeInTheDocument();
+    expect(screen.getByText('Temperature')).toBeInTheDocument();
+    expect(screen.getByText('Tire Pressure')).toBeInTheDocument();
     expect(screen.getByTestId('trip-map-chart')).toBeInTheDocument();
   });
 
-  it('switches between trip analysis tabs and navigates back', () => {
+  it('navigates back to the trips page', () => {
     render(<TripDetailContent />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Speed' }));
-    expect(screen.getByTestId('speed-chart')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Elevation' }));
-    expect(screen.getByTestId('elevation-chart')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to trips' }));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/trips' });
   });
 });

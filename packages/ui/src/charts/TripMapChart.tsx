@@ -45,8 +45,8 @@ interface MapApi {
   setStyle(style: unknown): void;
 }
 
-const FALLBACK_SELECTED_ROUTE_COLOR = '#F59E0B';
 const FALLBACK_ROUTE_COLORS = ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'];
+const FALLBACK_ACTIVE_POINT_COLOR = '#F59E0B';
 const ACTIVE_POINT_SOURCE_ID = 'trip-active-point';
 const ACTIVE_POINT_LAYER_ID = 'trip-active-point-layer';
 
@@ -224,7 +224,6 @@ export function TripMapChart({
     routeClickRef: React.MutableRefObject<TripMapChartProps['onRouteClick']>,
   ) {
     const routeColors = getRouteColors();
-    const selectedColor = getCssColor('--rm-status-warning', FALLBACK_SELECTED_ROUTE_COLOR);
     const nextRouteIds = new Set(nextRoutes.map((route) => route.id));
 
     syncedRouteIdsRef.current.forEach((routeId) => {
@@ -299,7 +298,9 @@ export function TripMapChart({
 
       if (!map.getLayer(lineId)) return;
 
-      map.setPaintProperty(lineId, 'line-color', selected ? selectedColor : routeColor);
+      // Keep each route's distinct color even when selected so multiple selected
+      // trips are easy to differentiate from one another.
+      map.setPaintProperty(lineId, 'line-color', routeColor);
       map.setPaintProperty(lineId, 'line-width', selected ? 5 : 3);
       map.setPaintProperty(lineId, 'line-opacity', dimUnselected ? 0.28 : 0.9);
     });
@@ -362,7 +363,7 @@ function syncActivePoint(map: MapApi, point: LatLng | null | undefined) {
       source: ACTIVE_POINT_SOURCE_ID,
       paint: {
         'circle-radius': 6,
-        'circle-color': getCssColor('--rm-accent', FALLBACK_SELECTED_ROUTE_COLOR),
+        'circle-color': getCssColor('--rm-accent', FALLBACK_ACTIVE_POINT_COLOR),
         'circle-stroke-width': 2,
         'circle-stroke-color': '#FFFFFF',
       },

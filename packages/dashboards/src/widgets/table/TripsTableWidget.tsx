@@ -106,10 +106,12 @@ import {
 } from './tripSelectionStore';
 
 const ROWS_PER_PAGE_OPTIONS = [15, 25, 50, 100] as const;
+const MAP_TRIP_PAGE_SIZE = 25;
 
 // How many track requests to fire at once. Keep batching to avoid thundering
 // herd of simultaneous requests; stale time is infinite so tracks are cached forever.
 const TRACK_BATCH_SIZE = 8;
+const TRACK_PREFETCH_LIMIT = 24;
 
 function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { selectedIds } = useTripSelection();
@@ -117,12 +119,16 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const mapStyle: MapStyleMode = isDark ? 'dark' : 'light';
   const [_setMapStyle, setMapStyleOverride] = useState<MapStyleMode | null>(null);
   const effectiveMapStyle: MapStyleMode = _setMapStyle ?? mapStyle;
-  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, 1, 50);
+  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, 1, MAP_TRIP_PAGE_SIZE);
   const trips = (data?.items ?? []) as TripRow[];
+  const prefetchTrips = React.useMemo(
+    () => trips.slice(0, TRACK_PREFETCH_LIMIT),
+    [trips],
+  );
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
 
   React.useEffect(() => {
-    resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`);
+    resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
   }, [ctx.vehicleId, ctx.from, ctx.to]);
 
   // ── Batched track fetching ───────────────────────────────────────────────
@@ -141,8 +147,8 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
     queries: trips.map((trip, index) => ({
       queryKey: ['trips', 'track', trip.id, ctx.vehicleId],
       queryFn: () => api.getTripTrack(trip.id, ctx.vehicleId!),
-      // Only enable queries up to the current batch window.
-      enabled: !!ctx.vehicleId && index < enabledUpTo,
+      // Prefetch only a bounded subset; selected routes fetch on-demand.
+      enabled: !!ctx.vehicleId && (selectedIds.includes(trip.id) || index < Math.min(enabledUpTo, prefetchTrips.length)),
       // Trip tracks are immutable once recorded — cache them forever.
       staleTime: Infinity,
       gcTime: 24 * 60 * 60 * 1000,
@@ -151,20 +157,20 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
 
   // Advance the batch window once every enabled query in the current window
   // has settled (success or error).
-  const currentWindowSize = Math.min(enabledUpTo, trips.length);
+  const currentWindowSize = Math.min(enabledUpTo, prefetchTrips.length);
   const settledInWindow = trackQueries
     .slice(0, currentWindowSize)
     .filter((q) => q.isSuccess || q.isError).length;
 
   React.useEffect(() => {
     if (
-      trips.length > 0 &&
+      prefetchTrips.length > 0 &&
       settledInWindow >= currentWindowSize &&
-      enabledUpTo < trips.length
+      enabledUpTo < prefetchTrips.length
     ) {
-      setEnabledUpTo((prev) => Math.min(prev + TRACK_BATCH_SIZE, trips.length));
+      setEnabledUpTo((prev) => Math.min(prev + TRACK_BATCH_SIZE, prefetchTrips.length));
     }
-  }, [settledInWindow, currentWindowSize, enabledUpTo, trips.length]);
+  }, [settledInWindow, currentWindowSize, enabledUpTo, prefetchTrips.length]);
 
   const trackDataVersion = trackQueries.map((query) => query.dataUpdatedAt).join(',');
 
@@ -182,11 +188,16 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
       .filter((route) => route.track.length > 1)
   ), [trackDataVersion, trips]);
 
+  const selectedRouteIds = React.useMemo(
+    () => selectedIds.filter((id) => routes.some((route) => route.id === id)),
+    [selectedIds, routes],
+  );
+
   const visibleRoutes = React.useMemo(
-    () => (selectedIds.length > 0
-      ? routes.filter((route) => selectedIds.includes(route.id))
+    () => (selectedRouteIds.length > 0
+      ? routes.filter((route) => selectedRouteIds.includes(route.id))
       : routes),
-    [routes, selectedIds],
+    [routes, selectedRouteIds],
   );
 
   return (
@@ -196,7 +207,7 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
           <TripMapChart
             track={[]}
             routes={visibleRoutes}
-            selectedRouteIds={selectedIds}
+            selectedRouteIds={selectedRouteIds}
             onRouteClick={toggleTripSelection}
             height={height}
             mapStyle={effectiveMapStyle}
@@ -212,9 +223,9 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
         </div>
       </div>
 
-      {selectedIds.length > 0 ? (
+      {selectedRouteIds.length > 0 ? (
         <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-fg-secondary">
-          <span>{selectedIds.length} route{selectedIds.length === 1 ? '' : 's'} selected.</span>
+          <span>{selectedRouteIds.length} route{selectedRouteIds.length === 1 ? '' : 's'} selected.</span>
           <button className="font-medium text-accent hover:underline" onClick={clearTripSelection}>Show all</button>
         </div>
       ) : isLoading ? (
@@ -227,12 +238,12 @@ function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
 function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(15);
+  const [pageSize, setPageSize] = useState(MAP_TRIP_PAGE_SIZE);
   const [search, setSearch] = useState('');
   const deferredSearch = React.useDeferredValue(search);
   const { selectedIds } = useTripSelection();
   const isMobile = useIsMobile();
-  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch);
+  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim());
   const placesQuery = useQuery({
     queryKey: ['places'],
     queryFn: () => api.listPlaces(),
@@ -354,8 +365,9 @@ function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx })
           getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
           emptyTitle="No trips found"
           emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
+          fixedLayout
           columnVisibilityMenu
-          className="overflow-x-auto"
+          className="overflow-x-hidden"
         />
       )}
 

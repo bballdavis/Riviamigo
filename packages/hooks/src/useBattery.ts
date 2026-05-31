@@ -31,6 +31,22 @@ export function usePhantomDrain(vehicleId: string | null, from: string, to: stri
   });
 }
 
+export function usePhantomDrainPeriods(
+  vehicleId: string | null,
+  from: string,
+  to: string,
+  limit = 250,
+  minDurationHours = 6,
+) {
+  return useQuery({
+    queryKey: ['battery', 'phantom-periods', vehicleId, from, to, limit, minDurationHours],
+    queryFn: () => api.getIdleDrainPeriods(vehicleId!, from, to, limit, minDurationHours),
+    enabled: !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+}
+
 export function useDegradation(vehicleId: string | null) {
   return useQuery({
     queryKey: ['battery', 'degradation', vehicleId],

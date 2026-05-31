@@ -14,6 +14,12 @@ import { cn } from '../lib/utils';
 import { Skeleton } from '../primitives/Skeleton';
 import { EmptyState } from '../primitives/EmptyState';
 
+type ColumnMeta = {
+  headerClassName?: string;
+  cellClassName?: string;
+  headerContentClassName?: string;
+};
+
 export interface DataTableProps<TData> {
   data: TData[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,6 +31,7 @@ export interface DataTableProps<TData> {
   emptyTitle?: string;
   emptyDescription?: string;
   className?: string;
+  fixedLayout?: boolean;
   columnVisibilityMenu?: boolean;
   defaultHiddenColumns?: string[];
 }
@@ -39,6 +46,7 @@ export function DataTable<TData>({
   emptyTitle = 'No data',
   emptyDescription,
   className,
+  fixedLayout = false,
   columnVisibilityMenu = false,
   defaultHiddenColumns,
 }: DataTableProps<TData>) {
@@ -94,24 +102,26 @@ export function DataTable<TData>({
 
   return (
     <div className={cn('relative w-full overflow-x-auto', className)}>
-      <table className="w-full text-sm">
+      <table className={cn('w-full text-sm', fixedLayout && 'table-fixed')}>
         <thead onContextMenu={openColumnMenu}>
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id} className="border-b border-border">
               {headerGroup.headers.map((header) => {
                 const canSort = header.column.getCanSort();
                 const sorted = header.column.getIsSorted();
+                const meta = header.column.columnDef.meta as ColumnMeta | undefined;
                 return (
                   <th
                     key={header.id}
                     className={cn(
                       'py-2 px-3 text-left text-xs font-medium text-fg-tertiary uppercase tracking-wider whitespace-nowrap',
-                      canSort && 'cursor-pointer select-none hover:text-fg-secondary'
+                      canSort && 'cursor-pointer select-none hover:text-fg-secondary',
+                      meta?.headerClassName
                     )}
                     onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
                     onContextMenu={openColumnMenu}
                   >
-                    <span className="flex items-center gap-1">
+                    <span className={cn('flex items-center gap-1', meta?.headerContentClassName)}>
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       {canSort && (
                         <span className="text-fg-tertiary">
@@ -167,11 +177,14 @@ export function DataTable<TData>({
                     isSelected && 'bg-accent/10 ring-1 ring-inset ring-accent/35 hover:bg-accent/15'
                   )}
                 >
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className={cn('py-2 px-3 text-fg-secondary', isSelected && 'text-fg')}>
+                  {row.getVisibleCells().map((cell) => {
+                    const meta = cell.column.columnDef.meta as ColumnMeta | undefined;
+                    return (
+                    <td key={cell.id} className={cn('py-2 px-3 text-fg-secondary', isSelected && 'text-fg', meta?.cellClassName)}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
-                  ))}
+                    );
+                  })}
                 </tr>
               );
             })

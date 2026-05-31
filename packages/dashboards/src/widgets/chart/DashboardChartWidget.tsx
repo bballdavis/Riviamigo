@@ -936,6 +936,28 @@ function ProjectedRangeMileageChart({
     }))
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
 
+  const projectedValues = rows
+    .map((point) => point.projectedRangeMi)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+
+  let yRange: [number, number] | undefined;
+  let ySplits: number[] | undefined;
+  if (projectedValues.length > 0) {
+    const minProjected = Math.min(...projectedValues);
+    const maxProjected = Math.max(...projectedValues);
+
+    const maxAxis = Math.ceil(maxProjected / 10) * 10 + 10;
+    const minAxis = Math.min(200, Math.floor(minProjected / 10) * 10);
+    const span = maxAxis - minAxis;
+    const tickStep = span <= 80 ? 5 : 10;
+
+    yRange = [minAxis, maxAxis];
+    ySplits = Array.from(
+      { length: Math.floor((maxAxis - minAxis) / tickStep) + 1 },
+      (_, index) => minAxis + index * tickStep,
+    );
+  }
+
   return (
     <RichTimeSeriesChart
       points={rows.map((point) => ({ ts: point.ts }))}
@@ -960,6 +982,8 @@ function ProjectedRangeMileageChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
+      yRange={yRange}
+      ySplits={ySplits}
       yRightUnit="mi"
       mode={definition.mode}
       smoothing={smoothing}

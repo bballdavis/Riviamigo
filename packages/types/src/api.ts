@@ -60,6 +60,29 @@ export interface PhantomDrainPoint {
   drain_pct: number;
 }
 
+export interface PhantomDrainPeriod {
+  period_start: string | null;
+  period_end: string | null;
+  duration_hours: number | null;
+  standby_pct: number | null;
+  soc_start: number | null;
+  soc_end: number | null;
+  soc_lost_pct: number | null;
+  drain_pct_per_hour: number | null;
+  range_start_mi: number | null;
+  range_end_mi: number | null;
+  range_lost_mi: number | null;
+  range_lost_per_hour_mi: number | null;
+  energy_drained_kwh: number | null;
+  avg_power_w: number | null;
+  has_reduced_range: boolean | null;
+}
+
+export interface IdleDrainResponse {
+  vehicle_id: string;
+  periods: PhantomDrainPeriod[];
+}
+
 export interface Trip {
   id: string;
   vehicle_id: string;
@@ -98,6 +121,21 @@ export interface TripPowerPoint {
   regen_power_kw: number | null;
   speed_mph: number | null;
   battery_level: number | null;
+}
+
+export interface TripDetailSeriesPoint {
+  ts: string;
+  speed_mph: number | null;
+  power_kw: number | null;
+  regen_power_kw: number | null;
+  battery_level: number | null;
+  outside_temp_c: number | null;
+  cabin_temp_c: number | null;
+  hvac_active: boolean | null;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
 }
 
 export interface ChargeSession {
@@ -519,6 +557,26 @@ export interface AuthMeResponse {
   email: string;
   role: string;
   default_vehicle_id: string | null;
+}
+
+export type UnitMode = 'imperial' | 'metric' | 'custom';
+export type DistanceUnit = 'miles' | 'kilometers';
+export type SpeedUnit = 'mph' | 'kmh';
+export type TemperatureUnit = 'fahrenheit' | 'celsius';
+export type PressureUnit = 'psi' | 'kpa';
+export type AltitudeUnit = 'feet' | 'meters';
+export type PlaceRadiusUnit = 'feet' | 'meters';
+export type EfficiencyDisplay = 'distance_per_energy' | 'energy_per_distance';
+
+export interface UnitPreferences {
+  mode: UnitMode;
+  distance_unit: DistanceUnit;
+  speed_unit: SpeedUnit;
+  temperature_unit: TemperatureUnit;
+  pressure_unit: PressureUnit;
+  altitude_unit: AltitudeUnit;
+  place_radius_unit: PlaceRadiusUnit;
+  efficiency_display: EfficiencyDisplay;
 }
 
 export type ApiAccessLevel = 'view' | 'edit' | 'admin';

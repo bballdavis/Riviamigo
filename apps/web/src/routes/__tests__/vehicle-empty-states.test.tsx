@@ -31,6 +31,10 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatPercent: (v: number) => `${v}%`,
   formatMiles: (v: number) => `${v} mi`,
   formatEfficiency: (v: number) => `${v} Wh/mi`,
+  formatEfficiencyValue: (v: number) => `${v}`,
+  formatMph: (v: number) => `${v} mph`,
+  getEfficiencyUnitLabel: () => 'Wh/mi',
+  getUnitPreferences: () => ({ system: 'imperial', efficiencyDisplay: 'distance_per_energy' }),
   getEfficiencyDisplay: () => 'distance_per_energy',
   setEfficiencyDisplay: vi.fn(),
   cn: (...args: unknown[]) => args.filter(Boolean).join(' '),
@@ -38,8 +42,10 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 
 vi.mock('@riviamigo/ui/charts', () => ({
   TripMapChart: () => <div data-testid="trip-map-chart" />,
-  SpeedProfileChart: () => <div data-testid="speed-chart" />,
-  ElevationProfileChart: () => <div data-testid="elevation-chart" />,
+  TripDriveChart: () => <div data-testid="trip-drive-chart" />,
+  SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
+  TripTemperatureChart: () => <div data-testid="trip-temperature-chart" />,
+  TripTirePressureChart: () => <div data-testid="trip-tire-pressure-chart" />,
   ChargeCurveChart: () => <div data-testid="charge-curve-chart" />,
 }));
 
@@ -57,8 +63,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useChargeCurve: () => ({ data: undefined, isLoading: false }),
   useTrip: () => ({ data: undefined, isLoading: false }),
   useTripTrack: () => ({ data: undefined, isLoading: false }),
-  useSpeedProfile: () => ({ data: undefined, isLoading: false }),
-  useElevationProfile: () => ({ data: undefined, isLoading: false }),
+  useTripDetailSeries: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({

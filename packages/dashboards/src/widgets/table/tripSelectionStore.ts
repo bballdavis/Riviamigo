@@ -15,9 +15,9 @@ function _notify() {
   for (const fn of _listeners) fn();
 }
 
-/** Resets selection when the vehicle/date context changes (idempotent for same key). */
-export function resetTripSelection(contextKey: string) {
-  if (_state.contextKey === contextKey) return;
+/** Resets selection when the vehicle/date context changes, or forcibly when requested. */
+export function resetTripSelection(contextKey: string, options?: { force?: boolean }) {
+  if (!options?.force && _state.contextKey === contextKey) return;
   _state.contextKey = contextKey;
   _state.selectedIds = [];
   _state.tripRegistry = {};

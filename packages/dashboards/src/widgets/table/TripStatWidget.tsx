@@ -64,7 +64,7 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const { data: series = [] } = useMetricSeries(ctx.vehicleId, options.metric, ctx.from, ctx.to);
 
   React.useEffect(() => {
-    resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`);
+    resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
   }, [ctx.vehicleId, ctx.from, ctx.to]);
 
   const title = instance.title ?? options.metric;
