@@ -101,6 +101,11 @@ describe('api client dashboard contracts', () => {
         restore_requests: [],
         latest_successful_run: null,
         next_run_at: null,
+        runtime_readiness: {
+          pg_dump_available: true,
+          run_now_allowed: true,
+          reason: null,
+        },
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },

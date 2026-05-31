@@ -56,6 +56,15 @@ export function TripDriveChart({
     );
   }
 
+  const hasAnyData = data.some((point) => point.power_kw != null || point.regen_kw != null);
+  if (!hasAnyData) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        No power samples were captured for this trip.
+      </div>
+    );
+  }
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
@@ -106,7 +115,7 @@ export function TripDriveChart({
         <Line
           type="monotone"
           dataKey="power_kw"
-          name="power_kw"
+          name="Power"
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
           dot={false}
@@ -116,7 +125,7 @@ export function TripDriveChart({
         <Line
           type="monotone"
           dataKey="regen_kw"
-          name="regen_kw"
+          name="Regen"
           stroke={CHART_COLORS.sky}
           strokeWidth={1.6}
           dot={false}
