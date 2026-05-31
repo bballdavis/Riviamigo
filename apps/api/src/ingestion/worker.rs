@@ -1994,10 +1994,38 @@ async fn open_software_version(
     version: &str,
     installed_at: chrono::DateTime<Utc>,
 ) {
+    let current_open = sqlx::query_scalar::<_, Option<String>>(
+        r#"SELECT version
+           FROM riviamigo.software_versions
+           WHERE vehicle_id = $1 AND observed_until IS NULL
+           ORDER BY installed_at DESC
+           LIMIT 1"#,
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    if current_open.as_ref().and_then(|v| v.as_deref()) == Some(version) {
+        return;
+    }
+
+    if current_open.is_some() {
+        let _ = sqlx::query(
+            r#"UPDATE riviamigo.software_versions
+               SET observed_until = $1
+               WHERE vehicle_id = $2 AND observed_until IS NULL"#,
+        )
+        .bind(installed_at)
+        .bind(vehicle_id)
+        .execute(pool)
+        .await;
+    }
+
     let _ = sqlx::query(
         r#"INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at)
-           VALUES ($1, $2, $3)
-           ON CONFLICT DO NOTHING"#,
+           VALUES ($1, $2, $3)"#,
     )
     .bind(vehicle_id)
     .bind(version)

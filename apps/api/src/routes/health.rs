@@ -29,6 +29,7 @@ struct HealthResponse {
     tires: Option<TirePressures>,
     closures: Option<Closures>,
     current_software_version: Option<String>,
+    ota_release_notes_url: Option<String>,
     software_history: Vec<SoftwareEntry>,
     thermal_events_30d: i64,
 }
@@ -39,6 +40,7 @@ struct HealthVehicle {
     model: String,
     trim: Option<String>,
     vin: Option<String>,
+    ota_release_notes_url: Option<String>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -113,6 +115,8 @@ async fn health(
         fetch_thermal_count(&state.pool, vehicle_id),
     )?;
 
+    let ota_release_notes_url = vehicle.ota_release_notes_url.clone();
+
     let current_version = sw_history
         .iter()
         .find(|e| e.observed_until.is_none() && e.version.is_some())
@@ -128,6 +132,7 @@ async fn health(
         tires,
         closures,
         current_software_version: current_version,
+        ota_release_notes_url,
         software_history: sw_history,
         thermal_events_30d: thermal_count,
     }))
@@ -136,6 +141,7 @@ async fn health(
 async fn fetch_vehicle(pool: &sqlx::PgPool, vid: Uuid) -> Result<HealthVehicle, AppError> {
     let row = sqlx::query_as::<_, HealthVehicle>(
         r#"SELECT name, model, trim, vin
+                  , ota_release_notes_url
            FROM riviamigo.vehicles
            WHERE id = $1"#,
     )

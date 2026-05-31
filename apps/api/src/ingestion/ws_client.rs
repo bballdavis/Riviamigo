@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest, protocol::CloseFrame, Error as WsError, Message,
@@ -20,6 +21,7 @@ const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const RIVIAN_CONNECTION_TTL_EXPIRED_CODE: u16 = 4420;
 const RIVIAN_CONNECTION_TTL_EXPIRED_REASON: &str = "Connection TTL expired";
 const RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE: u16 = 4410;
+const VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WsLoopEnd {
@@ -53,90 +55,405 @@ pub struct WsInboundEvent {
     pub telemetry: Option<TelemetryEvent>,
 }
 
-const VEHICLE_STATE_SUBSCRIPTION: &str = r#"
-subscription vehicleState($vehicleID: String!) {
-  vehicleState(id: $vehicleID) {
-    cloudConnection { isOnline lastSync }
-    powerState         { timeStamp value }
-    chargerState       { timeStamp value }
-    chargerStatus      { timeStamp value }
-    timeToEndOfCharge  { timeStamp value }
-    batteryLevel       { timeStamp value }
-    batteryCapacity    { timeStamp value }
-    batteryLimit       { timeStamp value }
-    distanceToEmpty    { timeStamp value }
-    gnssLocation       { timeStamp latitude longitude }
-    gnssSpeed          { timeStamp value }
-    gnssAltitude       { timeStamp value }
-    gnssBearing        { timeStamp value }
-    driveMode          { timeStamp value }
-    gearStatus         { timeStamp value }
-    vehicleMileage     { timeStamp value }
-    tirePressureStatusFrontLeft  { timeStamp value }
-    tirePressureStatusFrontRight { timeStamp value }
-    tirePressureStatusRearLeft   { timeStamp value }
-    tirePressureStatusRearRight  { timeStamp value }
-    tirePressureFrontLeft        { timeStamp value }
-    tirePressureFrontRight       { timeStamp value }
-    tirePressureRearLeft         { timeStamp value }
-    tirePressureRearRight        { timeStamp value }
-    doorFrontLeftLocked  { timeStamp value }
-    doorFrontRightLocked { timeStamp value }
-    doorRearLeftLocked   { timeStamp value }
-    doorRearRightLocked  { timeStamp value }
-    doorFrontLeftClosed  { timeStamp value }
-    doorFrontRightClosed { timeStamp value }
-    doorRearLeftClosed   { timeStamp value }
-    doorRearRightClosed  { timeStamp value }
-    closureFrunkLocked    { timeStamp value }
-    closureFrunkClosed    { timeStamp value }
-    closureLiftgateLocked { timeStamp value }
-    closureLiftgateClosed { timeStamp value }
-    closureTailgateLocked { timeStamp value }
-    closureTailgateClosed { timeStamp value }
-    otaAvailableVersion { timeStamp value }
-    otaCurrentVersion   { timeStamp value }
-    otaStatus           { timeStamp value }
-    otaCurrentStatus    { timeStamp value }
-    cabinClimateInteriorTemperature { timeStamp value }
-    cabinClimateDriverTemperature   { timeStamp value }
-    cabinClimateExteriorTemperature { timeStamp value }
-    cabinClimateRunning             { timeStamp value }
-    vehiclePowerOutput              { timeStamp value }
-    regenerativeBrakingPower        { timeStamp value }
-    batteryHvThermalEvent           { timeStamp value }
-    twelveVoltBatteryHealth         { timeStamp value }
-    chargePortState                 { timeStamp value }
-    chargerDerateStatus             { timeStamp value }
-    cabinPreconditioningStatus      { timeStamp value }
-    cabinPreconditioningType        { timeStamp value }
-    petModeStatus                   { timeStamp value }
-    petModeTemperatureStatus        { timeStamp value }
-    defrostDefogStatus              { timeStamp value }
-    steeringWheelHeat               { timeStamp value }
-    seatFrontLeftHeat               { timeStamp value }
-    seatFrontRightHeat              { timeStamp value }
-    seatRearLeftHeat                { timeStamp value }
-    seatRearRightHeat               { timeStamp value }
-    seatFrontLeftVent               { timeStamp value }
-    seatFrontRightVent              { timeStamp value }
-    closureTonneauLocked            { timeStamp value }
-    closureTonneauClosed            { timeStamp value }
-    closureSideBinLeftLocked        { timeStamp value }
-    closureSideBinRightLocked       { timeStamp value }
-    windowFrontLeftClosed           { timeStamp value }
-    windowFrontRightClosed          { timeStamp value }
-    windowRearLeftClosed            { timeStamp value }
-    windowRearRightClosed           { timeStamp value }
-    gearGuardLocked                 { timeStamp value }
-    gearGuardVideoStatus            { timeStamp value }
-    wiperFluidState                 { timeStamp value }
-    brakeFluidLow                   { timeStamp value }
-    alarmSoundStatus                { timeStamp value }
-    serviceMode                     { timeStamp value }
-  }
+#[derive(Debug, Clone, Copy)]
+struct VehicleStateField {
+    name: &'static str,
+    selection: &'static str,
+    critical_reason: Option<&'static str>,
 }
-"#;
+
+impl VehicleStateField {
+    const fn optional(name: &'static str, selection: &'static str) -> Self {
+        Self {
+            name,
+            selection,
+            critical_reason: None,
+        }
+    }
+
+    const fn critical(
+        name: &'static str,
+        selection: &'static str,
+        critical_reason: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            selection,
+            critical_reason: Some(critical_reason),
+        }
+    }
+}
+
+const VEHICLE_STATE_FIELDS: &[VehicleStateField] = &[
+    VehicleStateField::critical(
+        "cloudConnection",
+        "cloudConnection { isOnline lastSync }",
+        "online/offline freshness",
+    ),
+    VehicleStateField::critical(
+        "powerState",
+        "powerState { timeStamp value }",
+        "vehicle state",
+    ),
+    VehicleStateField::critical(
+        "chargerState",
+        "chargerState { timeStamp value }",
+        "charging state",
+    ),
+    VehicleStateField::critical(
+        "chargerStatus",
+        "chargerStatus { timeStamp value }",
+        "charging state",
+    ),
+    VehicleStateField::critical(
+        "timeToEndOfCharge",
+        "timeToEndOfCharge { timeStamp value }",
+        "charging estimates",
+    ),
+    VehicleStateField::critical(
+        "batteryLevel",
+        "batteryLevel { timeStamp value }",
+        "battery state",
+    ),
+    VehicleStateField::critical(
+        "batteryCapacity",
+        "batteryCapacity { timeStamp value }",
+        "battery state",
+    ),
+    VehicleStateField::critical(
+        "batteryLimit",
+        "batteryLimit { timeStamp value }",
+        "battery state",
+    ),
+    VehicleStateField::critical(
+        "distanceToEmpty",
+        "distanceToEmpty { timeStamp value }",
+        "range state",
+    ),
+    VehicleStateField::critical(
+        "gnssLocation",
+        "gnssLocation { timeStamp latitude longitude }",
+        "location/trips",
+    ),
+    VehicleStateField::critical("gnssSpeed", "gnssSpeed { timeStamp value }", "trips"),
+    VehicleStateField::optional("gnssAltitude", "gnssAltitude { timeStamp value }"),
+    VehicleStateField::optional("gnssBearing", "gnssBearing { timeStamp value }"),
+    VehicleStateField::critical("driveMode", "driveMode { timeStamp value }", "trips"),
+    VehicleStateField::critical("gearStatus", "gearStatus { timeStamp value }", "trips"),
+    VehicleStateField::critical(
+        "vehicleMileage",
+        "vehicleMileage { timeStamp value }",
+        "odometer/trips",
+    ),
+    VehicleStateField::optional(
+        "tirePressureStatusFrontLeft",
+        "tirePressureStatusFrontLeft { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureStatusFrontRight",
+        "tirePressureStatusFrontRight { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureStatusRearLeft",
+        "tirePressureStatusRearLeft { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureStatusRearRight",
+        "tirePressureStatusRearRight { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureFrontLeft",
+        "tirePressureFrontLeft { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureFrontRight",
+        "tirePressureFrontRight { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureRearLeft",
+        "tirePressureRearLeft { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureRearRight",
+        "tirePressureRearRight { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorFrontLeftLocked",
+        "doorFrontLeftLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorFrontRightLocked",
+        "doorFrontRightLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorRearLeftLocked",
+        "doorRearLeftLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorRearRightLocked",
+        "doorRearRightLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorFrontLeftClosed",
+        "doorFrontLeftClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorFrontRightClosed",
+        "doorFrontRightClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorRearLeftClosed",
+        "doorRearLeftClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "doorRearRightClosed",
+        "doorRearRightClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureFrunkLocked",
+        "closureFrunkLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureFrunkClosed",
+        "closureFrunkClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureLiftgateLocked",
+        "closureLiftgateLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureLiftgateClosed",
+        "closureLiftgateClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureTailgateLocked",
+        "closureTailgateLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureTailgateClosed",
+        "closureTailgateClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "otaAvailableVersion",
+        "otaAvailableVersion { timeStamp value }",
+    ),
+    VehicleStateField::optional("otaCurrentVersion", "otaCurrentVersion { timeStamp value }"),
+    VehicleStateField::optional("otaStatus", "otaStatus { timeStamp value }"),
+    VehicleStateField::optional("otaCurrentStatus", "otaCurrentStatus { timeStamp value }"),
+    VehicleStateField::optional(
+        "cabinClimateInteriorTemperature",
+        "cabinClimateInteriorTemperature { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "cabinClimateDriverTemperature",
+        "cabinClimateDriverTemperature { timeStamp value }",
+    ),
+    VehicleStateField::critical(
+        "cabinClimateExteriorTemperature",
+        "cabinClimateExteriorTemperature { timeStamp value }",
+        "trip/efficiency temperature context",
+    ),
+    VehicleStateField::optional(
+        "cabinClimateRunning",
+        "cabinClimateRunning { timeStamp value }",
+    ),
+    VehicleStateField::critical(
+        "vehiclePowerOutput",
+        "vehiclePowerOutput { timeStamp value }",
+        "charging and trip energy integration",
+    ),
+    VehicleStateField::critical(
+        "regenerativeBrakingPower",
+        "regenerativeBrakingPower { timeStamp value }",
+        "trip energy integration",
+    ),
+    VehicleStateField::optional(
+        "batteryHvThermalEvent",
+        "batteryHvThermalEvent { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "twelveVoltBatteryHealth",
+        "twelveVoltBatteryHealth { timeStamp value }",
+    ),
+    VehicleStateField::critical(
+        "chargePortState",
+        "chargePortState { timeStamp value }",
+        "charging state",
+    ),
+    VehicleStateField::optional(
+        "chargerDerateStatus",
+        "chargerDerateStatus { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "cabinPreconditioningStatus",
+        "cabinPreconditioningStatus { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "cabinPreconditioningType",
+        "cabinPreconditioningType { timeStamp value }",
+    ),
+    VehicleStateField::optional("petModeStatus", "petModeStatus { timeStamp value }"),
+    VehicleStateField::optional(
+        "petModeTemperatureStatus",
+        "petModeTemperatureStatus { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "defrostDefogStatus",
+        "defrostDefogStatus { timeStamp value }",
+    ),
+    VehicleStateField::optional("steeringWheelHeat", "steeringWheelHeat { timeStamp value }"),
+    VehicleStateField::optional("seatFrontLeftHeat", "seatFrontLeftHeat { timeStamp value }"),
+    VehicleStateField::optional(
+        "seatFrontRightHeat",
+        "seatFrontRightHeat { timeStamp value }",
+    ),
+    VehicleStateField::optional("seatRearLeftHeat", "seatRearLeftHeat { timeStamp value }"),
+    VehicleStateField::optional("seatRearRightHeat", "seatRearRightHeat { timeStamp value }"),
+    VehicleStateField::optional("seatFrontLeftVent", "seatFrontLeftVent { timeStamp value }"),
+    VehicleStateField::optional(
+        "seatFrontRightVent",
+        "seatFrontRightVent { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureTonneauLocked",
+        "closureTonneauLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureTonneauClosed",
+        "closureTonneauClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureSideBinLeftLocked",
+        "closureSideBinLeftLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureSideBinRightLocked",
+        "closureSideBinRightLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "windowFrontLeftClosed",
+        "windowFrontLeftClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "windowFrontRightClosed",
+        "windowFrontRightClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "windowRearLeftClosed",
+        "windowRearLeftClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "windowRearRightClosed",
+        "windowRearRightClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional("gearGuardLocked", "gearGuardLocked { timeStamp value }"),
+    VehicleStateField::optional(
+        "gearGuardVideoStatus",
+        "gearGuardVideoStatus { timeStamp value }",
+    ),
+    VehicleStateField::optional("wiperFluidState", "wiperFluidState { timeStamp value }"),
+    VehicleStateField::optional("brakeFluidLow", "brakeFluidLow { timeStamp value }"),
+    VehicleStateField::optional("alarmSoundStatus", "alarmSoundStatus { timeStamp value }"),
+    VehicleStateField::optional("serviceMode", "serviceMode { timeStamp value }"),
+];
+
+#[derive(Debug, thiserror::Error)]
+#[error("Rivian WS subscription rejected: {reason}")]
+struct RivianSubscriptionRejection {
+    reason: String,
+    invalid_fields: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct VehicleStateSubscriptionHealth {
+    failure_counts: HashMap<String, u32>,
+    disabled_fields: HashSet<String>,
+}
+
+impl VehicleStateSubscriptionHealth {
+    fn build_query(&self) -> String {
+        build_vehicle_state_subscription(&self.disabled_fields)
+    }
+
+    fn disabled_count(&self) -> usize {
+        self.disabled_fields.len()
+    }
+
+    fn record_rejection(&mut self, vehicle_id: &Uuid, invalid_fields: &[String]) -> bool {
+        let mut disabled_any = false;
+
+        for field_name in invalid_fields {
+            let count = self.failure_counts.entry(field_name.clone()).or_default();
+            *count += 1;
+
+            let descriptor = vehicle_state_field(field_name);
+            if descriptor.is_none() {
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    field = %field_name,
+                    failures = *count,
+                    "Rivian WS schema rejected unknown VehicleState field"
+                );
+                continue;
+            }
+
+            if *count >= VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD
+                && self.disabled_fields.insert(field_name.clone())
+            {
+                disabled_any = true;
+                let field = descriptor.expect("checked above");
+                if let Some(reason) = field.critical_reason {
+                    tracing::error!(
+                        vehicle_id = %vehicle_id,
+                        field = %field_name,
+                        failures = *count,
+                        critical_reason = reason,
+                        "Rivian WS VehicleState field disabled after repeated schema rejection"
+                    );
+                } else {
+                    tracing::warn!(
+                        vehicle_id = %vehicle_id,
+                        field = %field_name,
+                        failures = *count,
+                        "Rivian WS VehicleState field disabled after repeated schema rejection"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    vehicle_id = %vehicle_id,
+                    field = %field_name,
+                    failures = *count,
+                    disable_threshold = VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD,
+                    "Rivian WS VehicleState field rejected by schema"
+                );
+            }
+        }
+
+        disabled_any
+    }
+}
+
+fn vehicle_state_field(field_name: &str) -> Option<&'static VehicleStateField> {
+    VEHICLE_STATE_FIELDS
+        .iter()
+        .find(|field| field.name == field_name)
+}
+
+fn build_vehicle_state_subscription(disabled_fields: &HashSet<String>) -> String {
+    let mut query = String::from(
+        "subscription vehicleState($vehicleID: String!) {\n  vehicleState(id: $vehicleID) {\n",
+    );
+    for field in VEHICLE_STATE_FIELDS {
+        if disabled_fields.contains(field.name) {
+            continue;
+        }
+        query.push_str("    ");
+        query.push_str(field.selection);
+        query.push('\n');
+    }
+    query.push_str("  }\n}\n");
+    query
+}
 
 // Forward-declared for the departure-schedule WS subscription (wired in a follow-up).
 #[allow(dead_code)]
@@ -172,9 +489,20 @@ pub async fn run_ws_loop(
     let initial_backoff = config.rivian_ws_reconnect_initial_seconds.max(1);
     let max_backoff = config.rivian_ws_reconnect_max_seconds.max(initial_backoff);
     let mut backoff_secs = initial_backoff;
+    let mut subscription_health = VehicleStateSubscriptionHealth::default();
 
     loop {
-        match connect_and_subscribe(&vehicle_id, &rivian_veh_id, &tokens, &tx, &mut shutdown).await
+        let subscription_query = subscription_health.build_query();
+        match connect_and_subscribe(
+            &vehicle_id,
+            &rivian_veh_id,
+            &tokens,
+            &tx,
+            &mut shutdown,
+            &subscription_query,
+            subscription_health.disabled_count(),
+        )
+        .await
         {
             Ok(WsLoopEnd::Shutdown) => {
                 tracing::info!(vehicle_id = %vehicle_id, "WS connection closed gracefully");
@@ -188,6 +516,17 @@ pub async fn run_ws_loop(
                 backoff_secs = initial_backoff;
             }
             Err(e) => {
+                if let Some(rejection) = e.downcast_ref::<RivianSubscriptionRejection>() {
+                    let healed = subscription_health
+                        .record_rejection(&vehicle_id, &rejection.invalid_fields);
+                    if healed {
+                        tracing::warn!(
+                            vehicle_id = %vehicle_id,
+                            disabled_fields = subscription_health.disabled_count(),
+                            "Rivian WS subscription query degraded after schema rejection"
+                        );
+                    }
+                }
                 let delay = jittered_backoff_secs(backoff_secs);
                 tracing::warn!(vehicle_id = %vehicle_id, err = %e, backoff = delay, "WS error, reconnecting");
                 let _ = tx
@@ -215,6 +554,8 @@ async fn connect_and_subscribe(
     tokens: &RivianTokenBundle,
     tx: &mpsc::Sender<WsInboundEvent>,
     shutdown: &mut tokio::sync::broadcast::Receiver<()>,
+    subscription_query: &str,
+    disabled_field_count: usize,
 ) -> anyhow::Result<WsLoopEnd> {
     let request = build_rivian_ws_request()?;
 
@@ -304,7 +645,7 @@ async fn connect_and_subscribe(
         "type": "subscribe",
         "payload": {
             "operationName": "vehicleState",
-            "query": VEHICLE_STATE_SUBSCRIPTION,
+            "query": subscription_query,
             "variables": { "vehicleID": rivian_veh_id }
         }
     });
@@ -313,7 +654,9 @@ async fn connect_and_subscribe(
         .send(WsInboundEvent {
             kind: WsInboundKind::Control,
             received_at: Utc::now(),
-            raw: json!({"type": "subscribe"}).to_string(),
+            raw:
+                json!({"type": "subscribe", "disabled_vehicle_state_fields": disabled_field_count})
+                    .to_string(),
             message_type: Some("subscribe".into()),
             telemetry: None,
         })
@@ -332,13 +675,19 @@ async fn connect_and_subscribe(
                             // Surface the full message so we can diagnose which field is at fault
                             // rather than silently downgrading to a degraded subscription.
                             let reason = truncate_ws_message(&text);
+                            let invalid_fields = rejected_vehicle_state_fields(&value);
                             tracing::error!(
                                 vehicle_id = %vehicle_id,
                                 message_type = message_type.as_deref().unwrap_or("unknown"),
                                 message = %reason,
-                                "Rivian WS subscription rejected — verify VEHICLE_STATE_SUBSCRIPTION fields against Rivian schema; reconnecting"
+                                invalid_fields = ?invalid_fields,
+                                "Rivian WS subscription rejected by VehicleState schema"
                             );
-                            anyhow::bail!("Rivian WS subscription rejected: {reason}");
+                            return Err(RivianSubscriptionRejection {
+                                reason,
+                                invalid_fields,
+                            }
+                            .into());
                         }
                         match classify_text_message(&text, *vehicle_id) {
                             Ok(inbound) => {
@@ -554,6 +903,36 @@ fn truncate_ws_message(value: &str) -> String {
     format!("{}...", &value[..MAX_LEN])
 }
 
+fn rejected_vehicle_state_fields(value: &Value) -> Vec<String> {
+    let Some(payload) = value.get("payload").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut fields = Vec::new();
+    let mut seen = HashSet::new();
+    for error in payload {
+        let Some(message) = error.get("message").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(field) = rejected_vehicle_state_field(message) else {
+            continue;
+        };
+        if seen.insert(field.clone()) {
+            fields.push(field);
+        }
+    }
+    fields
+}
+
+fn rejected_vehicle_state_field(message: &str) -> Option<String> {
+    let prefix = "Cannot query field \"";
+    let suffix = "\" on type \"VehicleState\"";
+    let start = message.find(prefix)? + prefix.len();
+    let rest = &message[start..];
+    let end = rest.find(suffix)?;
+    Some(rest[..end].to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +1029,60 @@ mod tests {
         .to_string();
         let inbound = classify_text_message(&msg, Uuid::new_v4()).unwrap();
         assert_eq!(inbound.kind, WsInboundKind::Telemetry);
+    }
+
+    #[test]
+    fn extracts_rejected_vehicle_state_fields() {
+        let msg = json!({
+            "id": "1",
+            "type": "error",
+            "payload": [
+                {
+                    "message": "Cannot query field \"cabinClimateExteriorTemperature\" on type \"VehicleState\". Did you mean \"cabinClimateInteriorTemperature\"?",
+                    "locations": [{ "line": 48, "column": 5 }]
+                },
+                {
+                    "message": "Cannot query field \"vehiclePowerOutput\" on type \"VehicleState\".",
+                    "locations": [{ "line": 50, "column": 5 }]
+                },
+                {
+                    "message": "Cannot query field \"vehiclePowerOutput\" on type \"VehicleState\".",
+                    "locations": [{ "line": 50, "column": 5 }]
+                }
+            ]
+        });
+
+        assert_eq!(
+            rejected_vehicle_state_fields(&msg),
+            vec![
+                "cabinClimateExteriorTemperature".to_string(),
+                "vehiclePowerOutput".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn vehicle_state_subscription_omits_disabled_fields() {
+        let disabled_fields = HashSet::from(["vehiclePowerOutput".to_string()]);
+        let query = build_vehicle_state_subscription(&disabled_fields);
+
+        assert!(!query.contains("vehiclePowerOutput { timeStamp value }"));
+        assert!(query.contains("batteryLevel { timeStamp value }"));
+        assert!(query.contains("subscription vehicleState"));
+    }
+
+    #[test]
+    fn subscription_health_disables_repeatedly_rejected_known_fields() {
+        let vehicle_id = Uuid::new_v4();
+        let mut health = VehicleStateSubscriptionHealth::default();
+        let rejected = vec!["vehiclePowerOutput".to_string()];
+
+        assert!(!health.record_rejection(&vehicle_id, &rejected));
+        assert_eq!(health.disabled_count(), 0);
+
+        assert!(health.record_rejection(&vehicle_id, &rejected));
+        assert_eq!(health.disabled_count(), 1);
+        assert!(!health.build_query().contains("vehiclePowerOutput"));
     }
 
     #[test]
