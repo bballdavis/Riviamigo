@@ -85,8 +85,10 @@ async fn idle_drain(
                              (EXTRACT(EPOCH FROM (p.period_end - p.period_start)) / 3600.0)::float8 AS duration_hours,
                              CASE
                                  WHEN EXTRACT(EPOCH FROM (p.period_end - p.period_start)) > 0
-                                 THEN COALESCE(state_overlap.sleep_or_offline_seconds, 0)::float8
-                                      / EXTRACT(EPOCH FROM (p.period_end - p.period_start))
+                                 THEN LEAST(
+                                     COALESCE(state_overlap.sleep_or_offline_seconds, 0)::float8,
+                                     EXTRACT(EPOCH FROM (p.period_end - p.period_start))
+                                 ) / EXTRACT(EPOCH FROM (p.period_end - p.period_start))
                                  ELSE NULL
                              END AS standby_pct,
                              p.soc_start,
@@ -126,36 +128,40 @@ async fn idle_drain(
                          SELECT t.distance_to_empty_mi::float8 AS range_mi
                          FROM timeseries.telemetry t
                          WHERE t.vehicle_id = $1
-                             AND t.ts <= p.period_start
+                             AND t.ts >= p.period_start - INTERVAL '30 minutes'
+                             AND t.ts <= p.period_start + INTERVAL '30 minutes'
                              AND t.distance_to_empty_mi IS NOT NULL
-                         ORDER BY t.ts DESC
+                         ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - p.period_start))) ASC
                          LIMIT 1
                      ) start_sample ON TRUE
                      LEFT JOIN LATERAL (
                          SELECT t.distance_to_empty_mi::float8 AS range_mi
                          FROM timeseries.telemetry t
                          WHERE t.vehicle_id = $1
-                             AND t.ts >= p.period_end
+                             AND t.ts >= p.period_end - INTERVAL '30 minutes'
+                             AND t.ts <= p.period_end + INTERVAL '30 minutes'
                              AND t.distance_to_empty_mi IS NOT NULL
-                         ORDER BY t.ts ASC
+                         ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - p.period_end))) ASC
                          LIMIT 1
                      ) end_sample ON TRUE
                      LEFT JOIN LATERAL (
                          SELECT t.odometer_miles::float8 AS odometer_mi
                          FROM timeseries.telemetry t
                          WHERE t.vehicle_id = $1
-                             AND t.ts <= p.period_start
+                             AND t.ts >= p.period_start - INTERVAL '30 minutes'
+                             AND t.ts <= p.period_start + INTERVAL '30 minutes'
                              AND t.odometer_miles IS NOT NULL
-                         ORDER BY t.ts DESC
+                         ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - p.period_start))) ASC
                          LIMIT 1
                      ) start_odometer ON TRUE
                      LEFT JOIN LATERAL (
                          SELECT t.odometer_miles::float8 AS odometer_mi
                          FROM timeseries.telemetry t
                          WHERE t.vehicle_id = $1
-                             AND t.ts >= p.period_end
+                             AND t.ts >= p.period_end - INTERVAL '30 minutes'
+                             AND t.ts <= p.period_end + INTERVAL '30 minutes'
                              AND t.odometer_miles IS NOT NULL
-                         ORDER BY t.ts ASC
+                         ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - p.period_end))) ASC
                          LIMIT 1
                      ) end_odometer ON TRUE
                      LEFT JOIN LATERAL (

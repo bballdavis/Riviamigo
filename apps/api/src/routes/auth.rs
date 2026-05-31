@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
     response::{IntoResponse, Response},
-    routing::{post, put},
+    routing::{post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};

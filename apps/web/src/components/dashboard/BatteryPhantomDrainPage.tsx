@@ -16,7 +16,7 @@ function summarizePeriods(periods: PhantomDrainPeriod[]) {
     .map((period) => period.standby_pct)
     .filter((value): value is number => value != null && Number.isFinite(value));
   const avgStandbyPct = standbyValues.length > 0
-    ? (standbyValues.reduce((sum, value) => sum + value, 0) / standbyValues.length) * 100
+    ? standbyValues.reduce((sum, value) => sum + value, 0) / standbyValues.length
     : null;
 
   const totalEnergyDrainedKwh = periods.reduce((sum, period) => {
