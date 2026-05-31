@@ -48,6 +48,15 @@ export interface Vehicle {
   auth_state?: string | null;
   auth_reason_code?: string | null;
   images?: VehicleImages | null;
+  membership_role?: 'owner' | 'manager' | 'viewer';
+}
+
+export interface VehicleMember {
+  user_id: string;
+  email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  is_default: boolean;
+  created_at: string;
 }
 
 export interface VehicleImages {

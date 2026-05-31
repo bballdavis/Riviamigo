@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    errors::AppError, ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key,
+    db::vehicles::get_default_vehicle_id, errors::AppError,
+    ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +104,18 @@ impl FromRequestParts<AppState> for AuthUser {
             .map_err(|_| AppError::Unauthorized)?
             .claims;
 
+        let is_disabled = sqlx::query_scalar::<_, Option<bool>>(
+            "SELECT is_disabled FROM riviamigo.users WHERE id = $1",
+        )
+        .bind(claims.sub)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten()
+        .unwrap_or(false);
+        if is_disabled {
+            return Err(AppError::Forbidden);
+        }
+
         Ok(AuthUser {
             user_id: claims.sub,
             default_vehicle_id: claims.default_vehicle_id,
@@ -118,13 +131,14 @@ async fn authenticate_api_key(
     token: &str,
 ) -> Result<AuthUser, AppError> {
     let hash = hash_api_key(token);
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+    let row = sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(
         r#"
-        SELECT v.user_id, k.vehicle_id, k.access_level
+        SELECT k.user_id, k.vehicle_id, k.access_level
         FROM riviamigo.api_keys k
-        JOIN riviamigo.vehicles v ON v.id = k.vehicle_id
+        JOIN riviamigo.users u ON u.id = k.user_id
         WHERE k.key_hash = $1
           AND k.revoked_at IS NULL
+          AND u.is_disabled = FALSE
           AND (k.expires_at IS NULL OR k.expires_at > now())
         "#,
     )
@@ -153,9 +167,11 @@ async fn authenticate_api_key(
     .execute(&state.pool)
     .await?;
 
+    let default_vehicle_id = row.1.or(get_default_vehicle_id(&state.pool, row.0).await?);
+
     Ok(AuthUser {
         user_id: row.0,
-        default_vehicle_id: Some(row.1),
+        default_vehicle_id,
         api_access_level: Some(row.2),
     })
 }

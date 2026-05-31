@@ -11,7 +11,8 @@ import type {
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
-  CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse,
+  CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
+  AddVehicleMemberBody, UpdateVehicleMemberBody,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -242,14 +243,14 @@ class ApiClient {
           return this.request<T>(method, path, body, params, false);
         } catch {
           this.clearTokens();
-          const detail = {
+          const detail: ApiFailureDetail = {
             status: res.status,
             code: 'AUTH_EXPIRED',
             message: `Session expired while calling ${method} ${path}. Sign in again.`,
             method,
             path,
-            rateLimitSource,
-            retryAfterSeconds,
+            ...(rateLimitSource ? { rateLimitSource } : {}),
+            ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
           };
           this.reportFailure(detail);
           throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: detail.code, detail });
@@ -258,14 +259,14 @@ class ApiClient {
 
       const responseBody = await res.json().catch(() => null);
       const err: ApiError = responseBody?.error ?? { code: 'unknown', message: res.statusText };
-      const detail = {
+      const detail: ApiFailureDetail = {
         status: res.status,
         code: err.code,
         message: err.message,
         method,
         path,
-        rateLimitSource,
-        retryAfterSeconds,
+        ...(rateLimitSource ? { rateLimitSource } : {}),
+        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
       };
       if (reportErrors) this.reportFailure(detail);
       throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
@@ -360,6 +361,27 @@ class ApiClient {
 
   async updateVehicleName(vehicleId: string, name: string): Promise<void> {
     return this.request('PUT', `/v1/vehicles/${vehicleId}/name`, { name });
+  }
+
+  async setDefaultVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string }> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/default`);
+  }
+
+  async listVehicleMembers(vehicleId: string): Promise<VehicleMember[]> {
+    const res = await this.request<{ members: VehicleMember[] }>('GET', `/v1/vehicles/${vehicleId}/members`);
+    return res.members ?? [];
+  }
+
+  async addVehicleMember(vehicleId: string, body: AddVehicleMemberBody): Promise<void> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/members`, body);
+  }
+
+  async updateVehicleMember(vehicleId: string, userId: string, body: UpdateVehicleMemberBody): Promise<void> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/members/${userId}`, body);
+  }
+
+  async removeVehicleMember(vehicleId: string, userId: string): Promise<void> {
+    return this.request('DELETE', `/v1/vehicles/${vehicleId}/members/${userId}`);
   }
 
   // API access

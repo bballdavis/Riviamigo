@@ -8,9 +8,11 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
+    db::vehicles::require_vehicle_role,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
 };
@@ -109,17 +111,16 @@ async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKeyRecord>>, AppError> {
     require_session_auth(&auth)?;
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT k.id, k.vehicle_id, COALESCE(k.name, k.label, 'API key') AS "name!",
                k.access_level, k.created_at, k.last_used_at, k.expires_at, k.revoked_at
         FROM riviamigo.api_keys k
-        JOIN riviamigo.vehicles v ON v.id = k.vehicle_id
-        WHERE v.user_id = $1
+        WHERE k.user_id = $1
         ORDER BY k.created_at DESC
         "#,
-        auth.user_id
     )
+    .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -127,14 +128,18 @@ async fn list_api_keys(
         .into_iter()
         .map(|r| {
             Ok(ApiKeyRecord {
-                id: r.id,
-                vehicle_id: r.vehicle_id,
-                name: r.name,
-                access_level: ApiAccessLevel::try_from(r.access_level.as_str())?,
-                created_at: r.created_at,
-                last_used_at: r.last_used_at,
-                expires_at: r.expires_at,
-                revoked_at: r.revoked_at,
+                id: r.try_get("id")?,
+                vehicle_id: r.try_get::<Option<Uuid>, _>("vehicle_id")?.ok_or_else(|| {
+                    AppError::Validation("vehicle-scoped API key missing vehicle_id".into())
+                })?,
+                name: r.try_get("name")?,
+                access_level: ApiAccessLevel::try_from(
+                    r.try_get::<String, _>("access_level")?.as_str(),
+                )?,
+                created_at: r.try_get("created_at")?,
+                last_used_at: r.try_get("last_used_at")?,
+                expires_at: r.try_get("expires_at")?,
+                revoked_at: r.try_get("revoked_at")?,
             })
         })
         .collect::<Result<Vec<_>, AppError>>()?;
@@ -148,7 +153,13 @@ async fn create_api_key(
     Json(body): Json<CreateApiKeyBody>,
 ) -> Result<(StatusCode, Json<CreateApiKeyResponse>), AppError> {
     require_session_auth(&auth)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, body.vehicle_id).await?;
+    require_vehicle_role(
+        &state.pool,
+        auth.user_id,
+        body.vehicle_id,
+        &["owner", "manager"],
+    )
+    .await?;
 
     if body.name.trim().is_empty() {
         return Err(AppError::Validation("API key name is required".into()));
@@ -161,30 +172,33 @@ async fn create_api_key(
     let secret = generate_api_key();
     let key_hash = hash_api_key(&secret);
 
-    let row = sqlx::query!(
+    let row = sqlx::query(
         r#"
-        INSERT INTO riviamigo.api_keys (vehicle_id, key_hash, label, name, access_level)
-        VALUES ($1, $2, $3, $3, $4)
+        INSERT INTO riviamigo.api_keys (user_id, vehicle_id, key_hash, label, name, access_level)
+        VALUES ($1, $2, $3, $4, $4, $5)
         RETURNING id, vehicle_id, COALESCE(name, label, 'API key') AS "name!",
                   access_level, created_at, last_used_at, expires_at, revoked_at
         "#,
-        body.vehicle_id,
-        key_hash.as_slice(),
-        body.name.trim(),
-        body.access_level.as_str()
     )
+    .bind(auth.user_id)
+    .bind(body.vehicle_id)
+    .bind(key_hash.as_slice())
+    .bind(body.name.trim())
+    .bind(body.access_level.as_str())
     .fetch_one(&state.pool)
     .await?;
 
     let record = ApiKeyRecord {
-        id: row.id,
-        vehicle_id: row.vehicle_id,
-        name: row.name,
-        access_level: ApiAccessLevel::try_from(row.access_level.as_str())?,
-        created_at: row.created_at,
-        last_used_at: row.last_used_at,
-        expires_at: row.expires_at,
-        revoked_at: row.revoked_at,
+        id: row.try_get("id")?,
+        vehicle_id: row
+            .try_get::<Option<Uuid>, _>("vehicle_id")?
+            .ok_or_else(|| AppError::Validation("created API key missing vehicle_id".into()))?,
+        name: row.try_get("name")?,
+        access_level: ApiAccessLevel::try_from(row.try_get::<String, _>("access_level")?.as_str())?,
+        created_at: row.try_get("created_at")?,
+        last_used_at: row.try_get("last_used_at")?,
+        expires_at: row.try_get("expires_at")?,
+        revoked_at: row.try_get("revoked_at")?,
     };
 
     Ok((
@@ -203,19 +217,17 @@ async fn revoke_api_key(
 ) -> Result<StatusCode, AppError> {
     require_session_auth(&auth)?;
 
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         UPDATE riviamigo.api_keys k
         SET revoked_at = now(), updated_at = now()
-        FROM riviamigo.vehicles v
         WHERE k.id = $1
-          AND k.vehicle_id = v.id
-          AND v.user_id = $2
+          AND k.user_id = $2
           AND k.revoked_at IS NULL
         "#,
-        id,
-        auth.user_id
     )
+    .bind(id)
+    .bind(auth.user_id)
     .execute(&state.pool)
     .await?;
 

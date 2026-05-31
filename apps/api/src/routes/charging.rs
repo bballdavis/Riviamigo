@@ -397,8 +397,8 @@ async fn list_sessions_response(
         "SELECT cs.id, cs.started_at, \
             TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
-                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
-                cs.is_home, COALESCE(cs.charger_type, \
+                COALESCE(g.name, a.display_name, CASE WHEN COALESCE(csa.is_home, cs.is_home) THEN 'Home' END) AS location_name, \
+                COALESCE(csa.is_home, cs.is_home) AS is_home, COALESCE(cs.charger_type, \
                     CASE \
                         WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' \
                         WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
@@ -411,15 +411,16 @@ async fn list_sessions_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                cs.cost_usd AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
                 cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
                 0::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
-         LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
-         LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $6 \
+         LEFT JOIN riviamigo.geofences g ON g.id = COALESCE(csa.geofence_id, cs.geofence_id) \
+         LEFT JOIN riviamigo.addresses a ON a.id = COALESCE(csa.address_id, cs.address_id) \
             LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
                   AND ($7::text IS NULL OR \
@@ -438,19 +439,21 @@ async fn list_sessions_response(
     .await?;
 
     let total: i64 = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) \
+        "SELECT COUNT(*) \
                  FROM riviamigo.charge_sessions cs \
-                 LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
-                 LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+                 LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $4 \
+                 LEFT JOIN riviamigo.geofences g ON g.id = COALESCE(csa.geofence_id, cs.geofence_id) \
+                 LEFT JOIN riviamigo.addresses a ON a.id = COALESCE(csa.address_id, cs.address_id) \
                  WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-                     AND ($4::text IS NULL OR \
-                                COALESCE(g.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-                                COALESCE(a.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\')"
+                     AND ($5::text IS NULL OR \
+                                COALESCE(g.name, '') ILIKE '%' || $5 || '%' ESCAPE '\\' OR \
+                                COALESCE(a.display_name, '') ILIKE '%' || $5 || '%' ESCAPE '\\')",
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
-        .bind(search.as_deref())
+    .bind(user_id)
+    .bind(search.as_deref())
     .fetch_one(&mut *tx)
     .await?;
 
@@ -479,8 +482,8 @@ async fn get_session_response(
         "SELECT cs.id, cs.started_at, \
             TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
-                COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
-                cs.is_home, COALESCE(cs.charger_type, \
+                COALESCE(g.name, a.display_name, CASE WHEN COALESCE(csa.is_home, cs.is_home) THEN 'Home' END) AS location_name, \
+                COALESCE(csa.is_home, cs.is_home) AS is_home, COALESCE(cs.charger_type, \
                     CASE \
                         WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' \
                         WHEN COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, \
@@ -492,7 +495,7 @@ async fn get_session_response(
                     END \
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
-                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, cs.cost_usd AS cost_usd, \
+                COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, \
                 cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
@@ -500,8 +503,9 @@ async fn get_session_response(
                 cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
                 COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
-         LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
-         LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
+         LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $3 \
+         LEFT JOIN riviamigo.geofences g ON g.id = COALESCE(csa.geofence_id, cs.geofence_id) \
+         LEFT JOIN riviamigo.addresses a ON a.id = COALESCE(csa.address_id, cs.address_id) \
          LEFT JOIN riviamigo.user_preferences up ON up.user_id = $3 \
          LEFT JOIN LATERAL ( \
              SELECT COUNT(*)::int8 AS sample_count \
@@ -581,11 +585,11 @@ async fn get_summary_response(
         "WITH normalized AS (
             SELECT
                 COALESCE(kwh_added, energy_added_wh / 1000.0) AS energy_kwh,
-                is_home,
+                COALESCE(csa.is_home, cs.is_home) AS is_home,
                 charger_type,
                 network_vendor,
                 charge_limit,
-                cost_usd,
+                COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd,
                 energy_used_wh,
                 is_free_session,
                 range_added_km,
@@ -593,7 +597,8 @@ async fn get_summary_response(
                 COALESCE(max_charge_rate_kw, avg_charge_rate_kw,
                     CASE WHEN duration_minutes > 0 THEN COALESCE(kwh_added, energy_added_wh / 1000.0) / (duration_minutes::float8 / 60.0) END
                 ) AS rate_kw
-            FROM riviamigo.charge_sessions
+            FROM riviamigo.charge_sessions cs
+            LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $4
             WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
         ),
         typed AS (
@@ -629,6 +634,7 @@ async fn get_summary_response(
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
+    .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
 
@@ -665,36 +671,39 @@ async fn get_summary_response(
         });
 
     let weekly = sqlx::query_as::<_, WeeklySummaryRow>(
-        "SELECT date_trunc('week', started_at) AS week_start,
+        "SELECT date_trunc('week', cs.started_at) AS week_start,
             COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)),0) AS kwh,
-            SUM(cost_usd) AS cost_usd,
+            SUM(COALESCE(csa.cost_usd, cs.cost_usd)) AS cost_usd,
             COUNT(*) AS sessions
-         FROM riviamigo.charge_sessions
+         FROM riviamigo.charge_sessions cs
+         LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $4
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
          GROUP BY 1 ORDER BY 1",
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
+    .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
 
     let network_breakdown = sqlx::query_as::<_, NetworkBreakdownRow>(
         "SELECT
                 CASE
-                    WHEN is_home = true THEN 'Home Charging'
+                    WHEN COALESCE(csa.is_home, cs.is_home) = true THEN 'Home Charging'
                     WHEN network_vendor IS NOT NULL THEN network_vendor
                     WHEN charger_type IN ('ac', 'ac_l2') THEN 'Other AC'
                     ELSE NULL
                 END AS network_vendor,
                 COUNT(*) AS session_count,
                 SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)) AS energy_kwh,
-                SUM(cost_usd) AS cost_usd,
+                SUM(COALESCE(csa.cost_usd, cs.cost_usd)) AS cost_usd,
                 COUNT(*) FILTER (WHERE is_free_session) AS free_sessions
-         FROM riviamigo.charge_sessions
+         FROM riviamigo.charge_sessions cs
+         LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $4
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
            AND (
-               is_home = true
+               COALESCE(csa.is_home, cs.is_home) = true
                OR network_vendor IS NOT NULL
                OR charger_type IN ('ac', 'ac_l2')
            )
@@ -704,6 +713,7 @@ async fn get_summary_response(
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
+    .bind(user_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();

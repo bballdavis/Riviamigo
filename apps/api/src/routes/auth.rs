@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
     response::{IntoResponse, Response},
-    routing::{post},
+    routing::post,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
+    db::vehicles::get_default_vehicle_id,
     errors::AppError,
     middleware::auth::{issue_access_token, AppState, AuthUser},
 };
@@ -91,7 +92,7 @@ async fn register(
     let hash = argon2_hash(&body.password)?;
     let email = body.email.to_lowercase();
     let mut tx = state.pool.begin().await?;
-    sqlx::query!("LOCK TABLE riviamigo.users IN SHARE ROW EXCLUSIVE MODE")
+    sqlx::query("LOCK TABLE riviamigo.users IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
 
@@ -99,7 +100,7 @@ async fn register(
         .fetch_one(&mut *tx)
         .await?
         .unwrap_or(0);
-    let role = if user_count == 0 { "admin" } else { "user" };
+    let role = if user_count == 0 { "super_user" } else { "user" };
 
     let user_id: Uuid = sqlx::query_scalar!(
         "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id",
@@ -153,18 +154,14 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Result<Response, AppError> {
     let email = body.email.to_lowercase();
-    let row = sqlx::query!(
-        "SELECT id, password_hash, default_vehicle_id FROM riviamigo.users WHERE email = $1",
-        email.trim()
-    )
-    .fetch_optional(&state.pool)
-    .await?;
+    let row = sqlx::query("SELECT id, password_hash, is_disabled FROM riviamigo.users WHERE email = $1")
+        .bind(email.trim())
+        .fetch_optional(&state.pool)
+        .await?;
 
     // Always run the Argon2 verification to avoid timing oracle for user enumeration.
-    let hash = row
-        .as_ref()
-        .map(|r| r.password_hash.as_str())
-        .unwrap_or(DUMMY_HASH);
+    let password_hash = row.as_ref().map(|r| r.get::<String, _>("password_hash"));
+    let hash = password_hash.as_deref().unwrap_or(DUMMY_HASH);
     if let Err(e) = verify_password(&body.password, hash) {
         if row.is_some() {
             audit_log(
@@ -178,14 +175,19 @@ async fn login(
     }
 
     let row = row.ok_or(AppError::Unauthorized)?;
+    if row.get::<bool, _>("is_disabled") {
+        return Err(AppError::Forbidden);
+    }
 
-    let token = issue_access_token(row.id, row.default_vehicle_id, &state.jwt_keys)?;
-    let refresh = issue_refresh_token(&state.pool, row.id).await?;
+    let user_id: Uuid = row.get("id");
+    let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
+    let token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
+    let refresh = issue_refresh_token(&state.pool, user_id).await?;
 
     audit_log(
         state.pool.clone(),
         "login_success",
-        Some(row.id),
+        Some(user_id),
         format!("user logged in"),
     );
 
@@ -195,7 +197,7 @@ async fn login(
         Json(AccessTokenResponse {
             access_token: token,
             expires_in: 900,
-            default_vehicle_id: row.default_vehicle_id,
+            default_vehicle_id,
         }),
     )
         .into_response())
@@ -232,13 +234,7 @@ async fn refresh(
     .await?
     .ok_or(AppError::Unauthorized)?;
 
-    let default_vehicle_id = sqlx::query_scalar!(
-        "SELECT default_vehicle_id FROM riviamigo.users WHERE id = $1",
-        user_id
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
+    let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
 
     // Issue a fresh refresh token on every use so a leaked token is limited to one use.
     let new_refresh = issue_refresh_token(&state.pool, user_id).await?;
@@ -281,19 +277,19 @@ async fn logout(
 }
 
 async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoResponse, AppError> {
-    let row = sqlx::query!(
-        "SELECT email, default_vehicle_id, role FROM riviamigo.users WHERE id = $1",
-        auth.user_id
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let row = sqlx::query("SELECT email, role FROM riviamigo.users WHERE id = $1")
+        .bind(auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let default_vehicle_id = get_default_vehicle_id(&state.pool, auth.user_id).await?;
 
     Ok(Json(serde_json::json!({
         "user_id":            auth.user_id,
-        "email":              row.email,
-        "role":               row.role,
-        "default_vehicle_id": row.default_vehicle_id
+        "email":              row.get::<String, _>("email"),
+        "role":               row.get::<String, _>("role"),
+        "default_vehicle_id": default_vehicle_id
     })))
 }
 
@@ -381,10 +377,7 @@ async fn update_preferences(
     let units = normalize_units_payload(body.units)?;
     let (distance_unit, temperature_unit) = match units.mode.as_str() {
         "metric" => ("kilometers".to_string(), "celsius".to_string()),
-        "custom" => (
-            units.distance_unit.clone(),
-            units.temperature_unit.clone(),
-        ),
+        "custom" => (units.distance_unit.clone(), units.temperature_unit.clone()),
         _ => ("miles".to_string(), "fahrenheit".to_string()),
     };
 
@@ -495,7 +488,9 @@ fn resolved_units_payload(
     }
 }
 
-fn normalize_units_payload(input: UnitPreferencesPayload) -> Result<UnitPreferencesPayload, AppError> {
+fn normalize_units_payload(
+    input: UnitPreferencesPayload,
+) -> Result<UnitPreferencesPayload, AppError> {
     let valid_mode = matches!(input.mode.as_str(), "imperial" | "metric" | "custom");
     if !valid_mode {
         return Err(AppError::Validation("invalid unit mode".to_string()));
@@ -506,11 +501,21 @@ fn normalize_units_payload(input: UnitPreferencesPayload) -> Result<UnitPreferen
     let valid_pressure = matches!(input.pressure_unit.as_str(), "psi" | "kpa");
     let valid_altitude = matches!(input.altitude_unit.as_str(), "feet" | "meters");
     let valid_radius = matches!(input.place_radius_unit.as_str(), "feet" | "meters");
-    let valid_eff =
-        matches!(input.efficiency_display.as_str(), "distance_per_energy" | "energy_per_distance");
-    if !(valid_distance && valid_speed && valid_temp && valid_pressure && valid_altitude && valid_radius && valid_eff)
+    let valid_eff = matches!(
+        input.efficiency_display.as_str(),
+        "distance_per_energy" | "energy_per_distance"
+    );
+    if !(valid_distance
+        && valid_speed
+        && valid_temp
+        && valid_pressure
+        && valid_altitude
+        && valid_radius
+        && valid_eff)
     {
-        return Err(AppError::Validation("invalid unit preference value".to_string()));
+        return Err(AppError::Validation(
+            "invalid unit preference value".to_string(),
+        ));
     }
     Ok(input)
 }

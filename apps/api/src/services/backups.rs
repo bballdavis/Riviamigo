@@ -790,7 +790,9 @@ fn should_log_scheduler_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_dependency_error_if_unavailable, should_log_scheduler_failure, BackupDriver};
+    use super::{
+        runtime_dependency_error_if_unavailable, should_log_scheduler_failure, BackupDriver,
+    };
     use crate::errors::AppError;
 
     #[test]

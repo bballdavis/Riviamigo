@@ -1,4 +1,4 @@
-import type { ChargerType, DriveMode } from './vehicle';
+import type { ChargerType, DriveMode, VehicleMember } from './vehicle';
 
 export interface DateRange {
   from: Date;
@@ -608,6 +608,19 @@ export interface CreateApiKeyBody {
 export interface CreateApiKeyResult {
   key: string;
   record: ApiKeyRecord;
+}
+
+export interface AddVehicleMemberBody {
+  email: string;
+  role: 'owner' | 'manager' | 'viewer';
+}
+
+export interface UpdateVehicleMemberBody {
+  role: 'owner' | 'manager' | 'viewer';
+}
+
+export interface VehicleMembersResponse {
+  members: VehicleMember[];
 }
 
 export interface ApiCatalog {

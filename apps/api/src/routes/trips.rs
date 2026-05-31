@@ -161,10 +161,11 @@ async fn list_trips(
                 sa.display_name AS start_address, ea.display_name AS end_address, \
                 t.outside_temp_c AS outside_temp_c \
          FROM riviamigo.trips t \
-         LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
-         LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
-         LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
-         LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
+         LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $7 \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
          AND ($6::text IS NULL OR \
               COALESCE(sg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
@@ -181,16 +182,18 @@ async fn list_trips(
     .bind(limit)
     .bind(offset)
     .bind(search.as_deref())
+    .bind(auth.user_id)
     .fetch_all(&mut *tx)
     .await?;
 
     let total: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) \
          FROM riviamigo.trips t \
-         LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
-         LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
-         LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
-         LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
+         LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5 \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
          AND ($4::text IS NULL OR \
               COALESCE(sg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
@@ -204,6 +207,7 @@ async fn list_trips(
     .bind(from)
     .bind(to)
     .bind(search.as_deref())
+    .bind(auth.user_id)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -240,14 +244,16 @@ async fn get_trip(
                 sa.display_name AS start_address, ea.display_name AS end_address, \
                 t.outside_temp_c AS outside_temp_c \
          FROM riviamigo.trips t \
-         LEFT JOIN riviamigo.geofences sg ON sg.id = t.start_geofence_id \
-         LEFT JOIN riviamigo.geofences eg ON eg.id = t.end_geofence_id \
-         LEFT JOIN riviamigo.addresses sa ON sa.id = t.start_address_id \
-         LEFT JOIN riviamigo.addresses ea ON ea.id = t.end_address_id \
+         LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
             WHERE t.id=$1 AND t.vehicle_id=$2",
     )
     .bind(id)
     .bind(vid)
+    .bind(auth.user_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
