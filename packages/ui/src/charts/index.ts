@@ -38,5 +38,7 @@ export { SpeedHistogramChart } from './SpeedHistogramChart';
 export type { SpeedHistogramChartProps, SpeedHistogramBin } from './SpeedHistogramChart';
 export { TripTemperatureChart } from './TripTemperatureChart';
 export type { TripTemperatureChartProps, TripTemperaturePoint } from './TripTemperatureChart';
+export { TripElevationChart } from './TripElevationChart';
+export type { TripElevationChartProps, TripElevationPoint } from './TripElevationChart';
 export { TripTirePressureChart } from './TripTirePressureChart';
 export type { TripTirePressureChartProps, TripTirePressurePoint } from './TripTirePressureChart';

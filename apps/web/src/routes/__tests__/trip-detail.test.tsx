@@ -23,6 +23,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
   TripDriveChart: () => <div data-testid="trip-drive-chart" />,
   SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
   TripTemperatureChart: () => <div data-testid="trip-temperature-chart" />,
+  TripElevationChart: () => <div data-testid="trip-elevation-chart" />,
   TripTirePressureChart: () => <div data-testid="trip-tire-pressure-chart" />,
 }));
 
