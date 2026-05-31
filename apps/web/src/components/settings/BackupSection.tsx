@@ -285,6 +285,8 @@ export function BackupSection() {
   const restoreArtifact = overview.data.artifacts.find((a) => a.id === selectedArtifactId) ?? null;
   const canRequestRestore = Boolean(restoreArtifact) && restoreConfirmation.trim() === 'RESTORE';
   const timezoneIsAutoDetected = !!detectedTimezone && draft.timezone === detectedTimezone && !currentSettings.timezone;
+  const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
+  const runNowReason = overview.data.runtime_readiness?.reason;
 
   return (
     <div className="flex flex-col gap-5">
@@ -303,6 +305,7 @@ export function BackupSection() {
               size="sm"
               iconLeft={<Play className="h-3.5 w-3.5" />}
               loading={runBackupNow.isPending}
+              disabled={!runNowAllowed}
               onClick={() => runBackupNow.mutate()}
             >
               Run now
@@ -319,6 +322,11 @@ export function BackupSection() {
           </div>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {!runNowAllowed && runNowReason && (
+            <div className="rounded-lg border border-orange-400/40 bg-orange-500/10 px-3 py-2 text-xs text-orange-200">
+              Manual backup unavailable: {runNowReason}
+            </div>
+          )}
 
           {/* Status chips — equal-width grid */}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

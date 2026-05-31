@@ -23,6 +23,8 @@ pub enum AppError {
     RivianApi(String),
     #[error("Validation error: {0}")]
     Validation(String),
+    #[error("Dependency unavailable: {0}")]
+    DependencyUnavailable(String),
     #[error("Internal error")]
     Internal(#[from] anyhow::Error),
     #[error("Redis error: {0}")]
@@ -37,6 +39,11 @@ impl IntoResponse for AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", self.to_string()),
             AppError::Conflict(m) => (StatusCode::CONFLICT, "CONFLICT", m.clone()),
             AppError::Validation(m) => (StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION", m.clone()),
+            AppError::DependencyUnavailable(m) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DEPENDENCY_UNAVAILABLE",
+                m.clone(),
+            ),
             AppError::Io(e) => {
                 tracing::error!(err = %e, "io error");
                 (

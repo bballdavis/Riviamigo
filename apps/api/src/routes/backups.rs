@@ -141,6 +141,14 @@ struct BackupOverviewResponse {
     restore_requests: Vec<BackupRestoreRequestResponse>,
     latest_successful_run: Option<BackupRunResponse>,
     next_run_at: Option<DateTime<Utc>>,
+    runtime_readiness: BackupRuntimeReadinessResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupRuntimeReadinessResponse {
+    pg_dump_available: bool,
+    run_now_allowed: bool,
+    reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,6 +311,7 @@ async fn get_backup_overview(
     let restore_requests = load_restore_requests(&state).await?;
     let latest_successful_run = load_latest_successful_run(&state).await?;
     let next_run_at = compute_next_run(&settings)?;
+    let readiness = backup_service::runtime_readiness(&state.config).await;
 
     Ok(Json(BackupOverviewResponse {
         settings,
@@ -311,6 +320,11 @@ async fn get_backup_overview(
         restore_requests,
         latest_successful_run,
         next_run_at,
+        runtime_readiness: BackupRuntimeReadinessResponse {
+            pg_dump_available: readiness.pg_dump_available,
+            run_now_allowed: readiness.run_now_allowed,
+            reason: readiness.reason,
+        },
     }))
 }
 

@@ -101,6 +101,7 @@ subscription vehicleState($vehicleID: String!) {
     cabinClimateInteriorTemperature { timeStamp value }
     cabinClimateDriverTemperature   { timeStamp value }
     cabinClimateExteriorTemperature { timeStamp value }
+    cabinClimateRunning             { timeStamp value }
     vehiclePowerOutput              { timeStamp value }
     regenerativeBrakingPower        { timeStamp value }
     batteryHvThermalEvent           { timeStamp value }

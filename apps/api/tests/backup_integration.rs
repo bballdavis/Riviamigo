@@ -227,6 +227,8 @@ async fn admin_can_read_default_backup_settings() {
     assert_eq!(response.body["settings"]["target_type"], "s3");
     assert_eq!(response.body["settings"]["has_secret_key"], false);
     assert!(response.body["next_run_at"].is_null());
+    assert_eq!(response.body["runtime_readiness"]["run_now_allowed"], true);
+    assert!(response.body["runtime_readiness"]["reason"].is_null());
     assert_eq!(
         response.body["recent_runs"].as_array().map(Vec::len),
         Some(0)
@@ -281,6 +283,7 @@ async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
     assert_eq!(overview.body["settings"]["prefix"], "prod/riviamigo");
     assert_eq!(overview.body["settings"]["has_secret_key"], true);
     assert!(overview.body["next_run_at"].is_string());
+    assert_eq!(overview.body["runtime_readiness"]["run_now_allowed"], true);
 
     let encrypted_secret: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT secret_key_encrypted FROM riviamigo.backup_settings WHERE id = TRUE",

@@ -77,6 +77,27 @@ export function TripDetailContent() {
 
   const speedBins = React.useMemo(() => buildSpeedHistogram(timeline), [timeline]);
 
+  const metricCoverage = React.useMemo(() => {
+    let powerSamples = 0;
+    let tempSamples = 0;
+    let tireSamples = 0;
+
+    for (const point of timeline) {
+      if (point.power_kw != null || point.regen_kw != null) powerSamples += 1;
+      if (point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null) tempSamples += 1;
+      if (point.tire_fl_psi != null || point.tire_fr_psi != null || point.tire_rl_psi != null || point.tire_rr_psi != null) {
+        tireSamples += 1;
+      }
+    }
+
+    return {
+      powerSamples,
+      tempSamples,
+      tireSamples,
+      totalTimelineSamples: timeline.length,
+    };
+  }, [timeline]);
+
   const activeTimelinePoint = React.useMemo(
     () => getNearestTimelinePoint(timeline, activeElapsedS),
     [timeline, activeElapsedS],
@@ -156,7 +177,11 @@ export function TripDetailContent() {
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-fg">Drive Chart</h3>
-                    <p className="text-xs text-fg-tertiary">Power and regen over time</p>
+                    <p className="text-xs text-fg-tertiary">
+                      {metricCoverage.powerSamples > 0
+                        ? `${metricCoverage.powerSamples} power samples`
+                        : 'No power samples in trip telemetry'}
+                    </p>
                   </div>
                   <DriveChart
                     data={timeline}
@@ -185,7 +210,11 @@ export function TripDetailContent() {
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-fg">Temperature</h3>
-                    <p className="text-xs text-fg-tertiary">Outside, cabin, driver setpoint, and climate status</p>
+                    <p className="text-xs text-fg-tertiary">
+                      {metricCoverage.tempSamples > 0
+                        ? `${metricCoverage.tempSamples} temperature samples`
+                        : 'No temperature samples in trip telemetry'}
+                    </p>
                   </div>
                   <TemperatureChart
                     data={timeline}
@@ -213,7 +242,11 @@ export function TripDetailContent() {
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-fg">Tire Pressure</h3>
-                    <p className="text-xs text-fg-tertiary">Front and rear PSI traces</p>
+                    <p className="text-xs text-fg-tertiary">
+                      {metricCoverage.tireSamples > 0
+                        ? `${metricCoverage.tireSamples} tire pressure samples`
+                        : 'No tire pressure samples in trip telemetry'}
+                    </p>
                   </div>
                   <TirePressureChart
                     data={timeline}

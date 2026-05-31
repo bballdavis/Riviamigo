@@ -24,6 +24,7 @@ export const colors = {
   },
   dataViz: {
     amber:   '#FD8304',
+    yellow:  '#FACC15',
     sky:     '#60A5FA',
     emerald: '#10B981',
     violet:  '#A78BFA',

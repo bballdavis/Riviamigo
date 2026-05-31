@@ -147,6 +147,11 @@ vi.mock('@riviamigo/hooks', () => ({
         updated_at: '2026-05-04T12:01:00Z',
       },
       next_run_at: '2026-05-10T08:00:00Z',
+      runtime_readiness: {
+        pg_dump_available: true,
+        run_now_allowed: true,
+        reason: null,
+      },
     }),
     updateBackupSettings: vi.fn().mockResolvedValue({}),
     runBackupNow: vi.fn().mockResolvedValue({}),
