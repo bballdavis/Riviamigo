@@ -474,6 +474,11 @@ export interface BackupOverview {
   restore_requests: BackupRestoreRequest[];
   latest_successful_run: BackupRun | null;
   next_run_at: string | null;
+  runtime_readiness: {
+    pg_dump_available: boolean;
+    run_now_allowed: boolean;
+    reason: string | null;
+  };
 }
 
 export interface RunBackupResponse {

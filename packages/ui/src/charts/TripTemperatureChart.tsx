@@ -98,14 +98,10 @@ export function TripTemperatureChart({
           content={<ChartTooltip
             labelFormatter={(value) => formatElapsed(Number(value))}
             formatter={(value, name) => {
-              if (name === 'outside_temp_c') return [formatTemp(Number(value)), 'Outside'];
-              if (name === 'cabin_temp_c') return [formatTemp(Number(value)), 'Cabin'];
-              if (name === 'driver_temp_c') return [formatTemp(Number(value)), 'Driver Set'];
-              if (name === 'Outside Temp') return [formatTemp(Number(value)), 'Outside'];
-              if (name === 'Cabin Temp') return [formatTemp(Number(value)), 'Cabin'];
-              if (name === 'Driver Setpoint') return [formatTemp(Number(value)), 'Driver Set'];
-              if (name === 'hvac_on') return [Number(value) > 0 ? 'On' : 'Off', 'Climate'];
-              if (name === 'Climate On') return [Number(value) > 0 ? 'On' : 'Off', 'Climate'];
+              if (name === 'outside_temp_c' || name === 'Outside Temp') return [formatTemp(Number(value)), 'Outside'];
+              if (name === 'cabin_temp_c' || name === 'Cabin Temp') return [formatTemp(Number(value)), 'Cabin'];
+              if (name === 'driver_temp_c' || name === 'Driver Setpoint') return [formatTemp(Number(value)), 'Driver Set'];
+              if (name === 'hvac_on' || name === 'Climate On') return [Number(value) > 0 ? 'On' : 'Off', 'Climate'];
               return [String(value), String(name)];
             }}
           />}
@@ -126,15 +122,15 @@ export function TripTemperatureChart({
           dataKey="hvac_on"
           name="Climate On"
           stroke="none"
-          fill={CHART_COLORS.accent}
-          fillOpacity={0.1}
+          fill={CHART_COLORS.violet}
+          fillOpacity={0.16}
           isAnimationActive={false}
         />
         <Line
           type="monotone"
           dataKey="outside_temp_c"
           name="Outside Temp"
-          stroke={CHART_COLORS.sky}
+          stroke={CHART_COLORS.emerald}
           strokeWidth={1.8}
           dot={false}
           isAnimationActive={false}
@@ -144,7 +140,7 @@ export function TripTemperatureChart({
           type="monotone"
           dataKey="cabin_temp_c"
           name="Cabin Temp"
-          stroke={CHART_COLORS.accent}
+          stroke={CHART_COLORS.orange}
           strokeWidth={1.8}
           dot={false}
           isAnimationActive={false}
@@ -154,7 +150,7 @@ export function TripTemperatureChart({
           type="monotone"
           dataKey="driver_temp_c"
           name="Driver Setpoint"
-          stroke={CHART_COLORS.warning}
+          stroke={CHART_COLORS.yellow}
           strokeWidth={1.6}
           strokeDasharray="4 4"
           dot={false}

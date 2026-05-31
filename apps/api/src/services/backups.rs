@@ -19,6 +19,7 @@ use crate::{config::Config, errors::AppError};
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
 static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
+const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools or set BACKUP_DRIVER=json (manifest-only backups)";
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -39,6 +40,13 @@ impl BackupRunTrigger {
 pub struct BackupExecutionResult {
     pub run_id: Uuid,
     pub artifact_id: Uuid,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BackupRuntimeReadiness {
+    pub pg_dump_available: bool,
+    pub run_now_allowed: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -151,6 +159,8 @@ pub async fn run_backup_now(
     requested_by: Option<Uuid>,
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
+    ensure_backup_runtime_available(config).await?;
+
     // Acquire a dedicated connection so the advisory lock and its matching
     // unlock always run on the exact same PostgreSQL backend session.
     // Using different pool connections for lock vs unlock causes the unlock to
@@ -368,7 +378,8 @@ async fn maybe_run_scheduled_backup(
         if !is_pg_dump_available().await {
             if !PG_DUMP_UNAVAILABLE_LOGGED.swap(true, Ordering::Relaxed) {
                 tracing::warn!(
-                    "backup.scheduler.skipped_pg_dump_unavailable: pg_dump is not installed or not on PATH; set BACKUP_DRIVER=json or install PostgreSQL client tools"
+                    "backup.scheduler.skipped_pg_dump_unavailable: {}",
+                    PG_DUMP_UNAVAILABLE_MESSAGE
                 );
             }
             return Ok(None);
@@ -513,6 +524,44 @@ async fn is_pg_dump_available() -> bool {
     match Command::new("pg_dump").arg("--version").output().await {
         Ok(output) => output.status.success(),
         Err(_) => false,
+    }
+}
+
+async fn ensure_backup_runtime_available(config: &Config) -> Result<(), AppError> {
+    let driver = BackupDriver::from_config(&config.backup_driver);
+    let pg_dump_available = is_pg_dump_available().await;
+    if let Some(error) = runtime_dependency_error_if_unavailable(driver, pg_dump_available) {
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn runtime_dependency_error_if_unavailable(
+    driver: BackupDriver,
+    pg_dump_available: bool,
+) -> Option<AppError> {
+    if driver == BackupDriver::PgDump && !pg_dump_available {
+        return Some(AppError::DependencyUnavailable(
+            PG_DUMP_UNAVAILABLE_MESSAGE.to_string(),
+        ));
+    }
+    None
+}
+
+pub async fn runtime_readiness(config: &Config) -> BackupRuntimeReadiness {
+    if BackupDriver::from_config(&config.backup_driver) != BackupDriver::PgDump {
+        return BackupRuntimeReadiness {
+            pg_dump_available: false,
+            run_now_allowed: true,
+            reason: None,
+        };
+    }
+
+    let pg_dump_available = is_pg_dump_available().await;
+    BackupRuntimeReadiness {
+        pg_dump_available,
+        run_now_allowed: pg_dump_available,
+        reason: (!pg_dump_available).then_some(PG_DUMP_UNAVAILABLE_MESSAGE.to_string()),
     }
 }
 
@@ -741,7 +790,7 @@ fn should_log_scheduler_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::should_log_scheduler_failure;
+    use super::{runtime_dependency_error_if_unavailable, should_log_scheduler_failure, BackupDriver};
     use crate::errors::AppError;
 
     #[test]
@@ -773,5 +822,18 @@ mod tests {
             &mut last_failure_signature,
             &second
         ));
+    }
+
+    #[test]
+    fn runtime_dependency_error_is_returned_when_pg_dump_is_missing() {
+        let err = runtime_dependency_error_if_unavailable(BackupDriver::PgDump, false)
+            .expect("expected dependency error");
+        assert!(matches!(err, AppError::DependencyUnavailable(_)));
+    }
+
+    #[test]
+    fn runtime_dependency_error_not_returned_for_json_driver() {
+        let err = runtime_dependency_error_if_unavailable(BackupDriver::Json, false);
+        assert!(err.is_none());
     }
 }
