@@ -6,7 +6,7 @@ use http::{
         CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY,
         X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
     },
-    HeaderValue,
+    HeaderValue, StatusCode,
 };
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::{
@@ -50,7 +50,27 @@ async fn log_server_errors(
 ) -> axum::response::Response {
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
-    let response = next.run(req).await;
+    let mut response = next.run(req).await;
+
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        // Mark API-originated throttles so clients can differentiate from edge (nginx) limits.
+        if !response
+            .headers()
+            .contains_key("x-riviamigo-ratelimit-source")
+        {
+            response.headers_mut().insert(
+                "x-riviamigo-ratelimit-source",
+                HeaderValue::from_static("api"),
+            );
+        }
+        if !response.headers().contains_key(http::header::RETRY_AFTER) {
+            response
+                .headers_mut()
+                .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+
+        tracing::warn!(%method, %path, status = %response.status(), limiter_source = "api", "request rate limited");
+    }
 
     if response.status().is_server_error() {
         tracing::error!(%method, %path, status = %response.status(), "request returned server error");

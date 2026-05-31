@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@riviamigo/hooks';
 import { PageLayout, DateRangePicker, Tooltip } from '@riviamigo/ui/primitives';
-import { getEfficiencyDisplay, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
+import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
   DashboardRenderer,
   getDefaultBySlug,
@@ -67,6 +67,7 @@ export function DashboardPageShell({
   const [preset, setPreset] = useState<PresetKey | undefined>(DEFAULT_PRESET);
   const [range, setRange] = useState(presetToRange(DEFAULT_PRESET));
   const [efficiencyDisplay, setEfficiencyDisplayState] = useState<EfficiencyDisplay>(() => getEfficiencyDisplay());
+  const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
   const { from, to } = rangeToIso(range);
 
   const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
@@ -99,6 +100,19 @@ export function DashboardPageShell({
     setLocalConfig(null);
     setEditMode(false);
   }
+
+  useEffect(() => {
+    const handleUnits = () => {
+      setUnitMode(getUnitPreferences().mode);
+      setEfficiencyDisplayState(getEfficiencyDisplay());
+    };
+    window.addEventListener('rm-units-change', handleUnits as EventListener);
+    window.addEventListener('storage', handleUnits);
+    return () => {
+      window.removeEventListener('rm-units-change', handleUnits as EventListener);
+      window.removeEventListener('storage', handleUnits);
+    };
+  }, []);
 
   useEffect(() => {
     const wasEditMode = previousEditModeRef.current;
@@ -146,7 +160,7 @@ export function DashboardPageShell({
   const efficiencyDisplayTooltip = efficiencyDisplay === 'distance_per_energy'
     ? 'Showing mi/kWh. Click to switch to Wh/mi.'
     : 'Showing Wh/mi. Click to switch to mi/kWh.';
-  const efficiencyDisplayAction = showEfficiencyDisplayToggle && !currentEditMode ? (
+  const efficiencyDisplayAction = showEfficiencyDisplayToggle && !currentEditMode && unitMode !== 'custom' ? (
     <Tooltip
       content={(
         <div className="grid gap-1">

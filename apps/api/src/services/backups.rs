@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration as StdDuration,
 };
 
@@ -17,6 +18,7 @@ use crate::{config::Config, errors::AppError};
 
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
+static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -85,7 +87,7 @@ impl TryFrom<&str> for BackupFrequency {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackupDriver {
     PgDump,
     Json,
@@ -126,11 +128,18 @@ pub fn start_backup_scheduler(pool: PgPool, config: Config) -> tokio::task::Join
         let interval_secs = config.backup_poll_interval_seconds.max(30);
         let mut interval = tokio::time::interval(StdDuration::from_secs(interval_secs));
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut last_failure_signature: Option<String> = None;
 
         loop {
             interval.tick().await;
             if let Err(error) = maybe_run_scheduled_backup(&pool, &config).await {
-                tracing::error!(error = %error, "backup.scheduler.tick_failed");
+                if should_log_scheduler_failure(&mut last_failure_signature, &error) {
+                    tracing::error!(error = ?error, "backup.scheduler.tick_failed");
+                } else {
+                    tracing::debug!(error = ?error, "backup.scheduler.tick_failed_repeat");
+                }
+            } else {
+                last_failure_signature = None;
             }
         }
     })
@@ -355,6 +364,18 @@ async fn maybe_run_scheduled_backup(
     pool: &PgPool,
     config: &Config,
 ) -> Result<Option<Uuid>, AppError> {
+    if BackupDriver::from_config(&config.backup_driver) == BackupDriver::PgDump {
+        if !is_pg_dump_available().await {
+            if !PG_DUMP_UNAVAILABLE_LOGGED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "backup.scheduler.skipped_pg_dump_unavailable: pg_dump is not installed or not on PATH; set BACKUP_DRIVER=json or install PostgreSQL client tools"
+                );
+            }
+            return Ok(None);
+        }
+        PG_DUMP_UNAVAILABLE_LOGGED.store(false, Ordering::Relaxed);
+    }
+
     let settings = load_settings(pool).await?;
     if !settings.enabled {
         return Ok(None);
@@ -486,6 +507,13 @@ async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), Ap
         stderr.trim().to_string()
     };
     Err(AppError::Internal(anyhow::anyhow!(message)))
+}
+
+async fn is_pg_dump_available() -> bool {
+    match Command::new("pg_dump").arg("--version").output().await {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
 }
 
 /// Writes a JSON **manifest** file — metadata only (driver, database, trigger,
@@ -695,5 +723,55 @@ fn combine_local(timezone: Tz, date: NaiveDate, time: NaiveTime) -> chrono::Date
         chrono::LocalResult::Single(value) => value,
         chrono::LocalResult::Ambiguous(first, second) => first.min(second),
         chrono::LocalResult::None => timezone.from_utc_datetime(&naive),
+    }
+}
+
+fn should_log_scheduler_failure(
+    last_failure_signature: &mut Option<String>,
+    error: &AppError,
+) -> bool {
+    let signature = format!("{error:?}");
+    if last_failure_signature.as_deref() == Some(signature.as_str()) {
+        false
+    } else {
+        *last_failure_signature = Some(signature);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_log_scheduler_failure;
+    use crate::errors::AppError;
+
+    #[test]
+    fn scheduler_failure_logging_is_deduplicated() {
+        let mut last_failure_signature = None;
+        let error = AppError::Conflict("backup already running".into());
+
+        assert!(should_log_scheduler_failure(
+            &mut last_failure_signature,
+            &error
+        ));
+        assert!(!should_log_scheduler_failure(
+            &mut last_failure_signature,
+            &error
+        ));
+    }
+
+    #[test]
+    fn scheduler_failure_logging_resets_for_new_errors() {
+        let mut last_failure_signature = None;
+        let first = AppError::Conflict("first".into());
+        let second = AppError::Conflict("second".into());
+
+        assert!(should_log_scheduler_failure(
+            &mut last_failure_signature,
+            &first
+        ));
+        assert!(should_log_scheduler_failure(
+            &mut last_failure_signature,
+            &second
+        ));
     }
 }

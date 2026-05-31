@@ -21,6 +21,8 @@ import {
   formatEfficiency,
   formatKwh,
   formatMiles,
+  formatMph,
+  formatPressure,
   formatTemp,
 } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
@@ -228,6 +230,7 @@ function buildSourceValues(
   chargingSummary: unknown,
   status: unknown
 ) {
+  const charging = objectValues(chargingSummary);
   const primary =
     dataSource === 'batteryHealth'
       ? health
@@ -239,6 +242,20 @@ function buildSourceValues(
 
   return {
     ...objectValues(primary),
+    ...(
+      dataSource === 'chargingSummary'
+        ? {
+            away_kwh_including_unknown:
+              (typeof charging.away_kwh === 'number' && Number.isFinite(charging.away_kwh)
+                ? charging.away_kwh
+                : 0) +
+              (typeof charging.unknown_location_kwh === 'number' &&
+              Number.isFinite(charging.unknown_location_kwh)
+                ? charging.unknown_location_kwh
+                : 0),
+          }
+        : {}
+    ),
     health,
     battery: health,
     charging: chargingSummary,
@@ -446,8 +463,8 @@ function formatMetricValue(value: number | null | undefined, unit: string | null
   if (unit === 'Wh/mi') return formatEfficiency(value);
   if (unit === 'min') return formatDuration(value);
   if (unit === '%') return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
-  if (unit === 'psi') return `${value.toFixed(1)} psi`;
-  if (unit === 'mph') return `${value.toFixed(0)} mph`;
+  if (unit === 'psi') return formatPressure(value);
+  if (unit === 'mph') return formatMph(value);
   if (unit === 'kW') return `${value.toFixed(1)} kW`;
   if (unit === 'C') return formatTemp(value);
   if (!unit && Number.isInteger(value)) return value.toFixed(0);

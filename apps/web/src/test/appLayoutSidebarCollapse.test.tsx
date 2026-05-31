@@ -15,6 +15,9 @@ vi.mock('@riviamigo/hooks', () => ({
     defaultVehicleId: 'vehicle-1',
     logout,
   }),
+  useVehicles: () => ({
+    data: [{ id: 'vehicle-1', model: 'R1S' }],
+  }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicleStatus: () => ({
     status: null,
@@ -70,5 +73,29 @@ describe('AppLayout sidebar collapse', () => {
     expect(navigate).toHaveBeenCalledWith({ to: '/battery' });
     expect(main).toHaveClass('lg:pl-[72px]');
     expect(localStorage.getItem('rm-sidebar-collapsed')).toBe('true');
+  });
+
+  it('shows phantom drain as a battery child item and navigates to it', () => {
+    render(
+      <AppLayout activeKey="battery.phantom-drain">
+        <div>Battery content</div>
+      </AppLayout>,
+    );
+
+    expect(screen.getByText('Phantom Drain')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Phantom Drain'));
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/battery/phantom-drain' });
+  });
+
+  it('does not show battery child nav outside battery section', () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>,
+    );
+
+    expect(screen.queryByText('Phantom Drain')).not.toBeInTheDocument();
   });
 });

@@ -36,6 +36,7 @@ export interface RichTimeSeriesChartProps {
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
   smoothing?: number | undefined;
   yRange?: [number, number] | undefined;
+  ySplits?: number[] | undefined;
   stepInterpolation?: boolean | undefined;
   xSplits?: number[] | undefined;
 }
@@ -280,6 +281,7 @@ export function RichTimeSeriesChart({
   yValueFormatter = formatValue,
   smoothing = 0,
   yRange,
+  ySplits,
   stepInterpolation = false,
   xSplits,
 }: RichTimeSeriesChartProps) {
@@ -323,11 +325,11 @@ export function RichTimeSeriesChart({
   const structureKey = React.useMemo(
     () =>
       `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
-      `${yRange ? yRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
+      `${yRange ? yRange.join(',') : ''}|${ySplits ? ySplits.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, yRange, xSplits, xSecondaryFormatter, yRightUnit, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, yRange, ySplits, xSplits, xSecondaryFormatter, yRightUnit, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -442,6 +444,9 @@ export function RichTimeSeriesChart({
       stroke: CHART_COLORS.muted,
       grid: { stroke: CHART_COLORS.grid, width: 1 },
       font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
+      ...(ySplits
+        ? { splits: () => ySplits }
+        : {}),
       size: (_self, values) => {
         if (!values || values.length === 0) return 50;
         return estimateYLabelWidth(values as string[]);

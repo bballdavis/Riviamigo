@@ -17,13 +17,9 @@ export interface NavItem {
   children?: NavItem[];
 }
 
+const NAV_ICON_CLASS = 'h-[1.125rem] w-[1.125rem]';
+
 const DEFAULT_NAV_ITEMS: NavItem[] = [
-  { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <TbCarSuv className="h-4 w-4" /> },
-  { key: 'battery',    label: 'Battery',    href: '/battery',   icon: <Battery className="h-4 w-4" /> },
-  { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <FaChargingStation className="h-4 w-4" /> },
-  { key: 'trips',      label: 'Trips',      href: '/trips',     icon: <BiTrip className="h-4 w-4" /> },
-  { key: 'efficiency', label: 'Efficiency', href: '/efficiency',icon: <TrendingUp className="h-4 w-4" /> },
-  { key: 'health',     label: 'Health',     href: '/health',    icon: <Heart className="h-4 w-4" /> },
   { key: 'dashboard',  label: 'Overview',   href: '/',          icon: <TbCarSuv className={NAV_ICON_CLASS} /> },
   { key: 'battery',    label: 'Battery',    href: '/battery',   icon: <Battery className={NAV_ICON_CLASS} /> },
   { key: 'charging',   label: 'Charging',   href: '/charging',  icon: <FaChargingStation className={NAV_ICON_CLASS} /> },
