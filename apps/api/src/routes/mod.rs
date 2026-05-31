@@ -42,6 +42,7 @@ pub mod rivian_stewardship;
 pub mod schedules;
 pub mod state_timeline;
 pub mod trips;
+pub mod users;
 pub mod vehicles;
 
 async fn log_server_errors(
@@ -148,6 +149,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(idle_drain::router())
         .merge(locations::router())
         .merge(grafana::router())
+        .merge(users::router())
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();
