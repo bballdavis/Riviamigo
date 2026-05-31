@@ -12,6 +12,7 @@ import {
   TripDriveChart as DriveChart,
   SpeedHistogramChart as SpeedHistogram,
   TripTemperatureChart as TemperatureChart,
+  TripElevationChart as ElevationChart,
   TripTirePressureChart as TirePressureChart,
 } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -165,6 +166,9 @@ export function TripDetailContent() {
                   />
                 </div>
 
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-fg">Speed Histogram</h3>
@@ -177,17 +181,30 @@ export function TripDetailContent() {
                     onActiveElapsedSChange={setActiveElapsedS}
                   />
                 </div>
+
+                <div className="rounded-xl border border-border bg-bg-surface p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-fg">Temperature</h3>
+                    <p className="text-xs text-fg-tertiary">Outside, cabin, driver setpoint, and climate status</p>
+                  </div>
+                  <TemperatureChart
+                    data={timeline}
+                    loading={seriesLoading}
+                    activeElapsedS={activeElapsedS}
+                    onActiveElapsedSChange={setActiveElapsedS}
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-fg">Temperature</h3>
-                    <p className="text-xs text-fg-tertiary">Outside and cabin temperature over time</p>
+                    <h3 className="text-sm font-semibold text-fg">Elevation Profile</h3>
+                    <p className="text-xs text-fg-tertiary">TeslaMate-style terrain profile across the drive</p>
                   </div>
-                  <TemperatureChart
+                  <ElevationChart
                     data={timeline}
-                    loading={seriesLoading}
+                    loading={trackLoading}
                     activeElapsedS={activeElapsedS}
                     onActiveElapsedSChange={setActiveElapsedS}
                   />
@@ -223,11 +240,13 @@ interface TimelinePoint {
   battery_level: number | null;
   outside_temp_c: number | null;
   cabin_temp_c: number | null;
+  driver_temp_c: number | null;
   hvac_active: boolean | null;
   tire_fl_psi: number | null;
   tire_fr_psi: number | null;
   tire_rl_psi: number | null;
   tire_rr_psi: number | null;
+  altitude_m: number | null;
   lat: number | null;
   lng: number | null;
 }
@@ -256,13 +275,14 @@ function buildTimeline(
     battery_level: number | null;
     outside_temp_c: number | null;
     cabin_temp_c: number | null;
+    driver_temp_c: number | null;
     hvac_active: boolean | null;
     tire_fl_psi: number | null;
     tire_fr_psi: number | null;
     tire_rl_psi: number | null;
     tire_rr_psi: number | null;
   }>,
-  track: Array<{ ts: string; lat: number; lng: number }>,
+  track: Array<{ ts: string; lat: number; lng: number; altitude_m: number | null }>,
 ): TimelinePoint[] {
   if (!tripStartIso) return [];
   const tripStartMs = parseISO(tripStartIso).getTime();
@@ -275,6 +295,7 @@ function buildTimeline(
     battery_level: number | null;
     outside_temp_c: number | null;
     cabin_temp_c: number | null;
+    driver_temp_c: number | null;
     hvac_active: boolean | null;
     tire_fl_psi: number | null;
     tire_fr_psi: number | null;
@@ -292,6 +313,7 @@ function buildTimeline(
       battery_level: point.battery_level,
       outside_temp_c: point.outside_temp_c,
       cabin_temp_c: point.cabin_temp_c,
+      driver_temp_c: point.driver_temp_c,
       hvac_active: point.hvac_active,
       tire_fl_psi: point.tire_fl_psi,
       tire_fr_psi: point.tire_fr_psi,
@@ -305,6 +327,7 @@ function buildTimeline(
       tsMs: typeof point.ts === 'string' ? parseISO(point.ts).getTime() : Number.NaN,
       lat: point.lat,
       lng: point.lng,
+      altitude_m: point.altitude_m,
     }))
     .filter((point) => Number.isFinite(point.tsMs))
     .sort((a, b) => a.tsMs - b.tsMs);
@@ -328,11 +351,13 @@ function buildTimeline(
         battery_level: seriesPoint?.battery_level ?? null,
         outside_temp_c: seriesPoint?.outside_temp_c ?? null,
         cabin_temp_c: seriesPoint?.cabin_temp_c ?? null,
+        driver_temp_c: seriesPoint?.driver_temp_c ?? null,
         hvac_active: seriesPoint?.hvac_active ?? null,
         tire_fl_psi: seriesPoint?.tire_fl_psi ?? null,
         tire_fr_psi: seriesPoint?.tire_fr_psi ?? null,
         tire_rl_psi: seriesPoint?.tire_rl_psi ?? null,
         tire_rr_psi: seriesPoint?.tire_rr_psi ?? null,
+        altitude_m: trackPoint?.altitude_m ?? null,
         lat: trackPoint?.lat ?? null,
         lng: trackPoint?.lng ?? null,
       };
@@ -340,7 +365,7 @@ function buildTimeline(
 }
 
 function findNearestTrackPoint(
-  rows: Array<{ tsMs: number; lat: number; lng: number }>,
+  rows: Array<{ tsMs: number; lat: number; lng: number; altitude_m: number | null }>,
   targetTsMs: number,
 ) {
   if (rows.length === 0) return null;
@@ -348,11 +373,14 @@ function findNearestTrackPoint(
   let hi = rows.length - 1;
   while (lo < hi) {
     const mid = Math.floor((lo + hi) / 2);
-    if (rows[mid].tsMs < targetTsMs) lo = mid + 1;
+    const midRow = rows[mid];
+    if (!midRow) break;
+    if (midRow.tsMs < targetTsMs) lo = mid + 1;
     else hi = mid;
   }
-  const right = rows[lo];
-  const left = rows[Math.max(0, lo - 1)];
+  const right = rows[lo] ?? rows[rows.length - 1];
+  const left = rows[Math.max(0, lo - 1)] ?? right;
+  if (!right || !left) return null;
   return Math.abs(right.tsMs - targetTsMs) < Math.abs(left.tsMs - targetTsMs) ? right : left;
 }
 
@@ -377,9 +405,11 @@ function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramB
   for (const row of speedRows) {
     const speedMph = row.speed_mph ?? 0;
     const index = Math.min(bins.length - 1, Math.floor(speedMph / binSize));
-    bins[index].count += 1;
-    if (bins[index].sample_elapsed_s == null) {
-      bins[index].sample_elapsed_s = row.elapsed_s;
+    const bin = bins[index];
+    if (!bin) continue;
+    bin.count += 1;
+    if (bin.sample_elapsed_s == null) {
+      bin.sample_elapsed_s = row.elapsed_s;
     }
   }
 

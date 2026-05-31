@@ -131,6 +131,7 @@ export interface TripDetailSeriesPoint {
   battery_level: number | null;
   outside_temp_c: number | null;
   cabin_temp_c: number | null;
+  driver_temp_c: number | null;
   hvac_active: boolean | null;
   tire_fl_psi: number | null;
   tire_fr_psi: number | null;

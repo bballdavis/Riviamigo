@@ -100,6 +100,9 @@ subscription vehicleState($vehicleID: String!) {
     otaCurrentStatus    { timeStamp value }
     cabinClimateInteriorTemperature { timeStamp value }
     cabinClimateDriverTemperature   { timeStamp value }
+    cabinClimateExteriorTemperature { timeStamp value }
+    vehiclePowerOutput              { timeStamp value }
+    regenerativeBrakingPower        { timeStamp value }
     batteryHvThermalEvent           { timeStamp value }
     twelveVoltBatteryHealth         { timeStamp value }
     chargePortState                 { timeStamp value }

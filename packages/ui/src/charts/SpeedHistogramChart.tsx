@@ -12,6 +12,26 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 
+function hexToRgb(hex: string) {
+  const normalized = hex.replace('#', '').trim();
+  if (normalized.length !== 6) return { r: 56, g: 189, b: 248 };
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function blendColor(fromHex: string, toHex: string, ratio: number) {
+  const from = hexToRgb(fromHex);
+  const to = hexToRgb(toHex);
+  const t = Math.max(0, Math.min(1, ratio));
+  const r = Math.round(from.r + (to.r - from.r) * t);
+  const g = Math.round(from.g + (to.g - from.g) * t);
+  const b = Math.round(from.b + (to.b - from.b) * t);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 export interface SpeedHistogramBin {
   label: string;
   min: number;
@@ -51,6 +71,10 @@ export function SpeedHistogramChart({
     );
   }
 
+  const maxCount = Math.max(...bins.map((bin) => bin.count));
+  const minCount = Math.min(...bins.map((bin) => bin.count));
+  const countRange = Math.max(1, maxCount - minCount);
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart
@@ -88,13 +112,17 @@ export function SpeedHistogramChart({
           cursor={TOOLTIP_CURSOR_STYLE}
         />
         <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-          {bins.map((bin) => (
+          {bins.map((bin) => {
+            const intensity = (bin.count - minCount) / countRange;
+            const fill = blendColor(CHART_COLORS.success, CHART_COLORS.accent, intensity);
+            return (
             <Cell
               key={bin.label}
-              fill={bin.label === activeBinLabel ? CHART_COLORS.accent : CHART_COLORS.sky}
-              fillOpacity={bin.label === activeBinLabel ? 0.95 : 0.72}
+              fill={fill}
+              fillOpacity={bin.label === activeBinLabel ? 0.98 : 0.82}
             />
-          ))}
+            );
+          })}
         </Bar>
       </BarChart>
     </ResponsiveContainer>

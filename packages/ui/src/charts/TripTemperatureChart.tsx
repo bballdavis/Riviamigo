@@ -3,6 +3,7 @@ import {
   ResponsiveContainer,
   ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -18,6 +19,8 @@ export interface TripTemperaturePoint {
   elapsed_s: number;
   outside_temp_c: number | null;
   cabin_temp_c: number | null;
+  driver_temp_c?: number | null;
+  hvac_active?: boolean | null;
 }
 
 export interface TripTemperatureChartProps {
@@ -49,7 +52,7 @@ export function TripTemperatureChart({
     );
   }
 
-  const hasAnyData = data.some((point) => point.outside_temp_c != null || point.cabin_temp_c != null);
+  const hasAnyData = data.some((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null);
   if (!hasAnyData) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
@@ -58,10 +61,15 @@ export function TripTemperatureChart({
     );
   }
 
+  const chartData = data.map((point) => ({
+    ...point,
+    hvac_on: point.hvac_active ? 1 : 0,
+  }));
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
-        data={data}
+        data={chartData}
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
           const payload = state?.activePayload?.[0]?.payload as TripTemperaturePoint | undefined;
@@ -85,12 +93,19 @@ export function TripTemperatureChart({
           tickFormatter={(value: number) => formatTemp(value)}
           width={34}
         />
+        <YAxis yAxisId="climate" domain={[0, 1]} hide />
         <Tooltip
           content={<ChartTooltip
             labelFormatter={(value) => formatElapsed(Number(value))}
             formatter={(value, name) => {
               if (name === 'outside_temp_c') return [formatTemp(Number(value)), 'Outside'];
               if (name === 'cabin_temp_c') return [formatTemp(Number(value)), 'Cabin'];
+              if (name === 'driver_temp_c') return [formatTemp(Number(value)), 'Driver Set'];
+              if (name === 'Outside Temp') return [formatTemp(Number(value)), 'Outside'];
+              if (name === 'Cabin Temp') return [formatTemp(Number(value)), 'Cabin'];
+              if (name === 'Driver Setpoint') return [formatTemp(Number(value)), 'Driver Set'];
+              if (name === 'hvac_on') return [Number(value) > 0 ? 'On' : 'Off', 'Climate'];
+              if (name === 'Climate On') return [Number(value) > 0 ? 'On' : 'Off', 'Climate'];
               return [String(value), String(name)];
             }}
           />}
@@ -105,10 +120,20 @@ export function TripTemperatureChart({
         {activeElapsedS != null ? (
           <ReferenceLine x={activeElapsedS} stroke={CHART_COLORS.muted} strokeDasharray="4 4" />
         ) : null}
+        <Area
+          yAxisId="climate"
+          type="stepAfter"
+          dataKey="hvac_on"
+          name="Climate On"
+          stroke="none"
+          fill={CHART_COLORS.accent}
+          fillOpacity={0.1}
+          isAnimationActive={false}
+        />
         <Line
           type="monotone"
           dataKey="outside_temp_c"
-          name="outside_temp_c"
+          name="Outside Temp"
           stroke={CHART_COLORS.sky}
           strokeWidth={1.8}
           dot={false}
@@ -118,9 +143,20 @@ export function TripTemperatureChart({
         <Line
           type="monotone"
           dataKey="cabin_temp_c"
-          name="cabin_temp_c"
+          name="Cabin Temp"
           stroke={CHART_COLORS.accent}
           strokeWidth={1.8}
+          dot={false}
+          isAnimationActive={false}
+          connectNulls
+        />
+        <Line
+          type="monotone"
+          dataKey="driver_temp_c"
+          name="Driver Setpoint"
+          stroke={CHART_COLORS.warning}
+          strokeWidth={1.6}
+          strokeDasharray="4 4"
           dot={false}
           isAnimationActive={false}
           connectNulls

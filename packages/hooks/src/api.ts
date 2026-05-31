@@ -568,6 +568,7 @@ class ApiClient {
         battery_level: finiteNumber(row.battery_level) ?? null,
         outside_temp_c: finiteNumber(row.outside_temp_c) ?? null,
         cabin_temp_c: finiteNumber(row.cabin_temp_c) ?? null,
+        driver_temp_c: finiteNumber(row.driver_temp_c) ?? null,
         hvac_active: typeof row.hvac_active === 'boolean' ? row.hvac_active : null,
         tire_fl_psi: finiteNumber(row.tire_fl_psi) ?? null,
         tire_fr_psi: finiteNumber(row.tire_fr_psi) ?? null,
