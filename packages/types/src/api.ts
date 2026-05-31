@@ -326,6 +326,7 @@ export interface VehicleHealth {
   tires: VehicleHealthTires | null;
   closures: VehicleHealthClosures | null;
   current_software_version: string | null;
+  ota_release_notes_url: string | null;
   software_history: VehicleHealthSoftwareEntry[];
   thermal_events_30d: number;
 }
