@@ -1,6 +1,7 @@
 use axum::{
+    body::Body,
     extract::State,
-    http::StatusCode,
+    http::{header, HeaderValue, Response, StatusCode},
     routing::{get, post, put},
     Json, Router,
 };
@@ -9,6 +10,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
+use tokio::fs;
 use uuid::Uuid;
 
 use crate::{
@@ -23,6 +25,10 @@ pub fn router() -> Router<AppState> {
         .route("/admin/backups", get(get_backup_overview))
         .route("/admin/backups/settings", put(update_backup_settings))
         .route("/admin/backups/run", post(run_backup_now))
+        .route(
+            "/admin/backups/artifacts/:artifact_id/download",
+            get(download_backup_artifact),
+        )
         .route(
             "/admin/backups/restore-requests",
             post(create_restore_request),
@@ -137,6 +143,9 @@ impl TryFrom<&str> for BackupRunTrigger {
 struct BackupOverviewResponse {
     settings: BackupSettingsResponse,
     recent_runs: Vec<BackupRunResponse>,
+    recent_runs_total: i64,
+    recent_runs_page: i64,
+    recent_runs_per_page: i64,
     artifacts: Vec<BackupArtifactResponse>,
     restore_requests: Vec<BackupRestoreRequestResponse>,
     latest_successful_run: Option<BackupRunResponse>,
@@ -302,11 +311,15 @@ struct BackupRestoreRequestRow {
 async fn get_backup_overview(
     State(state): State<AppState>,
     auth: AuthUser,
+    axum::extract::Query(query): axum::extract::Query<BackupOverviewQuery>,
 ) -> Result<Json<BackupOverviewResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
 
     let settings = load_settings(&state).await?;
-    let recent_runs = load_recent_runs(&state).await?;
+    let recent_runs_page = query.page.unwrap_or(1).max(1);
+    let recent_runs_per_page = query.per_page.unwrap_or(10).clamp(1, 100);
+    let recent_runs_total = count_recent_runs(&state).await?;
+    let recent_runs = load_recent_runs(&state, recent_runs_page, recent_runs_per_page).await?;
     let artifacts = load_artifacts(&state).await?;
     let restore_requests = load_restore_requests(&state).await?;
     let latest_successful_run = load_latest_successful_run(&state).await?;
@@ -316,6 +329,9 @@ async fn get_backup_overview(
     Ok(Json(BackupOverviewResponse {
         settings,
         recent_runs,
+        recent_runs_total,
+        recent_runs_page: recent_runs_page as i64,
+        recent_runs_per_page: recent_runs_per_page as i64,
         artifacts,
         restore_requests,
         latest_successful_run,
@@ -326,6 +342,40 @@ async fn get_backup_overview(
             reason: readiness.reason,
         },
     }))
+}
+
+async fn download_backup_artifact(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(artifact_id): axum::extract::Path<Uuid>,
+) -> Result<Response<Body>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let artifact = load_artifact_by_id(&state, artifact_id).await?;
+    let bytes = fs::read(&artifact.storage_path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(anyhow::anyhow!("failed to read backup artifact: {error}")),
+        })?;
+
+    let safe_name = artifact.file_name.replace('"', "_");
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    let content_disposition = HeaderValue::from_str(&format!("attachment; filename=\"{safe_name}\""))
+        .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid download filename: {error}")))?;
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        content_disposition,
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn update_backup_settings(
@@ -499,15 +549,30 @@ async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppEr
     }
 }
 
-async fn load_recent_runs(state: &AppState) -> Result<Vec<BackupRunResponse>, AppError> {
+async fn count_recent_runs(state: &AppState) -> Result<i64, AppError> {
+    let total = sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.backup_runs")
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(total)
+}
+
+async fn load_recent_runs(
+    state: &AppState,
+    page: u32,
+    per_page: u32,
+) -> Result<Vec<BackupRunResponse>, AppError> {
+    let limit = i64::from(per_page);
+    let offset = i64::from(page.saturating_sub(1)) * i64::from(per_page);
     let rows = sqlx::query_as::<_, BackupRunRow>(
         r#"
         SELECT id, trigger, status, artifact_key, started_at, completed_at, error_message, created_at, updated_at
         FROM riviamigo.backup_runs
         ORDER BY created_at DESC
-        LIMIT 10
+        LIMIT $1 OFFSET $2
         "#,
     )
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await?;
 
@@ -896,4 +961,9 @@ async fn require_admin(state: &AppState, user_id: Uuid) -> Result<(), AppError> 
         Some("admin") | Some("super_user") => Ok(()),
         _ => Err(AppError::Forbidden),
     }
+}
+#[derive(Debug, Deserialize)]
+struct BackupOverviewQuery {
+    page: Option<u32>,
+    per_page: Option<u32>,
 }

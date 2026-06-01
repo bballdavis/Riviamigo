@@ -7,8 +7,15 @@ vi.mock('@riviamigo/ui/primitives', async () => {
   return m;
 });
 
+const setActiveVehicleId = vi.fn();
+const vehiclesData = [
+  { id: 'vehicle-1', display_name: 'Forest R1S', model: 'R1S' },
+  { id: 'vehicle-2', display_name: 'Demo R1T', model: 'R1T' },
+];
+
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+  useAuth: () => ({ defaultVehicleId: 'vehicle-1', activeVehicleId: null, setActiveVehicleId }),
+  useVehicles: () => ({ data: vehiclesData }),
 }));
 
 const mockConfig = {
@@ -71,6 +78,11 @@ import { indexRoute } from '../index';
 const DashboardContent = indexRoute.options.component as React.ComponentType;
 
 describe('Dashboard page', () => {
+  it('shows the vehicle selector when multiple vehicles exist', () => {
+    render(<DashboardContent />);
+    expect(screen.getByLabelText('Select vehicle')).toBeInTheDocument();
+  });
+
   it('renders the vehicle subtitle and summary stat labels', () => {
     render(<DashboardContent />);
 

@@ -7,6 +7,7 @@ import type {
   Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripDetailSeriesPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
+  CreateDemoVehicleBody, CreateDemoVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
@@ -335,6 +336,10 @@ class ApiClient {
     return this.request('POST', '/v1/vehicles', body);
   }
 
+  async createDemoVehicle(body: CreateDemoVehicleBody): Promise<CreateDemoVehicleResult> {
+    return this.request('POST', '/v1/vehicles/demo', body);
+  }
+
   async deleteVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string | null }> {
     return this.request('DELETE', `/v1/vehicles/${vehicleId}`);
   }
@@ -492,8 +497,16 @@ class ApiClient {
     return this.request('GET', '/v1/api/catalog');
   }
 
-  async getBackupOverview(): Promise<BackupOverview> {
-    return this.request('GET', '/v1/admin/backups');
+  async getBackupOverview(options?: { page?: number; perPage?: number }): Promise<BackupOverview> {
+    return this.request(
+      'GET',
+      '/v1/admin/backups',
+      undefined,
+      options ? {
+        ...(options.page !== undefined ? { page: options.page } : {}),
+        ...(options.perPage !== undefined ? { per_page: options.perPage } : {}),
+      } : undefined,
+    );
   }
 
   async updateBackupSettings(body: UpdateBackupSettingsBody) {
@@ -506,6 +519,46 @@ class ApiClient {
 
   async requestBackupRestore(body: CreateBackupRestoreRequestBody): Promise<BackupRestoreRequest> {
     return this.request('POST', '/v1/admin/backups/restore-requests', body);
+  }
+
+  async downloadBackupArtifact(artifactId: string): Promise<{ blob: Blob; fileName: string }> {
+    const url = `${getBase()}/v1/admin/backups/artifacts/${artifactId}/download`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: this.headers(),
+      credentials: 'include',
+    });
+
+    if (!res.ok) {
+      const rateLimitSource = res.headers.get('x-riviamigo-ratelimit-source') ?? undefined;
+      const retryAfterSeconds = (() => {
+        const header = res.headers.get('retry-after');
+        if (!header) return undefined;
+        const parsed = Number(header);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+      })();
+
+      const responseBody = await res.json().catch(() => null);
+      const err: ApiError = responseBody?.error ?? { code: 'unknown', message: res.statusText };
+      const detail: ApiFailureDetail = {
+        status: res.status,
+        code: err.code,
+        message: err.message,
+        method: 'GET',
+        path: '/v1/admin/backups/artifacts/:artifactId/download',
+        ...(rateLimitSource ? { rateLimitSource } : {}),
+        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+      };
+      this.reportFailure(detail);
+      throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
+    }
+
+    const disposition = res.headers.get('content-disposition') ?? '';
+    const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
+    return {
+      blob: await res.blob(),
+      fileName: fileNameMatch?.[1] ?? `backup-${artifactId}`,
+    };
   }
 
   // ── Battery ───────────────────────────────────────────────────────────────

@@ -34,6 +34,7 @@ export interface DateRangePickerProps {
   preset?: PresetKey | undefined;
   onChange: (range: DateRange, preset?: PresetKey) => void;
   className?: string;
+  triggerClassName?: string;
 }
 
 export function DateRangePicker({
@@ -41,6 +42,7 @@ export function DateRangePicker({
   preset,
   onChange,
   className,
+  triggerClassName,
 }: DateRangePickerProps) {
   const [open, setOpen] = React.useState(false);
   const [customFrom, setCustomFrom] = React.useState(toDateInputValue(value.from));
@@ -71,9 +73,10 @@ export function DateRangePicker({
       <button
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          'flex items-center gap-2 h-8 px-3 rounded-lg text-sm',
+          'flex items-center gap-2 h-9 px-3 rounded-lg text-sm',
           'bg-bg-elevated border border-border hover:border-border-strong',
-          'text-fg-secondary hover:text-fg transition-colors duration-150'
+          'text-fg-secondary hover:text-fg transition-colors duration-150',
+          triggerClassName,
         )}
       >
         <Calendar className="h-3.5 w-3.5 text-fg-tertiary" />

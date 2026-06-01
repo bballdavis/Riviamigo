@@ -471,6 +471,9 @@ export interface BackupRestoreRequest {
 export interface BackupOverview {
   settings: BackupSettings;
   recent_runs: BackupRun[];
+  recent_runs_total: number;
+  recent_runs_page: number;
+  recent_runs_per_page: number;
   artifacts: BackupArtifact[];
   restore_requests: BackupRestoreRequest[];
   latest_successful_run: BackupRun | null;
@@ -551,6 +554,16 @@ export interface AddVehicleBody {
 
 export interface AddVehicleResult {
   vehicle_id: string;
+}
+
+export interface CreateDemoVehicleResult {
+  ok: boolean;
+  vehicle_id: string;
+  created: boolean;
+}
+
+export interface CreateDemoVehicleBody {
+  model: 'R1T' | 'R1S' | 'R2S';
 }
 
 export interface AuthTokens {

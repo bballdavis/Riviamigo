@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth } from '@riviamigo/hooks';
+import { useAuth, useVehicles } from '@riviamigo/hooks';
 import { PageLayout, DateRangePicker, Tooltip } from '@riviamigo/ui/primitives';
 import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
@@ -62,7 +62,9 @@ export function DashboardPageShell({
   renderDashboard,
   showEfficiencyDisplayToggle = false,
 }: DashboardPageShellProps) {
-  const { defaultVehicleId } = useAuth();
+  const { defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
+  const setSessionVehicleId = setActiveVehicleId ?? (() => {});
+  const { data: vehicles } = useVehicles();
   const [internalEditMode, setInternalEditMode] = useState(false);
   const [preset, setPreset] = useState<PresetKey | undefined>(DEFAULT_PRESET);
   const [range, setRange] = useState(presetToRange(DEFAULT_PRESET));
@@ -70,6 +72,9 @@ export function DashboardPageShell({
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
   const { from, to } = rangeToIso(range);
 
+  const availableVehicles = vehicles ?? [];
+  const hasVehicleChoices = availableVehicles.length > 1;
+  const effectiveVehicleId = activeVehicleId ?? defaultVehicleId;
   const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
   const localDefault = getDefaultBySlug(slug);
   const savedConfig: DashboardConfig | undefined = apiConfig ?? localDefault;
@@ -78,8 +83,8 @@ export function DashboardPageShell({
   const currentEditMode = controlledEditMode ?? internalEditMode;
   const activeConfig = localConfig ?? savedConfig;
   const ctx = useMemo<WidgetCtx>(
-    () => ({ vehicleId: defaultVehicleId, from, to }),
-    [defaultVehicleId, from, to],
+    () => ({ vehicleId: effectiveVehicleId, from, to }),
+    [effectiveVehicleId, from, to],
   );
   const previousEditModeRef = useRef(currentEditMode);
 
@@ -128,6 +133,21 @@ export function DashboardPageShell({
     previousEditModeRef.current = currentEditMode;
   }, [currentEditMode, savedConfig]);
 
+  useEffect(() => {
+    if (!availableVehicles.length) {
+      if (activeVehicleId) setSessionVehicleId(null);
+      return;
+    }
+    if (activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === activeVehicleId)) {
+      setSessionVehicleId(null);
+      return;
+    }
+    if (!defaultVehicleId) return;
+    if (!activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === defaultVehicleId)) {
+      setSessionVehicleId(availableVehicles[0]?.id ?? null);
+    }
+  }, [activeVehicleId, availableVehicles, defaultVehicleId, setSessionVehicleId]);
+
   const shellState: DashboardPageShellRenderState = {
     activeConfig,
     savedConfig,
@@ -135,7 +155,7 @@ export function DashboardPageShell({
     setLocalConfig,
     isEditMode: currentEditMode,
     isLoading,
-    vehicleId: defaultVehicleId,
+    vehicleId: effectiveVehicleId,
     ctx,
     range,
     preset,
@@ -153,7 +173,25 @@ export function DashboardPageShell({
         setRange(nextRange);
         setPreset(nextPreset);
       }}
+      triggerClassName="h-9"
     />
+  ) : null;
+  const vehicleAction = hasVehicleChoices && !currentEditMode ? (
+    <label className="inline-flex items-center">
+      <span className="sr-only">Selected vehicle</span>
+      <select
+        className="h-9 min-w-[11rem] rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+        value={effectiveVehicleId ?? ''}
+        onChange={(event) => setSessionVehicleId(event.target.value || null)}
+        aria-label="Select vehicle"
+      >
+        {availableVehicles.map((vehicle) => (
+          <option key={vehicle.id} value={vehicle.id}>
+            {vehicle.display_name || vehicle.model}
+          </option>
+        ))}
+      </select>
+    </label>
   ) : null;
   const EfficiencyDisplayIcon = efficiencyDisplay === 'distance_per_energy' ? PiSpeedometerFill : PiSpeedometerLight;
   const efficiencyDisplayLabel = efficiencyDisplay === 'distance_per_energy' ? 'mi/kWh' : 'Wh/mi';
@@ -188,8 +226,9 @@ export function DashboardPageShell({
   // In edit mode, save/cancel live in the drawer; only date/efficiency go in the page header.
   const editActions = currentEditMode ? renderActions?.(shellState) : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
-  const pageActions = efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
+  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
     <div className="flex items-center gap-2">
+      {vehicleAction}
       {efficiencyDisplayAction}
       {dateRangeAction}
       {pageExtraActions}
@@ -204,7 +243,7 @@ export function DashboardPageShell({
           titleAction={renderTitleAction?.(shellState)}
           actions={pageActions}
         >
-          {!defaultVehicleId ? (
+          {!effectiveVehicleId ? (
             <NoVehicleState />
           ) : isLoading && !activeConfig ? (
             <div className="text-xs text-fg-tertiary p-4">Loading…</div>

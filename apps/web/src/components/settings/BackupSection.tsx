@@ -3,7 +3,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
 import type { BackupFrequency, BackupOverview, BackupTargetType, UpdateBackupSettingsBody } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
-import { Calendar, CheckCircle2, Clock3, DatabaseBackup, HardDrive, History, Play, RotateCcw, Save, Server, Timer } from 'lucide-react';
+import {
+  AlertTriangle,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  DatabaseBackup,
+  Download,
+  HardDrive,
+  History,
+  Play,
+  RotateCcw,
+  Save,
+  Server,
+  Timer,
+  X,
+} from 'lucide-react';
 
 const WEEKDAYS = [
   { value: 0, label: 'Sunday' },
@@ -104,6 +121,11 @@ function describeSchedule(overview: BackupOverview) {
   return parts.join(' / ');
 }
 
+function capitalizeFirstLetter(value: string) {
+  if (!value) return value;
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
 function Toggle({
   checked,
   onChange,
@@ -199,18 +221,19 @@ function ToggleRow({
 
 export function BackupSection() {
   const queryClient = useQueryClient();
+  const [recentRunsPage, setRecentRunsPage] = React.useState(1);
+  const [recentRunsPerPage, setRecentRunsPerPage] = React.useState(10);
   const overview = useQuery({
-    queryKey: ['backup-overview'],
-    queryFn: () => api.getBackupOverview(),
+    queryKey: ['backup-overview', recentRunsPage, recentRunsPerPage],
+    queryFn: () => api.getBackupOverview({ page: recentRunsPage, perPage: recentRunsPerPage }),
   });
   const [draft, setDraft] = React.useState<BackupDraft | null>(null);
   const [localEnabled, setLocalEnabled] = React.useState(true);
   const [s3Enabled, setS3Enabled] = React.useState(false);
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
-  const [selectedArtifactId, setSelectedArtifactId] = React.useState('');
-  const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
-  const [restoreNotes, setRestoreNotes] = React.useState('');
+  const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
+  const [pendingRestoreArtifact, setPendingRestoreArtifact] = React.useState<BackupOverview['artifacts'][number] | null>(null);
   const detectedTimezone = React.useMemo(() => detectTimezone(), []);
 
   React.useEffect(() => {
@@ -220,8 +243,17 @@ export function BackupSection() {
     setS3Enabled(!!overview.data.settings.endpoint);
     setSecretKey('');
     setClearSecretKey(false);
-    setSelectedArtifactId((cur) => cur || overview.data.artifacts[0]?.id || '');
-  }, [overview.data]);
+  }, [overview.data?.settings.updated_at]);
+
+  React.useEffect(() => {
+    if (!overview.data) return;
+    setExpandedArtifactId((current) => {
+      if (current && overview.data.artifacts.some((artifact) => artifact.id === current)) {
+        return current;
+      }
+      return null;
+    });
+  }, [overview.data?.artifacts]);
 
   const saveSettings = useMutation({
     mutationFn: async () => {
@@ -244,18 +276,33 @@ export function BackupSection() {
     },
   });
 
-  const requestRestore = useMutation({
-    mutationFn: () => {
-      if (!selectedArtifactId) throw new Error('Select a backup artifact before requesting a restore.');
-      return api.requestBackupRestore({
-        artifact_id: selectedArtifactId,
-        confirmation_phrase: restoreConfirmation,
-        notes: restoreNotes.trim() || null,
-      });
+  const downloadArtifact = useMutation({
+    mutationFn: async (artifact: BackupOverview['artifacts'][number]) => {
+      const { blob, fileName } = await api.downloadBackupArtifact(artifact.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     },
+    onError: (error) => {
+      emitToast('Download backup', error instanceof Error ? error.message : 'Backup download could not be started.');
+    },
+  });
+
+  const requestRestore = useMutation({
+    mutationFn: (artifact: BackupOverview['artifacts'][number]) =>
+      api.requestBackupRestore({
+        artifact_id: artifact.id,
+        confirmation_phrase: 'RESTORE',
+        notes: null,
+      }),
     onSuccess: () => {
-      setRestoreConfirmation('');
-      setRestoreNotes('');
+      setPendingRestoreArtifact(null);
       queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
     },
     onError: (error) => {
@@ -270,7 +317,7 @@ export function BackupSection() {
   if (overview.isLoading || !draft || !overview.data) {
     return (
       <Card>
-        <CardHeader><CardTitle>Backups</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Backup schedule</CardTitle></CardHeader>
         <CardContent><p className="text-sm text-fg-tertiary">Loading backup controls...</p></CardContent>
       </Card>
     );
@@ -282,8 +329,8 @@ export function BackupSection() {
     && draft.timezone.trim().length > 0
     && Number.parseInt(draft.retention_count, 10) >= 1
     && s3Valid;
-  const restoreArtifact = overview.data.artifacts.find((a) => a.id === selectedArtifactId) ?? null;
-  const canRequestRestore = Boolean(restoreArtifact) && restoreConfirmation.trim() === 'RESTORE';
+  const recentRunsTotal = overview.data.recent_runs_total;
+  const recentRunsPageCount = Math.max(1, Math.ceil(recentRunsTotal / recentRunsPerPage));
   const timezoneIsAutoDetected = !!detectedTimezone && draft.timezone === detectedTimezone && !currentSettings.timezone;
   const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
   const runNowReason = overview.data.runtime_readiness?.reason;
@@ -294,7 +341,7 @@ export function BackupSection() {
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>Backups</CardTitle>
+            <CardTitle>Backup schedule</CardTitle>
             <Badge variant={currentSettings.enabled ? 'success' : 'default'}>
               {currentSettings.enabled ? 'Automatic' : 'Disabled'}
             </Badge>
@@ -561,54 +608,99 @@ export function BackupSection() {
         )}
       </Card>
 
-      {/* ── Recent runs ── */}
+      {/* Recent runs */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-fg-secondary" />
             <CardTitle>Recent backup runs</CardTitle>
           </div>
-          <Badge variant="default">Execution history</Badge>
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant="default">Execution history</Badge>
+            <label className="flex items-center gap-2 text-xs text-fg-tertiary">
+              Rows
+              <select
+                value={recentRunsPerPage}
+                onChange={(event) => {
+                  setRecentRunsPerPage(Number(event.target.value));
+                  setRecentRunsPage(1);
+                }}
+                className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-3">
           {overview.data.recent_runs.length === 0 ? (
             <p className="text-sm text-fg-tertiary">
               No backup executions recorded yet. Use Run now to create the first cataloged artifact.
             </p>
           ) : (
-            <div className="divide-y divide-border">
-              {overview.data.recent_runs.map((run) => (
-                <div key={run.id} className="py-2">
-                  <div className="flex items-center gap-3">
-                    <span className="shrink-0 text-xs text-fg-tertiary tabular-nums">
-                      {new Date(run.created_at).toLocaleString()}
-                    </span>
-                    <span className="text-xs font-medium capitalize text-fg-secondary">{run.trigger}</span>
-                    {run.error_message && (
-                      <span className="min-w-0 truncate text-xs text-status-danger" title={run.error_message}>
-                        {run.error_message}
-                      </span>
-                    )}
-                    <Badge
-                      className="ml-auto shrink-0"
-                      variant={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : 'default'}
-                    >
-                      {run.status}
-                    </Badge>
-                  </div>
+            <>
+              <div className="rounded-lg border border-border overflow-hidden">
+                <div className="divide-y divide-border">
+                  {overview.data.recent_runs.map((run) => (
+                    <div key={run.id} className="grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="shrink-0 text-xs text-fg-tertiary tabular-nums">
+                          {new Date(run.created_at).toLocaleString()}
+                        </span>
+                        <span className="text-xs font-medium capitalize text-fg-secondary">{capitalizeFirstLetter(run.trigger)}</span>
+                        {run.error_message && (
+                          <span className="min-w-0 truncate text-xs text-status-danger" title={run.error_message}>
+                            {run.error_message}
+                          </span>
+                        )}
+                      </div>
+                      <Badge
+                        className="justify-self-start sm:justify-self-end"
+                        variant={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : 'default'}
+                      >
+                        {capitalizeFirstLetter(run.status)}
+                      </Badge>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+              <div className="flex shrink-0 items-center justify-between border-t border-border pt-3">
+                <p className="text-xs text-fg-tertiary">
+                  Page {overview.data.recent_runs_page} of {recentRunsPageCount} · {recentRunsTotal} run{recentRunsTotal === 1 ? '' : 's'}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={overview.data.recent_runs_page <= 1}
+                    onClick={() => setRecentRunsPage((page) => Math.max(1, page - 1))}
+                  >
+                    Prev
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={overview.data.recent_runs_page >= recentRunsPageCount}
+                    onClick={() => setRecentRunsPage((page) => Math.min(recentRunsPageCount, page + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
 
-      {/* ── Artifacts ── */}
+      {/* Backups */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <DatabaseBackup className="h-4 w-4 text-fg-secondary" />
-            <CardTitle>Artifacts</CardTitle>
+            <CardTitle>Backups</CardTitle>
           </div>
           <Badge variant="default">Local catalog</Badge>
         </CardHeader>
@@ -616,35 +708,151 @@ export function BackupSection() {
           {overview.data.artifacts.length === 0 ? (
             <p className="text-sm text-fg-tertiary">No backup artifact has been written yet.</p>
           ) : (
-            <div className="divide-y divide-border">
-              {overview.data.artifacts.map((artifact) => (
-                <div key={artifact.id} className="grid gap-3 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-fg">{artifact.file_name}</p>
-                      <Badge variant="success">{artifact.storage_type}</Badge>
-                    </div>
-                    <p className="mt-1 font-mono text-xs text-fg-tertiary">{artifact.storage_path}</p>
-                    <p className="mt-1 text-xs text-fg-tertiary">
-                      {Math.max(artifact.size_bytes, 0).toLocaleString()} bytes / SHA-256 {artifact.checksum_sha256.slice(0, 16)}...
-                    </p>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
-                    onClick={() => setSelectedArtifactId(artifact.id)}
+            <div className="space-y-2">
+              {overview.data.artifacts.map((artifact) => {
+                const isExpanded = expandedArtifactId === artifact.id;
+                return (
+                  <div
+                    key={artifact.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setExpandedArtifactId((current) => current === artifact.id ? null : artifact.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setExpandedArtifactId((current) => current === artifact.id ? null : artifact.id);
+                      }
+                    }}
+                    className="rounded-lg border border-border bg-bg-elevated/20 transition-colors hover:bg-bg-elevated/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
-                    Select for restore
-                  </Button>
-                </div>
-              ))}
+                    <div className="flex items-center gap-3 px-3 py-2.5">
+                      <button
+                        type="button"
+                        aria-label={isExpanded ? 'Collapse backup details' : 'Expand backup details'}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-bg-surface text-fg-secondary hover:text-fg"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setExpandedArtifactId((current) => current === artifact.id ? null : artifact.id);
+                        }}
+                      >
+                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-fg">
+                          {new Date(artifact.created_at).toLocaleString()}
+                        </p>
+                        <p className="mt-0.5 text-xs text-fg-tertiary capitalize">
+                          {artifact.storage_type}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          aria-label={`Download backup ${artifact.id}`}
+                          iconLeft={<Download className="h-3.5 w-3.5" />}
+                          loading={downloadArtifact.isPending && downloadArtifact.variables?.id === artifact.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            downloadArtifact.mutate(artifact);
+                          }}
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          aria-label={`Restore backup ${artifact.id}`}
+                          iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setPendingRestoreArtifact(artifact);
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="border-t border-border bg-bg-elevated/25 px-3 py-3 text-xs text-fg-tertiary">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">File name</p>
+                            <p className="mt-1 font-mono text-xs text-fg">{artifact.file_name}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Type</p>
+                            <p className="mt-1 font-mono text-xs text-fg capitalize">{artifact.storage_type}</p>
+                          </div>
+                          <div className="md:col-span-2">
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Location</p>
+                            <p className="mt-1 break-all font-mono text-xs text-fg">{artifact.storage_path}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Size</p>
+                            <p className="mt-1 font-mono text-xs text-fg">{Math.max(artifact.size_bytes, 0).toLocaleString()} bytes</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">SHA-256</p>
+                            <p className="mt-1 break-all font-mono text-xs text-fg">{artifact.checksum_sha256}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Run ID</p>
+                            <p className="mt-1 font-mono text-xs text-fg">{artifact.run_id}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Created</p>
+                            <p className="mt-1 font-mono text-xs text-fg">{new Date(artifact.created_at).toLocaleString()}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* ── Restore requests ── */}
+      {pendingRestoreArtifact && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-border bg-bg-surface p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-status-warning/30 bg-status-warning/10 text-status-warning">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-fg">Restore this backup?</p>
+                <p className="mt-1 text-sm text-fg-tertiary">
+                  This will create a restore request for <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
+                  It does not overwrite the database immediately.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md p-1 text-fg-tertiary hover:bg-bg-elevated hover:text-fg"
+                aria-label="Close restore confirmation"
+                onClick={() => setPendingRestoreArtifact(null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setPendingRestoreArtifact(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                loading={requestRestore.isPending}
+                onClick={() => requestRestore.mutate(pendingRestoreArtifact)}
+              >
+                Restore backup
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore requests */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -653,67 +861,7 @@ export function BackupSection() {
           </div>
           <Badge variant="danger">Admin only</Badge>
         </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem] md:items-end">
-            <label className="grid gap-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Artifact</span>
-              <select
-                value={selectedArtifactId}
-                onChange={(e) => setSelectedArtifactId(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-              >
-                <option value="">Select an artifact</option>
-                {overview.data.artifacts.map((artifact) => (
-                  <option key={artifact.id} value={artifact.id}>{artifact.file_name}</option>
-                ))}
-              </select>
-            </label>
-            <div className="rounded-lg border border-border bg-bg-elevated/30 px-3 py-2 text-xs text-fg-tertiary">
-              Type <span className="font-mono text-fg">RESTORE</span> to request a restore.
-            </div>
-          </div>
-
-          {restoreArtifact && (
-            <div className="rounded-lg border border-border bg-bg-elevated/30 p-3 text-xs text-fg-tertiary">
-              <p>Selected: <span className="font-mono text-fg">{restoreArtifact.file_name}</span></p>
-              <p className="mt-1">Path: <span className="font-mono text-fg">{restoreArtifact.storage_path}</span></p>
-            </div>
-          )}
-
-          <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)] md:items-end">
-            <label className="grid gap-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Confirmation</span>
-              <input
-                value={restoreConfirmation}
-                onChange={(e) => setRestoreConfirmation(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                placeholder="RESTORE"
-              />
-            </label>
-            <label className="grid gap-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Notes</span>
-              <input
-                value={restoreNotes}
-                onChange={(e) => setRestoreNotes(e.target.value)}
-                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                placeholder="Optional maintenance or incident context"
-              />
-            </label>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-status-danger/25 bg-status-danger/10 px-3 py-3 text-xs text-fg-secondary">
-            <p>Restore requests are recorded here for the maintenance runner to execute. They do not overwrite the live database inline.</p>
-            <Button
-              variant="danger"
-              size="sm"
-              loading={requestRestore.isPending}
-              disabled={!canRequestRestore}
-              onClick={() => requestRestore.mutate()}
-            >
-              Request restore
-            </Button>
-          </div>
-
+        <CardContent>
           {overview.data.restore_requests.length === 0 ? (
             <p className="text-sm text-fg-tertiary">No restore requests have been recorded yet.</p>
           ) : (
@@ -722,7 +870,7 @@ export function BackupSection() {
                 <div key={request.id} className="grid gap-2 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-fg">{request.status}</p>
+                      <p className="text-sm font-medium text-fg">{capitalizeFirstLetter(request.status)}</p>
                       <Badge variant="default">{request.artifact_id.slice(0, 8)}</Badge>
                     </div>
                     <p className="mt-1 text-xs text-fg-tertiary">

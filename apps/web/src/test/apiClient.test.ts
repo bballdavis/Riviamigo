@@ -97,6 +97,9 @@ describe('api client dashboard contracts', () => {
           updated_at: null,
         },
         recent_runs: [],
+        recent_runs_total: 0,
+        recent_runs_page: 1,
+        recent_runs_per_page: 10,
         artifacts: [],
         restore_requests: [],
         latest_successful_run: null,
@@ -112,9 +115,9 @@ describe('api client dashboard contracts', () => {
       }) as Response,
     );
 
-    await api.getBackupOverview();
+    await api.getBackupOverview({ page: 2, perPage: 10 });
 
-    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/admin/backups');
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/admin/backups?page=2&per_page=10');
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'GET' });
 
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ enabled: true }), {
@@ -153,6 +156,17 @@ describe('api client dashboard contracts', () => {
 
     expect(fetchMock.mock.calls[2]?.[0]).toContain('/v1/admin/backups/run');
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST' });
+
+    fetchMock.mockResolvedValueOnce(new Response(new Blob(['backup-data'], { type: 'application/octet-stream' }), {
+      status: 200,
+      headers: {
+        'Content-Disposition': 'attachment; filename="backup-20260504T120000Z.dump"',
+      },
+    }) as Response);
+
+    const download = await api.downloadBackupArtifact('artifact-1');
+    expect(download.fileName).toBe('backup-20260504T120000Z.dump');
+    expect(fetchMock.mock.calls[3]?.[0]).toContain('/v1/admin/backups/artifacts/artifact-1/download');
   });
 
   it('preserves login 401 responses instead of rewriting them as auth-expired', async () => {

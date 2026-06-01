@@ -481,7 +481,10 @@ async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), Ap
     let url = url::Url::parse(&config.database_url)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid DATABASE_URL: {e}")))?;
 
-    let mut cmd = Command::new("pg_dump");
+    let pg_dump = resolve_pg_dump_executable()
+        .await
+        .ok_or_else(|| AppError::DependencyUnavailable(PG_DUMP_UNAVAILABLE_MESSAGE.to_string()))?;
+    let mut cmd = Command::new(pg_dump);
     if let Some(host) = url.host_str() {
         cmd.arg(format!("--host={host}"));
     }
@@ -521,10 +524,37 @@ async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), Ap
 }
 
 async fn is_pg_dump_available() -> bool {
+    resolve_pg_dump_executable().await.is_some()
+}
+
+async fn resolve_pg_dump_executable() -> Option<PathBuf> {
     match Command::new("pg_dump").arg("--version").output().await {
-        Ok(output) => output.status.success(),
-        Err(_) => false,
+        Ok(output) if output.status.success() => Some(PathBuf::from("pg_dump")),
+        _ => find_windows_pg_dump_executable(),
     }
+}
+
+#[cfg(windows)]
+fn find_windows_pg_dump_executable() -> Option<PathBuf> {
+    for root in [std::env::var_os("ProgramFiles"), std::env::var_os("ProgramFiles(x86)")] {
+        let Some(root) = root else { continue };
+        let postgres_dir = PathBuf::from(root).join("PostgreSQL");
+        let Ok(entries) = std::fs::read_dir(&postgres_dir) else { continue };
+
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin").join("pg_dump.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(not(windows))]
+fn find_windows_pg_dump_executable() -> Option<PathBuf> {
+    None
 }
 
 async fn ensure_backup_runtime_available(config: &Config) -> Result<(), AppError> {
