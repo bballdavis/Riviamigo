@@ -57,6 +57,17 @@ function formatApiValue(value: number | null | undefined, unit: string | null | 
   return Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1);
 }
 
+function aggregateSeriesForStat(stat: TripStat, series: Array<{ value: number | null | undefined }>) {
+  const values = series
+    .map((point) => point.value)
+    .filter((point): point is number => typeof point === 'number' && Number.isFinite(point));
+  if (values.length === 0) return null;
+  if (stat === 'efficiency' || stat === 'duration') {
+    return values.reduce((sum, point) => sum + point, 0) / values.length;
+  }
+  return values.reduce((sum, point) => sum + point, 0);
+}
+
 export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
   const { selectedIds, tripRegistry } = useTripSelection();
@@ -74,7 +85,7 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
 
   const displayValue = hasSelection
     ? formatTripStat(options.stat, computeTripStat(options.stat, selectedTrips))
-    : formatApiValue(value?.value, value?.unit);
+    : formatApiValue(aggregateSeriesForStat(options.stat, series) ?? value?.value, value?.unit);
 
   const spriteData = series.filter(
     (p): p is { ts: string; value: number } =>

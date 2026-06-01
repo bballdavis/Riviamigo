@@ -266,4 +266,46 @@ describe('api client dashboard contracts', () => {
     expect(authExpired).toHaveBeenCalledTimes(1);
     window.removeEventListener('riviamigo:auth-expired', authExpired);
   });
+
+  it('emits distinct toast messages for nginx vs api 429 responses', async () => {
+    const toast = vi.fn();
+    window.addEventListener('riviamigo:toast', toast as EventListener);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' },
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-riviamigo-ratelimit-source': 'nginx',
+          'retry-after': '2',
+        },
+      }) as Response,
+    );
+    await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ status: 429 });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' },
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-riviamigo-ratelimit-source': 'api',
+          'retry-after': '2',
+        },
+      }) as Response,
+    );
+    await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ status: 429 });
+
+    const details = toast.mock.calls
+      .map(([event]) => (event as CustomEvent).detail?.message)
+      .filter((message): message is string => typeof message === 'string');
+
+    expect(details.some((message) => message.includes('Edge proxy rate limit reached'))).toBe(true);
+    expect(details.some((message) => message.includes('API rate limit reached'))).toBe(true);
+
+    window.removeEventListener('riviamigo:toast', toast as EventListener);
+  });
 });

@@ -126,10 +126,35 @@ async fn get_range(
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
     let to = p.to.unwrap_or_else(Utc::now);
 
-    let points = sqlx::query_as!(TimeSeriesPoint,
-        "SELECT bucket AS \"ts!\", avg_range_mi AS value FROM timeseries.telemetry_1hr \
-         WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
-        vid, from, to).fetch_all(&state.pool).await?;
+    let points = match resolution(from, to) {
+        "1min" => sqlx::query_as::<_, TimeSeriesPoint>(
+            "SELECT bucket AS ts, avg_range_mi AS value FROM timeseries.telemetry_1min \
+             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
+        )
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&state.pool)
+        .await?,
+        "1hr" => sqlx::query_as::<_, TimeSeriesPoint>(
+            "SELECT bucket AS ts, avg_range_mi AS value FROM timeseries.telemetry_1hr \
+             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
+        )
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&state.pool)
+        .await?,
+        _ => sqlx::query_as::<_, TimeSeriesPoint>(
+            "SELECT bucket AS ts, avg_range_mi AS value FROM timeseries.telemetry_1day \
+             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
+        )
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&state.pool)
+        .await?,
+    };
     Ok(Json(points))
 }
 

@@ -131,8 +131,17 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       : options.dataSource === 'vehicleStatus'
         ? statusLoading
         : false;
+  const hasFiniteSeriesPoint = series.some((point) => typeof point.value === 'number' && Number.isFinite(point.value));
+  const resolvedMetricLatest = hasFiniteSeriesPoint
+    ? deriveMetricValue('latest', null, series)
+    : value?.value;
+  const effectiveMetricMode = definition?.cumulative ? 'sum' : options.valueMode;
   const resolvedValue = options.dataSource === 'metric'
-    ? deriveMetricValue(options.valueMode, value?.value, series)
+    ? (
+      hasFiniteSeriesPoint
+        ? deriveMetricValue(effectiveMetricMode, resolvedMetricLatest, series)
+        : (resolvedMetricLatest ?? null)
+    )
     : resolveConfiguredValue(options, sourceValues);
   const unit = options.dataSource === 'metric' ? value?.unit : options.unit;
   const displayValue = isLoading ? '...' : formatMetricValue(resolvedValue, unit);
