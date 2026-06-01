@@ -157,7 +157,7 @@ function SettingsPage() {
 }
 
 export function SettingsContent() {
-  const { logout, defaultVehicleId, setDefaultVehicleId } = useAuth();
+  const { logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
@@ -186,12 +186,15 @@ export function SettingsContent() {
   const [shareEmail, setShareEmail] = React.useState('');
   const [shareRole, setShareRole] = React.useState<VehicleMember['role']>('viewer');
   const [latestInviteToken, setLatestInviteToken] = React.useState<string | null>(null);
+  const [demoPickerOpen, setDemoPickerOpen] = React.useState(false);
+  const canCreateDemoVehicle = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const isAdmin = me.data?.role === 'admin';
+  const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const sections = React.useMemo(
-    () => isAdmin
+    () => canManageBackups
       ? [...baseSections.slice(0, 5), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(5)]
       : baseSections,
-    [isAdmin],
+    [canManageBackups],
   );
 
   const apiKeys = useQuery({
@@ -323,6 +326,16 @@ export function SettingsContent() {
       queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
       queryClient.invalidateQueries({ queryKey: ['vehicle-invites', variables.vehicleId] });
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    },
+  });
+
+  const createDemoVehicle = useMutation({
+    mutationFn: (model: 'R1T' | 'R1S' | 'R2S') => api.createDemoVehicle({ model }),
+    onSuccess: (result) => {
+      setActiveVehicleId(result.vehicle_id);
+      setDemoPickerOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['me'] });
     },
   });
 
@@ -473,10 +486,39 @@ export function SettingsContent() {
               <Card>
                 <CardHeader>
                   <CardTitle>Vehicles</CardTitle>
-                  <Button variant="secondary" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />}
-                    onClick={() => navigate({ to: '/connect' })}>
-                    Add Vehicle
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {canCreateDemoVehicle && (
+                      <div className="relative">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          iconLeft={<Plus className="h-3.5 w-3.5" />}
+                          loading={createDemoVehicle.isPending}
+                          onClick={() => setDemoPickerOpen((current) => !current)}
+                        >
+                          Demo Vehicle
+                        </Button>
+                        {demoPickerOpen && (
+                          <div className="absolute right-0 top-full z-20 mt-2 w-40 rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
+                            {(['R1T', 'R1S', 'R2S'] as const).map((model) => (
+                              <button
+                                key={model}
+                                type="button"
+                                className="w-full rounded-md px-2 py-1.5 text-left text-sm text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg"
+                                onClick={() => createDemoVehicle.mutate(model)}
+                              >
+                                {model}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <Button variant="secondary" size="sm" iconLeft={<Plus className="h-3.5 w-3.5" />}
+                      onClick={() => navigate({ to: '/connect' })}>
+                      Vehicle
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   {(vehicles?.length ?? 0) === 0 && (
@@ -1231,7 +1273,7 @@ export function SettingsContent() {
 
             {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}
 
-            {activeSection === 'backup' && isAdmin && <BackupSection />}
+            {activeSection === 'backup' && canManageBackups && <BackupSection />}
 
             {activeSection === 'jobs' && <JobsSection vehicles={vehicles ?? []} />}
 

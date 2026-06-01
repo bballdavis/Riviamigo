@@ -8,6 +8,7 @@ interface AuthState {
   accessToken: string | null;
   userId: string | null;
   defaultVehicleId: string | null;
+  activeVehicleId: string | null;
   isAuthenticated: boolean;
   // True while an initial refresh is in flight on page load.
   isBootstrapping: boolean;
@@ -18,6 +19,7 @@ interface AuthState {
   refresh: () => Promise<boolean>;
   setTokens: (accessToken: string, defaultVehicleId: string | null) => void;
   setDefaultVehicleId: (vehicleId: string | null) => void;
+  setActiveVehicleId: (vehicleId: string | null) => void;
   clearSession: () => void;
 }
 
@@ -27,16 +29,20 @@ export const useAuth = create<AuthState>()(
       accessToken: null,
       userId: null,
       defaultVehicleId: null,
+      activeVehicleId: null,
       isAuthenticated: false,
       isBootstrapping: true,
 
       setTokens: (accessToken, defaultVehicleId) => {
         api.setToken(accessToken);
-        set({ accessToken, defaultVehicleId, isAuthenticated: true, isBootstrapping: false });
+        set({ accessToken, defaultVehicleId, activeVehicleId: null, isAuthenticated: true, isBootstrapping: false });
       },
 
       setDefaultVehicleId: (vehicleId) => {
         set({ defaultVehicleId: vehicleId });
+      },
+      setActiveVehicleId: (vehicleId) => {
+        set({ activeVehicleId: vehicleId });
       },
 
       clearSession: () => {
@@ -45,6 +51,7 @@ export const useAuth = create<AuthState>()(
           accessToken: null,
           userId: null,
           defaultVehicleId: null,
+          activeVehicleId: null,
           isAuthenticated: false,
           isBootstrapping: false,
         });
@@ -60,6 +67,7 @@ export const useAuth = create<AuthState>()(
         set({
           accessToken: tokens.access_token,
           defaultVehicleId: tokens.default_vehicle_id ?? null,
+          activeVehicleId: null,
           isAuthenticated: true,
           isBootstrapping: false,
         });
@@ -71,6 +79,7 @@ export const useAuth = create<AuthState>()(
         set({
           accessToken: tokens.access_token,
           defaultVehicleId: tokens.default_vehicle_id ?? null,
+          activeVehicleId: null,
           isAuthenticated: true,
           isBootstrapping: false,
         });
@@ -88,6 +97,7 @@ export const useAuth = create<AuthState>()(
           set({
             accessToken: tokens.access_token,
             defaultVehicleId: tokens.default_vehicle_id ?? null,
+            activeVehicleId: null,
             isAuthenticated: true,
             isBootstrapping: false,
           });
@@ -102,6 +112,7 @@ export const useAuth = create<AuthState>()(
       // Only persist non-sensitive preferences. accessToken stays in memory.
       partialize: (s) => ({
         defaultVehicleId: s.defaultVehicleId,
+        activeVehicleId: s.activeVehicleId,
         userId: s.userId,
       }),
     }
@@ -114,16 +125,18 @@ api.onAuthChange((tokens) => {
       accessToken: null,
       userId: null,
       defaultVehicleId: null,
+      activeVehicleId: null,
       isAuthenticated: false,
       isBootstrapping: false,
     });
     return;
   }
 
-  useAuth.setState({
-    accessToken: tokens.access_token,
-    defaultVehicleId: tokens.default_vehicle_id ?? null,
-    isAuthenticated: true,
-    isBootstrapping: false,
-  });
+    useAuth.setState({
+      accessToken: tokens.access_token,
+      defaultVehicleId: tokens.default_vehicle_id ?? null,
+      activeVehicleId: null,
+      isAuthenticated: true,
+      isBootstrapping: false,
+    });
 });
