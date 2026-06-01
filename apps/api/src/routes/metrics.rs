@@ -82,6 +82,31 @@ struct SeriesParams {
     bucket: Option<String>,
 }
 
+fn resolve_bucket(requested: Option<&str>, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<&'static str, AppError> {
+    match requested.unwrap_or("auto") {
+        "auto" => {
+            let minutes = (to - from).num_minutes();
+            if minutes <= 60 {
+                Ok("minute")
+            } else if minutes <= 6 * 60 {
+                Ok("5min")
+            } else if minutes <= 24 * 60 {
+                Ok("15min")
+            } else if minutes <= 7 * 24 * 60 {
+                Ok("hour")
+            } else {
+                Ok("day")
+            }
+        }
+        "minute" | "1min" => Ok("minute"),
+        "5min" => Ok("5min"),
+        "15min" => Ok("15min"),
+        "hour" | "1h" => Ok("hour"),
+        "day" | "1d" => Ok("day"),
+        other => Err(AppError::Validation(format!("unsupported bucket: {other}"))),
+    }
+}
+
 const METRICS: &[MetricDef] = &[
     MetricDef {
         id: "total_miles",
@@ -353,13 +378,10 @@ async fn get_series(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
     let to = p.to.unwrap_or_else(Utc::now);
-    let bucket = p.bucket.as_deref().unwrap_or("day");
-    if bucket != "day" {
-        return Err(AppError::Validation("only day bucket is supported".into()));
-    }
+    let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
 
     let points = match metric.source {
-        MetricSource::Summary => summary_series(&state.pool, vid, metric.id, from, to).await?,
+        MetricSource::Summary => summary_series(&state.pool, vid, metric.id, from, to, bucket).await?,
         MetricSource::Telemetry(column) => {
             telemetry_daily_series(
                 &state.pool,
@@ -368,6 +390,7 @@ async fn get_series(
                 from,
                 to,
                 metric.default_aggregation,
+                bucket,
             )
             .await?
         }
@@ -522,8 +545,17 @@ async fn summary_series(
     metric: &str,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
+    bucket: &str,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
-    let sql = match metric {
+    let summary_bucket_expr = match bucket {
+        "minute" => "date_trunc('minute', started_at)",
+        "5min" => "time_bucket(INTERVAL '5 minutes', started_at)",
+        "15min" => "time_bucket(INTERVAL '15 minutes', started_at)",
+        "hour" => "date_trunc('hour', started_at)",
+        _ => "date_trunc('day', started_at)",
+    };
+
+    let sql: String = match metric {
         "total_miles" => {
             "SELECT day AS ts, miles_driven::float8 AS value
              FROM timeseries.odometer_daily
@@ -538,76 +570,77 @@ async fn summary_series(
              )
              GROUP BY 1
              ORDER BY 1"
+                .to_string()
         }
-        "total_trips" => {
-            "SELECT date_trunc('day', started_at) AS ts, COUNT(*)::float8 AS value
+        "total_trips" => format!(
+            "SELECT {summary_bucket_expr} AS ts, COUNT(*)::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
-        }
-        "trip_miles" => {
-            "SELECT date_trunc('day', started_at) AS ts, SUM(distance_miles)::float8 AS value
+        ),
+        "trip_miles" => format!(
+            "SELECT {summary_bucket_expr} AS ts, SUM(distance_miles)::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
-        }
-        "energy_charged" => {
-            "SELECT date_trunc('day', started_at) AS ts, SUM(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 AS value
+        ),
+        "energy_charged" => format!(
+            "SELECT {summary_bucket_expr} AS ts, SUM(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 AS value
              FROM riviamigo.charge_sessions
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
-        }
-        "charging_sessions" => {
-            "SELECT date_trunc('day', started_at) AS ts, COUNT(*)::float8 AS value
+        ),
+        "charging_sessions" => format!(
+            "SELECT {summary_bucket_expr} AS ts, COUNT(*)::float8 AS value
              FROM riviamigo.charge_sessions
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
-        }
-        "total_cost" => {
-            "SELECT date_trunc('day', started_at) AS ts, SUM(cost_usd)::float8 AS value
+        ),
+        "total_cost" => format!(
+            "SELECT {summary_bucket_expr} AS ts, SUM(cost_usd)::float8 AS value
              FROM riviamigo.charge_sessions
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
-        }
-        "avg_session_energy" => {
-            "SELECT date_trunc('day', started_at) AS ts, AVG(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 AS value
+        ),
+        "avg_session_energy" => format!(
+            "SELECT {summary_bucket_expr} AS ts, AVG(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 AS value
              FROM riviamigo.charge_sessions
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              GROUP BY 1 ORDER BY 1"
-        }
-        "avg_efficiency" => {
-            "SELECT started_at::date::timestamptz AS ts, AVG(efficiency_wh_per_mile)::float8 AS value
+        ),
+        "avg_efficiency" => format!(
+            "SELECT {summary_bucket_expr} AS ts, AVG(efficiency_wh_per_mile)::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND efficiency_wh_per_mile IS NOT NULL
              GROUP BY 1 ORDER BY 1"
-        }
-        "avg_gross_efficiency" => {
-            "SELECT started_at::date::timestamptz AS ts,
+        ),
+        "avg_gross_efficiency" => format!(
+            "SELECT {summary_bucket_expr} AS ts,
                     (SUM(energy_wh + COALESCE(regen_wh, 0)) / NULLIF(SUM(distance_miles), 0))::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND energy_wh IS NOT NULL AND distance_miles > 0
              GROUP BY 1 ORDER BY 1"
-        }
-        "avg_outside_temp_c" => {
-            "SELECT started_at::date::timestamptz AS ts, AVG(outside_temp_c)::float8 AS value
+        ),
+        "avg_outside_temp_c" => format!(
+            "SELECT {summary_bucket_expr} AS ts, AVG(outside_temp_c)::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND outside_temp_c IS NOT NULL
              GROUP BY 1 ORDER BY 1"
-        }
-        "avg_trip_duration" => {
-            "SELECT started_at::date::timestamptz AS ts, AVG(duration_seconds / 60.0)::float8 AS value
+        ),
+        "avg_trip_duration" => format!(
+            "SELECT {summary_bucket_expr} AS ts, AVG(duration_seconds / 60.0)::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND duration_seconds IS NOT NULL
              GROUP BY 1 ORDER BY 1"
-        }
+        ),
         _ => return Ok(Vec::new()),
     };
 
-    Ok(sqlx::query_as::<_, MetricSeriesPoint>(sql)
+    Ok(sqlx::query_as::<_, MetricSeriesPoint>(&sql)
         .bind(vid)
         .bind(from)
         .bind(to)
@@ -622,6 +655,7 @@ async fn telemetry_daily_series(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     aggregation: &str,
+    bucket: &str,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
     if !ALLOWED_TELEMETRY_COLUMNS.contains(&column) {
         return Err(AppError::Validation(format!(
@@ -638,8 +672,16 @@ async fn telemetry_daily_series(
             )))
         }
     };
+    let bucket_expr = match bucket {
+        "minute" => "date_trunc('minute', ts)",
+        "5min" => "time_bucket(INTERVAL '5 minutes', ts)",
+        "15min" => "time_bucket(INTERVAL '15 minutes', ts)",
+        "hour" => "date_trunc('hour', ts)",
+        _ => "date_trunc('day', ts)",
+    };
+
     let sql = format!(
-        "SELECT date_trunc('day', ts) AS ts, {aggregate}({column})::float8 AS value \
+        "SELECT {bucket_expr} AS ts, {aggregate}({column})::float8 AS value \
          FROM timeseries.telemetry \
          WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3 AND {column} IS NOT NULL \
          GROUP BY 1 ORDER BY 1"

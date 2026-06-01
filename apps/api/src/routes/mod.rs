@@ -8,7 +8,7 @@ use http::{
     },
     HeaderValue, StatusCode,
 };
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use tower_governor::GovernorLayer;
 use tower_http::{
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -18,7 +18,10 @@ use tower_http::{
     trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
 };
 
-use crate::middleware::auth::AppState;
+use crate::middleware::{
+    auth::AppState,
+    rate_limit::{self, RateLimitClass},
+};
 
 pub mod api_keys;
 pub mod auth;
@@ -47,6 +50,7 @@ pub mod users_support;
 pub mod vehicles;
 
 async fn log_server_errors(
+    axum::extract::State(decoding_key): axum::extract::State<jsonwebtoken::DecodingKey>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -70,8 +74,22 @@ async fn log_server_errors(
                 .headers_mut()
                 .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
         }
+        let limiter_class = response
+            .headers()
+            .get("x-riviamigo-ratelimit-class")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unknown");
+        let key_type = rate_limit::infer_key_type(req.headers(), &decoding_key);
 
-        tracing::warn!(%method, %path, status = %response.status(), limiter_source = "api", "request rate limited");
+        tracing::warn!(
+            %method,
+            %path,
+            status = %response.status(),
+            limiter_source = "api",
+            limiter_class,
+            key_type,
+            "request rate limited"
+        );
     }
 
     if response.status().is_server_error() {
@@ -105,29 +123,38 @@ pub fn build_router(state: AppState) -> Router {
         ]))
         .allow_credentials(true);
 
-    // Rate-limit configs
-    // Auth routes: strict limit to prevent brute-force attacks on login/OTP
-    let auth_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(6)
-            .burst_size(10)
-            .finish()
-            .unwrap(),
-    );
-    // Protected data routes: allow a higher burst for dashboard pages that fan
-    // out many concurrent widget queries, while still capping sustained abuse.
-    let data_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(120)
-            .burst_size(240)
-            .finish()
-            .unwrap(),
-    );
+    let auth_ip_config = Arc::new(rate_limit::build_ip_limiter(RateLimitClass::AuthPublic, 6, 10));
+    let auth_read_identity_config = Arc::new(rate_limit::build_identity_limiter(
+        RateLimitClass::AuthRead,
+        80,
+        160,
+        state.jwt_keys.decoding.clone(),
+        Some(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS]),
+    ));
+    let auth_write_identity_config = Arc::new(rate_limit::build_identity_limiter(
+        RateLimitClass::AuthWrite,
+        40,
+        80,
+        state.jwt_keys.decoding.clone(),
+        Some(vec![
+            http::Method::POST,
+            http::Method::PUT,
+            http::Method::PATCH,
+            http::Method::DELETE,
+        ]),
+    ));
+    let heavy_read_identity_config = Arc::new(rate_limit::build_identity_limiter(
+        RateLimitClass::HeavyRead,
+        25,
+        50,
+        state.jwt_keys.decoding.clone(),
+        Some(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS]),
+    ));
 
     // Inject decoding key into request extensions so AuthUser extractor can find it.
     let decoding_key = state.jwt_keys.decoding.clone();
 
-    let protected = Router::new()
+    let protected_common = Router::new()
         .merge(auth::protected_router())
         .merge(api_keys::router())
         .merge(backups::router())
@@ -138,7 +165,6 @@ pub fn build_router(state: AppState) -> Router {
         .merge(charging::router())
         .merge(efficiency::router())
         .merge(metrics::router())
-        .merge(live::router())
         .merge(dashboards::router())
         .merge(cost_profiles::router())
         .merge(places::router())
@@ -150,7 +176,25 @@ pub fn build_router(state: AppState) -> Router {
         .merge(idle_drain::router())
         .merge(locations::router())
         .merge(grafana::router())
-        .merge(users::router())
+        .merge(users::router());
+
+    let protected_heavy = Router::new().merge(live::router());
+
+    let protected = Router::new()
+        .merge(
+            protected_common
+                .layer(GovernorLayer {
+                    config: auth_read_identity_config,
+                })
+                .layer(GovernorLayer {
+                    config: auth_write_identity_config,
+                }),
+        )
+        .merge(
+            protected_heavy.layer(GovernorLayer {
+                config: heavy_read_identity_config,
+            }),
+        )
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();
@@ -160,20 +204,20 @@ pub fn build_router(state: AppState) -> Router {
                 }
             },
         ))
-        .layer(RequestBodyLimitLayer::new(64 * 1024))
-        .layer(GovernorLayer {
-            config: data_config,
-        });
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
 
     // Public auth routes with strict rate limiting
     let auth_public = auth::router().layer(GovernorLayer {
-        config: auth_config,
+        config: auth_ip_config,
     });
 
     Router::new()
         .route("/health", get(health))
         .nest("/v1", Router::new().merge(auth_public).merge(protected))
-        .layer(middleware::from_fn(log_server_errors))
+        .layer(middleware::from_fn_with_state(
+            state.jwt_keys.decoding.clone(),
+            log_server_errors,
+        ))
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
