@@ -137,6 +137,6 @@ WHERE u.id = pd.user_id;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM riviamigo.users WHERE role = 'super_user') THEN
-    RAISE EXCEPTION 'at least one super_user is required after migration 0046';
+    RAISE EXCEPTION 'at least one super_user is required after migration 0047';
   END IF;
 END $$;

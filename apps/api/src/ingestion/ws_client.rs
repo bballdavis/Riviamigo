@@ -22,6 +22,11 @@ const RIVIAN_CONNECTION_TTL_EXPIRED_CODE: u16 = 4420;
 const RIVIAN_CONNECTION_TTL_EXPIRED_REASON: &str = "Connection TTL expired";
 const RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE: u16 = 4410;
 const VEHICLE_STATE_FIELD_FAILURE_DISABLE_THRESHOLD: u32 = 2;
+const KNOWN_UNSUPPORTED_VEHICLE_STATE_FIELDS: &[&str] = &[
+    "cabinClimateExteriorTemperature",
+    "cabinClimateRunning",
+    "vehiclePowerOutput",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WsLoopEnd {
@@ -150,16 +155,32 @@ const VEHICLE_STATE_FIELDS: &[VehicleStateField] = &[
         "tirePressureStatusFrontLeft { timeStamp value }",
     ),
     VehicleStateField::optional(
+        "tirePressureStatusValidFrontLeft",
+        "tirePressureStatusValidFrontLeft { timeStamp value }",
+    ),
+    VehicleStateField::optional(
         "tirePressureStatusFrontRight",
         "tirePressureStatusFrontRight { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureStatusValidFrontRight",
+        "tirePressureStatusValidFrontRight { timeStamp value }",
     ),
     VehicleStateField::optional(
         "tirePressureStatusRearLeft",
         "tirePressureStatusRearLeft { timeStamp value }",
     ),
     VehicleStateField::optional(
+        "tirePressureStatusValidRearLeft",
+        "tirePressureStatusValidRearLeft { timeStamp value }",
+    ),
+    VehicleStateField::optional(
         "tirePressureStatusRearRight",
         "tirePressureStatusRearRight { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "tirePressureStatusValidRearRight",
+        "tirePressureStatusValidRearRight { timeStamp value }",
     ),
     VehicleStateField::optional(
         "tirePressureFrontLeft",
@@ -327,8 +348,16 @@ const VEHICLE_STATE_FIELDS: &[VehicleStateField] = &[
         "closureSideBinLeftLocked { timeStamp value }",
     ),
     VehicleStateField::optional(
+        "closureSideBinLeftClosed",
+        "closureSideBinLeftClosed { timeStamp value }",
+    ),
+    VehicleStateField::optional(
         "closureSideBinRightLocked",
         "closureSideBinRightLocked { timeStamp value }",
+    ),
+    VehicleStateField::optional(
+        "closureSideBinRightClosed",
+        "closureSideBinRightClosed { timeStamp value }",
     ),
     VehicleStateField::optional(
         "windowFrontLeftClosed",
@@ -364,10 +393,22 @@ struct RivianSubscriptionRejection {
     invalid_fields: Vec<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct VehicleStateSubscriptionHealth {
     failure_counts: HashMap<String, u32>,
     disabled_fields: HashSet<String>,
+}
+
+impl Default for VehicleStateSubscriptionHealth {
+    fn default() -> Self {
+        Self {
+            failure_counts: HashMap::new(),
+            disabled_fields: KNOWN_UNSUPPORTED_VEHICLE_STATE_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+        }
+    }
 }
 
 impl VehicleStateSubscriptionHealth {
@@ -490,6 +531,13 @@ pub async fn run_ws_loop(
     let max_backoff = config.rivian_ws_reconnect_max_seconds.max(initial_backoff);
     let mut backoff_secs = initial_backoff;
     let mut subscription_health = VehicleStateSubscriptionHealth::default();
+    if subscription_health.disabled_count() > 0 {
+        tracing::info!(
+            vehicle_id = %vehicle_id,
+            disabled_fields = subscription_health.disabled_count(),
+            "Rivian WS starting with known-unsupported VehicleState fields disabled"
+        );
+    }
 
     loop {
         let subscription_query = subscription_health.build_query();
@@ -833,6 +881,10 @@ fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
         || event.tire_fr_status.is_some()
         || event.tire_rl_status.is_some()
         || event.tire_rr_status.is_some()
+        || event.tire_fl_valid.is_some()
+        || event.tire_fr_valid.is_some()
+        || event.tire_rl_valid.is_some()
+        || event.tire_rr_valid.is_some()
         || event.door_front_left_locked.is_some()
         || event.door_front_right_locked.is_some()
         || event.door_rear_left_locked.is_some()
@@ -871,6 +923,8 @@ fn event_has_meaningful_payload(event: &TelemetryEvent) -> bool {
         || event.tonneau_closed.is_some()
         || event.side_bin_left_locked.is_some()
         || event.side_bin_right_locked.is_some()
+        || event.side_bin_left_closed.is_some()
+        || event.side_bin_right_closed.is_some()
         || event.window_fl_closed.is_some()
         || event.window_fr_closed.is_some()
         || event.window_rl_closed.is_some()
@@ -1076,12 +1130,13 @@ mod tests {
         let vehicle_id = Uuid::new_v4();
         let mut health = VehicleStateSubscriptionHealth::default();
         let rejected = vec!["vehiclePowerOutput".to_string()];
+        let baseline_disabled = health.disabled_count();
 
         assert!(!health.record_rejection(&vehicle_id, &rejected));
-        assert_eq!(health.disabled_count(), 0);
+        assert_eq!(health.disabled_count(), baseline_disabled);
 
-        assert!(health.record_rejection(&vehicle_id, &rejected));
-        assert_eq!(health.disabled_count(), 1);
+        assert!(!health.record_rejection(&vehicle_id, &rejected));
+        assert_eq!(health.disabled_count(), baseline_disabled);
         assert!(!health.build_query().contains("vehiclePowerOutput"));
     }
 

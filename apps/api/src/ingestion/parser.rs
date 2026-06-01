@@ -77,6 +77,10 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         tire_fr_status: extract_str(state, "/tirePressureStatusFrontRight/value").map(String::from),
         tire_rl_status: extract_str(state, "/tirePressureStatusRearLeft/value").map(String::from),
         tire_rr_status: extract_str(state, "/tirePressureStatusRearRight/value").map(String::from),
+        tire_fl_valid: extract_bool_like(state, "/tirePressureStatusValidFrontLeft/value"),
+        tire_fr_valid: extract_bool_like(state, "/tirePressureStatusValidFrontRight/value"),
+        tire_rl_valid: extract_bool_like(state, "/tirePressureStatusValidRearLeft/value"),
+        tire_rr_valid: extract_bool_like(state, "/tirePressureStatusValidRearRight/value"),
 
         door_front_left_locked: extract_locked(state, "/doorFrontLeftLocked/value"),
         door_front_right_locked: extract_locked(state, "/doorFrontRightLocked/value"),
@@ -132,6 +136,8 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         tonneau_closed: extract_closed(state, "/closureTonneauClosed/value"),
         side_bin_left_locked: extract_locked(state, "/closureSideBinLeftLocked/value"),
         side_bin_right_locked: extract_locked(state, "/closureSideBinRightLocked/value"),
+        side_bin_left_closed: extract_closed(state, "/closureSideBinLeftClosed/value"),
+        side_bin_right_closed: extract_closed(state, "/closureSideBinRightClosed/value"),
         window_fl_closed: extract_closed(state, "/windowFrontLeftClosed/value"),
         window_fr_closed: extract_closed(state, "/windowFrontRightClosed/value"),
         window_rl_closed: extract_closed(state, "/windowRearLeftClosed/value"),
@@ -160,6 +166,18 @@ fn extract_i32(v: &Value, ptr: &str) -> Option<i32> {
 
 fn extract_bool(v: &Value, ptr: &str) -> Option<bool> {
     v.pointer(ptr)?.as_bool()
+}
+
+fn extract_bool_like(v: &Value, ptr: &str) -> Option<bool> {
+    match v.pointer(ptr)? {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => match value.to_lowercase().as_str() {
+            "true" | "valid" | "ok" | "yes" => Some(true),
+            "false" | "invalid" | "bad" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn extract_str<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {

@@ -43,6 +43,7 @@ pub mod schedules;
 pub mod state_timeline;
 pub mod trips;
 pub mod users;
+pub mod users_support;
 pub mod vehicles;
 
 async fn log_server_errors(
