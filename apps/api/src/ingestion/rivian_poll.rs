@@ -2348,7 +2348,7 @@ pub async fn run_startup_polls(
     if let Err(e) = fetch_charging_schedule_for_vehicle(vehicle_id, &pool, &client, &age_key).await
     {
         if is_auth_error(&e) {
-            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule skipped: authentication required");
+            tracing::debug!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule skipped: authentication required");
         } else {
             tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_charging_schedule failed");
         }

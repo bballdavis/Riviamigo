@@ -185,6 +185,7 @@ export function SettingsContent() {
   const [sharingVehicleId, setSharingVehicleId] = React.useState<string | null>(null);
   const [shareEmail, setShareEmail] = React.useState('');
   const [shareRole, setShareRole] = React.useState<VehicleMember['role']>('viewer');
+  const [latestInviteToken, setLatestInviteToken] = React.useState<string | null>(null);
   const isAdmin = me.data?.role === 'admin';
   const sections = React.useMemo(
     () => isAdmin
@@ -249,6 +250,11 @@ export function SettingsContent() {
     queryFn: () => api.listVehicleMembers(sharingVehicleId!),
     enabled: activeSection === 'vehicles' && !!sharingVehicleId,
   });
+  const vehicleInvites = useQuery({
+    queryKey: ['vehicle-invites', sharingVehicleId],
+    queryFn: () => api.listVehicleInvites(sharingVehicleId!),
+    enabled: activeSection === 'vehicles' && !!sharingVehicleId,
+  });
 
   React.useEffect(() => {
     if (!sharingVehicleId) return;
@@ -310,10 +316,12 @@ export function SettingsContent() {
   const addVehicleMember = useMutation({
     mutationFn: ({ vehicleId, email, role }: { vehicleId: string; email: string; role: VehicleMember['role'] }) =>
       api.addVehicleMember(vehicleId, { email, role }),
-    onSuccess: (_, variables) => {
+    onSuccess: (result, variables) => {
       setShareEmail('');
       setShareRole('viewer');
+      setLatestInviteToken(result.invite_created ? (result.invite_token ?? null) : null);
       queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
+      queryClient.invalidateQueries({ queryKey: ['vehicle-invites', variables.vehicleId] });
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
     },
   });
@@ -334,6 +342,14 @@ export function SettingsContent() {
       queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
       queryClient.invalidateQueries({ queryKey: ['me'] });
+    },
+  });
+
+  const revokeVehicleInvite = useMutation({
+    mutationFn: ({ vehicleId, inviteId }: { vehicleId: string; inviteId: string }) =>
+      api.revokeVehicleInvite(vehicleId, inviteId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['vehicle-invites', variables.vehicleId] });
     },
   });
 
@@ -778,7 +794,10 @@ export function SettingsContent() {
                                     variant="secondary"
                                     size="sm"
                                     loading={vehicleMembers.isFetching}
-                                    onClick={() => vehicleMembers.refetch()}
+                                    onClick={() => {
+                                      vehicleMembers.refetch();
+                                      vehicleInvites.refetch();
+                                    }}
                                   >
                                     Refresh
                                   </Button>
@@ -810,6 +829,12 @@ export function SettingsContent() {
                                     Add Member
                                   </Button>
                                 </div>
+                                {latestInviteToken && (
+                                  <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-xs text-fg-tertiary">
+                                    Invite created for a user not yet registered. Token:
+                                    <span className="ml-2 font-mono text-fg">{latestInviteToken}</span>
+                                  </div>
+                                )}
 
                                 <div className="grid gap-2">
                                   {vehicleMembers.isLoading && (
@@ -876,6 +901,37 @@ export function SettingsContent() {
                                       </div>
                                     );
                                   })}
+                                </div>
+                                <div className="grid gap-2 pt-1">
+                                  <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Pending Invites</p>
+                                  {(vehicleInvites.data ?? [])
+                                    .filter((invite) => !invite.accepted_at && !invite.revoked_at)
+                                    .map((invite) => (
+                                      <div key={invite.id} className="grid gap-2 rounded-xl border border-border bg-bg-elevated/25 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                                        <div className="min-w-0">
+                                          <p className="truncate text-sm text-fg">
+                                            {invite.invitee_email} <span className="text-fg-tertiary">({formatMembershipRole(invite.role)})</span>
+                                          </p>
+                                          <p className="mt-1 text-xs text-fg-tertiary">
+                                            Expires {new Date(invite.expires_at).toLocaleDateString()}
+                                          </p>
+                                        </div>
+                                        <Button
+                                          variant="danger"
+                                          size="sm"
+                                          className="h-9"
+                                          loading={revokeVehicleInvite.isPending && revokeVehicleInvite.variables?.inviteId === invite.id}
+                                          onClick={() => revokeVehicleInvite.mutate({ vehicleId: v.id, inviteId: invite.id })}
+                                        >
+                                          Revoke
+                                        </Button>
+                                      </div>
+                                    ))}
+                                  {(vehicleInvites.data ?? []).filter((invite) => !invite.accepted_at && !invite.revoked_at).length === 0 && (
+                                    <div className="rounded-xl border border-border bg-bg-elevated/25 p-3 text-sm text-fg-tertiary">
+                                      No pending invites.
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>

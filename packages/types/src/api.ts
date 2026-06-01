@@ -562,9 +562,11 @@ export interface AuthTokens {
 export interface AuthMeResponse {
   user_id: string;
   email: string;
-  role: string;
+  role: UserRole;
   default_vehicle_id: string | null;
 }
+
+export type UserRole = 'super_user' | 'admin' | 'user';
 
 export type UnitMode = 'imperial' | 'metric' | 'custom';
 export type DistanceUnit = 'miles' | 'kilometers';
@@ -621,6 +623,73 @@ export interface UpdateVehicleMemberBody {
 
 export interface VehicleMembersResponse {
   members: VehicleMember[];
+}
+
+export interface VehicleInvite {
+  id: string;
+  vehicle_id: string;
+  invited_by: string;
+  invitee_email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface CreateVehicleInviteBody {
+  email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  expires_in_days?: number;
+}
+
+export interface AdminUserRecord {
+  id: string;
+  email: string;
+  role: UserRole;
+  is_disabled: boolean;
+  vehicle_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAdminUserBody {
+  email: string;
+  password: string;
+  role?: UserRole;
+}
+
+export interface UpdateAdminUserBody {
+  email?: string;
+  role?: UserRole;
+  is_disabled?: boolean;
+}
+
+export interface AdminUserMembership {
+  vehicle_id: string;
+  role: 'owner' | 'manager' | 'viewer';
+  is_default: boolean;
+  created_at: string;
+  model: string;
+  display_name: string | null;
+}
+
+export interface AdminUserInvite {
+  id: string;
+  vehicle_id: string;
+  vehicle_name: string;
+  invitee_email: string;
+  role: 'owner' | 'manager' | 'viewer';
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface AdminUserDetail {
+  user: AdminUserRecord;
+  memberships: AdminUserMembership[];
+  invites: AdminUserInvite[];
 }
 
 export interface ApiCatalog {
