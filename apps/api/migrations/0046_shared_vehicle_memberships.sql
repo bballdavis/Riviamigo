@@ -1,4 +1,4 @@
--- Migration 0045: shared-vehicle ownership model, per-user annotations, and
+-- Migration 0046: shared-vehicle ownership model, per-user annotations, and
 -- latest-status storage for scalable hosted multi-user deployments.
 
 -- Canonical vehicle access now flows through memberships instead of

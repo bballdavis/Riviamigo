@@ -1,9 +1,11 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sqlx::Row;
+use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -26,6 +28,10 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/default", post(set_default_vehicle))
         .route("/vehicles/:id/members", get(list_vehicle_members).post(add_vehicle_member))
         .route("/vehicles/:id/members/:user_id", put(update_vehicle_member).delete(remove_vehicle_member))
+        .route("/vehicles/:id/invites", get(list_vehicle_invites).post(create_vehicle_invite))
+        .route("/vehicles/:id/invites/:invite_id", delete(revoke_vehicle_invite))
+        .route("/invites/:token", get(preview_invite))
+        .route("/invites/:token/accept", post(accept_invite))
         .route(
             "/vehicles/:id/credentials",
             put(refresh_vehicle_credentials),
@@ -106,6 +112,10 @@ struct LatestVehicleTelemetry {
     tire_fr_status: Option<String>,
     tire_rl_status: Option<String>,
     tire_rr_status: Option<String>,
+    tire_fl_valid: Option<bool>,
+    tire_fr_valid: Option<bool>,
+    tire_rl_valid: Option<bool>,
+    tire_rr_valid: Option<bool>,
     door_front_left_locked: Option<bool>,
     door_front_right_locked: Option<bool>,
     door_rear_left_locked: Option<bool>,
@@ -145,6 +155,8 @@ struct LatestVehicleTelemetry {
     tonneau_closed: Option<bool>,
     side_bin_left_locked: Option<bool>,
     side_bin_right_locked: Option<bool>,
+    side_bin_left_closed: Option<bool>,
+    side_bin_right_closed: Option<bool>,
     window_fl_closed: Option<bool>,
     window_fr_closed: Option<bool>,
     window_rl_closed: Option<bool>,
@@ -242,6 +254,10 @@ struct VehicleStatusResponse {
     tire_fr_status: Option<String>,
     tire_rl_status: Option<String>,
     tire_rr_status: Option<String>,
+    tire_fl_valid: Option<bool>,
+    tire_fr_valid: Option<bool>,
+    tire_rl_valid: Option<bool>,
+    tire_rr_valid: Option<bool>,
     door_front_left_locked: Option<bool>,
     door_front_right_locked: Option<bool>,
     door_rear_left_locked: Option<bool>,
@@ -285,6 +301,8 @@ struct VehicleStatusResponse {
     tonneau_closed: Option<bool>,
     side_bin_left_locked: Option<bool>,
     side_bin_right_locked: Option<bool>,
+    side_bin_left_closed: Option<bool>,
+    side_bin_right_closed: Option<bool>,
     window_fl_closed: Option<bool>,
     window_fr_closed: Option<bool>,
     window_rl_closed: Option<bool>,
@@ -341,6 +359,10 @@ struct RawVehicleSampleRow {
     tire_fr_status: Option<String>,
     tire_rl_status: Option<String>,
     tire_rr_status: Option<String>,
+    tire_fl_valid: Option<bool>,
+    tire_fr_valid: Option<bool>,
+    tire_rl_valid: Option<bool>,
+    tire_rr_valid: Option<bool>,
     door_front_left_locked: Option<bool>,
     door_front_right_locked: Option<bool>,
     door_rear_left_locked: Option<bool>,
@@ -961,6 +983,26 @@ struct AddVehicleMemberBody {
 }
 
 #[derive(Deserialize)]
+struct CreateVehicleInviteBody {
+    email: String,
+    role: String,
+    expires_in_days: Option<i32>,
+}
+
+#[derive(sqlx::FromRow, Serialize)]
+struct VehicleInviteRow {
+    id: Uuid,
+    vehicle_id: Uuid,
+    invited_by: Uuid,
+    invitee_email: String,
+    role: String,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    accepted_at: Option<chrono::DateTime<chrono::Utc>>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize)]
 struct UpdateVehicleMemberBody {
     role: String,
 }
@@ -1076,37 +1118,62 @@ async fn add_vehicle_member(
     )
     .bind(&email)
     .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::Validation("user must already have an account".into()))?;
-
-    let result = sqlx::query(
-        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
-         VALUES ($1, $2, $3, FALSE)
-         ON CONFLICT (vehicle_id, user_id) DO UPDATE
-         SET role = EXCLUDED.role,
-             updated_at = now()",
-    )
-    .bind(vid)
-    .bind(target_user_id)
-    .bind(body.role.as_str())
-    .execute(&state.pool)
     .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(AppError::Conflict("member already exists".into()));
+    if let Some(target_user_id) = target_user_id {
+        let result = sqlx::query(
+            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+             VALUES ($1, $2, $3, FALSE)
+             ON CONFLICT (vehicle_id, user_id) DO UPDATE
+             SET role = EXCLUDED.role,
+                 updated_at = now()",
+        )
+        .bind(vid)
+        .bind(target_user_id)
+        .bind(body.role.as_str())
+        .execute(&state.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::Conflict("member already exists".into()));
+        }
+
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id)
+             VALUES ($1, $2)
+             ON CONFLICT (vehicle_id, user_id) DO NOTHING",
+        )
+        .bind(vid)
+        .bind(target_user_id)
+        .execute(&state.pool)
+        .await?;
+
+        return Ok(Json(serde_json::json!({ "ok": true, "invite_created": false })));
     }
 
+    let token = format!("rmi_{}", Uuid::new_v4().simple());
+    let token_hash = hash_invite_token(&token);
+    let expires_in_days = 14;
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(expires_in_days as i64);
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id)
-         VALUES ($1, $2)
-         ON CONFLICT (vehicle_id, user_id) DO NOTHING",
+        "INSERT INTO riviamigo.vehicle_invites
+         (vehicle_id, invited_by, invitee_email, role, token_hash, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(vid)
-    .bind(target_user_id)
+    .bind(auth.user_id)
+    .bind(email)
+    .bind(body.role.as_str())
+    .bind(token_hash.as_slice())
+    .bind(expires_at)
     .execute(&state.pool)
     .await?;
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "invite_created": true,
+        "invite_token": token,
+    })))
 }
 
 async fn update_vehicle_member(
@@ -1176,6 +1243,189 @@ async fn remove_vehicle_member(
     .await?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn create_vehicle_invite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vid): Path<Uuid>,
+    Json(body): Json<CreateVehicleInviteBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
+    if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
+        return Err(AppError::Validation("role must be owner, manager, or viewer".into()));
+    }
+    let email = body.email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return Err(AppError::Validation("valid email required".into()));
+    }
+    let token = format!("rmi_{}", Uuid::new_v4().simple());
+    let token_hash = hash_invite_token(&token);
+    let expires_in_days = body.expires_in_days.unwrap_or(14).clamp(1, 30);
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(expires_in_days as i64);
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_invites
+         (vehicle_id, invited_by, invitee_email, role, token_hash, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(vid)
+    .bind(auth.user_id)
+    .bind(email)
+    .bind(body.role)
+    .bind(token_hash.as_slice())
+    .bind(expires_at)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "invite_token": token,
+        "expires_at": expires_at,
+    })))
+}
+
+async fn list_vehicle_invites(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vid): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
+    let rows = sqlx::query_as::<_, VehicleInviteRow>(
+        "SELECT id, vehicle_id, invited_by, invitee_email, role, expires_at, accepted_at, revoked_at, created_at
+         FROM riviamigo.vehicle_invites
+         WHERE vehicle_id = $1
+         ORDER BY created_at DESC",
+    )
+    .bind(vid)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "invites": rows })))
+}
+
+async fn revoke_vehicle_invite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((vid, invite_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
+    sqlx::query(
+        "UPDATE riviamigo.vehicle_invites
+         SET revoked_at = now(), updated_at = now()
+         WHERE id = $1 AND vehicle_id = $2 AND accepted_at IS NULL",
+    )
+    .bind(invite_id)
+    .bind(vid)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn preview_invite(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let token_hash = hash_invite_token(&token);
+    let row = sqlx::query(
+        "SELECT i.id, i.vehicle_id, i.invitee_email, i.role, i.expires_at, i.accepted_at, i.revoked_at, COALESCE(v.name, v.model) AS vehicle_name
+         FROM riviamigo.vehicle_invites i
+         JOIN riviamigo.vehicles v ON v.id = i.vehicle_id
+         WHERE i.token_hash = $1",
+    )
+    .bind(token_hash.as_slice())
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    Ok(Json(serde_json::json!({
+        "id": row.get::<Uuid, _>("id"),
+        "vehicle_id": row.get::<Uuid, _>("vehicle_id"),
+        "vehicle_name": row.get::<String, _>("vehicle_name"),
+        "invitee_email": row.get::<String, _>("invitee_email"),
+        "role": row.get::<String, _>("role"),
+        "expires_at": row.get::<chrono::DateTime<chrono::Utc>, _>("expires_at"),
+        "accepted_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at"),
+        "revoked_at": row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at"),
+    })))
+}
+
+async fn accept_invite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(token): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let token_hash = hash_invite_token(&token);
+    let mut tx = state.pool.begin().await?;
+    let invite = sqlx::query(
+        "SELECT i.id, i.vehicle_id, i.invitee_email, i.role, i.expires_at, i.accepted_at, i.revoked_at, u.email AS user_email
+         FROM riviamigo.vehicle_invites i
+         JOIN riviamigo.users u ON u.id = $2
+         WHERE i.token_hash = $1
+         FOR UPDATE",
+    )
+    .bind(token_hash.as_slice())
+    .bind(auth.user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if invite.get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at").is_some() {
+        return Err(AppError::Validation("invite revoked".into()));
+    }
+    if invite.get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at").is_some() {
+        return Err(AppError::Validation("invite already accepted".into()));
+    }
+    let expires_at = invite.get::<chrono::DateTime<chrono::Utc>, _>("expires_at");
+    if expires_at < chrono::Utc::now() {
+        return Err(AppError::Validation("invite expired".into()));
+    }
+    let invitee_email = invite.get::<String, _>("invitee_email");
+    let user_email = invite.get::<String, _>("user_email").to_lowercase();
+    if invitee_email.to_lowercase() != user_email {
+        return Err(AppError::Forbidden);
+    }
+    let vehicle_id = invite.get::<Uuid, _>("vehicle_id");
+    let role = invite.get::<String, _>("role");
+    let invite_id = invite.get::<Uuid, _>("id");
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, $3, FALSE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE
+         SET role = EXCLUDED.role, updated_at = now()",
+    )
+    .bind(vehicle_id)
+    .bind(auth.user_id)
+    .bind(role)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (vehicle_id, user_id) DO NOTHING",
+    )
+    .bind(vehicle_id)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE riviamigo.vehicle_invites
+         SET accepted_at = now(), accepted_user_id = $2, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(invite_id)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vehicle_id })))
+}
+
+fn hash_invite_token(token: &str) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hasher.finalize().to_vec()
 }
 
 async fn list_vehicles(
@@ -1284,6 +1534,7 @@ async fn vehicle_status(
           heading_deg, odometer_miles,
           tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
           tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+          tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
           door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
           door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
           closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
@@ -1295,6 +1546,7 @@ async fn vehicle_status(
           seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat,
           seat_fl_vent, seat_fr_vent,
           tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+          side_bin_left_closed, side_bin_right_closed,
           window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
           gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
           alarm_active, service_mode
@@ -1335,6 +1587,10 @@ async fn vehicle_status(
         tire_fr_status: None,
         tire_rl_status: None,
         tire_rr_status: None,
+        tire_fl_valid: None,
+        tire_fr_valid: None,
+        tire_rl_valid: None,
+        tire_rr_valid: None,
         door_front_left_locked: None,
         door_front_right_locked: None,
         door_rear_left_locked: None,
@@ -1373,6 +1629,8 @@ async fn vehicle_status(
         tonneau_closed: None,
         side_bin_left_locked: None,
         side_bin_right_locked: None,
+        side_bin_left_closed: None,
+        side_bin_right_closed: None,
         window_fl_closed: None,
         window_fr_closed: None,
         window_rl_closed: None,
@@ -1402,24 +1660,34 @@ async fn vehicle_status(
         latest.tire_rl_status.as_deref(),
         latest.tire_rr_status.as_deref(),
     ];
-    let tire_pressure_status: Option<String> = tire_statuses
-        .into_iter()
-        .flatten()
-        .find(|status| {
-            !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown")
-        })
-        .or_else(|| {
-            [
-                latest.tire_fl_status.as_deref(),
-                latest.tire_fr_status.as_deref(),
-                latest.tire_rl_status.as_deref(),
-                latest.tire_rr_status.as_deref(),
-            ]
+    let tire_validity = [
+        latest.tire_fl_valid,
+        latest.tire_fr_valid,
+        latest.tire_rl_valid,
+        latest.tire_rr_valid,
+    ];
+    let tire_pressure_status: Option<String> = if tire_validity.into_iter().flatten().any(|valid| !valid) {
+        Some("invalid_sensor".to_string())
+    } else {
+        tire_statuses
             .into_iter()
             .flatten()
-            .next()
-        })
-        .map(str::to_string);
+            .find(|status| {
+                !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown")
+            })
+            .or_else(|| {
+                [
+                    latest.tire_fl_status.as_deref(),
+                    latest.tire_fr_status.as_deref(),
+                    latest.tire_rl_status.as_deref(),
+                    latest.tire_rr_status.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .next()
+            })
+            .map(str::to_string)
+    };
     let lock_values = [
         latest.door_front_left_locked,
         latest.door_front_right_locked,
@@ -1440,8 +1708,8 @@ async fn vehicle_status(
         ("Liftgate", latest.closure_liftgate_closed),
         ("Tailgate", latest.closure_tailgate_closed),
         ("Tonneau", latest.tonneau_closed),
-        ("Left side bin", latest.side_bin_left_locked.map(|v| !v)),
-        ("Right side bin", latest.side_bin_right_locked.map(|v| !v)),
+        ("Left side bin", latest.side_bin_left_closed),
+        ("Right side bin", latest.side_bin_right_closed),
         ("Front left window", latest.window_fl_closed),
         ("Front right window", latest.window_fr_closed),
         ("Rear left window", latest.window_rl_closed),
@@ -1503,6 +1771,10 @@ async fn vehicle_status(
         tire_fr_status: latest.tire_fr_status,
         tire_rl_status: latest.tire_rl_status,
         tire_rr_status: latest.tire_rr_status,
+        tire_fl_valid: latest.tire_fl_valid,
+        tire_fr_valid: latest.tire_fr_valid,
+        tire_rl_valid: latest.tire_rl_valid,
+        tire_rr_valid: latest.tire_rr_valid,
         door_front_left_locked: latest.door_front_left_locked,
         door_front_right_locked: latest.door_front_right_locked,
         door_rear_left_locked: latest.door_rear_left_locked,
@@ -1546,6 +1818,8 @@ async fn vehicle_status(
         tonneau_closed: latest.tonneau_closed,
         side_bin_left_locked: latest.side_bin_left_locked,
         side_bin_right_locked: latest.side_bin_right_locked,
+        side_bin_left_closed: latest.side_bin_left_closed,
+        side_bin_right_closed: latest.side_bin_right_closed,
         window_fl_closed: latest.window_fl_closed,
         window_fr_closed: latest.window_fr_closed,
         window_rl_closed: latest.window_rl_closed,
@@ -1828,6 +2102,7 @@ async fn raw_vehicle_data(
                hvac_active, power_kw, regen_power_kw, heading_deg, odometer_miles,
                tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
                tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+               tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
                door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
                door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
                closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
@@ -1914,6 +2189,10 @@ async fn raw_vehicle_data(
             "tire_fr_status": r.tire_fr_status,
             "tire_rl_status": r.tire_rl_status,
             "tire_rr_status": r.tire_rr_status,
+            "tire_fl_valid": r.tire_fl_valid,
+            "tire_fr_valid": r.tire_fr_valid,
+            "tire_rl_valid": r.tire_rl_valid,
+            "tire_rr_valid": r.tire_rr_valid,
             "door_front_left_locked": r.door_front_left_locked,
             "door_front_right_locked": r.door_front_right_locked,
             "door_rear_left_locked": r.door_rear_left_locked,

@@ -658,6 +658,10 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, tire_fr_status);
     patch_opt!(target, source, tire_rl_status);
     patch_opt!(target, source, tire_rr_status);
+    patch_opt!(target, source, tire_fl_valid);
+    patch_opt!(target, source, tire_fr_valid);
+    patch_opt!(target, source, tire_rl_valid);
+    patch_opt!(target, source, tire_rr_valid);
     patch_opt!(target, source, door_front_left_locked);
     patch_opt!(target, source, door_front_right_locked);
     patch_opt!(target, source, door_rear_left_locked);
@@ -698,6 +702,8 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, tonneau_closed);
     patch_opt!(target, source, side_bin_left_locked);
     patch_opt!(target, source, side_bin_right_locked);
+    patch_opt!(target, source, side_bin_left_closed);
+    patch_opt!(target, source, side_bin_right_closed);
     patch_opt!(target, source, window_fl_closed);
     patch_opt!(target, source, window_fr_closed);
     patch_opt!(target, source, window_rl_closed);
@@ -747,6 +753,10 @@ fn event_is_duplicate_patch(event: &TelemetryEvent, state: &TelemetryEvent) -> b
         && duplicate_field!(event, state, tire_fr_status)
         && duplicate_field!(event, state, tire_rl_status)
         && duplicate_field!(event, state, tire_rr_status)
+        && duplicate_field!(event, state, tire_fl_valid)
+        && duplicate_field!(event, state, tire_fr_valid)
+        && duplicate_field!(event, state, tire_rl_valid)
+        && duplicate_field!(event, state, tire_rr_valid)
         && duplicate_field!(event, state, door_front_left_locked)
         && duplicate_field!(event, state, door_front_right_locked)
         && duplicate_field!(event, state, door_rear_left_locked)
@@ -786,6 +796,8 @@ fn event_is_duplicate_patch(event: &TelemetryEvent, state: &TelemetryEvent) -> b
         && duplicate_field!(event, state, tonneau_closed)
         && duplicate_field!(event, state, side_bin_left_locked)
         && duplicate_field!(event, state, side_bin_right_locked)
+        && duplicate_field!(event, state, side_bin_left_closed)
+        && duplicate_field!(event, state, side_bin_right_closed)
         && duplicate_field!(event, state, window_fl_closed)
         && duplicate_field!(event, state, window_fr_closed)
         && duplicate_field!(event, state, window_rl_closed)
@@ -847,6 +859,8 @@ fn closure_or_lock_change(event: &TelemetryEvent, prev: &TelemetryEvent) -> bool
         || changed_bool(event.tonneau_closed, prev.tonneau_closed)
         || changed_bool(event.side_bin_left_locked, prev.side_bin_left_locked)
         || changed_bool(event.side_bin_right_locked, prev.side_bin_right_locked)
+        || changed_bool(event.side_bin_left_closed, prev.side_bin_left_closed)
+        || changed_bool(event.side_bin_right_closed, prev.side_bin_right_closed)
         || changed_bool(event.window_fl_closed, prev.window_fl_closed)
         || changed_bool(event.window_fr_closed, prev.window_fr_closed)
         || changed_bool(event.window_rl_closed, prev.window_rl_closed)
@@ -1210,6 +1224,7 @@ async fn write_telemetry(
             power_kw, regen_power_kw, heading_deg, odometer_miles,
             tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
             tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+            tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
             door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
             door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
             closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
@@ -1222,14 +1237,15 @@ async fn write_telemetry(
             seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat,
             seat_fl_vent, seat_fr_vent,
             tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+            side_bin_left_closed, side_bin_right_closed,
             window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
             gear_guard_locked, gear_guard_video_status,
             wiper_fluid_low, brake_fluid_low, alarm_active, service_mode)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
                     $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
-                    $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,
-                    $56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,
-                    $76,$77,$78,$79,$80,$81,$82,$83)
+                    $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
+                    $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
+                    $81,$82,$83,$84,$85,$86,$87,$88,$89)
             ON CONFLICT (vehicle_id, ts) DO UPDATE
             SET
               latitude                  = COALESCE(EXCLUDED.latitude, timeseries.telemetry.latitude),
@@ -1291,6 +1307,10 @@ async fn write_telemetry(
         .bind(&e.tire_fr_status)
         .bind(&e.tire_rl_status)
         .bind(&e.tire_rr_status)
+        .bind(e.tire_fl_valid)
+        .bind(e.tire_fr_valid)
+        .bind(e.tire_rl_valid)
+        .bind(e.tire_rr_valid)
         .bind(e.door_front_left_locked)
         .bind(e.door_front_right_locked)
         .bind(e.door_rear_left_locked)
@@ -1333,6 +1353,8 @@ async fn write_telemetry(
         .bind(e.tonneau_closed)
         .bind(e.side_bin_left_locked)
         .bind(e.side_bin_right_locked)
+        .bind(e.side_bin_left_closed)
+        .bind(e.side_bin_right_closed)
         .bind(e.window_fl_closed)
         .bind(e.window_fr_closed)
         .bind(e.window_rl_closed)
@@ -1359,6 +1381,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              heading_deg, odometer_miles,
              tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
              tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+             tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
              door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
              door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
              closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
@@ -1369,19 +1392,21 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
              seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
              tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+             side_bin_left_closed, side_bin_right_closed,
              window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
              gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
              alarm_active, service_mode, updated_at
-           ) VALUES (
-             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-             $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
-             $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,
-             $51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
-             $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
-             $71,$72,$73,$74,$75,$76,$77,$78,now()
-           )
+            ) VALUES (
+              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+              $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+              $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+              $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
+              $41,$42,$43,$44,$45,$46,$47,$48,$49,$50,
+              $51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
+              $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
+              $71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
+              $81,$82,$83,$84,now()
+            )
            ON CONFLICT (vehicle_id) DO UPDATE SET
              ts = GREATEST(EXCLUDED.ts, riviamigo.vehicle_latest_status.ts),
              latitude = COALESCE(EXCLUDED.latitude, riviamigo.vehicle_latest_status.latitude),
@@ -1412,6 +1437,10 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              tire_fr_status = COALESCE(EXCLUDED.tire_fr_status, riviamigo.vehicle_latest_status.tire_fr_status),
              tire_rl_status = COALESCE(EXCLUDED.tire_rl_status, riviamigo.vehicle_latest_status.tire_rl_status),
              tire_rr_status = COALESCE(EXCLUDED.tire_rr_status, riviamigo.vehicle_latest_status.tire_rr_status),
+             tire_fl_valid = COALESCE(EXCLUDED.tire_fl_valid, riviamigo.vehicle_latest_status.tire_fl_valid),
+             tire_fr_valid = COALESCE(EXCLUDED.tire_fr_valid, riviamigo.vehicle_latest_status.tire_fr_valid),
+             tire_rl_valid = COALESCE(EXCLUDED.tire_rl_valid, riviamigo.vehicle_latest_status.tire_rl_valid),
+             tire_rr_valid = COALESCE(EXCLUDED.tire_rr_valid, riviamigo.vehicle_latest_status.tire_rr_valid),
              door_front_left_locked = COALESCE(EXCLUDED.door_front_left_locked, riviamigo.vehicle_latest_status.door_front_left_locked),
              door_front_right_locked = COALESCE(EXCLUDED.door_front_right_locked, riviamigo.vehicle_latest_status.door_front_right_locked),
              door_rear_left_locked = COALESCE(EXCLUDED.door_rear_left_locked, riviamigo.vehicle_latest_status.door_rear_left_locked),
@@ -1450,6 +1479,8 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
              tonneau_closed = COALESCE(EXCLUDED.tonneau_closed, riviamigo.vehicle_latest_status.tonneau_closed),
              side_bin_left_locked = COALESCE(EXCLUDED.side_bin_left_locked, riviamigo.vehicle_latest_status.side_bin_left_locked),
              side_bin_right_locked = COALESCE(EXCLUDED.side_bin_right_locked, riviamigo.vehicle_latest_status.side_bin_right_locked),
+             side_bin_left_closed = COALESCE(EXCLUDED.side_bin_left_closed, riviamigo.vehicle_latest_status.side_bin_left_closed),
+             side_bin_right_closed = COALESCE(EXCLUDED.side_bin_right_closed, riviamigo.vehicle_latest_status.side_bin_right_closed),
              window_fl_closed = COALESCE(EXCLUDED.window_fl_closed, riviamigo.vehicle_latest_status.window_fl_closed),
              window_fr_closed = COALESCE(EXCLUDED.window_fr_closed, riviamigo.vehicle_latest_status.window_fr_closed),
              window_rl_closed = COALESCE(EXCLUDED.window_rl_closed, riviamigo.vehicle_latest_status.window_rl_closed),
@@ -1492,6 +1523,10 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
     .bind(&e.tire_fr_status)
     .bind(&e.tire_rl_status)
     .bind(&e.tire_rr_status)
+    .bind(e.tire_fl_valid)
+    .bind(e.tire_fr_valid)
+    .bind(e.tire_rl_valid)
+    .bind(e.tire_rr_valid)
     .bind(e.door_front_left_locked)
     .bind(e.door_front_right_locked)
     .bind(e.door_rear_left_locked)
@@ -1530,6 +1565,8 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
     .bind(e.tonneau_closed)
     .bind(e.side_bin_left_locked)
     .bind(e.side_bin_right_locked)
+    .bind(e.side_bin_left_closed)
+    .bind(e.side_bin_right_closed)
     .bind(e.window_fl_closed)
     .bind(e.window_fr_closed)
     .bind(e.window_rl_closed)
@@ -1612,6 +1649,10 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
     set_opt!("tire_fr_status", e.tire_fr_status.as_deref());
     set_opt!("tire_rl_status", e.tire_rl_status.as_deref());
     set_opt!("tire_rr_status", e.tire_rr_status.as_deref());
+    set_opt!("tire_fl_valid", e.tire_fl_valid);
+    set_opt!("tire_fr_valid", e.tire_fr_valid);
+    set_opt!("tire_rl_valid", e.tire_rl_valid);
+    set_opt!("tire_rr_valid", e.tire_rr_valid);
     set_opt!("door_front_left_locked", e.door_front_left_locked);
     set_opt!("door_front_right_locked", e.door_front_right_locked);
     set_opt!("door_rear_left_locked", e.door_rear_left_locked);
@@ -1657,6 +1698,8 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
     set_opt!("tonneau_closed", e.tonneau_closed);
     set_opt!("side_bin_left_locked", e.side_bin_left_locked);
     set_opt!("side_bin_right_locked", e.side_bin_right_locked);
+    set_opt!("side_bin_left_closed", e.side_bin_left_closed);
+    set_opt!("side_bin_right_closed", e.side_bin_right_closed);
     set_opt!("window_fl_closed", e.window_fl_closed);
     set_opt!("window_fr_closed", e.window_fr_closed);
     set_opt!("window_rl_closed", e.window_rl_closed);

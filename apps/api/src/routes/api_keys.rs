@@ -385,7 +385,7 @@ async fn require_user_admin(state: &AppState, user_id: Uuid) -> Result<(), AppEr
             .await?;
 
     match role.as_deref() {
-        Some("admin") => Ok(()),
+        Some("admin") | Some("super_user") => Ok(()),
         _ => Err(AppError::Forbidden),
     }
 }

@@ -12,7 +12,8 @@ import type {
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
   CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
-  AddVehicleMemberBody, UpdateVehicleMemberBody,
+  AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite,
+  AdminUserRecord, CreateAdminUserBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -372,7 +373,7 @@ class ApiClient {
     return res.members ?? [];
   }
 
-  async addVehicleMember(vehicleId: string, body: AddVehicleMemberBody): Promise<void> {
+  async addVehicleMember(vehicleId: string, body: AddVehicleMemberBody): Promise<{ ok: boolean; invite_created: boolean; invite_token?: string }> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/members`, body);
   }
 
@@ -382,6 +383,74 @@ class ApiClient {
 
   async removeVehicleMember(vehicleId: string, userId: string): Promise<void> {
     return this.request('DELETE', `/v1/vehicles/${vehicleId}/members/${userId}`);
+  }
+
+  async listVehicleInvites(vehicleId: string): Promise<VehicleInvite[]> {
+    const res = await this.request<{ invites: VehicleInvite[] }>('GET', `/v1/vehicles/${vehicleId}/invites`);
+    return res.invites ?? [];
+  }
+
+  async createVehicleInvite(vehicleId: string, body: CreateVehicleInviteBody): Promise<{ ok: boolean; invite_token: string; expires_at: string }> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/invites`, body);
+  }
+
+  async revokeVehicleInvite(vehicleId: string, inviteId: string): Promise<void> {
+    return this.request('DELETE', `/v1/vehicles/${vehicleId}/invites/${inviteId}`);
+  }
+
+  async acceptVehicleInvite(token: string): Promise<{ ok: boolean; vehicle_id: string }> {
+    return this.request('POST', `/v1/invites/${token}/accept`);
+  }
+
+  async previewVehicleInvite(token: string): Promise<VehicleInvite & { vehicle_name: string }> {
+    return this.request('GET', `/v1/invites/${token}`);
+  }
+
+  async listUsers(search = ''): Promise<AdminUserRecord[]> {
+    const res = await this.request<{ users: AdminUserRecord[] }>('GET', '/v1/admin/users', undefined, search ? { search } : undefined);
+    return res.users ?? [];
+  }
+
+  async createUser(body: CreateAdminUserBody): Promise<{ id: string }> {
+    return this.request('POST', '/v1/admin/users', body);
+  }
+
+  async updateUser(id: string, body: UpdateAdminUserBody): Promise<void> {
+    return this.request('PATCH', `/v1/admin/users/${id}`, body);
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    return this.request('DELETE', `/v1/admin/users/${id}`);
+  }
+
+  async listUserVehicleMemberships(id: string): Promise<Array<{ vehicle_id: string; role: string; is_default: boolean; created_at: string; model: string; display_name: string | null }>> {
+    const res = await this.request<{ memberships: AdminUserMembership[] }>('GET', `/v1/admin/users/${id}/vehicles`);
+    return res.memberships ?? [];
+  }
+
+  async getUserDetail(id: string): Promise<AdminUserDetail> {
+    return this.request('GET', `/v1/admin/users/${id}/detail`);
+  }
+
+  async listUserInvites(id: string): Promise<AdminUserInvite[]> {
+    const res = await this.request<{ invites: AdminUserInvite[] }>('GET', `/v1/admin/users/${id}/invites`);
+    return res.invites ?? [];
+  }
+
+  async revokeUserInvite(userId: string, inviteId: string): Promise<void> {
+    return this.request('POST', `/v1/admin/users/${userId}/invites/${inviteId}/revoke`);
+  }
+
+  async grantUserVehicleMembership(userId: string, vehicleId: string, role: 'owner' | 'manager' | 'viewer'): Promise<void> {
+    return this.request('POST', `/v1/admin/users/${userId}/vehicles/${vehicleId}`, { role });
+  }
+
+  async updateUserVehicleMembership(userId: string, vehicleId: string, role: 'owner' | 'manager' | 'viewer'): Promise<void> {
+    return this.request('PATCH', `/v1/admin/users/${userId}/vehicles/${vehicleId}`, { role });
+  }
+
+  async removeUserVehicleMembership(userId: string, vehicleId: string): Promise<void> {
+    return this.request('DELETE', `/v1/admin/users/${userId}/vehicles/${vehicleId}`);
   }
 
   // API access

@@ -150,7 +150,7 @@ async fn require_jwt_admin(state: &AppState, auth: &AuthUser) -> Result<(), AppE
         .await?
         .flatten();
 
-    if role.as_deref() == Some("admin") {
+    if matches!(role.as_deref(), Some("admin") | Some("super_user")) {
         Ok(())
     } else {
         Err(AppError::Forbidden)

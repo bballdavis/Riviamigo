@@ -15,6 +15,7 @@ export interface NavItem {
   href: string;
   icon: React.ReactNode;
   children?: NavItem[];
+  pinToBottom?: boolean;
 }
 
 const NAV_ICON_CLASS = 'h-[1.125rem] w-[1.125rem]';
@@ -69,6 +70,65 @@ export function Sidebar({
   function isItemActive(item: NavItem) {
     if (item.key === activeKey) return true;
     return (item.children ?? []).some((child) => child.key === activeKey);
+  }
+
+  const pinnedItems = items.filter((item) => item.pinToBottom);
+  const regularItems = items.filter((item) => !item.pinToBottom);
+
+  function renderItem(item: NavItem) {
+    const isActive = isItemActive(item);
+    const activeChildKey = (item.children ?? []).find((child) => child.key === activeKey)?.key;
+    return (
+      <div key={item.key} className={cn('w-full', collapsed && 'flex justify-center')}>
+        <button
+          onClick={() => {
+            onNavigate(item.href);
+            setMobileOpen(false);
+          }}
+          title={collapsed ? item.label : undefined}
+          className={cn(
+            'w-full flex items-center gap-3 px-3 py-2 mx-2 rounded-lg text-sm font-medium',
+            'transition-all duration-150',
+            collapsed ? 'justify-center w-10 mx-auto' : 'w-[calc(100%-16px)]',
+            isActive
+              ? 'bg-accent-muted text-accent'
+              : 'text-fg-secondary hover:text-fg hover:bg-bg-elevated'
+          )}
+        >
+          <span className="shrink-0 inline-flex h-5 w-5 items-center justify-center leading-none">{item.icon}</span>
+          {!collapsed && <span className="leading-none">{item.label}</span>}
+          {isActive && !collapsed && (
+            <span className="ml-auto w-1 h-4 rounded-full bg-accent" />
+          )}
+        </button>
+
+        {!collapsed && item.children && item.children.length > 0 && (
+          <div className="mt-1 mb-1 ml-5 mr-2 border-l border-border pl-2">
+            {item.children.map((child) => {
+              const childIsActive = child.key === activeChildKey;
+              return (
+                <button
+                  key={child.key}
+                  onClick={() => {
+                    onNavigate(child.href);
+                    setMobileOpen(false);
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
+                    childIsActive
+                      ? 'bg-accent-muted text-accent'
+                      : 'text-fg-tertiary hover:bg-bg-elevated hover:text-fg-secondary'
+                  )}
+                >
+                  <span className="shrink-0">{child.icon}</span>
+                  <span>{child.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -164,62 +224,17 @@ export function Sidebar({
         </div>
 
         {/* Nav items */}
-        <nav className={cn('flex-1 py-3 overflow-y-auto', collapsed && 'flex flex-col items-center')}>
-          {items.map((item) => {
-            const isActive = isItemActive(item);
-            const activeChildKey = (item.children ?? []).find((child) => child.key === activeKey)?.key;
-            return (
-              <div key={item.key} className={cn('w-full', collapsed && 'flex justify-center')}>
-                <button
-                  onClick={() => {
-                    onNavigate(item.href);
-                    setMobileOpen(false);
-                  }}
-                  title={collapsed ? item.label : undefined}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2 mx-2 rounded-lg text-sm font-medium',
-                    'transition-all duration-150',
-                    collapsed ? 'justify-center w-10 mx-auto' : 'w-[calc(100%-16px)]',
-                    isActive
-                      ? 'bg-accent-muted text-accent'
-                      : 'text-fg-secondary hover:text-fg hover:bg-bg-elevated'
-                  )}
-                >
-                  <span className="shrink-0 inline-flex h-5 w-5 items-center justify-center leading-none">{item.icon}</span>
-                  {!collapsed && <span className="leading-none">{item.label}</span>}
-                  {isActive && !collapsed && (
-                    <span className="ml-auto w-1 h-4 rounded-full bg-accent" />
-                  )}
-                </button>
-
-                {!collapsed && item.children && item.children.length > 0 && (
-                  <div className="mt-1 mb-1 ml-5 mr-2 border-l border-border pl-2">
-                    {item.children.map((child) => {
-                      const childIsActive = child.key === activeChildKey;
-                      return (
-                        <button
-                          key={child.key}
-                          onClick={() => {
-                            onNavigate(child.href);
-                            setMobileOpen(false);
-                          }}
-                          className={cn(
-                            'w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
-                            childIsActive
-                              ? 'bg-accent-muted text-accent'
-                              : 'text-fg-tertiary hover:bg-bg-elevated hover:text-fg-secondary'
-                          )}
-                        >
-                          <span className="shrink-0">{child.icon}</span>
-                          <span>{child.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+        <nav className={cn('flex-1 py-3 overflow-y-auto flex flex-col', collapsed && 'items-center')}>
+          <div className={cn('w-full', collapsed && 'flex flex-col items-center')}>
+            {regularItems.map(renderItem)}
+          </div>
+          {pinnedItems.length > 0 && (
+            <div className="mt-auto w-full pt-3">
+              <div className={cn('w-full', collapsed && 'flex flex-col items-center')}>
+                {pinnedItems.map(renderItem)}
               </div>
-            );
-          })}
+            </div>
+          )}
         </nav>
 
         {/* Bottom slot (e.g. vehicle status, theme toggle) */}

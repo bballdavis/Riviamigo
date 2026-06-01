@@ -64,6 +64,32 @@ pub fn can_manage_user(actor: UserRole, target: UserRole) -> bool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{can_manage_user, UserRole};
+
+    #[test]
+    fn super_user_can_manage_every_role() {
+        assert!(can_manage_user(UserRole::SuperUser, UserRole::SuperUser));
+        assert!(can_manage_user(UserRole::SuperUser, UserRole::Admin));
+        assert!(can_manage_user(UserRole::SuperUser, UserRole::User));
+    }
+
+    #[test]
+    fn admin_can_manage_only_user_role() {
+        assert!(can_manage_user(UserRole::Admin, UserRole::User));
+        assert!(!can_manage_user(UserRole::Admin, UserRole::Admin));
+        assert!(!can_manage_user(UserRole::Admin, UserRole::SuperUser));
+    }
+
+    #[test]
+    fn user_cannot_manage_any_role() {
+        assert!(!can_manage_user(UserRole::User, UserRole::User));
+        assert!(!can_manage_user(UserRole::User, UserRole::Admin));
+        assert!(!can_manage_user(UserRole::User, UserRole::SuperUser));
+    }
+}
+
 pub async fn get_electricity_rate(pool: &PgPool, user_id: Uuid) -> Result<f64, AppError> {
     let rate = sqlx::query_scalar::<_, Option<f64>>(
         "SELECT electricity_rate_per_kwh FROM riviamigo.user_preferences WHERE user_id = $1",
