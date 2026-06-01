@@ -1,5 +1,5 @@
 import React from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
 import type { BackupFrequency, BackupOverview, BackupTargetType, UpdateBackupSettingsBody } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
@@ -226,6 +226,7 @@ export function BackupSection() {
   const overview = useQuery({
     queryKey: ['backup-overview', recentRunsPage, recentRunsPerPage],
     queryFn: () => api.getBackupOverview({ page: recentRunsPage, perPage: recentRunsPerPage }),
+    placeholderData: keepPreviousData,
   });
   const [draft, setDraft] = React.useState<BackupDraft | null>(null);
   const [localEnabled, setLocalEnabled] = React.useState(true);

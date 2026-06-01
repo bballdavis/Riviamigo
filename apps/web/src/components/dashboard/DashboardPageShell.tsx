@@ -50,7 +50,15 @@ export interface DashboardPageShellProps {
   showEfficiencyDisplayToggle?: boolean;
 }
 
-export function DashboardPageShell({
+export function DashboardPageShell(props: DashboardPageShellProps) {
+  return (
+    <AuthGuard>
+      <DashboardPageShellContent {...props} />
+    </AuthGuard>
+  );
+}
+
+function DashboardPageShellContent({
   navKey,
   slug,
   title,
@@ -223,7 +231,6 @@ export function DashboardPageShell({
       </button>
     </Tooltip>
   ) : null;
-  // In edit mode, save/cancel live in the drawer; only date/efficiency go in the page header.
   const editActions = currentEditMode ? renderActions?.(shellState) : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
   const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
@@ -236,34 +243,31 @@ export function DashboardPageShell({
   ) : undefined;
 
   return (
-    <AuthGuard>
-      <AppLayout activeKey={navKey}>
-        <PageLayout
-          title={title ?? activeConfig?.name ?? slug}
-          titleAction={renderTitleAction?.(shellState)}
-          actions={pageActions}
-        >
-          {!effectiveVehicleId ? (
-            <NoVehicleState />
-          ) : isLoading && !activeConfig ? (
-            <div className="text-xs text-fg-tertiary p-4">Loading…</div>
-          ) : activeConfig ? (
-            <>
-              {renderBeforeDashboard?.(shellState)}
-              {(renderDashboard?.(shellState) ?? true) ? (
-                <DashboardRenderer
-                  config={activeConfig}
-                  ctx={ctx}
-                  mode={currentEditMode ? 'edit' : 'view'}
-                  onConfigChange={setLocalConfig}
-                  editActions={editActions}
-                />
-              ) : null}
-            </>
-          ) : null}
-        </PageLayout>
-      </AppLayout>
-    </AuthGuard>
+    <AppLayout activeKey={navKey}>
+      <PageLayout
+        title={title ?? activeConfig?.name ?? slug}
+        titleAction={renderTitleAction?.(shellState)}
+        actions={pageActions}
+      >
+        {!effectiveVehicleId ? (
+          <NoVehicleState />
+        ) : isLoading && !activeConfig ? (
+          <div className="text-xs text-fg-tertiary p-4">Loading...</div>
+        ) : activeConfig ? (
+          <>
+            {renderBeforeDashboard?.(shellState)}
+            {(renderDashboard?.(shellState) ?? true) ? (
+              <DashboardRenderer
+                config={activeConfig}
+                ctx={ctx}
+                mode={currentEditMode ? 'edit' : 'view'}
+                onConfigChange={setLocalConfig}
+                editActions={editActions}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </PageLayout>
+    </AppLayout>
   );
 }
-
