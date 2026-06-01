@@ -159,6 +159,64 @@ impl TestApp {
             body,
         }
     }
+
+    async fn request_with_forwarded_ip(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        bearer_token: Option<&str>,
+        cookie: Option<&str>,
+        forwarded_ip: Option<&str>,
+    ) -> TestResponse {
+        let mut req = Request::builder().method(method).uri(path);
+        if let Some(token) = bearer_token {
+            req = req.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        if let Some(cookie_value) = cookie {
+            req = req.header(COOKIE, cookie_value);
+        }
+        if let Some(ip) = forwarded_ip {
+            req = req.header("x-forwarded-for", ip);
+        }
+
+        let mut request = if let Some(json_body) = body {
+            req.header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json_body.to_string()))
+                .expect("request body")
+        } else {
+            req.body(Body::empty()).expect("empty request")
+        };
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }))
+        };
+
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
@@ -861,5 +919,127 @@ async fn charging_sessions_include_local_charging_window_day() {
     assert_eq!(
         res.body["data"][0]["session_day_local"],
         json!("2026-05-23")
+    );
+}
+
+#[tokio::test]
+async fn auth_public_limit_uses_forwarded_ip_and_sets_api_source_header() {
+    let app = TestApp::new().await;
+
+    let mut first_ip_limited = false;
+    for i in 0..20 {
+        let res = app
+            .request_with_forwarded_ip(
+                Method::POST,
+                "/v1/auth/login",
+                Some(json!({"email": "nobody@example.com", "password": "bad-password"})),
+                None,
+                None,
+                Some("203.0.113.10"),
+            )
+            .await;
+
+        if res.status == StatusCode::TOO_MANY_REQUESTS {
+            first_ip_limited = true;
+            let source = res
+                .headers
+                .get("x-riviamigo-ratelimit-source")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            assert_eq!(source, "api");
+            break;
+        }
+        assert!(
+            matches!(res.status, StatusCode::UNAUTHORIZED | StatusCode::TOO_MANY_REQUESTS),
+            "unexpected status on attempt {i}: {}",
+            res.status
+        );
+    }
+    assert!(first_ip_limited, "expected first forwarded IP to be rate limited");
+
+    let other_ip = app
+        .request_with_forwarded_ip(
+            Method::POST,
+            "/v1/auth/login",
+            Some(json!({"email": "nobody@example.com", "password": "bad-password"})),
+            None,
+            None,
+            Some("203.0.113.11"),
+        )
+        .await;
+    assert_eq!(
+        other_ip.status,
+        StatusCode::UNAUTHORIZED,
+        "different forwarded IP should not share auth-public bucket"
+    );
+}
+
+#[tokio::test]
+async fn authenticated_limits_are_isolated_by_user_identity() {
+    let app = TestApp::new().await;
+    let token_one = register_and_login(&app, "rl-user-one@example.com").await;
+    let token_two = register_and_login(&app, "rl-user-two@example.com").await;
+
+    let mut limited = false;
+    for _ in 0..300 {
+        let res = app
+            .request(Method::GET, "/v1/auth/me", None, Some(&token_one), None)
+            .await;
+        if res.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "expected user one to eventually hit read limiter");
+
+    let user_two = app
+        .request(Method::GET, "/v1/auth/me", None, Some(&token_two), None)
+        .await;
+    assert_eq!(
+        user_two.status,
+        StatusCode::OK,
+        "second user should not share the first user's limiter bucket"
+    );
+}
+
+#[tokio::test]
+async fn heavy_read_exhaustion_does_not_block_regular_authenticated_reads() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "rl-heavy@example.com").await;
+
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "rl-heavy@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+    let vehicle_id = insert_vehicle(&app.pool, user_id, "heavy-rate-vehicle", "Heavy Truck").await;
+
+    let mut heavy_limited = false;
+    for _ in 0..120 {
+        let res = app
+            .request(
+                Method::GET,
+                &format!("/v1/vehicles/{vehicle_id}/live-session"),
+                None,
+                Some(&token),
+                None,
+            )
+            .await;
+        if res.status == StatusCode::TOO_MANY_REQUESTS {
+            heavy_limited = true;
+            break;
+        }
+    }
+    assert!(heavy_limited, "expected heavy read limiter to activate");
+
+    let regular_read = app
+        .request(Method::GET, "/v1/auth/me", None, Some(&token), None)
+        .await;
+    assert_eq!(
+        regular_read.status,
+        StatusCode::OK,
+        "exhausting heavy-read traffic should not block normal auth reads"
     );
 }
