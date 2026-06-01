@@ -152,11 +152,13 @@ export const CardTitle = ({ children }: { children: React.ReactNode }) =>
 export const CardContent = ({ children }: { children: React.ReactNode }) =>
   <div>{children}</div>;
 
-export const Button = ({ children, onClick, iconLeft, ...p }: {
+export const Button = ({ children, onClick, iconLeft, loading, ...p }: {
   children: React.ReactNode; onClick?: () => void; iconLeft?: React.ReactNode;
   variant?: string; size?: string; type?: 'button' | 'submit' | 'reset';
+  loading?: boolean;
+  [k: string]: unknown;
 }) => (
-  <button onClick={onClick} type={(p as { type?: 'button' | 'submit' | 'reset' }).type ?? 'button'}>
+  <button onClick={onClick} type={(p as { type?: 'button' | 'submit' | 'reset' }).type ?? 'button'} {...p}>
     {iconLeft}{children}
   </button>
 );

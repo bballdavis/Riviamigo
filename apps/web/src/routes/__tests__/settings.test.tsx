@@ -123,6 +123,9 @@ vi.mock('@riviamigo/hooks', () => ({
         created_at: '2026-05-04T12:00:00Z',
         updated_at: '2026-05-04T12:01:00Z',
       }],
+      recent_runs_total: 1,
+      recent_runs_page: 1,
+      recent_runs_per_page: 10,
       artifacts: [{
         id: 'artifact-1',
         run_id: 'run-1',
@@ -156,10 +159,15 @@ vi.mock('@riviamigo/hooks', () => ({
     updateBackupSettings: vi.fn().mockResolvedValue({}),
     runBackupNow: vi.fn().mockResolvedValue({}),
     requestBackupRestore: vi.fn().mockResolvedValue({}),
+    downloadBackupArtifact: vi.fn().mockResolvedValue({
+      blob: new Blob(['backup-data'], { type: 'application/octet-stream' }),
+      fileName: 'backup-20260504T120000Z.dump',
+    }),
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
+    createDemoVehicle: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
   },
-  useAuth:    () => ({ logout: vi.fn(), defaultVehicleId: 'v1', setDefaultVehicleId: vi.fn() }),
+  useAuth:    () => ({ logout: vi.fn(), defaultVehicleId: 'v1', setDefaultVehicleId: vi.fn(), setActiveVehicleId: vi.fn() }),
   useVehicles: () => ({
     data: [{ id: 'v1', display_name: 'Adventure Truck', model: 'R1T', year: null, trim: null, vin: null, rivian_vehicle_id: 'rivian-1' }],
   }),
@@ -176,8 +184,12 @@ vi.mock('lucide-react', () => ({
   DatabaseBackup: () => <svg data-testid="icon-database-backup" />,
   Calendar: () => <svg data-testid="icon-calendar" />,
   CheckCircle2: () => <svg data-testid="icon-check-circle" />,
+  AlertTriangle: () => <svg data-testid="icon-alert-triangle" />,
   CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
+  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
+  ChevronRight: () => <svg data-testid="icon-chevron-right" />,
   Clock3: () => <svg data-testid="icon-clock" />,
+  Download: () => <svg data-testid="icon-download" />,
   HardDrive: () => <svg data-testid="icon-hard-drive" />,
   History: () => <svg data-testid="icon-history" />,
   Home: () => <svg data-testid="icon-home" />,
@@ -196,8 +208,8 @@ vi.mock('lucide-react', () => ({
   RotateCcw: () => <svg data-testid="icon-rotate" />,
   Save:       () => <svg data-testid="icon-save" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
-  Trash2: () => <svg data-testid="icon-trash" />,
   X:      () => <svg data-testid="icon-x" />,
+  Trash2: () => <svg data-testid="icon-trash" />,
 }));
 
 import { SettingsContent } from '../settings';
@@ -232,15 +244,34 @@ describe('Settings page', () => {
     expect(screen.getByText(/R1T/)).toBeInTheDocument();
   });
 
-  it('renders the Add Vehicle button', () => {
+  it('renders the Vehicle button', () => {
     renderSettings();
-    expect(screen.getByText('Add Vehicle')).toBeInTheDocument();
+    expect(screen.getByText('Vehicle')).toBeInTheDocument();
   });
 
-  it('navigates to /connect when Add Vehicle is clicked', () => {
+  it('navigates to /connect when Vehicle is clicked', () => {
     renderSettings();
-    fireEvent.click(screen.getByText('Add Vehicle'));
+    fireEvent.click(screen.getByText('Vehicle'));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/connect' });
+  });
+
+  it('hides Demo Vehicle for regular users', () => {
+    renderSettings();
+    expect(screen.queryByText('Demo Vehicle')).not.toBeInTheDocument();
+  });
+
+  it('shows Demo Vehicle for admin users and triggers creation', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
+    renderSettings();
+    await waitFor(() => {
+      expect(screen.getByText('Demo Vehicle')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Demo Vehicle'));
+    fireEvent.click(screen.getByRole('button', { name: 'R1T' }));
+    await waitFor(() => {
+      expect(hooks.api.createDemoVehicle).toHaveBeenCalledWith({ model: 'R1T' });
+    });
   });
 
   it('renders the Appearance section', () => {
@@ -399,7 +430,9 @@ describe('Settings page', () => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
       expect(screen.getByText('S3 upload')).toBeInTheDocument();
       expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
-      expect(screen.getByText('Artifacts')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Backups' })).toBeInTheDocument();
+      expect(screen.getByText(/Page 1 of 1/)).toBeInTheDocument();
+      expect(screen.getByText('Rows')).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByDisplayValue('America/Chicago'), { target: { value: 'UTC' } });
@@ -417,16 +450,45 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Run now'));
     await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled());
 
-    fireEvent.change(screen.getByPlaceholderText('RESTORE'), { target: { value: 'RESTORE' } });
-    fireEvent.change(screen.getByPlaceholderText('Optional maintenance or incident context'), { target: { value: 'Verified artifact restore test' } });
-    fireEvent.click(screen.getByText('Request restore'));
+    expect(screen.queryByText('File name')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/Expand backup details/i));
+    await waitFor(() => {
+      expect(screen.getByText('File name')).toBeInTheDocument();
+      expect(screen.getByText('SHA-256')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText(/Download backup/));
+    await waitFor(() => {
+      expect(hooks.api.downloadBackupArtifact).toHaveBeenCalledWith('artifact-1');
+    });
+
+    fireEvent.click(screen.getByLabelText(/Restore backup/));
+    await waitFor(() => {
+      expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Restore backup'));
 
     await waitFor(() => {
       expect(hooks.api.requestBackupRestore).toHaveBeenCalledWith({
         artifact_id: 'artifact-1',
         confirmation_phrase: 'RESTORE',
-        notes: 'Verified artifact restore test',
+        notes: null,
       });
+    });
+  });
+
+  it('shows the Backups section for super users as well', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'super@example.com', role: 'super_user', default_vehicle_id: 'v1' });
+    renderSettings();
+
+    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Backups'));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
+      expect(screen.getByText('S3 upload')).toBeInTheDocument();
+      expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
     });
   });
 

@@ -12,6 +12,7 @@ use uuid::Uuid;
 use std::time::Duration;
 
 use crate::{
+    db::users::require_admin_or_super_user,
     db::vehicles::{get_default_vehicle_id, require_vehicle_role},
     errors::AppError,
     ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
@@ -23,6 +24,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
+        .route("/vehicles/demo", post(create_demo_vehicle))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id", delete(delete_vehicle))
         .route("/vehicles/:id/default", post(set_default_vehicle))
@@ -70,6 +72,11 @@ struct AddVehicleBody {
     model: Option<String>,
     trim: Option<String>,
     vin: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateDemoVehicleBody {
+    model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1501,6 +1508,171 @@ async fn list_vehicles(
     Ok(Json(serde_json::json!({"vehicles": vehicles})))
 }
 
+async fn create_demo_vehicle(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    body: Option<Json<CreateDemoVehicleBody>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    let mut tx = state.pool.begin().await?;
+    let model = body
+        .as_ref()
+        .map(|payload| payload.model.trim().to_uppercase())
+        .unwrap_or_else(|| "R1T".to_string());
+    if !matches!(model.as_str(), "R1T" | "R1S" | "R2S") {
+        return Err(AppError::Validation(
+            "model must be one of R1T, R1S, R2S".into(),
+        ));
+    }
+    let demo_key = format!("demo-{}-local", model.to_lowercase());
+    let display_name = format!("Demo {model}");
+    let vin = format!("DEMO-{model}-LOCAL-0001");
+    let (trim, battery_config, battery_capacity_wh, range_mi) = match model.as_str() {
+        "R1S" => ("Adventure", "r1_large_g1", 135_000.0_f64, 260.0_f64),
+        "R2S" => ("Adventure", "r2s", 82_000.0_f64, 300.0_f64),
+        _ => ("Adventure", "r1_large_g1", 135_000.0_f64, 248.0_f64),
+    };
+
+    let existing_vehicle_id = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT v.id
+         FROM riviamigo.vehicles v
+         JOIN riviamigo.vehicle_memberships vm ON vm.vehicle_id = v.id
+         WHERE vm.user_id = $1 AND v.rivian_vehicle_id = $2
+         LIMIT 1",
+    )
+    .bind(auth.user_id)
+    .bind(&demo_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (vehicle_id, created) = if let Some(Some(vehicle_id)) = existing_vehicle_id {
+        (vehicle_id, false)
+    } else {
+        let vehicle_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO riviamigo.vehicles
+              (user_id, rivian_vehicle_id, model, trim, vin, color, battery_config, battery_capacity_wh, name)
+             VALUES
+              ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             RETURNING id",
+        )
+        .bind(auth.user_id)
+        .bind(&demo_key)
+        .bind(&model)
+        .bind(trim)
+        .bind(&vin)
+        .bind("Limestone")
+        .bind(battery_config)
+        .bind(battery_capacity_wh)
+        .bind(&display_name)
+        .fetch_one(&mut *tx)
+        .await?;
+        (vehicle_id, true)
+    };
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', FALSE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE
+         SET role = 'owner', updated_at = now()",
+    )
+    .bind(vehicle_id)
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id, display_name)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE
+         SET display_name = EXCLUDED.display_name, updated_at = now()",
+    )
+    .bind(vehicle_id)
+    .bind(auth.user_id)
+    .bind(&display_name)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_images
+           (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
+         VALUES
+           ($1, 'side', 'light', 'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb),
+           ($1, 'side', 'dark',  'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb),
+           ($1, 'overhead', 'light', 'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb),
+           ($1, 'overhead', 'dark',  'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb)
+         ON CONFLICT (vehicle_id, url) DO NOTHING",
+    )
+    .bind(vehicle_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_latest_status
+          (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, is_online, updated_at)
+         VALUES
+          ($1, now(), 78, $2, $3, 85, 'ready', 'Disconnected', TRUE, now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET ts = EXCLUDED.ts,
+             battery_level = EXCLUDED.battery_level,
+             battery_capacity_wh = EXCLUDED.battery_capacity_wh,
+             distance_to_empty_mi = EXCLUDED.distance_to_empty_mi,
+             battery_limit = EXCLUDED.battery_limit,
+             power_state = EXCLUDED.power_state,
+             charger_state = EXCLUDED.charger_state,
+             is_online = EXCLUDED.is_online,
+             updated_at = now()",
+    )
+    .bind(vehicle_id)
+    .bind(battery_capacity_wh)
+    .bind(range_mi)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO timeseries.telemetry
+          (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, speed_mph, power_state, charger_state, drive_mode, odometer_miles, is_online)
+         VALUES
+          (now() - interval '90 minutes', $1, 80, $2, $3 + 4, 85, 0, 'ready', 'Disconnected', 'all_purpose', 15000, TRUE),
+          (now() - interval '60 minutes', $1, 79, $2, $3 + 2, 85, 18, 'drive', 'Disconnected', 'all_purpose', 15006, TRUE),
+          (now() - interval '30 minutes', $1, 78, $2, $3, 85, 0, 'ready', 'Disconnected', 'all_purpose', 15010, TRUE)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(vehicle_id)
+    .bind(battery_capacity_wh)
+    .bind(range_mi)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.trips
+          (vehicle_id, started_at, ended_at, distance_miles, duration_seconds, soc_start, soc_end, efficiency_wh_per_mile, max_speed_mph, drive_mode, outside_temp_c)
+         VALUES
+          ($1, now() - interval '70 minutes', now() - interval '50 minutes', 6.2, 1200, 80, 79, 420, 52, 'all_purpose', 19)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(vehicle_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO riviamigo.charge_sessions
+          (vehicle_id, started_at, ended_at, charger_type, kwh_added, soc_start, soc_end, max_charge_rate_kw, duration_minutes, cost_usd, currency_code)
+         VALUES
+          ($1, now() - interval '10 days', now() - interval '10 days' + interval '42 minutes', 'ac', 12.4, 51, 63, 10.8, 42, 2.48, 'USD')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(vehicle_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "vehicle_id": vehicle_id,
+        "created": created
+    })))
+}
+
 async fn vehicle_status(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -2396,6 +2568,14 @@ mod tests {
             serde_json::json!({"rivian_vehicle_id": "test"}),
         )
         .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn demo_vehicle_requires_auth() {
+        let app = make_app().await;
+        let status = post_status(app, "/v1/vehicles/demo", serde_json::json!({})).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
