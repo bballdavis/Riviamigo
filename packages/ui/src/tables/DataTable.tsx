@@ -18,6 +18,7 @@ type ColumnMeta = {
   headerClassName?: string;
   cellClassName?: string;
   headerContentClassName?: string;
+  columnLabel?: string;
 };
 
 export interface DataTableProps<TData> {
@@ -91,7 +92,11 @@ export function DataTable<TData>({
   const visibleColumns = table.getVisibleLeafColumns();
   const menuColumns = table
     .getAllLeafColumns()
-    .filter((column) => typeof column.columnDef.header === 'string');
+    .filter((column) => {
+      const header = column.columnDef.header;
+      const meta = column.columnDef.meta as ColumnMeta | undefined;
+      return typeof header === 'string' || typeof meta?.columnLabel === 'string';
+    });
 
   const openColumnMenu = (event: React.MouseEvent) => {
     if (!columnVisibilityMenu) return;
@@ -200,7 +205,10 @@ export function DataTable<TData>({
         >
           <p className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">Columns</p>
           {menuColumns.map((column) => {
-            const label = column.columnDef.header;
+            const meta = column.columnDef.meta as ColumnMeta | undefined;
+            const label = typeof column.columnDef.header === 'string'
+              ? column.columnDef.header
+              : meta?.columnLabel;
             if (typeof label !== 'string') return null;
             return (
               <label

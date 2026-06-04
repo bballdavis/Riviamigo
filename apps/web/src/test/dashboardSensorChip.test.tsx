@@ -65,7 +65,9 @@ import type { DashboardConfig } from '@riviamigo/dashboards';
 function config(
   showSprite: boolean,
   accentBorder = false,
-  options: Record<string, unknown> = {}
+  options: Record<string, unknown> = {},
+  definitionId = 'total_miles',
+  title = 'Total Miles',
 ): DashboardConfig {
   return {
     schemaVersion: 2,
@@ -80,10 +82,10 @@ function config(
       {
         id: 'd9000009-0000-0000-0000-000000000001',
         componentType: 'sensor',
-        definitionId: 'total_miles',
-        title: 'Total Miles',
+        definitionId,
+        title,
         options: {
-          metric: 'total_miles',
+          metric: definitionId,
           icon: 'route',
           chartType: 'line',
           showSprite,
@@ -200,6 +202,31 @@ describe('dashboard sensor chips', () => {
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer.querySelector('[data-sparkline-state="empty"]')).not.toBeNull();
     expect(layer.querySelectorAll('path, rect').length).toBeGreaterThan(0);
+  });
+
+  it('shows the weighted avg efficiency value instead of the latest series point', () => {
+    metricMocks.value = {
+      metric: 'avg_efficiency',
+      value: 200,
+      unit: 'Wh/mi',
+      label: 'Avg Efficiency',
+      ts: '2026-05-07T00:00:00Z',
+    };
+    metricMocks.series = [
+      { ts: '2026-05-01T00:00:00Z', value: 1000 },
+      { ts: '2026-05-02T00:00:00Z', value: 330 },
+      { ts: '2026-05-03T00:00:00Z', value: 999 },
+    ];
+
+    render(
+      <DashboardRenderer
+        config={config(true, false, {}, 'avg_efficiency', 'Avg Efficiency')}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+      />
+    );
+
+    expect(screen.getByText('5.0 mi/kWh')).toBeInTheDocument();
+    expect(screen.queryByText('1.0 mi/kWh')).not.toBeInTheDocument();
   });
 
   it('renders composite sensor language without changing the compact chip visual', () => {

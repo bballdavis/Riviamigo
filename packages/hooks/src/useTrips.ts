@@ -88,6 +88,9 @@ export function useTripDetailSeries(tripId: string | null, vehicleId: string | n
     queryFn: () => api.getTripDetailSeries(tripId!, vehicleId!),
     enabled: !!tripId && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     placeholderData: (previous) => previous,
   });
 }

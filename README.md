@@ -223,6 +223,25 @@ Rivian connect flow implementation notes are in [`docs/rivian-auth.md`](docs/riv
 
 All data endpoints require `Authorization: Bearer <token>` and `?vehicle_id=<uuid>`.
 
+## Rate limits
+
+Riviamigo uses separate buckets for public auth, authenticated metadata, authenticated reads, authenticated writes, and live/heavy reads. The default API values are tuned for self-hosted usage and are configurable with:
+
+- `RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE` / `RATE_LIMIT_AUTH_PUBLIC_BURST`
+- `RATE_LIMIT_AUTH_METADATA_PER_MINUTE` / `RATE_LIMIT_AUTH_METADATA_BURST`
+- `RATE_LIMIT_AUTH_READ_PER_MINUTE` / `RATE_LIMIT_AUTH_READ_BURST`
+- `RATE_LIMIT_AUTH_WRITE_PER_MINUTE` / `RATE_LIMIT_AUTH_WRITE_BURST`
+- `RATE_LIMIT_HEAVY_READ_PER_MINUTE` / `RATE_LIMIT_HEAVY_READ_BURST`
+
+API 429 responses include limiter metadata headers so the frontend can back off instead of retrying immediately:
+
+- `X-Riviamigo-RateLimit-Source`
+- `X-Riviamigo-RateLimit-Class`
+- `X-Ratelimit-Limit`
+- `X-Ratelimit-Remaining`
+- `X-Ratelimit-After`
+- `Retry-After`
+
 ## Deployment notes
 
 **Secrets:**

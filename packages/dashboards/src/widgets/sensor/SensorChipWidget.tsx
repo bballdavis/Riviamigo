@@ -132,13 +132,12 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         ? statusLoading
         : false;
   const hasFiniteSeriesPoint = series.some((point) => typeof point.value === 'number' && Number.isFinite(point.value));
-  const resolvedMetricLatest = hasFiniteSeriesPoint
-    ? deriveMetricValue('latest', null, series)
-    : value?.value;
+  const resolvedMetricLatest = value?.value ?? (hasFiniteSeriesPoint ? deriveMetricValue('latest', null, series) : null);
   const effectiveMetricMode = definition?.cumulative ? 'sum' : options.valueMode;
+  const useSeriesForValue = options.dataSource === 'metric' && metric !== 'avg_efficiency' && hasFiniteSeriesPoint;
   const resolvedValue = options.dataSource === 'metric'
     ? (
-      hasFiniteSeriesPoint
+      useSeriesForValue
         ? deriveMetricValue(effectiveMetricMode, resolvedMetricLatest, series)
         : (resolvedMetricLatest ?? null)
     )
