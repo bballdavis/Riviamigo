@@ -172,6 +172,19 @@ const vehicleImageUrlOnlyChargingFixtures = {
   },
 };
 
+const packagedDemoR1TChargingFixtures = {
+  all: [
+    { placement: 'side', design: 'light', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_light.webp' },
+    { placement: 'side', design: 'dark', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_dark.webp' },
+    { placement: 'side-charging', design: 'light', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side-charging_light.webp' },
+    { placement: 'side-charging', design: 'dark', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side-charging_dark.webp' },
+  ],
+  side: {
+    light: '/vehicle-images/fixtures/r1t/r1t_side_light.webp',
+    dark: '/vehicle-images/fixtures/r1t/r1t_side_dark.webp',
+  },
+};
+
 describe('charging connection custom widget', () => {
   beforeEach(() => {
     chargingMocks.forcePluggedState = 'Disconnected';
@@ -357,6 +370,26 @@ describe('charging connection custom widget', () => {
       transform: 'translate(-34%, 2%) scale(1.92)',
       transformOrigin: 'left top',
     });
+  });
+
+  it('renders packaged demo R1T charging art when the seeded truck is plugged in', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.model = 'R1T';
+    chargingMocks.images = packagedDemoR1TChargingFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
+      '/vehicle-images/fixtures/r1t/r1t_side-charging_light.webp',
+      '/vehicle-images/fixtures/r1t/r1t_side-charging_dark.webp',
+    ]);
   });
 
   it('does not expose a force-show switch in the custom widget editor', () => {

@@ -100,7 +100,11 @@ async fn register(
         .fetch_one(&mut *tx)
         .await?
         .unwrap_or(0);
-    let role = if user_count == 0 { "super_user" } else { "user" };
+    let role = if user_count == 0 {
+        "super_user"
+    } else {
+        "user"
+    };
 
     let user_id: Uuid = sqlx::query_scalar!(
         "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id",
@@ -154,10 +158,11 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Result<Response, AppError> {
     let email = body.email.to_lowercase();
-    let row = sqlx::query("SELECT id, password_hash, is_disabled FROM riviamigo.users WHERE email = $1")
-        .bind(email.trim())
-        .fetch_optional(&state.pool)
-        .await?;
+    let row =
+        sqlx::query("SELECT id, password_hash, is_disabled FROM riviamigo.users WHERE email = $1")
+            .bind(email.trim())
+            .fetch_optional(&state.pool)
+            .await?;
 
     // Always run the Argon2 verification to avoid timing oracle for user enumeration.
     let password_hash = row.as_ref().map(|r| r.get::<String, _>("password_hash"));

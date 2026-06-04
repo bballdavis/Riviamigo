@@ -1,11 +1,33 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
   return m;
 });
+
+const healthPageMocks = vi.hoisted(() => ({
+  auth: {
+    defaultVehicleId: 'veh-1',
+    activeVehicleId: null as string | null,
+    setActiveVehicleId: vi.fn(),
+  },
+  vehicles: [
+    { id: 'veh-1', display_name: 'Truck', model: 'R1T' },
+    { id: 'demo-v1', display_name: 'Demo R1T', model: 'R1T' },
+  ],
+  imagesByVehicleId: {
+    'veh-1': {
+      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/three_quarter_light.png' }],
+      side: { light: 'https://example.com/side.png', dark: null },
+    },
+    'demo-v1': {
+      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/demo-side.png' }],
+      side: { light: 'https://example.com/demo-side.png', dark: null },
+    },
+  } as Record<string, any>,
+}));
 
 const healthDataBase: any = {
   vehicle_id: 'veh-1',
@@ -73,25 +95,33 @@ const statusBase = {
   cabin_precon_status: null,
 };
 
-const mockUseVehicleHealth = vi.fn(() => ({ data: healthDataBase, isLoading: false }));
-const mockUseCurrentVehicleStatus = vi.fn(() => ({ data: statusBase }));
-const mockUseQuery = vi.fn(() => ({
+const mockUseVehicleHealth = vi.fn((vehicleId?: string | null) => ({
   data: {
-    all: [{ placement: 'side', design: 'three_quarter_light', size: null, resolution: null, url: 'https://example.com/three_quarter_light.png' }],
-    side: { light: 'https://example.com/side.png', dark: null },
+    ...healthDataBase,
+    vehicle_id: vehicleId ?? 'veh-1',
+    vehicle: {
+      ...healthDataBase.vehicle,
+      name: vehicleId === 'demo-v1' ? 'Demo R1T' : 'Truck',
+    },
   },
+  isLoading: false,
+}));
+const mockUseCurrentVehicleStatus = vi.fn(() => ({ data: statusBase }));
+const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
+  data: healthPageMocks.imagesByVehicleId[String(queryKey[2])] ?? null,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({ defaultVehicleId: 'veh-1' }),
-  useVehicleHealth: () => mockUseVehicleHealth(),
-  useCurrentVehicleStatus: () => mockUseCurrentVehicleStatus(),
+  useAuth: () => healthPageMocks.auth,
+  useVehicles: () => ({ data: healthPageMocks.vehicles }),
+  useVehicleHealth: (vehicleId?: string | null) => mockUseVehicleHealth(vehicleId),
+  useCurrentVehicleStatus: (vehicleId?: string | null) => mockUseCurrentVehicleStatus(vehicleId),
   api: { vehicleImages: vi.fn() },
 }));
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>();
-  return { ...actual, useQuery: () => mockUseQuery() };
+  return { ...actual, useQuery: (options: { queryKey: unknown[] }) => mockUseQuery(options) };
 });
 
 vi.mock('../../components/layout/AppLayout', () => ({
@@ -106,16 +136,30 @@ import { healthRoute } from '../health';
 const HealthContent = healthRoute.options.component as React.ComponentType;
 
 describe('/health page cleanup', () => {
+  beforeEach(() => {
+    healthPageMocks.auth.activeVehicleId = null;
+    healthPageMocks.auth.setActiveVehicleId.mockReset();
+    healthPageMocks.imagesByVehicleId['veh-1'] = {
+      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/three_quarter_light.png' }],
+      side: { light: 'https://example.com/side.png', dark: null },
+    };
+    healthPageMocks.imagesByVehicleId['demo-v1'] = {
+      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/demo-side.png' }],
+      side: { light: 'https://example.com/demo-side.png', dark: null },
+    };
+    mockUseVehicleHealth.mockClear();
+    mockUseCurrentVehicleStatus.mockClear();
+    mockUseQuery.mockClear();
+  });
+
   it('renders the hero three-quarter image and software release notes link with no fake update banner', () => {
-    mockUseQuery.mockReturnValueOnce({
-      data: {
-        all: [
-          { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png' },
-          { placement: 'front_side', design: 'light', size: null, resolution: null, url: 'https://example.com/three-quarter.png', metadata: { angle: '3/4' } },
-        ],
-        side: { light: 'https://example.com/side.png', dark: null },
-      },
-    });
+    healthPageMocks.imagesByVehicleId['veh-1'] = {
+      all: [
+        { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png' },
+        { placement: 'front_side', design: 'light', size: null, resolution: null, url: 'https://example.com/three-quarter.png', metadata: { angle: '3/4' } },
+      ],
+      side: { light: 'https://example.com/side.png', dark: null },
+    };
     render(<HealthContent />);
     const image = screen.getByAltText('Vehicle three-quarter view');
     expect(image).toHaveAttribute('src', 'https://example.com/three-quarter.png');
@@ -124,16 +168,14 @@ describe('/health page cleanup', () => {
   });
 
   it('falls back to plain side art before front hero art when no three-quarter image exists', () => {
-    mockUseQuery.mockReturnValueOnce({
-      data: {
-        all: [
-          { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png', metadata: { app_usage: ['health-hero-fallback'] } },
-          { placement: 'front', design: 'light', size: null, resolution: null, url: 'https://example.com/front.png', metadata: { app_usage: ['health-hero-fallback'] } },
-        ],
-        front: { light: 'https://example.com/front.png', dark: null },
-        side: { light: 'https://example.com/side.png', dark: null },
-      },
-    });
+    healthPageMocks.imagesByVehicleId['veh-1'] = {
+      all: [
+        { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png', metadata: { app_usage: ['health-hero-fallback'] } },
+        { placement: 'front', design: 'light', size: null, resolution: null, url: 'https://example.com/front.png', metadata: { app_usage: ['health-hero-fallback'] } },
+      ],
+      front: { light: 'https://example.com/front.png', dark: null },
+      side: { light: 'https://example.com/side.png', dark: null },
+    };
     render(<HealthContent />);
     const image = screen.getByAltText('Vehicle three-quarter view');
     expect(image).toHaveAttribute('src', 'https://example.com/side.png');
@@ -149,6 +191,22 @@ describe('/health page cleanup', () => {
     });
     render(<HealthContent />);
     expect(screen.getByText('Update 2026.11.0 available')).toBeInTheDocument();
+  });
+
+  it('uses the active session vehicle when health is pointed at a demo truck', () => {
+    healthPageMocks.auth.activeVehicleId = 'demo-v1';
+    render(<HealthContent />);
+    expect(mockUseVehicleHealth).toHaveBeenLastCalledWith('demo-v1');
+    expect(screen.getByRole('heading', { level: 2, name: 'Demo R1T' })).toBeInTheDocument();
+    expect(screen.getByAltText('Vehicle three-quarter view')).toHaveAttribute('src', 'https://example.com/demo-side.png');
+  });
+
+  it('renders a vehicle picker and routes selection changes through the session vehicle setter', () => {
+    render(<HealthContent />);
+    const picker = screen.getByLabelText('Select vehicle');
+    expect(picker).toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: 'demo-v1' } });
+    expect(healthPageMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
   });
 
   it('uses tailgate fallback from current status and renders doors & gates title', () => {

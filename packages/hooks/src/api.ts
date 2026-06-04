@@ -13,7 +13,7 @@ import type {
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
   CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
-  AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite,
+  AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
   AdminUserRecord, CreateAdminUserBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
 } from '@riviamigo/types';
 
@@ -363,6 +363,10 @@ class ApiClient {
     body: { battery_capacity_kwh?: number; battery_config?: string }
   ): Promise<void> {
     return this.request('PUT', `/v1/vehicles/${vehicleId}/battery-config`, body);
+  }
+
+  async updateVehicleSettings(vehicleId: string, body: UpdateVehicleSettingsBody): Promise<void> {
+    return this.request('PUT', `/v1/vehicles/${vehicleId}/settings`, body);
   }
 
   async updateVehicleName(vehicleId: string, name: string): Promise<void> {

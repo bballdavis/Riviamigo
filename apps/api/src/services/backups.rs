@@ -536,10 +536,15 @@ async fn resolve_pg_dump_executable() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn find_windows_pg_dump_executable() -> Option<PathBuf> {
-    for root in [std::env::var_os("ProgramFiles"), std::env::var_os("ProgramFiles(x86)")] {
+    for root in [
+        std::env::var_os("ProgramFiles"),
+        std::env::var_os("ProgramFiles(x86)"),
+    ] {
         let Some(root) = root else { continue };
         let postgres_dir = PathBuf::from(root).join("PostgreSQL");
-        let Ok(entries) = std::fs::read_dir(&postgres_dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&postgres_dir) else {
+            continue;
+        };
 
         for entry in entries.flatten() {
             let candidate = entry.path().join("bin").join("pg_dump.exe");

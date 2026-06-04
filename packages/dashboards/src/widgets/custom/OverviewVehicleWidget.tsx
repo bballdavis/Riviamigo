@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, Cpu, Gauge, Lock, MapPin, Thermometer, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { useAuth, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
-import { formatAltitude, formatKwh, formatMiles, formatMph, formatPressure, formatTemp } from '@riviamigo/ui/lib/utils';
+import { formatAltitude, formatKwh, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
+import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
+import { Tooltip } from '@riviamigo/ui/primitives';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
@@ -45,7 +47,15 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
 
-  return <CurrentVehicleStatePanel status={status} images={activeVehicle?.images} vehicleName={activeVehicle?.display_name} vehicleModel={activeVehicle?.model} />;
+  return (
+    <CurrentVehicleStatePanel
+      status={status}
+      images={activeVehicle?.images}
+      vehicleName={activeVehicle?.display_name}
+      vehicleModel={activeVehicle?.model}
+      targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
+    />
+  );
 }
 
 function CurrentVehicleStatePanel({
@@ -53,13 +63,15 @@ function CurrentVehicleStatePanel({
   images,
   vehicleName,
   vehicleModel,
+  targetTirePressurePsi,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
   vehicleName?: string | undefined;
   vehicleModel?: string | undefined;
+  targetTirePressurePsi?: number | null | undefined;
 }) {
-  const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? OVERVIEW_ANCHORS.default;
+  const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] || OVERVIEW_ANCHORS.default;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
@@ -77,10 +89,10 @@ function CurrentVehicleStatePanel({
     status?.door_rear_right_locked,
   ].some((value) => value !== null && value !== undefined);
   const tires = {
-    fl: formatTire(status?.tire_fl_psi, status?.tire_fl_status),
-    fr: formatTire(status?.tire_fr_psi, status?.tire_fr_status),
-    rl: formatTire(status?.tire_rl_psi, status?.tire_rl_status),
-    rr: formatTire(status?.tire_rr_psi, status?.tire_rr_status),
+    fl: makeTireDisplay(status?.tire_fl_psi, status?.tire_fl_status, targetTirePressurePsi),
+    fr: makeTireDisplay(status?.tire_fr_psi, status?.tire_fr_status, targetTirePressurePsi),
+    rl: makeTireDisplay(status?.tire_rl_psi, status?.tire_rl_status, targetTirePressurePsi),
+    rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
   const stats = [
     { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" /> },
@@ -144,10 +156,10 @@ function CurrentVehicleStatePanel({
               <VehicleArtFrame source={baseOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
                 <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} />
                 <VehicleOverheadLayers base={baseOverheadDark ?? baseOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" />
-                <VehicleLabel className={anchors.tire.rl} value={tires.rl} />
-                <VehicleLabel className={anchors.tire.fl} value={tires.fl} />
-                <VehicleLabel className={anchors.tire.rr} value={tires.rr} />
-                <VehicleLabel className={anchors.tire.fr} value={tires.fr} />
+                <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
+                <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
+                <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
+                <VehicleLabel className={anchors.tire.fr} value={tires.fr.value} tone={tires.fr.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <LockLabel className={anchors.doorLocks.rl} locked={status?.door_rear_left_locked} title="Rear left door lock" />
                 <LockLabel className={anchors.doorLocks.fl} locked={status?.door_front_left_locked} title="Front left door lock" />
                 <LockLabel className={anchors.doorLocks.rr} locked={status?.door_rear_right_locked} title="Rear right door lock" />
@@ -206,8 +218,22 @@ function ChargingGlyph({ chargerState, chargerStatus }: { chargerState: string |
   );
 }
 
-function VehicleLabel({ className, value }: { className: string; value: string }) {
-  return <span className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${className}`}>{value}</span>;
+function VehicleLabel({
+  className,
+  value,
+  tone,
+  targetTirePressurePsi,
+}: {
+  className: string;
+  value: string;
+  tone: ReturnType<typeof getTireHealthTone>;
+  targetTirePressurePsi?: number | null | undefined;
+}) {
+  return (
+    <Tooltip content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />} contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur">
+      <span className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)} ${className}`}>{value}</span>
+    </Tooltip>
+  );
 }
 
 function LockLabel({ className, locked, title }: { className: string; locked: boolean | null | undefined; title?: string }) {
@@ -292,11 +318,6 @@ function formatTimeToFull(minutes: number | null | undefined) {
   return `${hours}h ${mins}m`;
 }
 
-function formatTire(psi: number | null | undefined, status?: string | null) {
-  if (psi !== null && psi !== undefined) return formatPressure(psi);
-  return status ? prettify(status) : '-';
-}
-
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
   const rawValue = driveMode ?? gearStatus;
   if (!rawValue) return '-';
@@ -321,6 +342,45 @@ function clamp(value: number, min: number, max: number) {
 function prettify(value: string | null | undefined) {
   if (!value) return '-';
   return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function makeTireDisplay(psi: number | null | undefined, status: string | null | undefined, targetTirePressurePsi?: number | null) {
+  return {
+    value: formatTireLabel(psi, status),
+    tone: getTireHealthTone({ psi, status, targetPsi: targetTirePressurePsi }),
+  };
+}
+
+function TireHealthTooltipContent({ targetTirePressurePsi }: { targetTirePressurePsi?: number | null | undefined }) {
+  const entries = getTireHealthLegend(targetTirePressurePsi);
+  return (
+    <div className="grid gap-2">
+      <div className="grid gap-0.5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fg-tertiary">Tire Pressure Health</p>
+        <p className="text-sm font-medium text-fg">Target: {targetTirePressurePsi ?? 48} psi</p>
+      </div>
+      {entries.map((entry) => (
+        <div key={entry.tone} className="flex items-start gap-2 rounded-lg border border-border/70 bg-bg-surface/65 px-2.5 py-2">
+          <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+            entry.tone === 'success'
+              ? 'bg-status-positive/12 text-status-positive'
+              : entry.tone === 'warning'
+                ? 'bg-status-warning/12 text-status-warning'
+                : 'bg-status-danger/12 text-status-danger'
+          }`}>
+            {entry.tone === 'success' ? <CheckCircle2 className="h-3.5 w-3.5" /> : entry.tone === 'warning' ? <TriangleAlert className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-fg">{entry.label}</span>
+              <span className="font-mono text-[11px] text-fg-tertiary">{entry.rangeLabel}</span>
+            </div>
+            <p className="text-[11px] text-fg-secondary">{entry.detail}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 registerWidget({

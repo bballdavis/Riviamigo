@@ -82,7 +82,11 @@ struct SeriesParams {
     bucket: Option<String>,
 }
 
-fn resolve_bucket(requested: Option<&str>, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<&'static str, AppError> {
+fn resolve_bucket(
+    requested: Option<&str>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<&'static str, AppError> {
     match requested.unwrap_or("auto") {
         "auto" => {
             let minutes = (to - from).num_minutes();
@@ -381,7 +385,9 @@ async fn get_series(
     let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
 
     let points = match metric.source {
-        MetricSource::Summary => summary_series(&state.pool, vid, metric.id, from, to, bucket).await?,
+        MetricSource::Summary => {
+            summary_series(&state.pool, vid, metric.id, from, to, bucket).await?
+        }
         MetricSource::Telemetry(column) => {
             telemetry_daily_series(
                 &state.pool,

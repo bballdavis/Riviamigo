@@ -37,6 +37,7 @@ export interface Vehicle {
   trim: string | null;
   color: string | null;
   battery_capacity_kwh: number | null;
+  target_tire_pressure_psi?: number | null;
   battery_config?: string | null;
   display_name: string;
   created_at: string;
@@ -133,6 +134,8 @@ export interface VehicleStatus {
   closure_liftgate_closed?: boolean | null;
   closure_tailgate_locked?: boolean | null;
   closure_tailgate_closed?: boolean | null;
+  tonneau_locked?: boolean | null;
+  tonneau_closed?: boolean | null;
   side_bin_left_locked?: boolean | null;
   side_bin_right_locked?: boolean | null;
   side_bin_left_closed?: boolean | null;

@@ -634,6 +634,12 @@ export interface UpdateVehicleMemberBody {
   role: 'owner' | 'manager' | 'viewer';
 }
 
+export interface UpdateVehicleSettingsBody {
+  battery_capacity_kwh?: number;
+  battery_config?: string | null;
+  target_tire_pressure_psi?: number;
+}
+
 export interface VehicleMembersResponse {
   members: VehicleMember[];
 }
