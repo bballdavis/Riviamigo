@@ -1,12 +1,21 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { vi, describe, it, expect } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
   return m;
 });
+
+const settingsMocks = vi.hoisted(() => ({
+  auth: {
+    logout: vi.fn(),
+    defaultVehicleId: 'v1',
+    setDefaultVehicleId: vi.fn(),
+    setActiveVehicleId: vi.fn(),
+  },
+}));
 
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -166,10 +175,23 @@ vi.mock('@riviamigo/hooks', () => ({
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
     createDemoVehicle: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
+    updateVehicleSettings: vi.fn().mockResolvedValue({}),
+    updateVehicleName: vi.fn().mockResolvedValue({}),
   },
-  useAuth:    () => ({ logout: vi.fn(), defaultVehicleId: 'v1', setDefaultVehicleId: vi.fn(), setActiveVehicleId: vi.fn() }),
+  useAuth:    () => settingsMocks.auth,
   useVehicles: () => ({
-    data: [{ id: 'v1', display_name: 'Adventure Truck', model: 'R1T', year: null, trim: null, vin: null, rivian_vehicle_id: 'rivian-1' }],
+    data: [{
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+    }],
   }),
 }));
 
@@ -208,6 +230,8 @@ vi.mock('lucide-react', () => ({
   RotateCcw: () => <svg data-testid="icon-rotate" />,
   Save:       () => <svg data-testid="icon-save" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
+  Star: () => <svg data-testid="icon-star" />,
+  Users: () => <svg data-testid="icon-users" />,
   X:      () => <svg data-testid="icon-x" />,
   Trash2: () => <svg data-testid="icon-trash" />,
 }));
@@ -229,6 +253,12 @@ function renderSettings() {
 }
 
 describe('Settings page', () => {
+  beforeEach(() => {
+    settingsMocks.auth.logout.mockReset();
+    settingsMocks.auth.setDefaultVehicleId.mockReset();
+    settingsMocks.auth.setActiveVehicleId.mockReset();
+  });
+
   it('renders the Vehicles section heading', () => {
     renderSettings();
     expect(screen.getAllByText('Vehicles').length).toBeGreaterThan(0);
@@ -262,6 +292,7 @@ describe('Settings page', () => {
 
   it('shows Demo Vehicle for admin users and triggers creation', async () => {
     const hooks = await import('@riviamigo/hooks');
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
     vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
     renderSettings();
     await waitFor(() => {
@@ -271,6 +302,32 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'R1T' }));
     await waitFor(() => {
       expect(hooks.api.createDemoVehicle).toHaveBeenCalledWith({ model: 'R1T' });
+    });
+    await waitFor(() => {
+      expect(settingsMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'status', 'demo-v1'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'health', 'demo-v1'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'images', 'demo-v1'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
+    invalidateSpy.mockRestore();
+  });
+
+  it('saves target tire pressure through shared vehicle settings', async () => {
+    const hooks = await import('@riviamigo/hooks');
+
+    renderSettings();
+    fireEvent.click(screen.getByLabelText('Edit Adventure Truck'));
+    fireEvent.change(screen.getByDisplayValue('48'), { target: { value: '46' } });
+    fireEvent.click(screen.getByLabelText('Save vehicle'));
+
+    await waitFor(() => {
+      expect(hooks.api.updateVehicleSettings).toHaveBeenCalledWith('v1', {
+        battery_capacity_kwh: 135,
+        battery_config: 'R1T / R1S Large (Gen 1)',
+        target_tire_pressure_psi: 46,
+      });
     });
   });
 

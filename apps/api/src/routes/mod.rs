@@ -134,7 +134,11 @@ pub fn build_router(state: AppState) -> Router {
             ))
             .per_second(80)
             .burst_size(160)
-            .methods(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS])
+            .methods(vec![
+                http::Method::GET,
+                http::Method::HEAD,
+                http::Method::OPTIONS,
+            ])
             .finish()
             .unwrap(),
     );
@@ -161,7 +165,11 @@ pub fn build_router(state: AppState) -> Router {
             ))
             .per_second(25)
             .burst_size(50)
-            .methods(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS])
+            .methods(vec![
+                http::Method::GET,
+                http::Method::HEAD,
+                http::Method::OPTIONS,
+            ])
             .finish()
             .unwrap(),
     );
@@ -205,11 +213,9 @@ pub fn build_router(state: AppState) -> Router {
                     config: auth_write_identity_config,
                 }),
         )
-        .merge(
-            protected_heavy.layer(GovernorLayer {
-                config: heavy_read_identity_config,
-            }),
-        )
+        .merge(protected_heavy.layer(GovernorLayer {
+            config: heavy_read_identity_config,
+        }))
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();

@@ -24,7 +24,7 @@ import {
   TriangleAlert,
   Wrench,
 } from 'lucide-react';
-import { api, useAuth, useCurrentVehicleStatus, useVehicleHealth } from '@riviamigo/hooks';
+import { api, useAuth, useCurrentVehicleStatus, useVehicleHealth, useVehicles } from '@riviamigo/hooks';
 import type { VehicleHealthClosures, VehicleHealthTires, VehicleImages } from '@riviamigo/types';
 import {
   Badge,
@@ -62,14 +62,34 @@ function VehicleHealthPage() {
 }
 
 function VehicleHealthContent() {
-  const { defaultVehicleId } = useAuth();
-  const { data, isLoading } = useVehicleHealth(defaultVehicleId);
-  const { data: status } = useCurrentVehicleStatus(defaultVehicleId);
+  const { defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
+  const setSessionVehicleId = setActiveVehicleId ?? (() => {});
+  const { data: vehicles } = useVehicles();
+  const availableVehicles = vehicles ?? [];
+  const hasVehicleChoices = availableVehicles.length > 1;
+  const effectiveVehicleId = activeVehicleId ?? defaultVehicleId;
+  const { data, isLoading } = useVehicleHealth(effectiveVehicleId);
+  const { data: status } = useCurrentVehicleStatus(effectiveVehicleId);
   const { data: images } = useQuery({
-    queryKey: ['vehicles', 'images', defaultVehicleId],
-    queryFn: () => api.vehicleImages(defaultVehicleId!),
-    enabled: Boolean(defaultVehicleId),
+    queryKey: ['vehicles', 'images', effectiveVehicleId],
+    queryFn: () => api.vehicleImages(effectiveVehicleId!),
+    enabled: Boolean(effectiveVehicleId),
   });
+
+  React.useEffect(() => {
+    if (!availableVehicles.length) {
+      if (activeVehicleId) setSessionVehicleId(null);
+      return;
+    }
+    if (activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === activeVehicleId)) {
+      setSessionVehicleId(null);
+      return;
+    }
+    if (!defaultVehicleId) return;
+    if (!activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === defaultVehicleId)) {
+      setSessionVehicleId(availableVehicles[0]?.id ?? null);
+    }
+  }, [activeVehicleId, availableVehicles, defaultVehicleId, setSessionVehicleId]);
 
   const diagnostics = summarizeDiagnostics(status);
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
@@ -93,8 +113,25 @@ function VehicleHealthContent() {
         title="Vehicle Health"
         subtitle="Mechanical signals, software state, and telemetry freshness for your Rivian."
         className="pt-10 lg:pt-0"
+        actions={hasVehicleChoices ? (
+          <label className="inline-flex items-center">
+            <span className="sr-only">Selected vehicle</span>
+            <select
+              className="h-9 min-w-[11rem] rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              value={effectiveVehicleId ?? ''}
+              onChange={(event) => setSessionVehicleId(event.target.value || null)}
+              aria-label="Select vehicle"
+            >
+              {availableVehicles.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.display_name || vehicle.model}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       >
-        {!defaultVehicleId ? (
+        {!effectiveVehicleId ? (
           <NoVehicleState title="No vehicle selected" description="Connect your Rivian account to view vehicle health." />
         ) : (
           <>

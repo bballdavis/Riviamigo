@@ -44,12 +44,18 @@ struct DemoFixtureImageEntry {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let vehicle_id = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("usage: cargo run --bin export_vehicle_image_fixture -- <vehicle_id> <model>"))?;
+    let vehicle_id = args.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "usage: cargo run --bin export_vehicle_image_fixture -- <vehicle_id> <model>"
+        )
+    })?;
     let model = args
         .next()
-        .ok_or_else(|| anyhow::anyhow!("usage: cargo run --bin export_vehicle_image_fixture -- <vehicle_id> <model>"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "usage: cargo run --bin export_vehicle_image_fixture -- <vehicle_id> <model>"
+            )
+        })?
         .to_uppercase();
     let vehicle_id = Uuid::parse_str(&vehicle_id)?;
     let database_url = std::env::var("DATABASE_URL")?;
@@ -74,17 +80,28 @@ async fn main() -> anyhow::Result<()> {
         .join(model.to_lowercase());
     std::fs::create_dir_all(&output_dir)?;
 
-    let client = Client::builder().timeout(std::time::Duration::from_secs(30)).build()?;
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let mut manifest_images = Vec::with_capacity(rows.len());
     let mut used_filenames = HashSet::new();
 
     for row in rows {
-        let base_file = download_fixture_asset(&client, &output_dir, &row.url, &mut used_filenames).await?;
+        let base_file =
+            download_fixture_asset(&client, &output_dir, &row.url, &mut used_filenames).await?;
         let mut overlays = Vec::new();
-        for overlay in serde_json::from_value::<Vec<VehicleImageOverlay>>(row.overlays.clone()).unwrap_or_default() {
-            let overlay_file = download_fixture_asset(&client, &output_dir, &overlay.url, &mut used_filenames).await?;
+        for overlay in serde_json::from_value::<Vec<VehicleImageOverlay>>(row.overlays.clone())
+            .unwrap_or_default()
+        {
+            let overlay_file =
+                download_fixture_asset(&client, &output_dir, &overlay.url, &mut used_filenames)
+                    .await?;
             overlays.push(VehicleImageOverlay {
-                url: format!("/vehicle-images/fixtures/{}/{}", model.to_lowercase(), overlay_file),
+                url: format!(
+                    "/vehicle-images/fixtures/{}/{}",
+                    model.to_lowercase(),
+                    overlay_file
+                ),
                 overlay: overlay.overlay,
                 z_index: overlay.z_index,
             });
@@ -92,7 +109,10 @@ async fn main() -> anyhow::Result<()> {
 
         let mut metadata = row.metadata.clone();
         if let Some(obj) = metadata.as_object_mut() {
-            obj.insert("source_url".into(), serde_json::Value::String(row.url.clone()));
+            obj.insert(
+                "source_url".into(),
+                serde_json::Value::String(row.url.clone()),
+            );
             obj.insert("packaged".into(), serde_json::Value::Bool(true));
             obj.insert("model".into(), serde_json::Value::String(model.clone()));
         }
@@ -102,7 +122,11 @@ async fn main() -> anyhow::Result<()> {
             design: row.design,
             size: row.size,
             resolution: row.resolution,
-            url: format!("/vehicle-images/fixtures/{}/{}", model.to_lowercase(), base_file),
+            url: format!(
+                "/vehicle-images/fixtures/{}/{}",
+                model.to_lowercase(),
+                base_file
+            ),
             overlays,
             metadata,
         });
