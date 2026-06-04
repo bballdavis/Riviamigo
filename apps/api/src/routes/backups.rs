@@ -365,16 +365,16 @@ async fn download_backup_artifact(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
-    let content_disposition = HeaderValue::from_str(&format!("attachment; filename=\"{safe_name}\""))
-        .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid download filename: {error}")))?;
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        content_disposition,
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    let content_disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{safe_name}\""
+    ))
+    .map_err(|error| AppError::Internal(anyhow::anyhow!("invalid download filename: {error}")))?;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, content_disposition);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 

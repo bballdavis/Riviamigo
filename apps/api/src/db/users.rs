@@ -29,17 +29,21 @@ impl UserRole {
 }
 
 pub async fn get_user_role(pool: &PgPool, user_id: Uuid) -> Result<UserRole, AppError> {
-    let role = sqlx::query_scalar::<_, Option<String>>("SELECT role FROM riviamigo.users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?
-        .flatten()
-        .ok_or(AppError::Forbidden)?;
+    let role =
+        sqlx::query_scalar::<_, Option<String>>("SELECT role FROM riviamigo.users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten()
+            .ok_or(AppError::Forbidden)?;
 
     UserRole::from_str(&role).ok_or_else(|| AppError::Validation("unknown user role".into()))
 }
 
-pub async fn require_admin_or_super_user(pool: &PgPool, user_id: Uuid) -> Result<UserRole, AppError> {
+pub async fn require_admin_or_super_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<UserRole, AppError> {
     let role = get_user_role(pool, user_id).await?;
     match role {
         UserRole::SuperUser | UserRole::Admin => Ok(role),

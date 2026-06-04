@@ -61,21 +61,92 @@ BEGIN
       updated_at = now();
 
   INSERT INTO riviamigo.vehicle_latest_status
-    (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, charger_status, time_to_end_of_charge_min, charge_port_open, updated_at)
+    (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+     power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+     drive_mode, gear_status, altitude_m, speed_mph, cabin_temp_c, driver_temp_c, outside_temp_c,
+     heading_deg, odometer_miles,
+     tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+     tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+     tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
+     door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+     door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+     closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
+     closure_tailgate_locked, closure_tailgate_closed,
+     ota_current_version, ota_available_version, ota_status, ota_current_status,
+     hv_thermal_event, twelve_volt_health,
+     charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+     pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+     seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
+     tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+     side_bin_left_closed, side_bin_right_closed,
+     window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+     gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
+     alarm_active, service_mode, updated_at)
   VALUES
-    (v_vehicle_id, now(), 64, v_battery_capacity_wh, v_range_mi, 85, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95, TRUE, now())
+    (v_vehicle_id, now(), 78, v_battery_capacity_wh, v_range_mi, 85,
+     'charging', 'Charging', now(), 'chrgr_sts_connected_charging', 95,
+     'all_purpose', 'park', -8.2, 0, 22.8, 21.7, 18.9,
+     132, 15018,
+     48, 48, 50, 50,
+     'normal', 'normal', 'normal', 'normal',
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE,
+     '2026.18.0', NULL, 'idle', 'up_to_date',
+     'none', 'normal',
+     TRUE, FALSE, 'off', 'none',
+     FALSE, TRUE, FALSE, 0,
+     0, 0, 0, 0, 0, 0,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, 'idle', FALSE, FALSE,
+     FALSE, FALSE, now())
   ON CONFLICT (vehicle_id) DO UPDATE
-  SET ts = EXCLUDED.ts,
-      battery_level = EXCLUDED.battery_level,
-      battery_capacity_wh = EXCLUDED.battery_capacity_wh,
-      distance_to_empty_mi = EXCLUDED.distance_to_empty_mi,
-      battery_limit = EXCLUDED.battery_limit,
-      power_state = EXCLUDED.power_state,
-      charger_state = EXCLUDED.charger_state,
-      charger_status = EXCLUDED.charger_status,
-      time_to_end_of_charge_min = EXCLUDED.time_to_end_of_charge_min,
-      charge_port_open = EXCLUDED.charge_port_open,
-      updated_at = now();
+  SET (ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+       power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+       drive_mode, gear_status, altitude_m, speed_mph, cabin_temp_c, driver_temp_c, outside_temp_c,
+       heading_deg, odometer_miles,
+       tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+       tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+       tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
+       door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+       door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+       closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
+       closure_tailgate_locked, closure_tailgate_closed,
+       ota_current_version, ota_available_version, ota_status, ota_current_status,
+       hv_thermal_event, twelve_volt_health,
+       charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+       pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+       seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
+       tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+       side_bin_left_closed, side_bin_right_closed,
+       window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+       gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
+       alarm_active, service_mode, updated_at) =
+      (EXCLUDED.ts, EXCLUDED.battery_level, EXCLUDED.battery_capacity_wh, EXCLUDED.distance_to_empty_mi, EXCLUDED.battery_limit,
+       EXCLUDED.power_state, EXCLUDED.charger_state, EXCLUDED.charger_state_ts, EXCLUDED.charger_status, EXCLUDED.time_to_end_of_charge_min,
+       EXCLUDED.drive_mode, EXCLUDED.gear_status, EXCLUDED.altitude_m, EXCLUDED.speed_mph, EXCLUDED.cabin_temp_c, EXCLUDED.driver_temp_c, EXCLUDED.outside_temp_c,
+       EXCLUDED.heading_deg, EXCLUDED.odometer_miles,
+       EXCLUDED.tire_fl_psi, EXCLUDED.tire_fr_psi, EXCLUDED.tire_rl_psi, EXCLUDED.tire_rr_psi,
+       EXCLUDED.tire_fl_status, EXCLUDED.tire_fr_status, EXCLUDED.tire_rl_status, EXCLUDED.tire_rr_status,
+       EXCLUDED.tire_fl_valid, EXCLUDED.tire_fr_valid, EXCLUDED.tire_rl_valid, EXCLUDED.tire_rr_valid,
+       EXCLUDED.door_front_left_locked, EXCLUDED.door_front_right_locked, EXCLUDED.door_rear_left_locked, EXCLUDED.door_rear_right_locked,
+       EXCLUDED.door_front_left_closed, EXCLUDED.door_front_right_closed, EXCLUDED.door_rear_left_closed, EXCLUDED.door_rear_right_closed,
+       EXCLUDED.closure_frunk_locked, EXCLUDED.closure_frunk_closed, EXCLUDED.closure_liftgate_locked, EXCLUDED.closure_liftgate_closed,
+       EXCLUDED.closure_tailgate_locked, EXCLUDED.closure_tailgate_closed,
+       EXCLUDED.ota_current_version, EXCLUDED.ota_available_version, EXCLUDED.ota_status, EXCLUDED.ota_current_status,
+       EXCLUDED.hv_thermal_event, EXCLUDED.twelve_volt_health,
+       EXCLUDED.charge_port_open, EXCLUDED.charger_derate_active, EXCLUDED.cabin_precon_status, EXCLUDED.cabin_precon_type,
+       EXCLUDED.pet_mode_active, EXCLUDED.pet_mode_temp_ok, EXCLUDED.defrost_active, EXCLUDED.steering_wheel_heat,
+       EXCLUDED.seat_fl_heat, EXCLUDED.seat_fr_heat, EXCLUDED.seat_rl_heat, EXCLUDED.seat_rr_heat, EXCLUDED.seat_fl_vent, EXCLUDED.seat_fr_vent,
+       EXCLUDED.tonneau_locked, EXCLUDED.tonneau_closed, EXCLUDED.side_bin_left_locked, EXCLUDED.side_bin_right_locked,
+       EXCLUDED.side_bin_left_closed, EXCLUDED.side_bin_right_closed,
+       EXCLUDED.window_fl_closed, EXCLUDED.window_fr_closed, EXCLUDED.window_rl_closed, EXCLUDED.window_rr_closed,
+       EXCLUDED.gear_guard_locked, EXCLUDED.gear_guard_video_status, EXCLUDED.wiper_fluid_low, EXCLUDED.brake_fluid_low,
+       EXCLUDED.alarm_active, EXCLUDED.service_mode, now());
 
   INSERT INTO riviamigo.vehicle_runtime_state
     (vehicle_id, is_online, last_event_at, worker_health, worker_health_msg, updated_at)
@@ -139,12 +210,68 @@ BEGIN
     RAISE EXCEPTION 'R2S fixture pack has not been exported yet. Use the fixture export script once an exact cached R2S image set is available.';
   END IF;
 
-  INSERT INTO timeseries.telemetry
-    (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, speed_mph, power_state, charger_state, drive_mode, odometer_miles, is_online)
+  DELETE FROM riviamigo.software_versions
+  WHERE vehicle_id = v_vehicle_id;
+
+  INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at, observed_until)
   VALUES
-    (now() - interval '90 minutes', v_vehicle_id, 60, v_battery_capacity_wh, v_range_mi - 10, 85, 0, 'charging', 'Connected', 'all_purpose', 15000, TRUE),
-    (now() - interval '60 minutes', v_vehicle_id, 62, v_battery_capacity_wh, v_range_mi - 8, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE),
-    (now() - interval '30 minutes', v_vehicle_id, 64, v_battery_capacity_wh, v_range_mi - 6, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE)
+    (v_vehicle_id, '2026.14.0', now() - interval '45 days', now() - interval '14 days'),
+    (v_vehicle_id, '2026.18.0', now() - interval '14 days', NULL);
+
+  INSERT INTO timeseries.telemetry
+    (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+     speed_mph, altitude_m, power_state, charger_state, charger_status, time_to_end_of_charge_min,
+     drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c, odometer_miles,
+     tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+     tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+     tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
+     door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+     closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
+     ota_current_version, ota_available_version, ota_status, ota_current_status,
+     hv_thermal_event, twelve_volt_health,
+     charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+     pet_mode_active, pet_mode_temp_ok, defrost_active,
+     tonneau_locked, tonneau_closed, side_bin_left_closed, side_bin_right_closed, is_online)
+  VALUES
+    (now() - interval '90 minutes', v_vehicle_id, 74, v_battery_capacity_wh, v_range_mi - 12, 85,
+     0, -8.7, 'charging', 'Connected', 'chrgr_sts_connected_no_chrg', 110,
+     'all_purpose', 'park', 22.1, 21.2, 18.1, 15018,
+     47.8, 47.9, 49.7, 49.8,
+     'normal', 'normal', 'normal', 'normal',
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE,
+     '2026.18.0', NULL, 'idle', 'up_to_date',
+     'none', 'normal',
+     TRUE, FALSE, 'off', 'none',
+     FALSE, TRUE, FALSE,
+     TRUE, TRUE, TRUE, TRUE, TRUE),
+    (now() - interval '60 minutes', v_vehicle_id, 76, v_battery_capacity_wh, v_range_mi - 9, 85,
+     0, -8.5, 'charging', 'Charging', 'chrgr_sts_connected_charging', 102,
+     'all_purpose', 'park', 22.4, 21.4, 18.5, 15018,
+     47.9, 48.0, 49.9, 50.0,
+     'normal', 'normal', 'normal', 'normal',
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE,
+     '2026.18.0', NULL, 'idle', 'up_to_date',
+     'none', 'normal',
+     TRUE, FALSE, 'off', 'none',
+     FALSE, TRUE, FALSE,
+     TRUE, TRUE, TRUE, TRUE, TRUE),
+    (now() - interval '30 minutes', v_vehicle_id, 78, v_battery_capacity_wh, v_range_mi - 6, 85,
+     0, -8.2, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95,
+     'all_purpose', 'park', 22.8, 21.7, 18.9, 15018,
+     48.0, 48.0, 50.0, 50.0,
+     'normal', 'normal', 'normal', 'normal',
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE, TRUE,
+     TRUE, TRUE, TRUE,
+     '2026.18.0', NULL, 'idle', 'up_to_date',
+     'none', 'normal',
+     TRUE, FALSE, 'off', 'none',
+     FALSE, TRUE, FALSE,
+     TRUE, TRUE, TRUE, TRUE, TRUE)
   ON CONFLICT DO NOTHING;
 
   INSERT INTO riviamigo.trips

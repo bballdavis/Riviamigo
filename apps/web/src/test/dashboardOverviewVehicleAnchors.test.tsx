@@ -53,7 +53,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         side_bin_right_locked: true,
       },
     }),
-    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: overviewMocks.model, images: overheadImageFixtures }] }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: overviewMocks.model, images: overheadImageFixtures, target_tire_pressure_psi: 48 }] }),
   };
 });
 
@@ -143,6 +143,10 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByText('32 psi')).toHaveClass(anchors.tires.fl);
     expect(screen.getByText('33 psi')).toHaveClass(anchors.tires.rr);
     expect(screen.getByText('34 psi')).toHaveClass(anchors.tires.fr);
+    expect(screen.getByText('31 psi')).toHaveClass('border-status-danger/70');
+    expect(screen.getByText('32 psi')).toHaveClass('border-status-danger/70');
+    expect(screen.getByText('33 psi')).toHaveClass('border-status-danger/70');
+    expect(screen.getByText('34 psi')).toHaveClass('border-status-danger/70');
 
     expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);
     expect(screen.getByTitle('Front left door lock')).toHaveClass(anchors.locks.fl);
@@ -154,5 +158,12 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Front left door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Rear right door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Front right door lock')).toHaveClass('text-status-positive');
+  });
+
+  it('renders seeded overhead demo art for the overview stage', () => {
+    renderOverviewForModel('R1T');
+    expect(screen.getAllByRole('img').map((image) => image.getAttribute('src'))).toEqual(
+      expect.arrayContaining(['/rivian/overhead-light.webp', '/rivian/overhead-dark.webp']),
+    );
   });
 });

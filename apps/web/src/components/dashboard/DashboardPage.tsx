@@ -10,7 +10,9 @@ import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
-import { Battery, Car, Gauge, MapPin, Save, Thermometer, Trash2, Edit2, Cpu } from 'lucide-react';
+import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
+import { Tooltip } from '@riviamigo/ui/primitives';
+import { Battery, Car, CheckCircle2, CircleAlert, Gauge, MapPin, Save, Thermometer, Trash2, TriangleAlert, Edit2, Cpu } from 'lucide-react';
 import { BsLockFill, BsUnlockFill } from 'react-icons/bs';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { DashboardPageShell } from './DashboardPageShell';
@@ -159,7 +161,17 @@ export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: Das
   ) : undefined;
 }
 
-export function CurrentVehicleStatePanel({ status, images, vehicleName }: { status: VehicleStatus | null | undefined; images?: VehicleImages | null | undefined; vehicleName?: string | undefined }) {
+export function CurrentVehicleStatePanel({
+  status,
+  images,
+  vehicleName,
+  targetTirePressurePsi,
+}: {
+  status: VehicleStatus | null | undefined;
+  images?: VehicleImages | null | undefined;
+  vehicleName?: string | undefined;
+  targetTirePressurePsi?: number | null | undefined;
+}) {
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
@@ -173,10 +185,10 @@ export function CurrentVehicleStatePanel({ status, images, vehicleName }: { stat
   const locksKnown = [status?.door_front_left_locked, status?.door_front_right_locked, status?.door_rear_left_locked, status?.door_rear_right_locked]
     .some((value) => value !== null && value !== undefined);
   const tires = {
-    fl: formatTire(status?.tire_fl_psi, status?.tire_fl_status),
-    fr: formatTire(status?.tire_fr_psi, status?.tire_fr_status),
-    rl: formatTire(status?.tire_rl_psi, status?.tire_rl_status),
-    rr: formatTire(status?.tire_rr_psi, status?.tire_rr_status),
+    fl: makeTireDisplay(status?.tire_fl_psi, status?.tire_fl_status, targetTirePressurePsi),
+    fr: makeTireDisplay(status?.tire_fr_psi, status?.tire_fr_status, targetTirePressurePsi),
+    rl: makeTireDisplay(status?.tire_rl_psi, status?.tire_rl_status, targetTirePressurePsi),
+    rr: makeTireDisplay(status?.tire_rr_psi, status?.tire_rr_status, targetTirePressurePsi),
   };
   const stats = [
     { label: 'Driver mode', value: renderDriverMode(status?.drive_mode, status?.gear_status), icon: <Car className="h-3.5 w-3.5" /> },
@@ -273,10 +285,10 @@ export function CurrentVehicleStatePanel({ status, images, vehicleName }: { stat
                   overlays={overlaysDark}
                   darkClassName="hidden dark:block"
                 />
-                <VehicleLabel className="left-[27%] top-[0%]" value={tires.rl} />
-                <VehicleLabel className="left-[82%] top-[0%]" value={tires.fl} />
-                <VehicleLabel className="left-[27%] top-[102%]" value={tires.rr} />
-                <VehicleLabel className="left-[82%] top-[102%]" value={tires.fr} />
+                <VehicleLabel className="left-[27%] top-[0%]" value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
+                <VehicleLabel className="left-[82%] top-[0%]" value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
+                <VehicleLabel className="left-[27%] top-[102%]" value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
+                <VehicleLabel className="left-[82%] top-[102%]" value={tires.fr.value} tone={tires.fr.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <LockLabel className="left-[43%] top-[-0%]" locked={status?.door_rear_left_locked} />
                 <LockLabel className="left-[60%] top-[-0%]" locked={status?.door_front_left_locked} />
                 <LockLabel className="left-[43%] top-[102%]" locked={status?.door_rear_right_locked} />
@@ -338,8 +350,22 @@ function ChargingGlyph({ chargerState, chargerStatus }: { chargerState: string |
   );
 }
 
-function VehicleLabel({ className, value }: { className: string; value: string }) {
-  return <span className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${className}`}>{value}</span>;
+function VehicleLabel({
+  className,
+  value,
+  tone,
+  targetTirePressurePsi,
+}: {
+  className: string;
+  value: string;
+  tone: ReturnType<typeof getTireHealthTone>;
+  targetTirePressurePsi?: number | null | undefined;
+}) {
+  return (
+    <Tooltip content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />} contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur">
+      <span className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)} ${className}`}>{value}</span>
+    </Tooltip>
+  );
 }
 
 function LockLabel({ className, locked, title }: { className: string; locked: boolean | null | undefined; title?: string }) {
@@ -447,12 +473,6 @@ function formatKwh(value: number | null | undefined) {
   return value === null || value === undefined ? '-' : `${Math.round(value)} kWh`;
 }
 
-function formatTire(psi: number | null | undefined, status?: string | null) {
-  if (psi !== null && psi !== undefined) return formatPressure(psi);
-  return status ? prettify(status) : '-';
-}
-
-
 function formatDrive(driveMode: string | null | undefined, gearStatus: string | null | undefined) {
   if (driveMode) return driveMode;
   return gearStatus ? prettify(gearStatus) : '-';
@@ -482,6 +502,45 @@ function clamp(value: number, min: number, max: number) {
 function prettify(value: string | null | undefined) {
   if (!value) return '-';
   return value.replace(/^chrgr_sts_/, '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function makeTireDisplay(psi: number | null | undefined, status: string | null | undefined, targetTirePressurePsi?: number | null) {
+  return {
+    value: formatTireLabel(psi, status),
+    tone: getTireHealthTone({ psi, status, targetPsi: targetTirePressurePsi }),
+  };
+}
+
+function TireHealthTooltipContent({ targetTirePressurePsi }: { targetTirePressurePsi?: number | null | undefined }) {
+  const entries = getTireHealthLegend(targetTirePressurePsi);
+  return (
+    <div className="grid gap-2">
+      <div className="grid gap-0.5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fg-tertiary">Tire Pressure Health</p>
+        <p className="text-sm font-medium text-fg">Target: {targetTirePressurePsi ?? 48} psi</p>
+      </div>
+      {entries.map((entry) => (
+        <div key={entry.tone} className="flex items-start gap-2 rounded-lg border border-border/70 bg-bg-surface/65 px-2.5 py-2">
+          <span className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+            entry.tone === 'success'
+              ? 'bg-status-positive/12 text-status-positive'
+              : entry.tone === 'warning'
+                ? 'bg-status-warning/12 text-status-warning'
+                : 'bg-status-danger/12 text-status-danger'
+          }`}>
+            {entry.tone === 'success' ? <CheckCircle2 className="h-3.5 w-3.5" /> : entry.tone === 'warning' ? <TriangleAlert className="h-3.5 w-3.5" /> : <CircleAlert className="h-3.5 w-3.5" />}
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-fg">{entry.label}</span>
+              <span className="font-mono text-[11px] text-fg-tertiary">{entry.rangeLabel}</span>
+            </div>
+            <p className="text-[11px] text-fg-secondary">{entry.detail}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 type DoorKey = 'front_left' | 'front_right' | 'rear_left' | 'rear_right' | 'frunk' | 'rear_gate';

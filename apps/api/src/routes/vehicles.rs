@@ -7,8 +7,8 @@ use axum::{
     Json, Router,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use sqlx::Row;
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -32,15 +32,33 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles/demo", post(create_demo_vehicle))
-        .route("/vehicle-image-cache/:id/:image_key", get(vehicle_image_cache_asset))
-        .route("/admin/vehicles/:id/images/remirror", post(admin_remirror_vehicle_images))
+        .route(
+            "/vehicle-image-cache/:id/:image_key",
+            get(vehicle_image_cache_asset),
+        )
+        .route(
+            "/admin/vehicles/:id/images/remirror",
+            post(admin_remirror_vehicle_images),
+        )
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id", delete(delete_vehicle))
         .route("/vehicles/:id/default", post(set_default_vehicle))
-        .route("/vehicles/:id/members", get(list_vehicle_members).post(add_vehicle_member))
-        .route("/vehicles/:id/members/:user_id", put(update_vehicle_member).delete(remove_vehicle_member))
-        .route("/vehicles/:id/invites", get(list_vehicle_invites).post(create_vehicle_invite))
-        .route("/vehicles/:id/invites/:invite_id", delete(revoke_vehicle_invite))
+        .route(
+            "/vehicles/:id/members",
+            get(list_vehicle_members).post(add_vehicle_member),
+        )
+        .route(
+            "/vehicles/:id/members/:user_id",
+            put(update_vehicle_member).delete(remove_vehicle_member),
+        )
+        .route(
+            "/vehicles/:id/invites",
+            get(list_vehicle_invites).post(create_vehicle_invite),
+        )
+        .route(
+            "/vehicles/:id/invites/:invite_id",
+            delete(revoke_vehicle_invite),
+        )
         .route("/invites/:token", get(preview_invite))
         .route("/invites/:token/accept", post(accept_invite))
         .route(
@@ -50,6 +68,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/status", get(vehicle_status))
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
+        .route("/vehicles/:id/settings", put(update_vehicle_settings))
         .route("/vehicles/:id/battery-config", put(update_battery_config))
         .route("/vehicles/:id/name", put(update_vehicle_name))
 }
@@ -90,21 +109,158 @@ struct CreateDemoVehicleBody {
 
 fn demo_vehicle_latest_status_upsert_sql() -> &'static str {
     "INSERT INTO riviamigo.vehicle_latest_status
-      (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, charger_status, time_to_end_of_charge_min, charge_port_open, updated_at)
+      (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+       power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+       drive_mode, gear_status, altitude_m, speed_mph, cabin_temp_c, driver_temp_c, outside_temp_c,
+       heading_deg, odometer_miles,
+       tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+       tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+       tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
+       door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+       door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+       closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
+       closure_tailgate_locked, closure_tailgate_closed,
+       ota_current_version, ota_available_version, ota_status, ota_current_status,
+       hv_thermal_event, twelve_volt_health,
+       charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+       pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+       seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
+       tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+       side_bin_left_closed, side_bin_right_closed,
+       window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+       gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
+       alarm_active, service_mode, updated_at)
      VALUES
-      ($1, now(), 64, $2, $3, 85, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95, TRUE, now())
+      ($1, now(), 78, $2, $3, 85,
+       'charging', 'Charging', now(), 'chrgr_sts_connected_charging', 95,
+       'all_purpose', 'park', -8.2, 0, 22.8, 21.7, 18.9,
+       132, 15018,
+       48, 48, 50, 50,
+       'normal', 'normal', 'normal', 'normal',
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE,
+       '2026.18.0', NULL, 'idle', 'up_to_date',
+       'none', 'normal',
+       TRUE, FALSE, 'off', 'none',
+       FALSE, TRUE, FALSE, 0,
+       0, 0, 0, 0, 0, 0,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, 'idle', FALSE, FALSE,
+       FALSE, FALSE, now())
      ON CONFLICT (vehicle_id) DO UPDATE
-     SET ts = EXCLUDED.ts,
-         battery_level = EXCLUDED.battery_level,
-         battery_capacity_wh = EXCLUDED.battery_capacity_wh,
-         distance_to_empty_mi = EXCLUDED.distance_to_empty_mi,
-         battery_limit = EXCLUDED.battery_limit,
-         power_state = EXCLUDED.power_state,
-         charger_state = EXCLUDED.charger_state,
-         charger_status = EXCLUDED.charger_status,
-         time_to_end_of_charge_min = EXCLUDED.time_to_end_of_charge_min,
-         charge_port_open = EXCLUDED.charge_port_open,
-        updated_at = now()"
+     SET (ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+          power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+          drive_mode, gear_status, altitude_m, speed_mph, cabin_temp_c, driver_temp_c, outside_temp_c,
+          heading_deg, odometer_miles,
+          tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+          tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+          tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
+          door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
+          door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+          closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
+          closure_tailgate_locked, closure_tailgate_closed,
+          ota_current_version, ota_available_version, ota_status, ota_current_status,
+          hv_thermal_event, twelve_volt_health,
+          charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+          pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
+          seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
+          tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
+          side_bin_left_closed, side_bin_right_closed,
+          window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
+          gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
+          alarm_active, service_mode, updated_at) =
+         (EXCLUDED.ts, EXCLUDED.battery_level, EXCLUDED.battery_capacity_wh, EXCLUDED.distance_to_empty_mi, EXCLUDED.battery_limit,
+          EXCLUDED.power_state, EXCLUDED.charger_state, EXCLUDED.charger_state_ts, EXCLUDED.charger_status, EXCLUDED.time_to_end_of_charge_min,
+          EXCLUDED.drive_mode, EXCLUDED.gear_status, EXCLUDED.altitude_m, EXCLUDED.speed_mph, EXCLUDED.cabin_temp_c, EXCLUDED.driver_temp_c, EXCLUDED.outside_temp_c,
+          EXCLUDED.heading_deg, EXCLUDED.odometer_miles,
+          EXCLUDED.tire_fl_psi, EXCLUDED.tire_fr_psi, EXCLUDED.tire_rl_psi, EXCLUDED.tire_rr_psi,
+          EXCLUDED.tire_fl_status, EXCLUDED.tire_fr_status, EXCLUDED.tire_rl_status, EXCLUDED.tire_rr_status,
+          EXCLUDED.tire_fl_valid, EXCLUDED.tire_fr_valid, EXCLUDED.tire_rl_valid, EXCLUDED.tire_rr_valid,
+          EXCLUDED.door_front_left_locked, EXCLUDED.door_front_right_locked, EXCLUDED.door_rear_left_locked, EXCLUDED.door_rear_right_locked,
+          EXCLUDED.door_front_left_closed, EXCLUDED.door_front_right_closed, EXCLUDED.door_rear_left_closed, EXCLUDED.door_rear_right_closed,
+          EXCLUDED.closure_frunk_locked, EXCLUDED.closure_frunk_closed, EXCLUDED.closure_liftgate_locked, EXCLUDED.closure_liftgate_closed,
+          EXCLUDED.closure_tailgate_locked, EXCLUDED.closure_tailgate_closed,
+          EXCLUDED.ota_current_version, EXCLUDED.ota_available_version, EXCLUDED.ota_status, EXCLUDED.ota_current_status,
+          EXCLUDED.hv_thermal_event, EXCLUDED.twelve_volt_health,
+          EXCLUDED.charge_port_open, EXCLUDED.charger_derate_active, EXCLUDED.cabin_precon_status, EXCLUDED.cabin_precon_type,
+          EXCLUDED.pet_mode_active, EXCLUDED.pet_mode_temp_ok, EXCLUDED.defrost_active, EXCLUDED.steering_wheel_heat,
+          EXCLUDED.seat_fl_heat, EXCLUDED.seat_fr_heat, EXCLUDED.seat_rl_heat, EXCLUDED.seat_rr_heat, EXCLUDED.seat_fl_vent, EXCLUDED.seat_fr_vent,
+          EXCLUDED.tonneau_locked, EXCLUDED.tonneau_closed, EXCLUDED.side_bin_left_locked, EXCLUDED.side_bin_right_locked,
+          EXCLUDED.side_bin_left_closed, EXCLUDED.side_bin_right_closed,
+          EXCLUDED.window_fl_closed, EXCLUDED.window_fr_closed, EXCLUDED.window_rl_closed, EXCLUDED.window_rr_closed,
+          EXCLUDED.gear_guard_locked, EXCLUDED.gear_guard_video_status, EXCLUDED.wiper_fluid_low, EXCLUDED.brake_fluid_low,
+          EXCLUDED.alarm_active, EXCLUDED.service_mode, now())"
+}
+
+fn demo_vehicle_software_history_seed_sql() -> &'static str {
+    "DELETE FROM riviamigo.software_versions WHERE vehicle_id = $1;
+     INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at, observed_until)
+     VALUES
+      ($1, '2026.14.0', now() - interval '45 days', now() - interval '14 days'),
+      ($1, '2026.18.0', now() - interval '14 days', NULL)"
+}
+
+fn demo_vehicle_telemetry_seed_insert_sql() -> &'static str {
+    "INSERT INTO timeseries.telemetry
+      (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
+       speed_mph, altitude_m, power_state, charger_state, charger_status, time_to_end_of_charge_min,
+       drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c, odometer_miles,
+       tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
+       tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
+       tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
+       door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
+       closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
+       ota_current_version, ota_available_version, ota_status, ota_current_status,
+       hv_thermal_event, twelve_volt_health,
+       charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
+       pet_mode_active, pet_mode_temp_ok, defrost_active,
+       tonneau_locked, tonneau_closed, side_bin_left_closed, side_bin_right_closed, is_online)
+     VALUES
+      (now() - interval '90 minutes', $1, 74, $2, $3 - 12, 85,
+       0, -8.7, 'charging', 'Connected', 'chrgr_sts_connected_no_chrg', 110,
+       'all_purpose', 'park', 22.1, 21.2, 18.1, 15018,
+       47.8, 47.9, 49.7, 49.8,
+       'normal', 'normal', 'normal', 'normal',
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE,
+       '2026.18.0', NULL, 'idle', 'up_to_date',
+       'none', 'normal',
+       TRUE, FALSE, 'off', 'none',
+       FALSE, TRUE, FALSE,
+       TRUE, TRUE, TRUE, TRUE, TRUE),
+      (now() - interval '60 minutes', $1, 76, $2, $3 - 9, 85,
+       0, -8.5, 'charging', 'Charging', 'chrgr_sts_connected_charging', 102,
+       'all_purpose', 'park', 22.4, 21.4, 18.5, 15018,
+       47.9, 48.0, 49.9, 50.0,
+       'normal', 'normal', 'normal', 'normal',
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE,
+       '2026.18.0', NULL, 'idle', 'up_to_date',
+       'none', 'normal',
+       TRUE, FALSE, 'off', 'none',
+       FALSE, TRUE, FALSE,
+       TRUE, TRUE, TRUE, TRUE, TRUE),
+      (now() - interval '30 minutes', $1, 78, $2, $3 - 6, 85,
+       0, -8.2, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95,
+       'all_purpose', 'park', 22.8, 21.7, 18.9, 15018,
+       48.0, 48.0, 50.0, 50.0,
+       'normal', 'normal', 'normal', 'normal',
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE, TRUE,
+       TRUE, TRUE, TRUE,
+       '2026.18.0', NULL, 'idle', 'up_to_date',
+       'none', 'normal',
+       TRUE, FALSE, 'off', 'none',
+       FALSE, TRUE, FALSE,
+       TRUE, TRUE, TRUE, TRUE, TRUE)
+     ON CONFLICT DO NOTHING"
 }
 
 fn is_demo_vehicle_key(value: &str) -> bool {
@@ -135,15 +291,15 @@ fn demo_vehicle_image_seeds(model: &str) -> Result<Vec<DemoVehicleImageSeed>, Ap
             size: image.size,
             resolution: image.resolution,
             url: image.url,
-            overlays: serde_json::to_value(image.overlays).unwrap_or_else(|_| serde_json::json!([])),
+            overlays: serde_json::to_value(image.overlays)
+                .unwrap_or_else(|_| serde_json::json!([])),
             metadata: image.metadata,
         })
         .collect())
 }
 
 fn demo_fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../web/public/vehicle-images/fixtures")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web/public/vehicle-images/fixtures")
 }
 
 fn fixture_public_root() -> PathBuf {
@@ -165,11 +321,17 @@ fn load_demo_fixture_manifest(model: &str) -> Result<DemoFixtureManifest, AppErr
     }
 
     let contents = std::fs::read_to_string(&manifest_path)?;
-    serde_json::from_str::<DemoFixtureManifest>(&contents)
-        .map_err(|error| AppError::Validation(format!("Demo fixture manifest for {model} is invalid: {error}")))
+    serde_json::from_str::<DemoFixtureManifest>(&contents).map_err(|error| {
+        AppError::Validation(format!(
+            "Demo fixture manifest for {model} is invalid: {error}"
+        ))
+    })
 }
 
-fn validate_demo_fixture_manifest(model: &str, manifest: &DemoFixtureManifest) -> Result<(), AppError> {
+fn validate_demo_fixture_manifest(
+    model: &str,
+    manifest: &DemoFixtureManifest,
+) -> Result<(), AppError> {
     if !manifest.model.eq_ignore_ascii_case(model) {
         return Err(AppError::Validation(format!(
             "Demo fixture manifest model mismatch: expected {model}, found {}.",
@@ -191,11 +353,9 @@ fn validate_demo_fixture_manifest(model: &str, manifest: &DemoFixtureManifest) -
         }
     }
 
-    if !manifest
-        .images
-        .iter()
-        .any(|image| is_charging_side_value(&image.placement) || image.url.contains("side-charging"))
-    {
+    if !manifest.images.iter().any(|image| {
+        is_charging_side_value(&image.placement) || image.url.contains("side-charging")
+    }) {
         return Err(AppError::Validation(format!(
             "Demo fixture manifest for {model} is incomplete. Missing required 'side-charging' image."
         )));
@@ -328,6 +488,7 @@ struct VehicleListRow {
     color: Option<String>,
     name: Option<String>,
     battery_capacity_wh: Option<f64>,
+    target_tire_pressure_psi: Option<f64>,
     battery_config: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     // Enrichment fields (migration 0023)
@@ -1134,6 +1295,7 @@ async fn delete_vehicle(
 struct UpdateBatteryConfigBody {
     battery_capacity_kwh: Option<f64>,
     battery_config: Option<String>,
+    target_tire_pressure_psi: Option<f64>,
 }
 
 async fn update_battery_config(
@@ -1142,17 +1304,50 @@ async fn update_battery_config(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateBatteryConfigBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
+    update_vehicle_settings_impl(&state, auth.user_id, vid, body).await
+}
+
+async fn update_vehicle_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateBatteryConfigBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    update_vehicle_settings_impl(&state, auth.user_id, vid, body).await
+}
+
+async fn update_vehicle_settings_impl(
+    state: &AppState,
+    user_id: Uuid,
+    vid: Uuid,
+    body: UpdateBatteryConfigBody,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_role(&state.pool, user_id, vid, &["owner", "manager"]).await?;
     let capacity_wh = body.battery_capacity_kwh.map(|kwh| kwh * 1000.0);
+    let target_tire_pressure_psi = match body.target_tire_pressure_psi {
+        Some(value) if !value.is_finite() => {
+            return Err(AppError::Validation(
+                "target_tire_pressure_psi must be a finite number".into(),
+            ))
+        }
+        Some(value) if !(20.0..=80.0).contains(&value) => {
+            return Err(AppError::Validation(
+                "target_tire_pressure_psi must be between 20 and 80".into(),
+            ))
+        }
+        other => other,
+    };
     sqlx::query(
         "UPDATE riviamigo.vehicles
          SET battery_capacity_wh = COALESCE($2, battery_capacity_wh),
-             battery_config = COALESCE($3, battery_config)
+             battery_config = COALESCE($3, battery_config),
+             target_tire_pressure_psi = COALESCE($4, target_tire_pressure_psi)
          WHERE id = $1",
     )
     .bind(vid)
     .bind(capacity_wh)
     .bind(body.battery_config)
+    .bind(target_tire_pressure_psi)
     .execute(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1267,7 +1462,9 @@ async fn set_default_vehicle(
         .await?;
 
     tx.commit().await?;
-    Ok(Json(serde_json::json!({ "ok": true, "default_vehicle_id": vid })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "default_vehicle_id": vid }),
+    ))
 }
 
 async fn list_vehicle_members(
@@ -1306,15 +1503,16 @@ async fn add_vehicle_member(
         return Err(AppError::Validation("valid email required".into()));
     }
     if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
-        return Err(AppError::Validation("role must be owner, manager, or viewer".into()));
+        return Err(AppError::Validation(
+            "role must be owner, manager, or viewer".into(),
+        ));
     }
 
-    let target_user_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM riviamigo.users WHERE email = $1",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
+    let target_user_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM riviamigo.users WHERE email = $1")
+            .bind(&email)
+            .fetch_optional(&state.pool)
+            .await?;
 
     if let Some(target_user_id) = target_user_id {
         let result = sqlx::query(
@@ -1344,7 +1542,9 @@ async fn add_vehicle_member(
         .execute(&state.pool)
         .await?;
 
-        return Ok(Json(serde_json::json!({ "ok": true, "invite_created": false })));
+        return Ok(Json(
+            serde_json::json!({ "ok": true, "invite_created": false }),
+        ));
     }
 
     let token = format!("rmi_{}", Uuid::new_v4().simple());
@@ -1381,7 +1581,9 @@ async fn update_vehicle_member(
     require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
 
     if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
-        return Err(AppError::Validation("role must be owner, manager, or viewer".into()));
+        return Err(AppError::Validation(
+            "role must be owner, manager, or viewer".into(),
+        ));
     }
 
     let updated = sqlx::query(
@@ -1426,17 +1628,17 @@ async fn remove_vehicle_member(
         .fetch_one(&state.pool)
         .await?;
         if owner_count <= 1 {
-            return Err(AppError::Validation("vehicle must keep at least one owner".into()));
+            return Err(AppError::Validation(
+                "vehicle must keep at least one owner".into(),
+            ));
         }
     }
 
-    sqlx::query(
-        "DELETE FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND user_id = $2",
-    )
-    .bind(vid)
-    .bind(member_user_id)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("DELETE FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND user_id = $2")
+        .bind(vid)
+        .bind(member_user_id)
+        .execute(&state.pool)
+        .await?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -1449,7 +1651,9 @@ async fn create_vehicle_invite(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_role(&state.pool, auth.user_id, vid, &["owner"]).await?;
     if !matches!(body.role.as_str(), "owner" | "manager" | "viewer") {
-        return Err(AppError::Validation("role must be owner, manager, or viewer".into()));
+        return Err(AppError::Validation(
+            "role must be owner, manager, or viewer".into(),
+        ));
     }
     let email = body.email.trim().to_lowercase();
     if email.is_empty() || !email.contains('@') {
@@ -1563,10 +1767,16 @@ async fn accept_invite(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    if invite.get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at").is_some() {
+    if invite
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
+        .is_some()
+    {
         return Err(AppError::Validation("invite revoked".into()));
     }
-    if invite.get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at").is_some() {
+    if invite
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at")
+        .is_some()
+    {
         return Err(AppError::Validation("invite already accepted".into()));
     }
     let expires_at = invite.get::<chrono::DateTime<chrono::Utc>, _>("expires_at");
@@ -1615,7 +1825,9 @@ async fn accept_invite(
     .await?;
 
     tx.commit().await?;
-    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vehicle_id })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
+    ))
 }
 
 fn hash_invite_token(token: &str) -> Vec<u8> {
@@ -1630,7 +1842,7 @@ async fn list_vehicles(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let rows = sqlx::query_as::<_, VehicleListRow>(
         "SELECT v.id, v.rivian_vehicle_id, v.model, v.trim, v.vin, v.color, \
-                COALESCE(vus.display_name, v.name) AS name, v.battery_capacity_wh, \
+                COALESCE(vus.display_name, v.name) AS name, v.battery_capacity_wh, v.target_tire_pressure_psi, \
                 v.battery_config, v.created_at, v.interior_color, v.wheel_option, v.max_vehicle_power_kw, \
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
                 v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
@@ -1681,6 +1893,7 @@ async fn list_vehicles(
             "battery_cell_type":        r.battery_cell_type,
             "supported_features":       r.supported_features,
             "battery_capacity_kwh":     r.battery_capacity_wh.map(|w| w / 1000.0),
+            "target_tire_pressure_psi": r.target_tire_pressure_psi,
             "battery_config":           r.battery_config,
             "display_name":             r.name.as_deref().unwrap_or(&r.model),
             "membership_role":          r.membership_role,
@@ -1784,11 +1997,11 @@ async fn create_demo_vehicle(
     .await?;
 
     sqlx::query(demo_vehicle_latest_status_upsert_sql())
-    .bind(vehicle_id)
-    .bind(battery_capacity_wh)
-    .bind(range_mi)
-    .execute(&mut *tx)
-    .await?;
+        .bind(vehicle_id)
+        .bind(battery_capacity_wh)
+        .bind(range_mi)
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_runtime_state
@@ -1838,20 +2051,17 @@ async fn create_demo_vehicle(
         .await?;
     }
 
-    sqlx::query(
-        "INSERT INTO timeseries.telemetry
-          (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, speed_mph, power_state, charger_state, drive_mode, odometer_miles, is_online)
-         VALUES
-          (now() - interval '90 minutes', $1, 60, $2, $3 - 10, 85, 0, 'charging', 'Connected', 'all_purpose', 15000, TRUE),
-          (now() - interval '60 minutes', $1, 62, $2, $3 - 8, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE),
-          (now() - interval '30 minutes', $1, 64, $2, $3 - 6, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE)
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(vehicle_id)
-    .bind(battery_capacity_wh)
-    .bind(range_mi)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query(demo_vehicle_software_history_seed_sql())
+        .bind(vehicle_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(demo_vehicle_telemetry_seed_insert_sql())
+        .bind(vehicle_id)
+        .bind(battery_capacity_wh)
+        .bind(range_mi)
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query(
         "INSERT INTO riviamigo.trips
@@ -2048,28 +2258,29 @@ async fn vehicle_status(
         latest.tire_rl_valid,
         latest.tire_rr_valid,
     ];
-    let tire_pressure_status: Option<String> = if tire_validity.into_iter().flatten().any(|valid| !valid) {
-        Some("invalid_sensor".to_string())
-    } else {
-        tire_statuses
-            .into_iter()
-            .flatten()
-            .find(|status| {
-                !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown")
-            })
-            .or_else(|| {
-                [
-                    latest.tire_fl_status.as_deref(),
-                    latest.tire_fr_status.as_deref(),
-                    latest.tire_rl_status.as_deref(),
-                    latest.tire_rr_status.as_deref(),
-                ]
+    let tire_pressure_status: Option<String> =
+        if tire_validity.into_iter().flatten().any(|valid| !valid) {
+            Some("invalid_sensor".to_string())
+        } else {
+            tire_statuses
                 .into_iter()
                 .flatten()
-                .next()
-            })
-            .map(str::to_string)
-    };
+                .find(|status| {
+                    !status.eq_ignore_ascii_case("ok") && !status.eq_ignore_ascii_case("unknown")
+                })
+                .or_else(|| {
+                    [
+                        latest.tire_fl_status.as_deref(),
+                        latest.tire_fr_status.as_deref(),
+                        latest.tire_rl_status.as_deref(),
+                        latest.tire_rr_status.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .next()
+                })
+                .map(str::to_string)
+        };
     let lock_values = [
         latest.door_front_left_locked,
         latest.door_front_right_locked,
@@ -2247,7 +2458,9 @@ async fn vehicle_images(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    Ok(Json(fetch_vehicle_images_json(&state.pool, &state.config, vid).await?))
+    Ok(Json(
+        fetch_vehicle_images_json(&state.pool, &state.config, vid).await?,
+    ))
 }
 
 async fn cache_vehicle_images(
@@ -2362,7 +2575,10 @@ async fn ensure_vehicle_images_cached(
     }
 }
 
-fn build_cached_vehicle_image_metadata(source_url: &str, base: serde_json::Value) -> serde_json::Value {
+fn build_cached_vehicle_image_metadata(
+    source_url: &str,
+    base: serde_json::Value,
+) -> serde_json::Value {
     merge_metadata(
         base,
         serde_json::json!({
@@ -2418,7 +2634,11 @@ fn infer_extension(source_url: &str, content_type: Option<&str>) -> &'static str
 }
 
 fn guess_mime_type(path: &StdPath) -> &'static str {
-    match path.extension().and_then(|ext| ext.to_str()).unwrap_or_default() {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -2467,7 +2687,8 @@ async fn mirror_vehicle_image_assets(
     let mirrored = download_and_store_asset(client, config, vehicle_id, source_url).await?;
     let mut overlay_assets = Vec::with_capacity(overlays.len());
     for overlay in overlays {
-        let mirrored_overlay = download_and_store_asset(client, config, vehicle_id, &overlay.url).await?;
+        let mirrored_overlay =
+            download_and_store_asset(client, config, vehicle_id, &overlay.url).await?;
         overlay_assets.push(MirroredOverlayAsset {
             source_url: overlay.url.clone(),
             mirror_key: mirrored_overlay.mirror_key,
@@ -2573,7 +2794,10 @@ async fn mirror_vehicle_images(
 }
 
 fn metadata_has_local_mirror(config: &crate::config::Config, metadata: &serde_json::Value) -> bool {
-    let Some(relpath) = metadata.get("mirror_relpath").and_then(|value| value.as_str()) else {
+    let Some(relpath) = metadata
+        .get("mirror_relpath")
+        .and_then(|value| value.as_str())
+    else {
         return false;
     };
     metadata
@@ -2604,16 +2828,16 @@ fn resolved_overlays(
     metadata: &serde_json::Value,
 ) -> serde_json::Value {
     let mut overlays = overlay_entries_from_value(row_overlays);
-    let Some(mirrors) = metadata.get("overlay_mirrors").and_then(|value| value.as_array()) else {
+    let Some(mirrors) = metadata
+        .get("overlay_mirrors")
+        .and_then(|value| value.as_array())
+    else {
         return serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]));
     };
 
     for overlay in &mut overlays {
         if let Some(mirror) = mirrors.iter().find(|entry| {
-            entry
-                .get("source_url")
-                .and_then(|value| value.as_str())
-                == Some(overlay.url.as_str())
+            entry.get("source_url").and_then(|value| value.as_str()) == Some(overlay.url.as_str())
         }) {
             if let Some(key) = mirror.get("mirror_key").and_then(|value| value.as_str()) {
                 if metadata_has_local_mirror(config, mirror) {
@@ -2639,20 +2863,16 @@ async fn find_mirrored_asset(
     .await?;
 
     for metadata in metadatas {
-        if metadata
-            .get("mirror_key")
-            .and_then(|value| value.as_str())
-            == Some(image_key)
-        {
+        if metadata.get("mirror_key").and_then(|value| value.as_str()) == Some(image_key) {
             return Ok(Some(metadata));
         }
 
-        if let Some(mirrors) = metadata.get("overlay_mirrors").and_then(|value| value.as_array()) {
+        if let Some(mirrors) = metadata
+            .get("overlay_mirrors")
+            .and_then(|value| value.as_array())
+        {
             if let Some(found) = mirrors.iter().find(|mirror| {
-                mirror
-                    .get("mirror_key")
-                    .and_then(|value| value.as_str())
-                    == Some(image_key)
+                mirror.get("mirror_key").and_then(|value| value.as_str()) == Some(image_key)
             }) {
                 return Ok(Some(found.clone()));
             }
@@ -2687,7 +2907,8 @@ async fn fetch_vehicle_images_json(
         .iter()
         .map(|row| {
             let resolved_url = resolved_image_url(config, vehicle_id, &row.url, &row.metadata);
-            let resolved_overlays = resolved_overlays(config, vehicle_id, &row.overlays, &row.metadata);
+            let resolved_overlays =
+                resolved_overlays(config, vehicle_id, &row.overlays, &row.metadata);
             serde_json::json!({
                 "placement": row.placement,
                 "design": row.design,
@@ -2761,7 +2982,8 @@ async fn vehicle_image_cache_asset(
     let mut response = Response::new(Body::from(bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(mime_type).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        HeaderValue::from_str(mime_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -2777,7 +2999,9 @@ async fn admin_remirror_vehicle_images(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     ensure_vehicle_images_cached(&state.pool, &state.config, vehicle_id, &state.age_key).await;
-    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vehicle_id })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
+    ))
 }
 
 fn normalize_image_placement(value: &str) -> &'static str {
@@ -2800,7 +3024,8 @@ fn normalize_image_placement(value: &str) -> &'static str {
 
 fn is_charging_side_value(value: &str) -> bool {
     let normalized = value.to_lowercase();
-    normalized.contains("side") && (normalized.contains("charging") || normalized.contains("charge"))
+    normalized.contains("side")
+        && (normalized.contains("charging") || normalized.contains("charge"))
 }
 
 fn normalize_image_design(value: Option<&str>) -> &'static str {
@@ -3181,22 +3406,45 @@ mod tests {
         assert!(sql.contains("'chrgr_sts_connected_charging'"));
         assert!(sql.contains("time_to_end_of_charge_min"));
         assert!(sql.contains("charge_port_open"));
+        assert!(sql.contains("door_front_left_locked"));
+        assert!(sql.contains("tire_fl_psi"));
+        assert!(sql.contains("ota_current_version"));
+        assert!(sql.contains("twelve_volt_health"));
     }
 
     #[test]
     fn demo_vehicle_image_seeds_use_packaged_app_assets() {
         let r1t = super::demo_vehicle_image_seeds("R1T").expect("R1T fixture manifest should load");
         assert!(!r1t.is_empty());
-        assert!(r1t.iter().all(|seed| seed.url.starts_with("/vehicle-images/fixtures/")));
-        assert!(r1t.iter().all(|seed| !seed.url.contains("media.rivian.com")));
+        assert!(r1t
+            .iter()
+            .all(|seed| seed.url.starts_with("/vehicle-images/fixtures/")));
+        assert!(r1t
+            .iter()
+            .all(|seed| !seed.url.contains("media.rivian.com")));
         assert!(r1t.iter().any(|seed| seed.url.contains("/r1t/")));
+        assert!(r1t.iter().any(|seed| seed.placement == "front"));
         assert!(r1t.iter().any(|seed| seed.placement == "overhead"));
+        assert!(r1t.iter().any(|seed| seed.placement == "rear"));
+        assert!(r1t.iter().any(|seed| seed.placement == "side"));
         assert!(r1t.iter().any(|seed| seed.placement == "side-charging"));
     }
 
     #[test]
+    fn demo_vehicle_telemetry_seed_query_covers_health_inputs() {
+        let sql = super::demo_vehicle_telemetry_seed_insert_sql();
+        assert!(sql.contains("chrgr_sts_connected_charging"));
+        assert!(sql.contains("tire_fl_psi"));
+        assert!(sql.contains("closure_frunk_closed"));
+        assert!(sql.contains("ota_current_version"));
+        assert!(sql.contains("twelve_volt_health"));
+        assert!(sql.contains("is_online"));
+    }
+
+    #[test]
     fn missing_demo_fixture_manifest_returns_validation_error() {
-        let error = super::demo_vehicle_image_seeds("R2S").expect_err("R2S fixture should be absent until exported");
+        let error = super::demo_vehicle_image_seeds("R2S")
+            .expect_err("R2S fixture should be absent until exported");
         assert!(matches!(error, crate::errors::AppError::Validation(_)));
     }
 
@@ -3220,8 +3468,14 @@ mod tests {
             s3_endpoint: None,
             s3_access_key: None,
             s3_secret_key: None,
-            backup_artifact_dir: std::env::temp_dir().join("riviamigo-test-backups").to_string_lossy().into_owned(),
-            vehicle_image_cache_dir: std::env::temp_dir().join("riviamigo-test-missing-mirror").to_string_lossy().into_owned(),
+            backup_artifact_dir: std::env::temp_dir()
+                .join("riviamigo-test-backups")
+                .to_string_lossy()
+                .into_owned(),
+            vehicle_image_cache_dir: std::env::temp_dir()
+                .join("riviamigo-test-missing-mirror")
+                .to_string_lossy()
+                .into_owned(),
             backup_driver: "json".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,

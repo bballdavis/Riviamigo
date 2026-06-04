@@ -950,12 +950,18 @@ async fn auth_public_limit_uses_forwarded_ip_and_sets_api_source_header() {
             break;
         }
         assert!(
-            matches!(res.status, StatusCode::UNAUTHORIZED | StatusCode::TOO_MANY_REQUESTS),
+            matches!(
+                res.status,
+                StatusCode::UNAUTHORIZED | StatusCode::TOO_MANY_REQUESTS
+            ),
             "unexpected status on attempt {i}: {}",
             res.status
         );
     }
-    assert!(first_ip_limited, "expected first forwarded IP to be rate limited");
+    assert!(
+        first_ip_limited,
+        "expected first forwarded IP to be rate limited"
+    );
 
     let other_ip = app
         .request_with_forwarded_ip(

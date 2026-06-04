@@ -13,6 +13,7 @@ import {
   type UnitMode,
   type UnitSystem,
 } from '@riviamigo/ui/lib/utils';
+import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
   Button, Badge, ThemeToggle, Tooltip,
@@ -179,6 +180,7 @@ export function SettingsContent() {
   const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
   const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
   const [customKwh, setCustomKwh] = React.useState('');
+  const [editTargetTirePressure, setEditTargetTirePressure] = React.useState(String(DEFAULT_TARGET_TIRE_PRESSURE_PSI));
   const [editNameValue, setEditNameValue] = React.useState('');
   const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
@@ -283,9 +285,13 @@ export function SettingsContent() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['api-keys'] }),
   });
 
-  const updateBatteryConfig = useMutation({
-    mutationFn: ({ vehicleId, kwh, config }: { vehicleId: string; kwh: number; config: string }) =>
-      api.updateVehicleBatteryConfig(vehicleId, { battery_capacity_kwh: kwh, battery_config: config }),
+  const updateVehicleSettings = useMutation({
+    mutationFn: ({ vehicleId, kwh, config, targetTirePressurePsi }: { vehicleId: string; kwh: number; config: string; targetTirePressurePsi: number }) =>
+      api.updateVehicleSettings(vehicleId, {
+        battery_capacity_kwh: kwh,
+        battery_config: config,
+        target_tire_pressure_psi: targetTirePressurePsi,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['vehicles'] });
     },
@@ -334,8 +340,11 @@ export function SettingsContent() {
     onSuccess: (result) => {
       setActiveVehicleId(result.vehicle_id);
       setDemoPickerOpen(false);
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      queryClient.invalidateQueries({ queryKey: ['me'] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', result.vehicle_id] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'health', result.vehicle_id] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
+      void queryClient.invalidateQueries({ queryKey: ['me'] });
     },
   });
 
@@ -379,6 +388,7 @@ export function SettingsContent() {
     setEditingBatteryVehicleId(vehicleId);
     const vehicle = vehicles?.find((v) => v.id === vehicleId);
     setEditNameValue(vehicle?.display_name ?? '');
+    setEditTargetTirePressure(String(vehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI));
 
     if (currentKwh != null) {
       // Search all gens so a Gen 2 pack saved while gen was auto-detected as Gen 1 still resolves correctly
@@ -415,9 +425,11 @@ export function SettingsContent() {
     if (!preset) return;
     const kwh = preset.key === 'custom' ? parseFloat(customKwh) : preset.kwh!;
     if (!isFinite(kwh) || kwh <= 0) return;
+    const targetTirePressurePsi = parseFloat(editTargetTirePressure);
+    if (!isFinite(targetTirePressurePsi) || targetTirePressurePsi < 20 || targetTirePressurePsi > 80) return;
     const config = preset.key === 'custom' ? `Custom (${kwh} kWh)` : preset.label;
     const saves: Promise<unknown>[] = [
-      updateBatteryConfig.mutateAsync({ vehicleId, kwh, config }),
+      updateVehicleSettings.mutateAsync({ vehicleId, kwh, config, targetTirePressurePsi }),
     ];
     if (trimmedName && trimmedName !== vehicle?.display_name) {
       saves.push(updateVehicleName.mutateAsync({ vehicleId, name: trimmedName }));
@@ -749,8 +761,15 @@ export function SettingsContent() {
                                   <Button
                                     className="h-9 w-9 shrink-0 px-0"
                                     iconLeft={<Save className="h-5 w-5" />}
-                                    loading={updateBatteryConfig.isPending || updateVehicleName.isPending}
-                                    disabled={!editNameValue.trim() || (batteryPreset === 'custom' && (!customKwh || isNaN(parseFloat(customKwh))))}
+                                    loading={updateVehicleSettings.isPending || updateVehicleName.isPending}
+                                    disabled={
+                                      !editNameValue.trim()
+                                      || (batteryPreset === 'custom' && (!customKwh || isNaN(parseFloat(customKwh))))
+                                      || !editTargetTirePressure
+                                      || isNaN(parseFloat(editTargetTirePressure))
+                                      || parseFloat(editTargetTirePressure) < 20
+                                      || parseFloat(editTargetTirePressure) > 80
+                                    }
                                     onClick={() => { handleSaveVehicle(v.id).catch(() => {}); }}
                                     title="Save vehicle"
                                     aria-label="Save vehicle"
@@ -812,13 +831,24 @@ export function SettingsContent() {
                                       />
                                     </label>
                                   )}
+                                  <label className="grid gap-1">
+                                    <span className="text-xs text-fg-tertiary">Target Tire Pressure</span>
+                                    <input
+                                      type="number"
+                                      value={editTargetTirePressure}
+                                      onChange={(e) => setEditTargetTirePressure(e.target.value)}
+                                      placeholder="48"
+                                      min="20"
+                                      max="80"
+                                      step="1"
+                                      className="h-9 w-32 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                                    />
+                                  </label>
                                 </div>
-                                {selectedPreset && selectedPreset.key !== 'custom' && (
-                                  <p className="text-xs text-fg-tertiary">
-                                    This value is used as the baseline for battery health % and degradation charts.
-                                    Defaults can be overridden if your vehicle came with a different pack.
-                                  </p>
-                                )}
+                                <p className="text-xs text-fg-tertiary">
+                                  This value is used as the baseline for battery health % and degradation charts.
+                                  Defaults can be overridden if your vehicle came with a different pack. Target tire pressure is the recommended cold PSI; confirm it against the driver-door placard.
+                                </p>
                               </div>
                             </div>
                           )}

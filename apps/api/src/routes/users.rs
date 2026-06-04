@@ -21,9 +21,15 @@ pub fn router() -> Router<AppState> {
         .route("/admin/users", get(list_users).post(create_user))
         .route("/admin/users/:id", patch(update_user).delete(delete_user))
         .route("/admin/users/:id/detail", get(get_user_detail))
-        .route("/admin/users/:id/vehicles", get(list_user_vehicle_memberships))
+        .route(
+            "/admin/users/:id/vehicles",
+            get(list_user_vehicle_memberships),
+        )
         .route("/admin/users/:id/invites", get(list_user_invites))
-        .route("/admin/users/:id/invites/:invite_id/revoke", post(revoke_user_invite))
+        .route(
+            "/admin/users/:id/invites/:invite_id/revoke",
+            post(revoke_user_invite),
+        )
         .route(
             "/admin/users/:id/vehicles/:vehicle_id",
             post(grant_user_vehicle_membership)
@@ -138,10 +144,12 @@ async fn create_user(
         other => AppError::Database(other),
     })?;
 
-    let _ = sqlx::query("INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING")
-        .bind(user_id)
-        .execute(&state.pool)
-        .await?;
+    let _ = sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    )
+    .bind(user_id)
+    .execute(&state.pool)
+    .await?;
 
     Ok(Json(serde_json::json!({ "id": user_id })))
 }
@@ -163,8 +171,13 @@ async fn update_user(
         if !can_manage_user(actor_role, new_role) {
             return Err(AppError::Forbidden);
         }
-        if target_user_id == auth.user_id && target_role == UserRole::SuperUser && new_role != UserRole::SuperUser {
-            return Err(AppError::Validation("cannot demote yourself from super_user".into()));
+        if target_user_id == auth.user_id
+            && target_role == UserRole::SuperUser
+            && new_role != UserRole::SuperUser
+        {
+            return Err(AppError::Validation(
+                "cannot demote yourself from super_user".into(),
+            ));
         }
     }
 
@@ -175,7 +188,9 @@ async fn update_user(
         .fetch_one(&state.pool)
         .await?;
         if super_user_count <= 1 {
-            return Err(AppError::Validation("cannot disable the last super_user".into()));
+            return Err(AppError::Validation(
+                "cannot disable the last super_user".into(),
+            ));
         }
     }
 
@@ -222,11 +237,15 @@ async fn delete_user(
     require_super_user(&state.pool, auth.user_id).await?;
     let target_role = get_user_role(&state.pool, target_user_id).await?;
     if target_role == UserRole::SuperUser {
-        let super_user_count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM riviamigo.users WHERE role = 'super_user'")
-            .fetch_one(&state.pool)
-            .await?;
+        let super_user_count: i64 = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM riviamigo.users WHERE role = 'super_user'",
+        )
+        .fetch_one(&state.pool)
+        .await?;
         if super_user_count <= 1 {
-            return Err(AppError::Validation("cannot delete the last super_user".into()));
+            return Err(AppError::Validation(
+                "cannot delete the last super_user".into(),
+            ));
         }
     }
 
@@ -294,12 +313,13 @@ async fn list_user_invites(
     Path(target_user_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    let email = sqlx::query_scalar::<_, Option<String>>("SELECT email FROM riviamigo.users WHERE id = $1")
-        .bind(target_user_id)
-        .fetch_optional(&state.pool)
-        .await?
-        .flatten()
-        .ok_or(AppError::NotFound)?;
+    let email =
+        sqlx::query_scalar::<_, Option<String>>("SELECT email FROM riviamigo.users WHERE id = $1")
+            .bind(target_user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten()
+            .ok_or(AppError::NotFound)?;
     let invites = list_user_invites_payload(&state.pool, &email).await?;
     Ok(Json(serde_json::json!({ "invites": invites })))
 }
@@ -310,12 +330,13 @@ async fn revoke_user_invite(
     Path((target_user_id, invite_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    let email = sqlx::query_scalar::<_, Option<String>>("SELECT email FROM riviamigo.users WHERE id = $1")
-        .bind(target_user_id)
-        .fetch_optional(&state.pool)
-        .await?
-        .flatten()
-        .ok_or(AppError::NotFound)?;
+    let email =
+        sqlx::query_scalar::<_, Option<String>>("SELECT email FROM riviamigo.users WHERE id = $1")
+            .bind(target_user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten()
+            .ok_or(AppError::NotFound)?;
 
     sqlx::query(
         "UPDATE riviamigo.vehicle_invites
@@ -427,7 +448,9 @@ async fn remove_user_vehicle_membership(
         .fetch_one(&state.pool)
         .await?;
         if owner_count <= 1 {
-            return Err(AppError::Validation("vehicle must keep at least one owner".into()));
+            return Err(AppError::Validation(
+                "vehicle must keep at least one owner".into(),
+            ));
         }
     }
 

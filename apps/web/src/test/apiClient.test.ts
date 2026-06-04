@@ -169,6 +169,24 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[3]?.[0]).toContain('/v1/admin/backups/artifacts/artifact-1/download');
   });
 
+  it('writes shared vehicle settings through the consolidated vehicle settings route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await api.updateVehicleSettings('vehicle-1', {
+      battery_capacity_kwh: 135,
+      battery_config: 'R1T / R1S Large (Gen 1)',
+      target_tire_pressure_psi: 48,
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/vehicles/vehicle-1/settings');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' });
+  });
+
   it('preserves login 401 responses instead of rewriting them as auth-expired', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({

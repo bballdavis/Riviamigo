@@ -44,7 +44,10 @@ impl KeyExtractor for TrustedProxyIpKeyExtractor {
     type Key = String;
 
     fn extract<T>(&self, req: &Request<T>) -> Result<Self::Key, GovernorError> {
-        Ok(format!("ip:{}", trusted_client_ip(req).ok_or(GovernorError::UnableToExtractKey)?))
+        Ok(format!(
+            "ip:{}",
+            trusted_client_ip(req).ok_or(GovernorError::UnableToExtractKey)?
+        ))
     }
 }
 
@@ -56,7 +59,10 @@ impl KeyExtractor for AuthIdentityKeyExtractor {
             return Ok(identity);
         }
 
-        Ok(format!("ip:{}", trusted_client_ip(req).ok_or(GovernorError::UnableToExtractKey)?))
+        Ok(format!(
+            "ip:{}",
+            trusted_client_ip(req).ok_or(GovernorError::UnableToExtractKey)?
+        ))
     }
 }
 
