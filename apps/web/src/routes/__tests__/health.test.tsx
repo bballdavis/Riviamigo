@@ -123,6 +123,22 @@ describe('/health page cleanup', () => {
     expect(screen.queryByText(/Update .* available/)).not.toBeInTheDocument();
   });
 
+  it('falls back to plain side art before front hero art when no three-quarter image exists', () => {
+    mockUseQuery.mockReturnValueOnce({
+      data: {
+        all: [
+          { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png', metadata: { app_usage: ['health-hero-fallback'] } },
+          { placement: 'front', design: 'light', size: null, resolution: null, url: 'https://example.com/front.png', metadata: { app_usage: ['health-hero-fallback'] } },
+        ],
+        front: { light: 'https://example.com/front.png', dark: null },
+        side: { light: 'https://example.com/side.png', dark: null },
+      },
+    });
+    render(<HealthContent />);
+    const image = screen.getByAltText('Vehicle three-quarter view');
+    expect(image).toHaveAttribute('src', 'https://example.com/side.png');
+  });
+
   it('shows update banner when a real update version exists', () => {
     mockUseVehicleHealth.mockReturnValueOnce({
       data: {

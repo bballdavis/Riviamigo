@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
   forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
+  model: 'R1S' as 'R1S' | 'R1T' | 'unknown',
   images: null as null | {
     all: Array<{
       placement: string;
@@ -43,7 +44,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         last_updated: '2026-05-12T12:00:00Z',
       },
     }),
-    useVehicles: () => ({ data: [{ id: 'vehicle-1', images: chargingMocks.images }] }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images }] }),
     useMetricCatalog: () => ({ data: [] }),
     useMetricValue: () => ({ data: null }),
     useMetricSeries: () => ({ data: [] }),
@@ -174,6 +175,7 @@ const vehicleImageUrlOnlyChargingFixtures = {
 describe('charging connection custom widget', () => {
   beforeEach(() => {
     chargingMocks.forcePluggedState = 'Disconnected';
+    chargingMocks.model = 'R1S';
     chargingMocks.images = null;
   });
 
@@ -288,13 +290,14 @@ describe('charging connection custom widget', () => {
     expect(screen.getByText('1h 35m')).toBeInTheDocument();
     expect(screen.getByText('Charging')).toBeInTheDocument();
     expect(screen.getByText('92.5%')).toBeInTheDocument();
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-crop-family', 'R1S');
     expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
     expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
       '/rivian/side-charging-light.webp',
       '/rivian/side-charging-dark.webp',
     ]);
     expect(screen.getAllByTestId('charging-side-image')[0]).toHaveStyle({
-      transform: 'translateX(-12%) scale(1.12)',
+      transform: 'translateX(-30%) scale(1.78)',
       transformOrigin: 'left top',
     });
 
@@ -335,6 +338,25 @@ describe('charging connection custom widget', () => {
       '/rivian/r1s_side-charging_dark_large.webp',
     ]);
     expect(images.map((image) => image.getAttribute('data-image-mode'))).toEqual(['charging', 'charging']);
+  });
+
+  it('uses the stronger truck crop for R1T charging side art', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.model = 'R1T';
+    chargingMocks.images = vehicleImageFixtures;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-crop-family', 'R1T');
+    expect(screen.getAllByTestId('charging-side-image')[0]).toHaveStyle({
+      transform: 'translate(-34%, 2%) scale(1.92)',
+      transformOrigin: 'left top',
+    });
   });
 
   it('does not expose a force-show switch in the custom widget editor', () => {

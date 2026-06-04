@@ -1,6 +1,6 @@
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 
-export type DoorKey = 'front_left' | 'front_right' | 'rear_left' | 'rear_right' | 'frunk' | 'rear_gate';
+export type DoorKey = 'front_left' | 'front_right' | 'rear_left' | 'rear_right' | 'frunk' | 'rear_gate' | 'tonneau' | 'side_bin_left' | 'side_bin_right';
 
 export function getOpenDoorStates(status: VehicleStatus | null | undefined): DoorKey[] {
   const states: Array<{ key: DoorKey; open: boolean }> = [
@@ -10,6 +10,9 @@ export function getOpenDoorStates(status: VehicleStatus | null | undefined): Doo
     { key: 'rear_right', open: status?.door_rear_right_closed === false },
     { key: 'frunk', open: status?.closure_frunk_closed === false },
     { key: 'rear_gate', open: status?.closure_liftgate_closed === false || status?.closure_tailgate_closed === false },
+    { key: 'tonneau', open: status?.tonneau_closed === false },
+    { key: 'side_bin_left', open: status?.side_bin_left_closed === false },
+    { key: 'side_bin_right', open: status?.side_bin_right_closed === false },
   ];
   return states.filter((state) => state.open).map((state) => state.key);
 }
@@ -98,6 +101,12 @@ function doorImageTokenSets(door: DoorKey): string[][] {
       return [['frunk', 'open']];
     case 'rear_gate':
       return [['tailgate', 'open'], ['liftgate', 'open'], ['hatch', 'open']];
+    case 'tonneau':
+      return [['tonneau', 'open']];
+    case 'side_bin_left':
+      return [['side', 'bin', 'left', 'open'], ['side_bin_left_open']];
+    case 'side_bin_right':
+      return [['side', 'bin', 'right', 'open'], ['side_bin_right_open']];
     default:
       return [['open']];
   }

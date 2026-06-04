@@ -9,6 +9,35 @@ import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { findFirstOverheadImage, getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 
+type AnchorSet = {
+  tire: { rl: string; fl: string; rr: string; fr: string };
+  doorLocks: { rl: string; fl: string; rr: string; fr: string };
+  frunkLock: string;
+  rearGateLock: string;
+  tonneauLock?: string;
+  sideBinLeftLock?: string;
+  sideBinRightLock?: string;
+};
+
+const SHARED_OVERVIEW_ANCHORS: AnchorSet = {
+  tire: { rl: 'left-[27%] top-[0%]', fl: 'left-[82%] top-[0%]', rr: 'left-[27%] top-[102%]', fr: 'left-[82%] top-[102%]' },
+  doorLocks: { rl: 'left-[43%] top-[-0%]', fl: 'left-[60%] top-[-0%]', rr: 'left-[43%] top-[102%]', fr: 'left-[60%] top-[102%]' },
+  rearGateLock: 'left-[4%] top-1/2',
+  frunkLock: 'left-[102%] top-1/2',
+};
+
+const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
+  default: SHARED_OVERVIEW_ANCHORS,
+  R1T: {
+    ...SHARED_OVERVIEW_ANCHORS,
+    tonneauLock: 'left-[14%] top-[50%]',
+    sideBinLeftLock: 'left-[16%] top-[32%]',
+    sideBinRightLock: 'left-[16%] top-[68%]',
+  },
+  R1S: SHARED_OVERVIEW_ANCHORS,
+  R2S: SHARED_OVERVIEW_ANCHORS,
+};
+
 function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
@@ -16,18 +45,21 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const { data: vehicles } = useVehicles();
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
 
-  return <CurrentVehicleStatePanel status={status} images={activeVehicle?.images} vehicleName={activeVehicle?.display_name} />;
+  return <CurrentVehicleStatePanel status={status} images={activeVehicle?.images} vehicleName={activeVehicle?.display_name} vehicleModel={activeVehicle?.model} />;
 }
 
 function CurrentVehicleStatePanel({
   status,
   images,
   vehicleName,
+  vehicleModel,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
   vehicleName?: string | undefined;
+  vehicleModel?: string | undefined;
 }) {
+  const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? OVERVIEW_ANCHORS.default;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
@@ -112,16 +144,25 @@ function CurrentVehicleStatePanel({
               <VehicleArtFrame source={baseOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
                 <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} />
                 <VehicleOverheadLayers base={baseOverheadDark ?? baseOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" />
-                <VehicleLabel className="left-[27%] top-[0%]" value={tires.rl} />
-                <VehicleLabel className="left-[82%] top-[0%]" value={tires.fl} />
-                <VehicleLabel className="left-[27%] top-[102%]" value={tires.rr} />
-                <VehicleLabel className="left-[82%] top-[102%]" value={tires.fr} />
-                <LockLabel className="left-[43%] top-[-0%]" locked={status?.door_rear_left_locked} />
-                <LockLabel className="left-[60%] top-[-0%]" locked={status?.door_front_left_locked} />
-                <LockLabel className="left-[43%] top-[102%]" locked={status?.door_rear_right_locked} />
-                <LockLabel className="left-[60%] top-[102%]" locked={status?.door_front_right_locked} />
-                <LockLabel className="left-[4%] top-1/2" locked={status?.closure_liftgate_locked ?? status?.closure_tailgate_locked} title="Rear gate lock" />
-                <LockLabel className="left-[102%] top-1/2" locked={status?.closure_frunk_locked} title="Frunk lock" />
+                <VehicleLabel className={anchors.tire.rl} value={tires.rl} />
+                <VehicleLabel className={anchors.tire.fl} value={tires.fl} />
+                <VehicleLabel className={anchors.tire.rr} value={tires.rr} />
+                <VehicleLabel className={anchors.tire.fr} value={tires.fr} />
+                <LockLabel className={anchors.doorLocks.rl} locked={status?.door_rear_left_locked} title="Rear left door lock" />
+                <LockLabel className={anchors.doorLocks.fl} locked={status?.door_front_left_locked} title="Front left door lock" />
+                <LockLabel className={anchors.doorLocks.rr} locked={status?.door_rear_right_locked} title="Rear right door lock" />
+                <LockLabel className={anchors.doorLocks.fr} locked={status?.door_front_right_locked} title="Front right door lock" />
+                <LockLabel className={anchors.rearGateLock} locked={status?.closure_liftgate_locked ?? status?.closure_tailgate_locked} title="Rear gate lock" />
+                <LockLabel className={anchors.frunkLock} locked={status?.closure_frunk_locked} title="Frunk lock" />
+                {vehicleModel === 'R1T' && anchors.tonneauLock && (
+                  <LockLabel className={anchors.tonneauLock} locked={status?.tonneau_locked} title="Tonneau lock" />
+                )}
+                {vehicleModel === 'R1T' && anchors.sideBinLeftLock && (
+                  <LockLabel className={anchors.sideBinLeftLock} locked={status?.side_bin_left_locked} title="Left side bin lock" />
+                )}
+                {vehicleModel === 'R1T' && anchors.sideBinRightLock && (
+                  <LockLabel className={anchors.sideBinRightLock} locked={status?.side_bin_right_locked} title="Right side bin lock" />
+                )}
               </VehicleArtFrame>
             ) : (
               <div className="flex h-28 w-64 items-center justify-center rounded-[2rem] border border-dashed border-border bg-bg-elevated text-fg-tertiary">
@@ -176,7 +217,7 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
   return (
     <span
       title={title}
-      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${unlocked ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-border bg-bg-elevated/90 text-fg' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
+      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${unlocked ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
     >
       <Icon className="h-3.5 w-3.5" />
     </span>

@@ -499,6 +499,10 @@ mod tests {
                 .join("riviamigo-dashboard-test")
                 .to_string_lossy()
                 .into_owned(),
+            vehicle_image_cache_dir: std::env::temp_dir()
+                .join("riviamigo-dashboard-test-vehicle-images")
+                .to_string_lossy()
+                .into_owned(),
             backup_driver: "json".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,

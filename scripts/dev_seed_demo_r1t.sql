@@ -1,4 +1,4 @@
--- Local/dev helper: create or refresh an admin-scoped demo vehicle with compact sample data.
+-- Seed a demo vehicle for local QA using packaged app assets.
 -- Usage: psql "$DATABASE_URL" -v user_id='<uuid>' -v model='R1T' -f scripts/dev_seed_demo_r1t.sql
 
 \set ON_ERROR_STOP on
@@ -60,18 +60,10 @@ BEGIN
   SET display_name = EXCLUDED.display_name,
       updated_at = now();
 
-  INSERT INTO riviamigo.vehicle_images (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
-  VALUES
-    (v_vehicle_id, 'side', 'light', 'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{"demo":true}'::jsonb),
-    (v_vehicle_id, 'side', 'dark',  'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{"demo":true}'::jsonb),
-    (v_vehicle_id, 'overhead', 'light', 'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{"demo":true}'::jsonb),
-    (v_vehicle_id, 'overhead', 'dark',  'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{"demo":true}'::jsonb)
-  ON CONFLICT (vehicle_id, url) DO NOTHING;
-
   INSERT INTO riviamigo.vehicle_latest_status
-    (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, is_online, updated_at)
+    (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, charger_status, time_to_end_of_charge_min, charge_port_open, updated_at)
   VALUES
-    (v_vehicle_id, now(), 78, v_battery_capacity_wh, v_range_mi, 85, 'ready', 'Disconnected', TRUE, now())
+    (v_vehicle_id, now(), 64, v_battery_capacity_wh, v_range_mi, 85, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95, TRUE, now())
   ON CONFLICT (vehicle_id) DO UPDATE
   SET ts = EXCLUDED.ts,
       battery_level = EXCLUDED.battery_level,
@@ -80,15 +72,79 @@ BEGIN
       battery_limit = EXCLUDED.battery_limit,
       power_state = EXCLUDED.power_state,
       charger_state = EXCLUDED.charger_state,
-      is_online = EXCLUDED.is_online,
+      charger_status = EXCLUDED.charger_status,
+      time_to_end_of_charge_min = EXCLUDED.time_to_end_of_charge_min,
+      charge_port_open = EXCLUDED.charge_port_open,
       updated_at = now();
+
+  INSERT INTO riviamigo.vehicle_runtime_state
+    (vehicle_id, is_online, last_event_at, worker_health, worker_health_msg, updated_at)
+  VALUES
+    (v_vehicle_id, TRUE, now(), 'connected', 'Demo vehicle seeded', now())
+  ON CONFLICT (vehicle_id) DO UPDATE
+  SET is_online = EXCLUDED.is_online,
+      last_event_at = EXCLUDED.last_event_at,
+      worker_health = EXCLUDED.worker_health,
+      worker_health_msg = EXCLUDED.worker_health_msg,
+      updated_at = now();
+
+  DELETE FROM riviamigo.vehicle_images
+  WHERE vehicle_id = v_vehicle_id;
+
+  IF v_model = 'R1T' THEN
+    INSERT INTO riviamigo.vehicle_images
+      (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
+    VALUES
+      (v_vehicle_id, 'front', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'front', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'overhead', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'overhead', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'rear', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'rear', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side-charging', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side-charging', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1t/r1t_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true))
+    ON CONFLICT (vehicle_id, url) DO UPDATE
+    SET placement = EXCLUDED.placement,
+        design = EXCLUDED.design,
+        size = EXCLUDED.size,
+        resolution = EXCLUDED.resolution,
+        overlays = EXCLUDED.overlays,
+        metadata = EXCLUDED.metadata,
+        updated_at = now();
+  ELSIF v_model = 'R1S' THEN
+    INSERT INTO riviamigo.vehicle_images
+      (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
+    VALUES
+      (v_vehicle_id, 'front', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'front', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'overhead', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'overhead', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'rear', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'rear', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side-charging', 'dark', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_dark_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true)),
+      (v_vehicle_id, 'side-charging', 'light', 'large', 'hdpi', '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_light_large_hdpi.webp', '[]'::jsonb, jsonb_build_object('source', 'rivian-mobile-static', 'model', v_model, 'packaged', true))
+    ON CONFLICT (vehicle_id, url) DO UPDATE
+    SET placement = EXCLUDED.placement,
+        design = EXCLUDED.design,
+        size = EXCLUDED.size,
+        resolution = EXCLUDED.resolution,
+        overlays = EXCLUDED.overlays,
+        metadata = EXCLUDED.metadata,
+        updated_at = now();
+  ELSE
+    RAISE EXCEPTION 'R2S fixture pack has not been exported yet. Use the fixture export script once an exact cached R2S image set is available.';
+  END IF;
 
   INSERT INTO timeseries.telemetry
     (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, speed_mph, power_state, charger_state, drive_mode, odometer_miles, is_online)
   VALUES
-    (now() - interval '90 minutes', v_vehicle_id, 80, v_battery_capacity_wh, v_range_mi + 4, 85, 0, 'ready', 'Disconnected', 'all_purpose', 15000, TRUE),
-    (now() - interval '60 minutes', v_vehicle_id, 79, v_battery_capacity_wh, v_range_mi + 2, 85, 18, 'drive', 'Disconnected', 'all_purpose', 15006, TRUE),
-    (now() - interval '30 minutes', v_vehicle_id, 78, v_battery_capacity_wh, v_range_mi, 85, 0, 'ready', 'Disconnected', 'all_purpose', 15010, TRUE)
+    (now() - interval '90 minutes', v_vehicle_id, 60, v_battery_capacity_wh, v_range_mi - 10, 85, 0, 'charging', 'Connected', 'all_purpose', 15000, TRUE),
+    (now() - interval '60 minutes', v_vehicle_id, 62, v_battery_capacity_wh, v_range_mi - 8, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE),
+    (now() - interval '30 minutes', v_vehicle_id, 64, v_battery_capacity_wh, v_range_mi - 6, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE)
   ON CONFLICT DO NOTHING;
 
   INSERT INTO riviamigo.trips
@@ -104,3 +160,4 @@ BEGIN
   ON CONFLICT DO NOTHING;
 END
 $$;
+

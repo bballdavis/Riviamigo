@@ -8,6 +8,7 @@ use http::{
     },
     HeaderValue, StatusCode,
 };
+use tower_governor::governor::GovernorConfigBuilder;
 use tower_governor::GovernorLayer;
 use tower_http::{
     compression::CompressionLayer,
@@ -56,6 +57,8 @@ async fn log_server_errors(
 ) -> axum::response::Response {
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
+    let limiter_class = classify_rate_limit_class(req.method(), req.uri().path()).as_header_value();
+    let key_type = rate_limit::infer_key_type(req.headers(), &decoding_key);
     let mut response = next.run(req).await;
 
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -74,13 +77,6 @@ async fn log_server_errors(
                 .headers_mut()
                 .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
         }
-        let limiter_class = response
-            .headers()
-            .get("x-riviamigo-ratelimit-class")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("unknown");
-        let key_type = rate_limit::infer_key_type(req.headers(), &decoding_key);
-
         tracing::warn!(
             %method,
             %path,
@@ -123,33 +119,52 @@ pub fn build_router(state: AppState) -> Router {
         ]))
         .allow_credentials(true);
 
-    let auth_ip_config = Arc::new(rate_limit::build_ip_limiter(RateLimitClass::AuthPublic, 6, 10));
-    let auth_read_identity_config = Arc::new(rate_limit::build_identity_limiter(
-        RateLimitClass::AuthRead,
-        80,
-        160,
-        state.jwt_keys.decoding.clone(),
-        Some(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS]),
-    ));
-    let auth_write_identity_config = Arc::new(rate_limit::build_identity_limiter(
-        RateLimitClass::AuthWrite,
-        40,
-        80,
-        state.jwt_keys.decoding.clone(),
-        Some(vec![
-            http::Method::POST,
-            http::Method::PUT,
-            http::Method::PATCH,
-            http::Method::DELETE,
-        ]),
-    ));
-    let heavy_read_identity_config = Arc::new(rate_limit::build_identity_limiter(
-        RateLimitClass::HeavyRead,
-        25,
-        50,
-        state.jwt_keys.decoding.clone(),
-        Some(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS]),
-    ));
+    let auth_ip_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(rate_limit::TrustedProxyIpKeyExtractor)
+            .per_second(6)
+            .burst_size(10)
+            .finish()
+            .unwrap(),
+    );
+    let auth_read_identity_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
+                state.jwt_keys.decoding.clone(),
+            ))
+            .per_second(80)
+            .burst_size(160)
+            .methods(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS])
+            .finish()
+            .unwrap(),
+    );
+    let auth_write_identity_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
+                state.jwt_keys.decoding.clone(),
+            ))
+            .per_second(40)
+            .burst_size(80)
+            .methods(vec![
+                http::Method::POST,
+                http::Method::PUT,
+                http::Method::PATCH,
+                http::Method::DELETE,
+            ])
+            .finish()
+            .unwrap(),
+    );
+    let heavy_read_identity_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
+                state.jwt_keys.decoding.clone(),
+            ))
+            .per_second(25)
+            .burst_size(50)
+            .methods(vec![http::Method::GET, http::Method::HEAD, http::Method::OPTIONS])
+            .finish()
+            .unwrap(),
+    );
 
     // Inject decoding key into request extensions so AuthUser extractor can find it.
     let decoding_key = state.jwt_keys.decoding.clone();
@@ -255,4 +270,22 @@ pub fn build_router(state: AppState) -> Router {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClass {
+    if path.starts_with("/v1/auth/login")
+        || path.starts_with("/v1/auth/register")
+        || path.starts_with("/v1/auth/refresh")
+    {
+        return RateLimitClass::AuthPublic;
+    }
+
+    if path == "/v1/vehicles/live" || path.contains("/live-session") {
+        return RateLimitClass::HeavyRead;
+    }
+
+    match *method {
+        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS => RateLimitClass::AuthRead,
+        _ => RateLimitClass::AuthWrite,
+    }
 }
