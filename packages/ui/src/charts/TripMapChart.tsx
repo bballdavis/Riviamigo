@@ -21,6 +21,7 @@ export interface TripMapChartProps {
   height?: number;
   className?: string;
   mapStyle?: MapStyleMode;
+  mapLoader?: typeof loadMapLibre;
 }
 
 interface MapSourceApi {
@@ -70,6 +71,12 @@ function buildMapLibreStyle(mode: MapStyleMode) {
   };
 }
 
+export async function loadMapLibre() {
+  const maplibregl = await import('maplibre-gl');
+  await import('maplibre-gl/dist/maplibre-gl.css');
+  return maplibregl.default;
+}
+
 /**
  * Lazy-loads MapLibre GL to avoid bundling it in SSR/test contexts.
  * The map renders one or more trip polylines.
@@ -83,6 +90,7 @@ export function TripMapChart({
   height = 320,
   className,
   mapStyle = 'dark',
+  mapLoader = loadMapLibre,
 }: TripMapChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MapApi | null>(null);
@@ -90,19 +98,37 @@ export function TripMapChart({
   const syncedRouteIdsRef = React.useRef<string[]>([]);
   const lastRouteSignatureRef = React.useRef<string>('');
   const onRouteClickRef = React.useRef(onRouteClick);
+  const latestRoutesRef = React.useRef<TripMapRoute[]>([]);
+  const latestSelectedRouteIdsRef = React.useRef<string[]>([]);
+  const latestActivePointRef = React.useRef<LatLng | null | undefined>(activePoint);
+  const latestVisibleRouteSignatureRef = React.useRef<string>('');
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
     [routes, track],
   );
-  const routeSignature = React.useMemo(
-    () => routeList.map((route) => `${route.id}:${route.track.length}:${serializePoint(route.track[0])}:${serializePoint(route.track.at(-1))}`).join('|'),
-    [routeList],
+  const selectedRouteIdSet = React.useMemo(() => new Set(selectedRouteIds), [selectedRouteIds]);
+  const visibleRoutes = React.useMemo(
+    () => (selectedRouteIds.length > 0
+      ? routeList.filter((route) => selectedRouteIdSet.has(route.id))
+      : routeList),
+    [routeList, selectedRouteIdSet, selectedRouteIds.length],
+  );
+  const visibleRouteSignature = React.useMemo(
+    () => visibleRoutes.map((route) => `${route.id}:${route.track.length}:${serializePoint(route.track[0])}:${serializePoint(route.track.at(-1))}`).join('|'),
+    [visibleRoutes],
   );
 
   React.useEffect(() => {
     onRouteClickRef.current = onRouteClick;
   }, [onRouteClick]);
+
+  React.useEffect(() => {
+    latestRoutesRef.current = visibleRoutes;
+    latestSelectedRouteIdsRef.current = selectedRouteIds;
+    latestActivePointRef.current = activePoint;
+    latestVisibleRouteSignatureRef.current = visibleRouteSignature;
+  }, [activePoint, selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
   React.useEffect(() => {
     const element = containerRef.current;
@@ -127,15 +153,14 @@ export function TripMapChart({
     let cancelled = false;
 
     (async () => {
-      const maplibregl = await import('maplibre-gl');
-      await import('maplibre-gl/dist/maplibre-gl.css');
+      const maplibregl = await mapLoader();
 
       if (cancelled || !containerRef.current) return;
 
       const firstPoint = routeList[0]?.track[0];
       if (!firstPoint) return;
 
-      const map = new maplibregl.default.Map({
+      const map = new maplibregl.Map({
         container: containerRef.current!,
         style: buildMapLibreStyle(mapStyle),
         center: [firstPoint.lng, firstPoint.lat],
@@ -151,8 +176,16 @@ export function TripMapChart({
         if (!mapRef.current) return;
 
         isLoadedRef.current = true;
-        syncRoutes(mapRef.current, routeList, selectedRouteIds, onRouteClickRef);
-        syncActivePoint(mapRef.current, activePoint);
+        lastRouteSignatureRef.current = '';
+        syncedRouteIdsRef.current = [];
+        syncRoutes(
+          mapRef.current,
+          latestRoutesRef.current,
+          latestSelectedRouteIdsRef.current,
+          onRouteClickRef,
+          latestVisibleRouteSignatureRef.current,
+        );
+        syncActivePoint(mapRef.current, latestActivePointRef.current);
         requestAnimationFrame(() => {
           mapRef.current?.resize();
         });
@@ -172,7 +205,7 @@ export function TripMapChart({
     // Only run when the first routes arrive — NOT on mapStyle change so that
     // toggling dark/light doesn't destroy the map instance.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeList.length === 0]);
+  }, [mapLoader, routeList.length === 0]);
 
   // ── Style swap — update tiles in place without destroying the map ─────────
   // setStyle() clears all sources/layers, so we re-sync routes once the new
@@ -182,19 +215,19 @@ export function TripMapChart({
     if (!isLoadedRef.current || !mapRef.current) return;
 
     const map = mapRef.current;
-    const snapshot = {
-      routes: routeList,
-      selectedIds: selectedRouteIds,
-      clickRef: onRouteClickRef,
-      activePoint,
-    };
 
     function onStyleLoad() {
       isLoadedRef.current = true;
       lastRouteSignatureRef.current = '';
       syncedRouteIdsRef.current = [];
-      syncRoutes(map, snapshot.routes, snapshot.selectedIds, snapshot.clickRef);
-      syncActivePoint(map, snapshot.activePoint);
+      syncRoutes(
+        map,
+        latestRoutesRef.current,
+        latestSelectedRouteIdsRef.current,
+        onRouteClickRef,
+        latestVisibleRouteSignatureRef.current,
+      );
+      syncActivePoint(map, latestActivePointRef.current);
     }
 
     map.setStyle(buildMapLibreStyle(mapStyle));
@@ -203,14 +236,14 @@ export function TripMapChart({
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [mapStyle]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapStyle]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current || routeList.length === 0) return;
 
-    syncRoutes(mapRef.current, routeList, selectedRouteIds, onRouteClickRef);
-  }, [routeList, routeSignature, selectedRouteIds]);
+    syncRoutes(mapRef.current, visibleRoutes, selectedRouteIds, onRouteClickRef, visibleRouteSignature);
+  }, [selectedRouteIds, visibleRouteSignature, visibleRoutes]);
 
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current) return;
@@ -222,6 +255,7 @@ export function TripMapChart({
     nextRoutes: TripMapRoute[],
     nextSelectedRouteIds: string[],
     routeClickRef: React.MutableRefObject<TripMapChartProps['onRouteClick']>,
+    nextRouteSignature: string,
   ) {
     const routeColors = getRouteColors();
     const nextRouteIds = new Set(nextRoutes.map((route) => route.id));
@@ -242,7 +276,6 @@ export function TripMapChart({
       const lineId = `${sourceId}-line`;
       const hitId = `${sourceId}-hit`;
       const selected = nextSelectedRouteIds.includes(route.id);
-      const dimUnselected = nextSelectedRouteIds.length > 0 && !selected;
       const routeColor = route.color?.trim() || routeColors[index % routeColors.length];
       const geojson = {
         type: 'Feature' as const,
@@ -302,14 +335,20 @@ export function TripMapChart({
       // trips are easy to differentiate from one another.
       map.setPaintProperty(lineId, 'line-color', routeColor);
       map.setPaintProperty(lineId, 'line-width', selected ? 5 : 3);
-      map.setPaintProperty(lineId, 'line-opacity', dimUnselected ? 0.28 : 0.9);
+      map.setPaintProperty(lineId, 'line-opacity', 0.9);
     });
 
-    const shouldRefit = lastRouteSignatureRef.current !== routeSignature;
+    if (nextRoutes.length === 0) {
+      syncedRouteIdsRef.current = [];
+      lastRouteSignatureRef.current = nextRouteSignature;
+      return;
+    }
+
+    const shouldRefit = lastRouteSignatureRef.current !== nextRouteSignature;
     if (shouldRefit) {
       map.fitBounds(getRouteBounds(nextRoutes), { padding: 48, animate: false });
       map.resize();
-      lastRouteSignatureRef.current = routeSignature;
+      lastRouteSignatureRef.current = nextRouteSignature;
     }
 
     syncedRouteIdsRef.current = nextRoutes.map((route) => route.id);

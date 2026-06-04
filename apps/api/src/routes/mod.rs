@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{middleware, routing::get, Router};
 use http::{
@@ -33,6 +33,7 @@ pub mod charging;
 pub mod cost_profiles;
 pub mod dashboards;
 pub mod efficiency;
+pub mod efficiency_math;
 pub mod grafana;
 pub mod health;
 pub mod idle_drain;
@@ -59,7 +60,28 @@ async fn log_server_errors(
     let path = req.uri().path().to_owned();
     let limiter_class = classify_rate_limit_class(req.method(), req.uri().path()).as_header_value();
     let key_type = rate_limit::infer_key_type(req.headers(), &decoding_key);
+    let authenticated = key_type != "ip_fallback";
     let mut response = next.run(req).await;
+
+    if path.starts_with("/v1/") {
+        response.headers_mut().insert(
+            "x-riviamigo-ratelimit-class",
+            HeaderValue::from_static(limiter_class),
+        );
+
+        if let Some(after) = response.headers().get("x-ratelimit-after").cloned() {
+            if !response.headers().contains_key(http::header::RETRY_AFTER) {
+                response
+                    .headers_mut()
+                    .insert(http::header::RETRY_AFTER, after.clone());
+            }
+            if !response.headers().contains_key("x-riviamigo-ratelimit-reset") {
+                response
+                    .headers_mut()
+                    .insert("x-riviamigo-ratelimit-reset", after);
+            }
+        }
+    }
 
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
         // Mark API-originated throttles so clients can differentiate from edge (nginx) limits.
@@ -72,11 +94,21 @@ async fn log_server_errors(
                 HeaderValue::from_static("api"),
             );
         }
-        if !response.headers().contains_key(http::header::RETRY_AFTER) {
-            response
-                .headers_mut()
-                .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
-        }
+        let limit = response
+            .headers()
+            .get("x-ratelimit-limit")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let remaining = response
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let reset = response
+            .headers()
+            .get("x-ratelimit-after")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
         tracing::warn!(
             %method,
             %path,
@@ -84,6 +116,10 @@ async fn log_server_errors(
             limiter_source = "api",
             limiter_class,
             key_type,
+            authenticated,
+            limit,
+            remaining,
+            reset,
             "request rate limited"
         );
     }
@@ -119,76 +155,83 @@ pub fn build_router(state: AppState) -> Router {
         ]))
         .allow_credentials(true);
 
-    let auth_ip_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .key_extractor(rate_limit::TrustedProxyIpKeyExtractor)
-            .per_second(6)
-            .burst_size(10)
-            .finish()
-            .unwrap(),
-    );
-    let auth_metadata_identity_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
-                state.jwt_keys.decoding.clone(),
-            ))
-            .per_second(20)
-            .burst_size(40)
-            .methods(vec![
+    let auth_ip_config = Arc::new({
+        let mut builder =
+            GovernorConfigBuilder::default().key_extractor(rate_limit::TrustedProxyIpKeyExtractor);
+        apply_rate_limit_settings(
+            &mut builder,
+            state.config.rate_limit.auth_public_per_minute,
+            state.config.rate_limit.auth_public_burst,
+            None,
+        );
+        builder.use_headers().finish().unwrap()
+    });
+    let auth_metadata_identity_config = Arc::new({
+        let mut builder = GovernorConfigBuilder::default().key_extractor(
+            rate_limit::AuthIdentityKeyExtractor::new(state.jwt_keys.decoding.clone()),
+        );
+        apply_rate_limit_settings(
+            &mut builder,
+            state.config.rate_limit.auth_metadata_per_minute,
+            state.config.rate_limit.auth_metadata_burst,
+            Some(vec![
                 http::Method::GET,
                 http::Method::HEAD,
                 http::Method::OPTIONS,
                 http::Method::PUT,
-            ])
-            .finish()
-            .unwrap(),
-    );
-    let auth_read_identity_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
-                state.jwt_keys.decoding.clone(),
-            ))
-            .per_second(80)
-            .burst_size(160)
-            .methods(vec![
+            ]),
+        );
+        builder.use_headers().finish().unwrap()
+    });
+    let auth_read_identity_config = Arc::new({
+        let mut builder = GovernorConfigBuilder::default().key_extractor(
+            rate_limit::AuthIdentityKeyExtractor::new(state.jwt_keys.decoding.clone()),
+        );
+        apply_rate_limit_settings(
+            &mut builder,
+            state.config.rate_limit.auth_read_per_minute,
+            state.config.rate_limit.auth_read_burst,
+            Some(vec![
                 http::Method::GET,
                 http::Method::HEAD,
                 http::Method::OPTIONS,
-            ])
-            .finish()
-            .unwrap(),
-    );
-    let auth_write_identity_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
-                state.jwt_keys.decoding.clone(),
-            ))
-            .per_second(40)
-            .burst_size(80)
-            .methods(vec![
+            ]),
+        );
+        builder.use_headers().finish().unwrap()
+    });
+    let auth_write_identity_config = Arc::new({
+        let mut builder = GovernorConfigBuilder::default().key_extractor(
+            rate_limit::AuthIdentityKeyExtractor::new(state.jwt_keys.decoding.clone()),
+        );
+        apply_rate_limit_settings(
+            &mut builder,
+            state.config.rate_limit.auth_write_per_minute,
+            state.config.rate_limit.auth_write_burst,
+            Some(vec![
                 http::Method::POST,
                 http::Method::PUT,
                 http::Method::PATCH,
                 http::Method::DELETE,
-            ])
-            .finish()
-            .unwrap(),
-    );
-    let heavy_read_identity_config = Arc::new(
-        GovernorConfigBuilder::default()
-            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
-                state.jwt_keys.decoding.clone(),
-            ))
-            .per_second(25)
-            .burst_size(50)
-            .methods(vec![
+            ]),
+        );
+        builder.use_headers().finish().unwrap()
+    });
+    let heavy_read_identity_config = Arc::new({
+        let mut builder = GovernorConfigBuilder::default().key_extractor(
+            rate_limit::AuthIdentityKeyExtractor::new(state.jwt_keys.decoding.clone()),
+        );
+        apply_rate_limit_settings(
+            &mut builder,
+            state.config.rate_limit.heavy_read_per_minute,
+            state.config.rate_limit.heavy_read_burst,
+            Some(vec![
                 http::Method::GET,
                 http::Method::HEAD,
                 http::Method::OPTIONS,
-            ])
-            .finish()
-            .unwrap(),
-    );
+            ]),
+        );
+        builder.use_headers().finish().unwrap()
+    });
 
     // Inject decoding key into request extensions so AuthUser extractor can find it.
     let decoding_key = state.jwt_keys.decoding.clone();
@@ -323,5 +366,21 @@ fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClas
     match *method {
         http::Method::GET | http::Method::HEAD | http::Method::OPTIONS => RateLimitClass::AuthRead,
         _ => RateLimitClass::AuthWrite,
+    }
+}
+
+fn apply_rate_limit_settings<K, M>(
+    builder: &mut GovernorConfigBuilder<K, M>,
+    per_minute: u32,
+    burst: u32,
+    methods: Option<Vec<http::Method>>,
+) where
+    K: tower_governor::key_extractor::KeyExtractor,
+    M: governor::middleware::RateLimitingMiddleware<governor::clock::QuantaInstant>,
+{
+    let period = Duration::from_secs_f64(60.0 / f64::from(per_minute));
+    builder.period(period).burst_size(burst);
+    if let Some(methods) = methods {
+        builder.methods(methods);
     }
 }

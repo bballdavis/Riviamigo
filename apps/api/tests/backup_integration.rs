@@ -91,6 +91,11 @@ impl TestApp {
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
+                vehicle_image_cache_dir: std::env::temp_dir()
+                    .join("riviamigo-backup-test-images")
+                    .to_string_lossy()
+                    .into_owned(),
+                rate_limit: Default::default(),
             },
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             supervisor: SupervisorHandle::noop(),

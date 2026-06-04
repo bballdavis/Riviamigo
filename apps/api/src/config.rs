@@ -41,6 +41,32 @@ pub struct Config {
     /// Set to any value to allow insecure (non-Secure) cookies. Must NOT be
     /// set when `RIVIAMIGO_ENV=production`.
     pub cookie_insecure: Option<String>,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_auth_public_per_minute")]
+    pub auth_public_per_minute: u32,
+    #[serde(default = "default_auth_public_burst")]
+    pub auth_public_burst: u32,
+    #[serde(default = "default_auth_metadata_per_minute")]
+    pub auth_metadata_per_minute: u32,
+    #[serde(default = "default_auth_metadata_burst")]
+    pub auth_metadata_burst: u32,
+    #[serde(default = "default_auth_read_per_minute")]
+    pub auth_read_per_minute: u32,
+    #[serde(default = "default_auth_read_burst")]
+    pub auth_read_burst: u32,
+    #[serde(default = "default_auth_write_per_minute")]
+    pub auth_write_per_minute: u32,
+    #[serde(default = "default_auth_write_burst")]
+    pub auth_write_burst: u32,
+    #[serde(default = "default_heavy_read_per_minute")]
+    pub heavy_read_per_minute: u32,
+    #[serde(default = "default_heavy_read_burst")]
+    pub heavy_read_burst: u32,
 }
 
 fn default_port() -> u16 {
@@ -100,6 +126,46 @@ fn default_true() -> bool {
     true
 }
 
+fn default_auth_public_per_minute() -> u32 {
+    30
+}
+
+fn default_auth_public_burst() -> u32 {
+    10
+}
+
+fn default_auth_metadata_per_minute() -> u32 {
+    1200
+}
+
+fn default_auth_metadata_burst() -> u32 {
+    120
+}
+
+fn default_auth_read_per_minute() -> u32 {
+    900
+}
+
+fn default_auth_read_burst() -> u32 {
+    180
+}
+
+fn default_auth_write_per_minute() -> u32 {
+    240
+}
+
+fn default_auth_write_burst() -> u32 {
+    60
+}
+
+fn default_heavy_read_per_minute() -> u32 {
+    300
+}
+
+fn default_heavy_read_burst() -> u32 {
+    90
+}
+
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let config =
@@ -127,6 +193,45 @@ impl Config {
             }
         }
 
+        self.rate_limit.validate()?;
+
+        Ok(())
+    }
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            auth_public_per_minute: default_auth_public_per_minute(),
+            auth_public_burst: default_auth_public_burst(),
+            auth_metadata_per_minute: default_auth_metadata_per_minute(),
+            auth_metadata_burst: default_auth_metadata_burst(),
+            auth_read_per_minute: default_auth_read_per_minute(),
+            auth_read_burst: default_auth_read_burst(),
+            auth_write_per_minute: default_auth_write_per_minute(),
+            auth_write_burst: default_auth_write_burst(),
+            heavy_read_per_minute: default_heavy_read_per_minute(),
+            heavy_read_burst: default_heavy_read_burst(),
+        }
+    }
+}
+
+impl RateLimitConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        for (name, per_minute, burst) in [
+            ("RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE", self.auth_public_per_minute, self.auth_public_burst),
+            ("RATE_LIMIT_AUTH_METADATA_PER_MINUTE", self.auth_metadata_per_minute, self.auth_metadata_burst),
+            ("RATE_LIMIT_AUTH_READ_PER_MINUTE", self.auth_read_per_minute, self.auth_read_burst),
+            ("RATE_LIMIT_AUTH_WRITE_PER_MINUTE", self.auth_write_per_minute, self.auth_write_burst),
+            ("RATE_LIMIT_HEAVY_READ_PER_MINUTE", self.heavy_read_per_minute, self.heavy_read_burst),
+        ] {
+            if per_minute == 0 {
+                anyhow::bail!("{name} must be greater than 0");
+            }
+            if burst == 0 {
+                anyhow::bail!("{name} burst size must be greater than 0");
+            }
+        }
         Ok(())
     }
 }
