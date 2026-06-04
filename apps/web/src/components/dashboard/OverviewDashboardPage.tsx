@@ -1,6 +1,6 @@
 import React from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, useAuth } from '@riviamigo/hooks';
+import { useQueryClient } from '@tanstack/react-query';
+import { useMe } from '@riviamigo/hooks';
 import { useCreateDashboard, useUpdateDashboard, useUpdateAdminDashboard } from '@riviamigo/dashboards';
 import {
   createDefaultDashboardEditActions,
@@ -14,8 +14,7 @@ export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProp
   const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
-  const isAuthenticated = useAuth((state) => state.isAuthenticated);
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me(), enabled: isAuthenticated });
+  const me = useMe();
   const isAdmin = me.data?.role === 'admin';
 
   return (

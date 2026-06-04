@@ -47,11 +47,14 @@ pub struct UpdateDashboard {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/dashboards", get(list).post(create))
-        .route("/dashboards/by-slug/:slug", get(by_slug))
         .route("/dashboards/:id", get(fetch).put(update).delete(remove))
         .route("/dashboards/:id/clone", post(clone_dashboard))
         .route("/admin/dashboards/:id", put(admin_update))
         .route("/admin/dashboards/:id/lock", post(admin_set_lock))
+}
+
+pub fn metadata_router() -> Router<AppState> {
+    Router::new().route("/dashboards/by-slug/:slug", get(by_slug))
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────

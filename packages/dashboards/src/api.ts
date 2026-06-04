@@ -4,6 +4,7 @@ import { DashboardConfigSchema } from './schema';
 import type { DashboardConfig, WidgetInstance } from './schema';
 
 const BASE = '/v1/dashboards';
+const DASHBOARD_QUERY_STALE_TIME_MS = 60 * 60 * 1000;
 
 interface DashboardRecord {
   id?: string;
@@ -176,6 +177,9 @@ export function useDashboards() {
       return records.map(normalizeDashboardConfig);
     },
     enabled: !!accessToken,
+    staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     placeholderData: (previous) => previous,
   });
 }
@@ -186,6 +190,9 @@ export function useDashboardBySlug(slug: string | null) {
     queryKey: ['dashboards', 'slug', slug],
     queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/by-slug/${slug}`)),
     enabled: !!accessToken && !!slug,
+    staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     placeholderData: (previous) => previous,
   });
 }

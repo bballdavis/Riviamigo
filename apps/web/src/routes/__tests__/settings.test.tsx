@@ -15,6 +15,12 @@ const settingsMocks = vi.hoisted(() => ({
     setDefaultVehicleId: vi.fn(),
     setActiveVehicleId: vi.fn(),
   },
+  me: {
+    user_id: 'u1',
+    email: 'user@example.com',
+    role: 'user' as 'user' | 'admin' | 'super_user',
+    default_vehicle_id: 'v1',
+  },
 }));
 
 const mockNavigate = vi.fn();
@@ -179,6 +185,7 @@ vi.mock('@riviamigo/hooks', () => ({
     updateVehicleName: vi.fn().mockResolvedValue({}),
   },
   useAuth:    () => settingsMocks.auth,
+  useMe:      () => ({ data: settingsMocks.me }),
   useVehicles: () => ({
     data: [{
       id: 'v1',
@@ -257,6 +264,12 @@ describe('Settings page', () => {
     settingsMocks.auth.logout.mockReset();
     settingsMocks.auth.setDefaultVehicleId.mockReset();
     settingsMocks.auth.setActiveVehicleId.mockReset();
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'user@example.com',
+      role: 'user',
+      default_vehicle_id: 'v1',
+    };
   });
 
   it('renders the Vehicles section heading', () => {
@@ -293,7 +306,7 @@ describe('Settings page', () => {
   it('shows Demo Vehicle for admin users and triggers creation', async () => {
     const hooks = await import('@riviamigo/hooks');
     const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
-    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
     renderSettings();
     await waitFor(() => {
       expect(screen.getByText('Demo Vehicle')).toBeInTheDocument();
@@ -464,7 +477,7 @@ describe('Settings page', () => {
 
   it('renders the stewardship section for admin users', async () => {
     const hooks = await import('@riviamigo/hooks');
-    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
     renderSettings();
     fireEvent.click(screen.getByText('Raw Data'));
 
@@ -477,7 +490,7 @@ describe('Settings page', () => {
 
   it('renders and operates the admin Backups section', async () => {
     const hooks = await import('@riviamigo/hooks');
-    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' });
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
     renderSettings();
 
     await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
@@ -536,7 +549,7 @@ describe('Settings page', () => {
 
   it('shows the Backups section for super users as well', async () => {
     const hooks = await import('@riviamigo/hooks');
-    vi.mocked(hooks.api.me).mockResolvedValueOnce({ user_id: 'u1', email: 'super@example.com', role: 'super_user', default_vehicle_id: 'v1' });
+    settingsMocks.me = { user_id: 'u1', email: 'super@example.com', role: 'super_user', default_vehicle_id: 'v1' };
     renderSettings();
 
     await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());

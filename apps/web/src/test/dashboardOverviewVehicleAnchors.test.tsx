@@ -139,10 +139,10 @@ describe('overview vehicle anchors', () => {
 
     const anchors = expectedAnchors[model];
 
-    expect(screen.getByText('31 psi')).toHaveClass(anchors.tires.rl);
-    expect(screen.getByText('32 psi')).toHaveClass(anchors.tires.fl);
-    expect(screen.getByText('33 psi')).toHaveClass(anchors.tires.rr);
-    expect(screen.getByText('34 psi')).toHaveClass(anchors.tires.fr);
+    expect(screen.getByText('31 psi').parentElement?.parentElement).toHaveClass(anchors.tires.rl);
+    expect(screen.getByText('32 psi').parentElement?.parentElement).toHaveClass(anchors.tires.fl);
+    expect(screen.getByText('33 psi').parentElement?.parentElement).toHaveClass(anchors.tires.rr);
+    expect(screen.getByText('34 psi').parentElement?.parentElement).toHaveClass(anchors.tires.fr);
     expect(screen.getByText('31 psi')).toHaveClass('border-status-danger/70');
     expect(screen.getByText('32 psi')).toHaveClass('border-status-danger/70');
     expect(screen.getByText('33 psi')).toHaveClass('border-status-danger/70');

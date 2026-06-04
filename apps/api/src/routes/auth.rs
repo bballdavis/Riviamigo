@@ -25,7 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/logout", post(logout))
 }
 
-pub fn protected_router() -> Router<AppState> {
+pub fn metadata_router() -> Router<AppState> {
     Router::new()
         .route("/auth/me", axum::routing::get(me))
         .route(
