@@ -1,0 +1,151 @@
+{
+  "model": "R1S",
+  "images": [
+    {
+      "placement": "front",
+      "design": "dark",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_dark_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_dark_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "front",
+      "design": "light",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_light_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_front_light_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "overhead",
+      "design": "dark",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_dark_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "app_usage": ["overview"],
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_dark_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "overhead",
+      "design": "light",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_light_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "app_usage": ["overview"],
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_overhead_light_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "rear",
+      "design": "dark",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_dark_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_dark_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "rear",
+      "design": "light",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_light_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_rear_light_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "side",
+      "design": "dark",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_dark_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "app_usage": ["health-hero-fallback"],
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_dark_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "side",
+      "design": "light",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_light_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "app_usage": ["health-hero-fallback"],
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side_light_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "side-charging",
+      "design": "dark",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_dark_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "app_usage": ["charging"],
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_dark_large_hdpi.webp",
+        "packaged": true
+      }
+    },
+    {
+      "placement": "side-charging",
+      "design": "light",
+      "size": "large",
+      "resolution": "hdpi",
+      "url": "/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_light_large_hdpi.webp",
+      "overlays": [],
+      "metadata": {
+        "source": "rivian-mobile-static",
+        "model": "R1S",
+        "app_usage": ["charging"],
+        "source_url": "https://rivian.com/mobile/static/img/v1/vehicle/r1s/2021/adventure/ext/el-cap-granite/20ad1-brit-at/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_light_large_hdpi.webp",
+        "packaged": true
+      }
+    }
+  ]
+}

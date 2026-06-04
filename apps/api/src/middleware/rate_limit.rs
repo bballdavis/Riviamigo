@@ -1,20 +1,16 @@
 use std::net::{IpAddr, SocketAddr};
 
-use http::{header::AUTHORIZATION, HeaderMap, Request, Response};
+use http::{header::AUTHORIZATION, HeaderMap, Request};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use sha2::{Digest, Sha256};
-use tower_governor::{
-    governor::{GovernorConfig, GovernorConfigBuilder},
-    key_extractor::KeyExtractor,
-    GovernorError,
-};
+use tower_governor::{key_extractor::KeyExtractor, GovernorError};
 
 use crate::middleware::auth::Claims;
 
 #[derive(Clone, Debug)]
 pub struct TrustedProxyIpKeyExtractor;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AuthIdentityKeyExtractor {
     decoding_key: DecodingKey,
 }
@@ -80,53 +76,6 @@ pub fn infer_key_type(headers: &HeaderMap, decoding_key: &DecodingKey) -> &'stat
     }
 
     "ip_fallback"
-}
-
-pub fn build_ip_limiter(
-    class: RateLimitClass,
-    per_second: u64,
-    burst_size: u32,
-) -> GovernorConfig<TrustedProxyIpKeyExtractor, tower_governor::governor::NoOpMiddleware> {
-    let mut builder = GovernorConfigBuilder::default()
-        .key_extractor(TrustedProxyIpKeyExtractor);
-    builder
-        .per_second(per_second)
-        .burst_size(burst_size)
-        .error_handler(move |mut error| {
-            let mut response: Response<axum::body::Body> = error.as_response();
-            response.headers_mut().insert(
-                "x-riviamigo-ratelimit-class",
-                http::HeaderValue::from_static(class.as_header_value()),
-            );
-            response
-        });
-    builder.finish().expect("valid rate limiter config")
-}
-
-pub fn build_identity_limiter(
-    class: RateLimitClass,
-    per_second: u64,
-    burst_size: u32,
-    decoding_key: DecodingKey,
-    methods: Option<Vec<http::Method>>,
-) -> GovernorConfig<AuthIdentityKeyExtractor, tower_governor::governor::NoOpMiddleware> {
-    let mut builder = GovernorConfigBuilder::default()
-        .key_extractor(AuthIdentityKeyExtractor::new(decoding_key));
-    builder
-        .per_second(per_second)
-        .burst_size(burst_size)
-        .error_handler(move |mut error| {
-            let mut response: Response<axum::body::Body> = error.as_response();
-            response.headers_mut().insert(
-                "x-riviamigo-ratelimit-class",
-                http::HeaderValue::from_static(class.as_header_value()),
-            );
-            response
-        });
-    if let Some(configured_methods) = methods {
-        builder.methods(configured_methods);
-    }
-    builder.finish().expect("valid rate limiter config")
 }
 
 fn infer_identity_key(headers: &HeaderMap, decoding_key: &DecodingKey) -> Option<String> {

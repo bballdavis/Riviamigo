@@ -7,7 +7,37 @@ import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
-const CHARGING_SIDE_LIGHT_IMAGE_URL = '/vehicle-images/r1s-side-charging-light.png';
+const CHARGING_SIDE_LIGHT_IMAGE_URL =
+  '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_light_large_hdpi.webp';
+
+type ChargingCropFamily = 'R1T' | 'R1S' | 'default';
+
+interface ChargingCropConfig {
+  translateX: number;
+  scale: number;
+  translateY?: number;
+  objectPosition?: string;
+}
+
+const CHARGING_CROP_CONFIG: Record<ChargingCropFamily, ChargingCropConfig> = {
+  R1T: {
+    translateX: -34,
+    translateY: 2,
+    scale: 1.92,
+    objectPosition: 'left center',
+  },
+  R1S: {
+    translateX: -30,
+    translateY: 0,
+    scale: 1.78,
+    objectPosition: 'left center',
+  },
+  default: {
+    translateX: -12,
+    scale: 1.12,
+    objectPosition: 'left center',
+  },
+};
 
 interface ChargingSummarySnapshot {
   session_count: number;
@@ -48,6 +78,7 @@ function ChargingConnectionWidget({
     findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
     chargingSideLight;
+  const cropFamily = chargingCropFamily(activeVehicle?.model);
   const imageMode = 'side-charging';
   const displaySideLight = chargingSideLight;
   const displaySideDark = chargingSideDark;
@@ -88,14 +119,15 @@ function ChargingConnectionWidget({
     <section
       data-testid="charging-connection-chip"
       data-charging-state={charging ? 'charging' : 'connected'}
+      data-crop-family={cropFamily}
       data-image-mode={imageMode}
       data-image-light={displaySideLight}
       data-image-dark={displaySideDark}
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        <VehicleSideImage source={displaySideLight} darkClassName="dark:hidden" />
-        <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" />
+        <VehicleSideImage source={displaySideLight} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} />
+        <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} />
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/82 to-transparent" />
@@ -233,10 +265,17 @@ function ChargingBatteryLedBar({
 function VehicleSideImage({
   source,
   darkClassName,
+  cropConfig,
 }: {
   source: string;
   darkClassName: string;
+  cropConfig: ChargingCropConfig;
 }) {
+  const translateY = cropConfig.translateY ?? 0;
+  const transform =
+    translateY === 0
+      ? `translateX(${cropConfig.translateX}%) scale(${cropConfig.scale})`
+      : `translate(${cropConfig.translateX}%, ${translateY}%) scale(${cropConfig.scale})`;
   return (
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <img
@@ -245,10 +284,21 @@ function VehicleSideImage({
         data-testid="charging-side-image"
         data-image-mode="charging"
         className="h-full w-auto max-w-none object-contain"
-        style={{ objectPosition: 'left center', transform: 'translateX(-12%) scale(1.12)', transformOrigin: 'left top' }}
+        style={{
+          objectPosition: cropConfig.objectPosition ?? 'left center',
+          transform,
+          transformOrigin: 'left top',
+        }}
       />
     </div>
   );
+}
+
+function chargingCropFamily(model: string | null | undefined): ChargingCropFamily {
+  const normalized = (model ?? '').toUpperCase();
+  if (normalized.includes('R1T')) return 'R1T';
+  if (normalized.includes('R1S')) return 'R1S';
+  return 'default';
 }
 
 function formatPercent(value: number | null | undefined) {

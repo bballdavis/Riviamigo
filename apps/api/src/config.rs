@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -19,6 +20,8 @@ pub struct Config {
     pub s3_secret_key: Option<String>,
     #[serde(default = "default_backup_artifact_dir")]
     pub backup_artifact_dir: String,
+    #[serde(default = "default_vehicle_image_cache_dir")]
+    pub vehicle_image_cache_dir: String,
     #[serde(default = "default_backup_driver")]
     pub backup_driver: String,
     #[serde(default = "default_backup_poll_interval_seconds")]
@@ -53,6 +56,21 @@ fn default_backup_artifact_dir() -> String {
 
 fn default_backup_driver() -> String {
     "pg_dump".into()
+}
+
+fn default_vehicle_image_cache_dir() -> String {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+        })
+        .unwrap_or_else(std::env::temp_dir);
+
+    base.join("riviamigo")
+        .join("vehicle-image-cache")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn default_backup_poll_interval_seconds() -> u64 {

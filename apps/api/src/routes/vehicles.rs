@@ -1,5 +1,8 @@
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
+    http::{header, HeaderValue},
+    response::Response,
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -9,7 +12,11 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use std::time::Duration;
+use std::{
+    collections::HashSet,
+    path::{Path as StdPath, PathBuf},
+    time::Duration,
+};
 
 use crate::{
     db::users::require_admin_or_super_user,
@@ -25,6 +32,8 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles/demo", post(create_demo_vehicle))
+        .route("/vehicle-image-cache/:id/:image_key", get(vehicle_image_cache_asset))
+        .route("/admin/vehicles/:id/images/remirror", post(admin_remirror_vehicle_images))
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id", delete(delete_vehicle))
         .route("/vehicles/:id/default", post(set_default_vehicle))
@@ -77,6 +86,139 @@ struct AddVehicleBody {
 #[derive(Deserialize)]
 struct CreateDemoVehicleBody {
     model: String,
+}
+
+fn demo_vehicle_latest_status_upsert_sql() -> &'static str {
+    "INSERT INTO riviamigo.vehicle_latest_status
+      (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, charger_status, time_to_end_of_charge_min, charge_port_open, updated_at)
+     VALUES
+      ($1, now(), 64, $2, $3, 85, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95, TRUE, now())
+     ON CONFLICT (vehicle_id) DO UPDATE
+     SET ts = EXCLUDED.ts,
+         battery_level = EXCLUDED.battery_level,
+         battery_capacity_wh = EXCLUDED.battery_capacity_wh,
+         distance_to_empty_mi = EXCLUDED.distance_to_empty_mi,
+         battery_limit = EXCLUDED.battery_limit,
+         power_state = EXCLUDED.power_state,
+         charger_state = EXCLUDED.charger_state,
+         charger_status = EXCLUDED.charger_status,
+         time_to_end_of_charge_min = EXCLUDED.time_to_end_of_charge_min,
+         charge_port_open = EXCLUDED.charge_port_open,
+        updated_at = now()"
+}
+
+fn is_demo_vehicle_key(value: &str) -> bool {
+    value.starts_with("demo-")
+}
+
+#[derive(Debug, Clone)]
+struct DemoVehicleImageSeed {
+    placement: String,
+    design: Option<String>,
+    size: Option<String>,
+    resolution: Option<String>,
+    url: String,
+    overlays: serde_json::Value,
+    metadata: serde_json::Value,
+}
+
+fn demo_vehicle_image_seeds(model: &str) -> Result<Vec<DemoVehicleImageSeed>, AppError> {
+    let manifest = load_demo_fixture_manifest(model)?;
+    validate_demo_fixture_manifest(model, &manifest)?;
+
+    Ok(manifest
+        .images
+        .into_iter()
+        .map(|image| DemoVehicleImageSeed {
+            placement: image.placement,
+            design: image.design,
+            size: image.size,
+            resolution: image.resolution,
+            url: image.url,
+            overlays: serde_json::to_value(image.overlays).unwrap_or_else(|_| serde_json::json!([])),
+            metadata: image.metadata,
+        })
+        .collect())
+}
+
+fn demo_fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../web/public/vehicle-images/fixtures")
+}
+
+fn fixture_public_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web/public")
+}
+
+fn load_demo_fixture_manifest(model: &str) -> Result<DemoFixtureManifest, AppError> {
+    let manifest_path = demo_fixture_root()
+        .join(model.to_lowercase())
+        .join("manifest.json");
+    if !manifest_path.exists() {
+        return Err(AppError::Validation(format!(
+            "Demo fixture pack for {model} is missing. Run the fixture export script or add {}/manifest.json.",
+            manifest_path
+                .strip_prefix(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."))
+                .unwrap_or(&manifest_path)
+                .display()
+        )));
+    }
+
+    let contents = std::fs::read_to_string(&manifest_path)?;
+    serde_json::from_str::<DemoFixtureManifest>(&contents)
+        .map_err(|error| AppError::Validation(format!("Demo fixture manifest for {model} is invalid: {error}")))
+}
+
+fn validate_demo_fixture_manifest(model: &str, manifest: &DemoFixtureManifest) -> Result<(), AppError> {
+    if !manifest.model.eq_ignore_ascii_case(model) {
+        return Err(AppError::Validation(format!(
+            "Demo fixture manifest model mismatch: expected {model}, found {}.",
+            manifest.model
+        )));
+    }
+
+    let mut placements = HashSet::new();
+    for image in &manifest.images {
+        placements.insert(normalize_image_placement(&image.placement));
+        ensure_fixture_public_file_exists(&image.url)?;
+    }
+
+    for required in ["overhead", "side", "front", "rear"] {
+        if !placements.contains(required) {
+            return Err(AppError::Validation(format!(
+                "Demo fixture manifest for {model} is incomplete. Missing required placement '{required}'."
+            )));
+        }
+    }
+
+    if !manifest
+        .images
+        .iter()
+        .any(|image| is_charging_side_value(&image.placement) || image.url.contains("side-charging"))
+    {
+        return Err(AppError::Validation(format!(
+            "Demo fixture manifest for {model} is incomplete. Missing required 'side-charging' image."
+        )));
+    }
+
+    Ok(())
+}
+
+fn ensure_fixture_public_file_exists(public_url: &str) -> Result<(), AppError> {
+    if !public_url.starts_with("/vehicle-images/fixtures/") {
+        return Err(AppError::Validation(format!(
+            "Demo fixture URL must live under /vehicle-images/fixtures, got '{public_url}'."
+        )));
+    }
+    let relative = public_url.trim_start_matches('/');
+    let path = fixture_public_root().join(relative);
+    if !path.exists() {
+        return Err(AppError::Validation(format!(
+            "Demo fixture asset is missing from disk: {}",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +473,53 @@ struct VehicleImageRow {
     url: String,
     overlays: serde_json::Value,
     metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct VehicleImageOverlay {
+    url: String,
+    overlay: Option<String>,
+    #[serde(rename = "zIndex")]
+    z_index: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct MirroredOverlayAsset {
+    source_url: String,
+    mirror_key: String,
+    mirror_relpath: String,
+    mime_type: String,
+    sha256: String,
+    overlay: Option<String>,
+    #[serde(rename = "zIndex")]
+    z_index: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DemoFixtureManifest {
+    model: String,
+    images: Vec<DemoFixtureImageEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DemoFixtureImageEntry {
+    placement: String,
+    design: Option<String>,
+    size: Option<String>,
+    resolution: Option<String>,
+    url: String,
+    #[serde(default)]
+    overlays: Vec<VehicleImageOverlay>,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+struct MirroredFileAsset {
+    mirror_key: String,
+    mirror_relpath: String,
+    mime_type: String,
+    sha256: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -811,7 +1000,7 @@ async fn add_vehicle(
 
     tx.commit().await?;
 
-    cache_vehicle_images(&state.pool, vehicle_id, &tokens).await;
+    cache_vehicle_images(&state.pool, &state.config, vehicle_id, &tokens).await;
 
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
     info!(
@@ -1459,19 +1648,21 @@ async fn list_vehicles(
 
     let mut vehicles = Vec::with_capacity(rows.len());
     for r in rows {
-        let images = fetch_vehicle_images_json(&state.pool, r.id)
+        let images = fetch_vehicle_images_json(&state.pool, &state.config, r.id)
             .await
             .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
         if images
             .get("all")
             .and_then(|all| all.as_array())
             .is_some_and(|all| all.is_empty())
+            && !is_demo_vehicle_key(&r.rivian_vehicle_id)
         {
             let pool = state.pool.clone();
             let age_key = state.age_key.clone();
+            let config = state.config.clone();
             let vehicle_id = r.id;
             tokio::spawn(async move {
-                ensure_vehicle_images_cached(&pool, vehicle_id, &age_key).await;
+                ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key).await;
             });
         }
         vehicles.push(serde_json::json!({
@@ -1592,36 +1783,7 @@ async fn create_demo_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(
-        "INSERT INTO riviamigo.vehicle_images
-           (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
-         VALUES
-           ($1, 'side', 'light', 'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb),
-           ($1, 'side', 'dark',  'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb),
-           ($1, 'overhead', 'light', 'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb),
-           ($1, 'overhead', 'dark',  'xl', '2048x1024', '/vehicle-images/r1s-side-charging-light.png', '[]'::jsonb, '{\"demo\":true}'::jsonb)
-         ON CONFLICT (vehicle_id, url) DO NOTHING",
-    )
-    .bind(vehicle_id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT INTO riviamigo.vehicle_latest_status
-          (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, power_state, charger_state, is_online, updated_at)
-         VALUES
-          ($1, now(), 78, $2, $3, 85, 'ready', 'Disconnected', TRUE, now())
-         ON CONFLICT (vehicle_id) DO UPDATE
-         SET ts = EXCLUDED.ts,
-             battery_level = EXCLUDED.battery_level,
-             battery_capacity_wh = EXCLUDED.battery_capacity_wh,
-             distance_to_empty_mi = EXCLUDED.distance_to_empty_mi,
-             battery_limit = EXCLUDED.battery_limit,
-             power_state = EXCLUDED.power_state,
-             charger_state = EXCLUDED.charger_state,
-             is_online = EXCLUDED.is_online,
-             updated_at = now()",
-    )
+    sqlx::query(demo_vehicle_latest_status_upsert_sql())
     .bind(vehicle_id)
     .bind(battery_capacity_wh)
     .bind(range_mi)
@@ -1629,12 +1791,60 @@ async fn create_demo_vehicle(
     .await?;
 
     sqlx::query(
+        "INSERT INTO riviamigo.vehicle_runtime_state
+          (vehicle_id, is_online, last_event_at, worker_health, worker_health_msg, updated_at)
+         VALUES
+          ($1, TRUE, now(), 'connected', 'Demo vehicle seeded', now())
+         ON CONFLICT (vehicle_id) DO UPDATE
+         SET is_online = EXCLUDED.is_online,
+             last_event_at = EXCLUDED.last_event_at,
+             worker_health = EXCLUDED.worker_health,
+             worker_health_msg = EXCLUDED.worker_health_msg,
+             updated_at = now()",
+    )
+    .bind(vehicle_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM riviamigo.vehicle_images WHERE vehicle_id = $1")
+        .bind(vehicle_id)
+        .execute(&mut *tx)
+        .await?;
+
+    for image in demo_vehicle_image_seeds(&model)? {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_images
+              (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
+             VALUES
+              ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (vehicle_id, url) DO UPDATE
+             SET placement = EXCLUDED.placement,
+                 design = EXCLUDED.design,
+                 size = EXCLUDED.size,
+                 resolution = EXCLUDED.resolution,
+                 overlays = EXCLUDED.overlays,
+                 metadata = EXCLUDED.metadata,
+                 updated_at = now()",
+        )
+        .bind(vehicle_id)
+        .bind(&image.placement)
+        .bind(image.design.as_deref())
+        .bind(image.size.as_deref())
+        .bind(image.resolution.as_deref())
+        .bind(&image.url)
+        .bind(image.overlays)
+        .bind(image.metadata)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query(
         "INSERT INTO timeseries.telemetry
           (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit, speed_mph, power_state, charger_state, drive_mode, odometer_miles, is_online)
          VALUES
-          (now() - interval '90 minutes', $1, 80, $2, $3 + 4, 85, 0, 'ready', 'Disconnected', 'all_purpose', 15000, TRUE),
-          (now() - interval '60 minutes', $1, 79, $2, $3 + 2, 85, 18, 'drive', 'Disconnected', 'all_purpose', 15006, TRUE),
-          (now() - interval '30 minutes', $1, 78, $2, $3, 85, 0, 'ready', 'Disconnected', 'all_purpose', 15010, TRUE)
+          (now() - interval '90 minutes', $1, 60, $2, $3 - 10, 85, 0, 'charging', 'Connected', 'all_purpose', 15000, TRUE),
+          (now() - interval '60 minutes', $1, 62, $2, $3 - 8, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE),
+          (now() - interval '30 minutes', $1, 64, $2, $3 - 6, 85, 0, 'charging', 'Charging', 'all_purpose', 15000, TRUE)
          ON CONFLICT DO NOTHING",
     )
     .bind(vehicle_id)
@@ -2037,11 +2247,12 @@ async fn vehicle_images(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    Ok(Json(fetch_vehicle_images_json(&state.pool, vid).await?))
+    Ok(Json(fetch_vehicle_images_json(&state.pool, &state.config, vid).await?))
 }
 
 async fn cache_vehicle_images(
     pool: &sqlx::PgPool,
+    config: &crate::config::Config,
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
 ) {
@@ -2073,18 +2284,22 @@ async fn cache_vehicle_images(
                 .bind(image.design)
                 .bind(image.size)
                 .bind(image.resolution)
-                .bind(image.url)
+                .bind(&image.url)
                 .bind(image.overlays)
-                .bind(serde_json::json!({
+                .bind(build_cached_vehicle_image_metadata(
+                    &image.url,
+                    serde_json::json!({
                     "source": image.source,
                     "vehicle_version": image.vehicle_version,
                     "rivian_vehicle_id": image.vehicle_id,
                     "rivian_order_id": image.order_id,
                     "extension": image.extension
-                }))
+                    }),
+                ))
                 .execute(pool)
                 .await;
             }
+            mirror_vehicle_images(pool, config, vehicle_id).await;
             info!(vehicle_id = %vehicle_id, image_count, "vehicle.images.cached");
         }
         Err(error) => {
@@ -2093,15 +2308,26 @@ async fn cache_vehicle_images(
     }
 }
 
-async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age_key: &str) {
-    let existing: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.vehicle_images WHERE vehicle_id = $1")
-            .bind(vehicle_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+async fn ensure_vehicle_images_cached(
+    pool: &sqlx::PgPool,
+    config: &crate::config::Config,
+    vehicle_id: Uuid,
+    age_key: &str,
+) {
+    let rows = sqlx::query_as::<_, VehicleImageRow>(
+        "SELECT placement, design, size, resolution, url, overlays, metadata
+         FROM riviamigo.vehicle_images
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
-    if existing > 0 {
+    if !rows.is_empty() {
+        if rows.iter().any(vehicle_image_needs_local_mirror) {
+            mirror_vehicle_images(pool, config, vehicle_id).await;
+        }
         return;
     }
 
@@ -2129,15 +2355,316 @@ async fn ensure_vehicle_images_cached(pool: &sqlx::PgPool, vehicle_id: Uuid, age
     };
 
     match crate::ingestion::session_store::decrypt_tokens(&encrypted_tokens, &identity) {
-        Ok(tokens) => cache_vehicle_images(pool, vehicle_id, &tokens).await,
+        Ok(tokens) => cache_vehicle_images(pool, config, vehicle_id, &tokens).await,
         Err(error) => {
             warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.backfill_decrypt_failed");
         }
     }
 }
 
+fn build_cached_vehicle_image_metadata(source_url: &str, base: serde_json::Value) -> serde_json::Value {
+    merge_metadata(
+        base,
+        serde_json::json!({
+            "source_url": source_url,
+            "mirror_status": "pending"
+        }),
+    )
+}
+
+fn merge_metadata(mut left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {
+    if let (Some(left_obj), Some(right_obj)) = (left.as_object_mut(), right.as_object()) {
+        for (key, value) in right_obj {
+            left_obj.insert(key.clone(), value.clone());
+        }
+        left
+    } else {
+        right
+    }
+}
+
+fn overlay_entries_from_value(value: &serde_json::Value) -> Vec<VehicleImageOverlay> {
+    serde_json::from_value::<Vec<VehicleImageOverlay>>(value.clone()).unwrap_or_default()
+}
+
+fn image_cache_root(config: &crate::config::Config) -> PathBuf {
+    PathBuf::from(&config.vehicle_image_cache_dir)
+}
+
+fn mirror_file_path(config: &crate::config::Config, relpath: &str) -> PathBuf {
+    image_cache_root(config).join(relpath.replace('/', std::path::MAIN_SEPARATOR_STR))
+}
+
+fn sanitize_image_key(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-')
+}
+
+fn infer_extension(source_url: &str, content_type: Option<&str>) -> &'static str {
+    let lowered = source_url.to_ascii_lowercase();
+    for ext in ["webp", "png", "jpg", "jpeg", "gif"] {
+        if lowered.contains(&format!(".{ext}")) {
+            return ext;
+        }
+    }
+    match content_type.unwrap_or_default() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        _ => "webp",
+    }
+}
+
+fn guess_mime_type(path: &StdPath) -> &'static str {
+    match path.extension().and_then(|ext| ext.to_str()).unwrap_or_default() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        _ => "image/webp",
+    }
+}
+
+async fn download_and_store_asset(
+    client: &reqwest::Client,
+    config: &crate::config::Config,
+    vehicle_id: Uuid,
+    source_url: &str,
+) -> Result<MirroredFileAsset, anyhow::Error> {
+    let response = client.get(source_url).send().await?.error_for_status()?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = response.bytes().await?;
+    let sha256 = hex::encode(Sha256::digest(&bytes));
+    let extension = infer_extension(source_url, content_type.as_deref());
+    let key_hash = hex::encode(Sha256::digest(source_url.as_bytes()));
+    let mirror_key = format!("{key_hash}.{extension}");
+    let mirror_relpath = format!("{vehicle_id}/{mirror_key}");
+    let path = mirror_file_path(config, &mirror_relpath);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, &bytes).await?;
+    Ok(MirroredFileAsset {
+        mirror_key,
+        mirror_relpath,
+        mime_type: content_type.unwrap_or_else(|| guess_mime_type(&path).to_string()),
+        sha256,
+    })
+}
+
+async fn mirror_vehicle_image_assets(
+    client: &reqwest::Client,
+    config: &crate::config::Config,
+    vehicle_id: Uuid,
+    source_url: &str,
+    overlays: &[VehicleImageOverlay],
+) -> Result<serde_json::Value, anyhow::Error> {
+    let mirrored = download_and_store_asset(client, config, vehicle_id, source_url).await?;
+    let mut overlay_assets = Vec::with_capacity(overlays.len());
+    for overlay in overlays {
+        let mirrored_overlay = download_and_store_asset(client, config, vehicle_id, &overlay.url).await?;
+        overlay_assets.push(MirroredOverlayAsset {
+            source_url: overlay.url.clone(),
+            mirror_key: mirrored_overlay.mirror_key,
+            mirror_relpath: mirrored_overlay.mirror_relpath,
+            mime_type: mirrored_overlay.mime_type,
+            sha256: mirrored_overlay.sha256,
+            overlay: overlay.overlay.clone(),
+            z_index: overlay.z_index,
+        });
+    }
+
+    Ok(serde_json::json!({
+        "source_url": source_url,
+        "mirror_status": "ready",
+        "mirror_key": mirrored.mirror_key,
+        "mirror_relpath": mirrored.mirror_relpath,
+        "mime_type": mirrored.mime_type,
+        "sha256": mirrored.sha256,
+        "overlay_mirrors": overlay_assets
+    }))
+}
+
+fn vehicle_image_needs_local_mirror(row: &VehicleImageRow) -> bool {
+    if !row.url.starts_with("http://") && !row.url.starts_with("https://") {
+        return false;
+    }
+    row.metadata
+        .get("mirror_status")
+        .and_then(|value| value.as_str())
+        != Some("ready")
+}
+
+async fn mirror_vehicle_images(
+    pool: &sqlx::PgPool,
+    config: &crate::config::Config,
+    vehicle_id: Uuid,
+) {
+    let rows = match sqlx::query_as::<_, VehicleImageRow>(
+        "SELECT placement, design, size, resolution, url, overlays, metadata
+         FROM riviamigo.vehicle_images
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_rows_failed");
+            return;
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+
+    for row in rows {
+        if !vehicle_image_needs_local_mirror(&row) {
+            continue;
+        }
+        let overlays = overlay_entries_from_value(&row.overlays);
+        match mirror_vehicle_image_assets(&client, config, vehicle_id, &row.url, &overlays).await {
+            Ok(mirror_metadata) => {
+                let merged = merge_metadata(row.metadata.clone(), mirror_metadata);
+                let _ = sqlx::query(
+                    "UPDATE riviamigo.vehicle_images
+                     SET metadata = $3,
+                         updated_at = now()
+                     WHERE vehicle_id = $1 AND url = $2",
+                )
+                .bind(vehicle_id)
+                .bind(&row.url)
+                .bind(merged)
+                .execute(pool)
+                .await;
+            }
+            Err(error) => {
+                warn!(vehicle_id = %vehicle_id, url = %row.url, error = %error, "vehicle.images.mirror_failed");
+                let merged = merge_metadata(
+                    row.metadata.clone(),
+                    serde_json::json!({
+                        "source_url": row.url,
+                        "mirror_status": "failed",
+                        "mirror_error": error.to_string()
+                    }),
+                );
+                let _ = sqlx::query(
+                    "UPDATE riviamigo.vehicle_images
+                     SET metadata = $3,
+                         updated_at = now()
+                     WHERE vehicle_id = $1 AND url = $2",
+                )
+                .bind(vehicle_id)
+                .bind(&row.url)
+                .bind(merged)
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+}
+
+fn metadata_has_local_mirror(config: &crate::config::Config, metadata: &serde_json::Value) -> bool {
+    let Some(relpath) = metadata.get("mirror_relpath").and_then(|value| value.as_str()) else {
+        return false;
+    };
+    metadata
+        .get("mirror_status")
+        .and_then(|value| value.as_str())
+        == Some("ready")
+        && mirror_file_path(config, relpath).exists()
+}
+
+fn resolved_image_url(
+    config: &crate::config::Config,
+    vehicle_id: Uuid,
+    original_url: &str,
+    metadata: &serde_json::Value,
+) -> String {
+    if let Some(key) = metadata.get("mirror_key").and_then(|value| value.as_str()) {
+        if metadata_has_local_mirror(config, metadata) {
+            return format!("/v1/vehicle-image-cache/{vehicle_id}/{key}");
+        }
+    }
+    original_url.to_string()
+}
+
+fn resolved_overlays(
+    config: &crate::config::Config,
+    vehicle_id: Uuid,
+    row_overlays: &serde_json::Value,
+    metadata: &serde_json::Value,
+) -> serde_json::Value {
+    let mut overlays = overlay_entries_from_value(row_overlays);
+    let Some(mirrors) = metadata.get("overlay_mirrors").and_then(|value| value.as_array()) else {
+        return serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]));
+    };
+
+    for overlay in &mut overlays {
+        if let Some(mirror) = mirrors.iter().find(|entry| {
+            entry
+                .get("source_url")
+                .and_then(|value| value.as_str())
+                == Some(overlay.url.as_str())
+        }) {
+            if let Some(key) = mirror.get("mirror_key").and_then(|value| value.as_str()) {
+                if metadata_has_local_mirror(config, mirror) {
+                    overlay.url = format!("/v1/vehicle-image-cache/{vehicle_id}/{key}");
+                }
+            }
+        }
+    }
+
+    serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]))
+}
+
+async fn find_mirrored_asset(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    image_key: &str,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let metadatas = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT metadata FROM riviamigo.vehicle_images WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    for metadata in metadatas {
+        if metadata
+            .get("mirror_key")
+            .and_then(|value| value.as_str())
+            == Some(image_key)
+        {
+            return Ok(Some(metadata));
+        }
+
+        if let Some(mirrors) = metadata.get("overlay_mirrors").and_then(|value| value.as_array()) {
+            if let Some(found) = mirrors.iter().find(|mirror| {
+                mirror
+                    .get("mirror_key")
+                    .and_then(|value| value.as_str())
+                    == Some(image_key)
+            }) {
+                return Ok(Some(found.clone()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 async fn fetch_vehicle_images_json(
     pool: &sqlx::PgPool,
+    config: &crate::config::Config,
     vehicle_id: Uuid,
 ) -> Result<serde_json::Value, AppError> {
     let rows = sqlx::query_as::<_, VehicleImageRow>(
@@ -2159,13 +2686,15 @@ async fn fetch_vehicle_images_json(
     let all: Vec<_> = rows
         .iter()
         .map(|row| {
+            let resolved_url = resolved_image_url(config, vehicle_id, &row.url, &row.metadata);
+            let resolved_overlays = resolved_overlays(config, vehicle_id, &row.overlays, &row.metadata);
             serde_json::json!({
                 "placement": row.placement,
                 "design": row.design,
                 "size": row.size,
                 "resolution": row.resolution,
-                "url": row.url,
-                "overlays": row.overlays,
+                "url": resolved_url,
+                "overlays": resolved_overlays,
                 "metadata": row.metadata,
             })
         })
@@ -2181,7 +2710,7 @@ async fn fetch_vehicle_images_json(
                 rows.iter()
                     .find(|row| normalize_image_placement(&row.placement) == placement)
             })
-            .map(|row| row.url.clone())
+            .map(|row| resolved_image_url(config, vehicle_id, &row.url, &row.metadata))
     };
 
     Ok(serde_json::json!({
@@ -2205,9 +2734,55 @@ async fn fetch_vehicle_images_json(
     }))
 }
 
+async fn vehicle_image_cache_asset(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((vehicle_id, image_key)): Path<(Uuid, String)>,
+) -> Result<Response, AppError> {
+    if !sanitize_image_key(&image_key) {
+        return Err(AppError::NotFound);
+    }
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    let Some(metadata) = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await? else {
+        return Err(AppError::NotFound);
+    };
+
+    let relpath = metadata
+        .get("mirror_relpath")
+        .and_then(|value| value.as_str())
+        .ok_or(AppError::NotFound)?;
+    let mime_type = metadata
+        .get("mime_type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("application/octet-stream");
+    let path = mirror_file_path(&state.config, relpath);
+    let bytes = tokio::fs::read(path).await?;
+
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime_type).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    Ok(response)
+}
+
+async fn admin_remirror_vehicle_images(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    ensure_vehicle_images_cached(&state.pool, &state.config, vehicle_id, &state.age_key).await;
+    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vehicle_id })))
+}
+
 fn normalize_image_placement(value: &str) -> &'static str {
     let normalized = value.to_lowercase();
-    if normalized.contains("side") {
+    if normalized.contains("side") && !is_charging_side_value(value) {
         "side"
     } else if normalized.contains("overhead")
         || normalized.contains("top")
@@ -2221,6 +2796,11 @@ fn normalize_image_placement(value: &str) -> &'static str {
     } else {
         "unknown"
     }
+}
+
+fn is_charging_side_value(value: &str) -> bool {
+    let normalized = value.to_lowercase();
+    normalized.contains("side") && (normalized.contains("charging") || normalized.contains("charge"))
 }
 
 fn normalize_image_design(value: Option<&str>) -> &'static str {
@@ -2432,6 +3012,10 @@ mod tests {
                 .join("riviamigo-route-test-backups")
                 .to_string_lossy()
                 .into_owned(),
+            vehicle_image_cache_dir: std::env::temp_dir()
+                .join("riviamigo-route-test-vehicle-images")
+                .to_string_lossy()
+                .into_owned(),
             backup_driver: "json".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
@@ -2496,6 +3080,10 @@ mod tests {
             s3_secret_key: None,
             backup_artifact_dir: std::env::temp_dir()
                 .join("riviamigo-route-test-backups")
+                .to_string_lossy()
+                .into_owned(),
+            vehicle_image_cache_dir: std::env::temp_dir()
+                .join("riviamigo-route-test-vehicle-images")
                 .to_string_lossy()
                 .into_owned(),
             backup_driver: "json".into(),
@@ -2577,6 +3165,87 @@ mod tests {
         let app = make_app().await;
         let status = post_status(app, "/v1/vehicles/demo", serde_json::json!({})).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn demo_vehicle_latest_status_seed_query_does_not_reference_is_online() {
+        let sql = super::demo_vehicle_latest_status_upsert_sql();
+        assert!(!sql.contains("is_online"));
+    }
+
+    #[test]
+    fn demo_vehicle_latest_status_seed_query_marks_the_demo_as_actively_charging() {
+        let sql = super::demo_vehicle_latest_status_upsert_sql();
+        assert!(sql.contains("'charging'"));
+        assert!(sql.contains("'Charging'"));
+        assert!(sql.contains("'chrgr_sts_connected_charging'"));
+        assert!(sql.contains("time_to_end_of_charge_min"));
+        assert!(sql.contains("charge_port_open"));
+    }
+
+    #[test]
+    fn demo_vehicle_image_seeds_use_packaged_app_assets() {
+        let r1t = super::demo_vehicle_image_seeds("R1T").expect("R1T fixture manifest should load");
+        assert!(!r1t.is_empty());
+        assert!(r1t.iter().all(|seed| seed.url.starts_with("/vehicle-images/fixtures/")));
+        assert!(r1t.iter().all(|seed| !seed.url.contains("media.rivian.com")));
+        assert!(r1t.iter().any(|seed| seed.url.contains("/r1t/")));
+        assert!(r1t.iter().any(|seed| seed.placement == "overhead"));
+        assert!(r1t.iter().any(|seed| seed.placement == "side-charging"));
+    }
+
+    #[test]
+    fn missing_demo_fixture_manifest_returns_validation_error() {
+        let error = super::demo_vehicle_image_seeds("R2S").expect_err("R2S fixture should be absent until exported");
+        assert!(matches!(error, crate::errors::AppError::Validation(_)));
+    }
+
+    #[test]
+    fn demo_vehicle_keys_are_detected_explicitly() {
+        assert!(super::is_demo_vehicle_key("demo-r1t-local"));
+        assert!(super::is_demo_vehicle_key("demo-r2s-local"));
+        assert!(!super::is_demo_vehicle_key("rivian-1234"));
+    }
+
+    #[test]
+    fn resolved_image_url_falls_back_to_remote_when_local_file_is_missing() {
+        let config = crate::config::Config {
+            database_url: "postgres://localhost/test".into(),
+            redis_url: "redis://localhost".into(),
+            jwt_secret: None,
+            jwt_public_key: None,
+            age_encryption_key: None,
+            port: 3001,
+            allowed_origins: vec![],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+            backup_artifact_dir: std::env::temp_dir().join("riviamigo-test-backups").to_string_lossy().into_owned(),
+            vehicle_image_cache_dir: std::env::temp_dir().join("riviamigo-test-missing-mirror").to_string_lossy().into_owned(),
+            backup_driver: "json".into(),
+            backup_poll_interval_seconds: 60,
+            rivian_ws_reconnect_initial_seconds: 10,
+            rivian_ws_reconnect_max_seconds: 900,
+            rivian_raw_event_retention_days: 7,
+            rivian_persist_raw_events: true,
+            rivian_suppress_duplicate_telemetry: true,
+            riviamigo_env: None,
+            cookie_insecure: None,
+        };
+        let metadata = serde_json::json!({
+            "mirror_status": "ready",
+            "mirror_key": "abc.webp",
+            "mirror_relpath": "vehicle/abc.webp"
+        });
+
+        let url = super::resolved_image_url(
+            &config,
+            uuid::Uuid::nil(),
+            "https://rivian.com/mobile/static/img/example.webp",
+            &metadata,
+        );
+
+        assert_eq!(url, "https://rivian.com/mobile/static/img/example.webp");
     }
 
     #[tokio::test]

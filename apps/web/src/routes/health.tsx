@@ -666,13 +666,35 @@ function sanitizeUpdateVersion(version: string | null, currentVersion: string) {
 function selectHealthHeroImage(images: VehicleImages | undefined) {
   if (!images) return null;
   const all = images.all ?? [];
-  const scored = all
-    .map((image) => ({ image, score: scoreHealthHeroImage(image) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score);
-  if (scored[0]?.image.url) return scored[0].image.url;
 
-  return images.side?.light ?? images.side?.dark ?? all.find((image) => String(image.placement ?? '').toLowerCase().includes('side'))?.url ?? null;
+  const explicitHero = bestHealthHeroImage(all, (image) => hasHealthUsage(image, 'health-hero'));
+  if (explicitHero?.url) return explicitHero.url;
+
+  const explicitThreeQuarter = bestHealthHeroImage(all, isThreeQuarterHealthImage);
+  if (explicitThreeQuarter?.url) return explicitThreeQuarter.url;
+
+  const plainSide =
+    images.side?.light ??
+    images.side?.dark ??
+    all.find((image) => isPlainSideHealthImage(image) && designMatchesHealthImage(image, 'light'))?.url ??
+    all.find((image) => isPlainSideHealthImage(image))?.url;
+  if (plainSide) return plainSide;
+
+  const taggedFallback = bestHealthHeroImage(all, (image) => hasHealthUsage(image, 'health-hero-fallback'));
+  if (taggedFallback?.url) return taggedFallback.url;
+
+  const frontFallback =
+    images.front?.light ??
+    images.front?.dark ??
+    all.find((image) => isFrontHealthImage(image) && designMatchesHealthImage(image, 'light'))?.url ??
+    all.find((image) => isFrontHealthImage(image))?.url;
+  if (frontFallback) return frontFallback;
+
+  return (
+    all.find((image) => String(image.placement ?? '').toLowerCase().includes('side'))?.url ??
+    all.find((image) => String(image.placement ?? '').toLowerCase().includes('front'))?.url ??
+    null
+  );
 }
 
 function scoreHealthHeroImage(image: VehicleImages['all'][number]) {
@@ -683,15 +705,68 @@ function scoreHealthHeroImage(image: VehicleImages['all'][number]) {
   const text = `${url} ${placement} ${design} ${meta}`;
 
   let score = 0;
+  if (text.includes('health-hero')) score += 300;
   if (text.includes('three_quarter') || text.includes('three-quarters') || text.includes('three_quarters') || text.includes('3/4')) score += 120;
   if (placement.includes('three') || placement.includes('quarter')) score += 80;
   if (design.includes('light')) score += 15;
   if (text.includes('front') && text.includes('side')) score += 60;
+  if (placement.includes('front')) score += 35;
   if (text.includes('angle')) score += 20;
   if (placement.includes('side') && !text.includes('three')) score -= 80;
   if (placement.includes('overhead') || placement.includes('top')) score -= 120;
+  if (placement.includes('side-charging') || text.includes('side-charging')) score -= 140;
   if (placement.includes('rear')) score -= 60;
   return score;
+}
+
+function bestHealthHeroImage(
+  images: VehicleImages['all'],
+  predicate: (image: VehicleImages['all'][number]) => boolean,
+) {
+  return images
+    .filter(predicate)
+    .map((image) => ({ image, score: scoreHealthHeroImage(image) }))
+    .sort((a, b) => b.score - a.score)[0]?.image;
+}
+
+function healthImageText(image: VehicleImages['all'][number]) {
+  return `${image.url ?? ''} ${image.placement ?? ''} ${image.design ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
+}
+
+function hasHealthUsage(image: VehicleImages['all'][number], usage: string) {
+  const metadata = image.metadata as { app_usage?: unknown } | null | undefined;
+  const usages = Array.isArray(metadata?.app_usage)
+    ? metadata.app_usage.filter((value): value is string => typeof value === 'string').map((value) => value.toLowerCase())
+    : [];
+  return usages.includes(usage.toLowerCase());
+}
+
+function isThreeQuarterHealthImage(image: VehicleImages['all'][number]) {
+  const text = healthImageText(image);
+  const placement = String(image.placement ?? '').toLowerCase();
+  return (
+    text.includes('three_quarter') ||
+    text.includes('three-quarters') ||
+    text.includes('three_quarters') ||
+    text.includes('3/4') ||
+    placement.includes('three') ||
+    placement.includes('quarter') ||
+    (text.includes('front') && text.includes('side') && text.includes('angle'))
+  );
+}
+
+function isPlainSideHealthImage(image: VehicleImages['all'][number]) {
+  const placement = String(image.placement ?? '').toLowerCase();
+  const text = healthImageText(image);
+  return placement.includes('side') && !placement.includes('charging') && !text.includes('side-charging');
+}
+
+function isFrontHealthImage(image: VehicleImages['all'][number]) {
+  return String(image.placement ?? '').toLowerCase().includes('front');
+}
+
+function designMatchesHealthImage(image: VehicleImages['all'][number], design: 'light' | 'dark') {
+  return String(image.design ?? '').toLowerCase().includes(design);
 }
 
 function dedupeSoftwareHistory(entries: import('@riviamigo/types').VehicleHealthSoftwareEntry[]) {

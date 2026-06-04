@@ -34,6 +34,10 @@ mod tests {
                 .join("riviamigo-backups-test")
                 .to_string_lossy()
                 .into_owned(),
+            vehicle_image_cache_dir: std::env::temp_dir()
+                .join("riviamigo-vehicle-images-test")
+                .to_string_lossy()
+                .into_owned(),
             backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
