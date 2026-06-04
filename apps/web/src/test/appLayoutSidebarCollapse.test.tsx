@@ -15,6 +15,9 @@ vi.mock('@riviamigo/hooks', () => ({
     defaultVehicleId: 'vehicle-1',
     logout,
   }),
+  useMe: () => ({
+    data: { role: 'user' },
+  }),
   useVehicles: () => ({
     data: [{ id: 'vehicle-1', model: 'R1S' }],
   }),

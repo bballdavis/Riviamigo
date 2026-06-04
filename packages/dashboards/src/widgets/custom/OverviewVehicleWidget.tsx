@@ -230,8 +230,12 @@ function VehicleLabel({
   targetTirePressurePsi?: number | null | undefined;
 }) {
   return (
-    <Tooltip content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />} contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur">
-      <span className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)} ${className}`}>{value}</span>
+    <Tooltip
+      className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 ${className}`}
+      content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />}
+      contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur"
+    >
+      <span className={`rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)}`}>{value}</span>
     </Tooltip>
   );
 }

@@ -18,6 +18,7 @@ pub struct AuthIdentityKeyExtractor {
 #[derive(Clone, Copy, Debug)]
 pub enum RateLimitClass {
     AuthPublic,
+    AuthMetadata,
     AuthRead,
     AuthWrite,
     HeavyRead,
@@ -27,6 +28,7 @@ impl RateLimitClass {
     pub fn as_header_value(self) -> &'static str {
         match self {
             Self::AuthPublic => "auth_public",
+            Self::AuthMetadata => "auth_metadata",
             Self::AuthRead => "auth_read",
             Self::AuthWrite => "auth_write",
             Self::HeavyRead => "heavy_read",

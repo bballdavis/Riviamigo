@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, useAuth } from '@riviamigo/hooks';
+import { useQueryClient } from '@tanstack/react-query';
+import { useMe } from '@riviamigo/hooks';
 import {
   useCreateDashboard,
   useUpdateDashboard,
@@ -32,8 +32,7 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
-  const isAuthenticated = useAuth((state) => state.isAuthenticated);
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me(), enabled: isAuthenticated });
+  const me = useMe();
   const isAdmin = me.data?.role === 'admin';
 
   return (
@@ -362,8 +361,12 @@ function VehicleLabel({
   targetTirePressurePsi?: number | null | undefined;
 }) {
   return (
-    <Tooltip content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />} contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur">
-      <span className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)} ${className}`}>{value}</span>
+    <Tooltip
+      className={`absolute z-30 -translate-x-1/2 -translate-y-1/2 ${className}`}
+      content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />}
+      contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur"
+    >
+      <span className={`rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)}`}>{value}</span>
     </Tooltip>
   );
 }

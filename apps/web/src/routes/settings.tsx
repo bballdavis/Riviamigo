@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
-import { api, useAuth, useVehicles } from '@riviamigo/hooks';
+import { api, useAuth, useMe, useVehicles } from '@riviamigo/hooks';
 import type { ApiAccessLevel, UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   formatMiles,
@@ -162,10 +162,7 @@ export function SettingsContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
-  const me = useQuery({
-    queryKey: ['me'],
-    queryFn: () => api.me(),
-  });
+  const me = useMe();
   const [activeSection, setActiveSection] = React.useState<SettingsSection>('vehicles');
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');

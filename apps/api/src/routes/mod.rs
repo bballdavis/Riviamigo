@@ -127,6 +127,22 @@ pub fn build_router(state: AppState) -> Router {
             .finish()
             .unwrap(),
     );
+    let auth_metadata_identity_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
+                state.jwt_keys.decoding.clone(),
+            ))
+            .per_second(20)
+            .burst_size(40)
+            .methods(vec![
+                http::Method::GET,
+                http::Method::HEAD,
+                http::Method::OPTIONS,
+                http::Method::PUT,
+            ])
+            .finish()
+            .unwrap(),
+    );
     let auth_read_identity_config = Arc::new(
         GovernorConfigBuilder::default()
             .key_extractor(rate_limit::AuthIdentityKeyExtractor::new(
@@ -178,7 +194,6 @@ pub fn build_router(state: AppState) -> Router {
     let decoding_key = state.jwt_keys.decoding.clone();
 
     let protected_common = Router::new()
-        .merge(auth::protected_router())
         .merge(api_keys::router())
         .merge(backups::router())
         .merge(backfill::router())
@@ -201,9 +216,17 @@ pub fn build_router(state: AppState) -> Router {
         .merge(grafana::router())
         .merge(users::router());
 
+    let protected_metadata = Router::new()
+        .merge(auth::metadata_router())
+        .merge(dashboards::metadata_router())
+        .layer(GovernorLayer {
+            config: auth_metadata_identity_config,
+        });
+
     let protected_heavy = Router::new().merge(live::router());
 
     let protected = Router::new()
+        .merge(protected_metadata)
         .merge(
             protected_common
                 .layer(GovernorLayer {
@@ -284,6 +307,13 @@ fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClas
         || path.starts_with("/v1/auth/refresh")
     {
         return RateLimitClass::AuthPublic;
+    }
+
+    if path.starts_with("/v1/auth/me")
+        || path.starts_with("/v1/auth/preferences")
+        || path.starts_with("/v1/dashboards/by-slug/")
+    {
+        return RateLimitClass::AuthMetadata;
     }
 
     if path == "/v1/vehicles/live" || path.contains("/live-session") {
