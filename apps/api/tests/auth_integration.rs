@@ -95,6 +95,10 @@ impl TestApp {
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
+                vehicle_image_cache_dir: std::env::temp_dir()
+                    .join("riviamigo-auth-test-images")
+                    .to_string_lossy()
+                    .into_owned(),
             },
             nominatim_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             supervisor: SupervisorHandle::noop(),
@@ -1005,6 +1009,33 @@ async fn authenticated_limits_are_isolated_by_user_identity() {
         user_two.status,
         StatusCode::OK,
         "second user should not share the first user's limiter bucket"
+    );
+}
+
+#[tokio::test]
+async fn metadata_limits_do_not_block_regular_authenticated_reads() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "rl-metadata@example.com").await;
+
+    let mut limited = false;
+    for _ in 0..300 {
+        let res = app
+            .request(Method::GET, "/v1/auth/me", None, Some(&token), None)
+            .await;
+        if res.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "expected metadata limiter to activate");
+
+    let regular_read = app
+        .request(Method::GET, "/v1/vehicles", None, Some(&token), None)
+        .await;
+    assert_eq!(
+        regular_read.status,
+        StatusCode::OK,
+        "exhausting metadata traffic should not block ordinary authenticated reads"
     );
 }
 

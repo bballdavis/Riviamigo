@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
-import { api } from '@riviamigo/hooks';
+import { api, useMe } from '@riviamigo/hooks';
 import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, PageLayout } from '@riviamigo/ui/primitives';
@@ -28,7 +28,7 @@ function UsersContent() {
   const [grantVehicleId, setGrantVehicleId] = React.useState('');
   const [grantRole, setGrantRole] = React.useState<'owner' | 'manager' | 'viewer'>('viewer');
 
-  const me = useQuery({ queryKey: ['me'], queryFn: () => api.me() });
+  const me = useMe();
   const isPrivileged = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const isSuperUser = me.data?.role === 'super_user';
 

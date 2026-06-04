@@ -1,6 +1,7 @@
 export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
 export { useAuth } from './useAuth';
+export { useMe } from './useMe';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
 export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
 export {
