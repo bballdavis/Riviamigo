@@ -11,6 +11,7 @@ use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    routes::efficiency_math::weighted_average_from_totals,
 };
 
 pub fn router() -> Router<AppState> {
@@ -62,6 +63,13 @@ struct MetricValueResponse {
 struct MetricSeriesPoint {
     ts: DateTime<Utc>,
     value: Option<f64>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct WeightedEfficiencyRow {
+    ts: DateTime<Utc>,
+    total_distance_miles: Option<f64>,
+    weighted_efficiency_wh_mi: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -511,13 +519,25 @@ async fn summary_value(
         .fetch_optional(pool)
         .await?
         .flatten(),
-        "avg_efficiency" => sqlx::query_scalar(
-            "SELECT CASE WHEN SUM(distance_miles) > 0 THEN SUM(distance_miles * efficiency_wh_per_mile) / SUM(distance_miles) ELSE NULL END FROM riviamigo.trips WHERE vehicle_id=$1",
+        "avg_efficiency" => sqlx::query_as::<_, WeightedEfficiencyRow>(
+            "SELECT
+                now() AS ts,
+                SUM(distance_miles)::float8 AS total_distance_miles,
+                SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi
+             FROM riviamigo.trips
+             WHERE vehicle_id=$1
+               AND efficiency_wh_per_mile IS NOT NULL
+               AND distance_miles > 0",
         )
         .bind(vid)
         .fetch_optional(pool)
         .await?
-        .flatten(),
+        .and_then(|row| {
+            weighted_average_from_totals(
+                row.total_distance_miles,
+                row.weighted_efficiency_wh_mi,
+            )
+        }),
         "avg_gross_efficiency" => sqlx::query_scalar(
             "SELECT CASE WHEN SUM(distance_miles) > 0 THEN SUM(energy_wh + COALESCE(regen_wh, 0)) / SUM(distance_miles) ELSE NULL END FROM riviamigo.trips WHERE vehicle_id=$1 AND energy_wh IS NOT NULL AND distance_miles > 0",
         )
@@ -615,10 +635,13 @@ async fn summary_series(
              GROUP BY 1 ORDER BY 1"
         ),
         "avg_efficiency" => format!(
-            "SELECT {summary_bucket_expr} AS ts, AVG(efficiency_wh_per_mile)::float8 AS value
+            "SELECT {summary_bucket_expr} AS ts,
+                    SUM(distance_miles)::float8 AS total_distance_miles,
+                    SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
              AND efficiency_wh_per_mile IS NOT NULL
+             AND distance_miles > 0
              GROUP BY 1 ORDER BY 1"
         ),
         "avg_gross_efficiency" => format!(
@@ -645,6 +668,26 @@ async fn summary_series(
         ),
         _ => return Ok(Vec::new()),
     };
+
+    if metric == "avg_efficiency" {
+        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(&sql)
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .fetch_all(pool)
+            .await?;
+
+        return Ok(rows
+            .into_iter()
+            .map(|row| MetricSeriesPoint {
+                ts: row.ts,
+                value: weighted_average_from_totals(
+                    row.total_distance_miles,
+                    row.weighted_efficiency_wh_mi,
+                ),
+            })
+            .collect());
+    }
 
     Ok(sqlx::query_as::<_, MetricSeriesPoint>(&sql)
         .bind(vid)

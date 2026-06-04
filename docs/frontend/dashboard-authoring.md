@@ -47,6 +47,29 @@ A widget should usually:
 
 Do not use one widget to coordinate the rest of a page.
 
+## Adding A Table
+
+Prefer the shared table seam before inventing page-local table chrome.
+
+Use the existing shared pieces in this order:
+
+1. `packages/ui/src/tables/DataTable.tsx` for the actual table body, sorting, empty state, and optional column visibility menu.
+2. `packages/ui/src/tables/TableControls.tsx` for the standard search, rows-per-page, and pagination chrome.
+3. `packages/ui/src/tables/*Columns.tsx` for column definitions that keep widths compact and readable.
+
+Table rules:
+
+- Keep page-local wrappers `min-w-0` and avoid horizontal scrolling as the default fix.
+- Use fixed or explicit widths for dense tables before adding more columns.
+- Collapse related values into one cell when the table is getting too wide, like `SoC start -> end`.
+- Default-hide secondary columns instead of widening the table for rarely used data.
+- Use tooltip headers for domain-specific labels so the cell text can stay compact.
+- If a new table is not a good fit for `DataTable` plus `TableControls`, document why in the code and reuse the nearest shared seam rather than creating a one-off chrome block.
+- If a table shows inferred vehicle behavior, define the canonical metric, exclusion rules, and evidence thresholds before wiring the UI. Do not render low-confidence derived values as if they are first-class facts.
+- Prefer nullable secondary metrics over forced placeholders when the underlying evidence is weak. Phantom Drain is the model here: SoC-backed drain is canonical, range loss is derived, and state-based sleep share is hidden when coverage is weak.
+
+When adding a new table page, make the search box and pagination semantics match the existing site patterns first. Only diverge when the data shape makes the shared controls genuinely misleading.
+
 ## Sensor Chip Language
 
 Use `componentType: "sensor"` for compact stat chips unless the card owns a genuinely custom interaction or visual. The reusable sensor chip supports:

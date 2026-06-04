@@ -35,8 +35,15 @@ function computeTripStat(stat: TripStat, trips: TripRow[]): number | null {
   if (stat === 'count') return trips.length;
   if (stat === 'miles') return trips.reduce((sum, t) => sum + t.distance_mi, 0);
   if (stat === 'duration') return trips.reduce((sum, t) => sum + t.duration_min, 0) / trips.length;
-  const vals = trips.map((t) => t.efficiency_wh_mi).filter((v): v is number => v !== null);
-  return vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+  const weightedTrips = trips.filter((t) => t.distance_mi > 0 && t.efficiency_wh_mi != null);
+  if (weightedTrips.length === 0) return null;
+  const totalDistance = weightedTrips.reduce((sum, trip) => sum + trip.distance_mi, 0);
+  if (totalDistance <= 0) return null;
+  const weightedEfficiency = weightedTrips.reduce(
+    (sum, trip) => sum + (trip.distance_mi * trip.efficiency_wh_mi),
+    0,
+  );
+  return weightedEfficiency / totalDistance;
 }
 
 function formatTripStat(stat: TripStat, value: number | null): string {
@@ -85,7 +92,9 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
 
   const displayValue = hasSelection
     ? formatTripStat(options.stat, computeTripStat(options.stat, selectedTrips))
-    : formatApiValue(aggregateSeriesForStat(options.stat, series) ?? value?.value, value?.unit);
+    : options.stat === 'efficiency'
+      ? formatApiValue(value?.value ?? aggregateSeriesForStat(options.stat, series), value?.unit)
+      : formatApiValue(aggregateSeriesForStat(options.stat, series) ?? value?.value, value?.unit);
 
   const spriteData = series.filter(
     (p): p is { ts: string; value: number } =>

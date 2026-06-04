@@ -863,6 +863,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            rate_limit: crate::config::RateLimitConfig::default(),
         };
 
         let state = AppState {

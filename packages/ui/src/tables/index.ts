@@ -1,5 +1,7 @@
 export { DataTable } from './DataTable';
 export type { DataTableProps } from './DataTable';
+export { TableControls } from './TableControls';
+export type { TableControlsProps } from './TableControls';
 export { tripColumns, createTripColumns } from './tripColumns';
 export type { TripRow } from './tripColumns';
 export { chargingColumns } from './chargingColumns';

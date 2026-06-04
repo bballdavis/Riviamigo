@@ -12,6 +12,7 @@ use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    routes::idle_drain::fetch_validated_idle_drain_periods_for_chart,
     routes::range_normalization::{
         normalize_remaining_range_miles_strict, projected_full_charge_range_miles,
     },
@@ -458,14 +459,34 @@ async fn get_phantom_drain(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
     let to = p.to.unwrap_or_else(Utc::now);
-    let from_day = from.date_naive();
-    let to_day = to.date_naive();
+    let periods = fetch_validated_idle_drain_periods_for_chart(&state.pool, vid, from, to).await?;
 
-    let points = sqlx::query_as!(PhantomDrainPoint,
-        "SELECT day, soc_lost_pct_total::float8 AS total_soc_lost, avg_drain_pct_per_hour::float8 AS avg_drain_rate, hours_idle::float8 AS hours_parked \
-         FROM timeseries.phantom_drain_daily \
-         WHERE vehicle_id=$1 AND day>=$2 AND day<=$3 ORDER BY day",
-        vid, from_day, to_day).fetch_all(&state.pool).await?;
+    let mut by_day = BTreeMap::<NaiveDate, (f64, f64)>::new();
+    for period in periods {
+        let Some(day) = period.period_start.map(|ts| ts.date_naive()) else {
+            continue;
+        };
+        let duration = period.duration_hours.unwrap_or(0.0);
+        let soc_lost = period.soc_lost_pct.unwrap_or(0.0);
+        let entry = by_day.entry(day).or_insert((0.0, 0.0));
+        entry.0 += soc_lost;
+        entry.1 += duration;
+    }
+
+    let points = by_day
+        .into_iter()
+        .map(|(day, (total_soc_lost, hours_parked))| PhantomDrainPoint {
+            day: Some(day),
+            total_soc_lost: Some(total_soc_lost),
+            avg_drain_rate: if hours_parked > 0.0 {
+                Some(total_soc_lost / hours_parked)
+            } else {
+                None
+            },
+            hours_parked: Some(hours_parked),
+        })
+        .collect::<Vec<_>>();
+
     Ok(Json(points))
 }
 
@@ -532,6 +553,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            rate_limit: crate::config::RateLimitConfig::default(),
         };
 
         let state = AppState {

@@ -64,7 +64,8 @@ export interface PhantomDrainPeriod {
   period_start: string | null;
   period_end: string | null;
   duration_hours: number | null;
-  standby_pct: number | null;
+  sleep_share_pct: number | null;
+  state_coverage_pct: number | null;
   soc_start: number | null;
   soc_end: number | null;
   soc_lost_pct: number | null;
@@ -76,6 +77,14 @@ export interface PhantomDrainPeriod {
   energy_drained_kwh: number | null;
   avg_power_w: number | null;
   has_reduced_range: boolean | null;
+  validation_status: 'validated' | 'excluded';
+  validation_reason: string | null;
+  sample_count: number;
+  start_sample_at: string | null;
+  end_sample_at: string | null;
+  movement_detected: boolean;
+  overlaps_trip: boolean;
+  overlaps_charge: boolean;
 }
 
 export interface IdleDrainResponse {

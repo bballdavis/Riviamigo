@@ -11,6 +11,7 @@ use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    routes::efficiency_math::weighted_average_from_totals,
 };
 
 pub fn router() -> Router<AppState> {
@@ -46,6 +47,15 @@ struct TrendPoint {
     rolling_7d_wh_mi: Option<f64>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct SummaryRow {
+    total_distance_miles: Option<f64>,
+    weighted_efficiency_wh_mi: Option<f64>,
+    total_miles: f64,
+    p10: Option<f64>,
+    p90: Option<f64>,
+}
+
 async fn get_summary(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -60,23 +70,30 @@ async fn get_summary(
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
     let to = p.to.unwrap_or_else(Utc::now);
 
-    let row = sqlx::query!(
-        "SELECT COALESCE(AVG(efficiency_wh_per_mile),0) AS avg_wh_per_mi,
+    let row = sqlx::query_as::<_, SummaryRow>(
+        "SELECT COALESCE(SUM(distance_miles), 0)::float8 AS total_distance_miles,
+                COALESCE(SUM(distance_miles * efficiency_wh_per_mile), 0)::float8 AS weighted_efficiency_wh_mi,
                 COALESCE(SUM(distance_miles),0) AS total_miles,
                 PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) AS p10,
                 PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) AS p90
          FROM riviamigo.trips
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND efficiency_wh_per_mile IS NOT NULL",
-        vid,
-        from,
-        to
+           AND efficiency_wh_per_mile IS NOT NULL
+           AND distance_miles > 0"
     )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
     .fetch_one(&state.pool)
     .await?;
 
+    let avg_wh_per_mi = weighted_average_from_totals(
+        row.total_distance_miles,
+        row.weighted_efficiency_wh_mi,
+    );
+
     Ok(Json(serde_json::json!({
-        "avg_wh_per_mi":  row.avg_wh_per_mi,
+        "avg_wh_per_mi":  avg_wh_per_mi,
         "total_miles":    row.total_miles,
         "p10_wh_per_mi":  row.p10.unwrap_or(0.0),
         "p90_wh_per_mi":  row.p90.unwrap_or(0.0),
@@ -309,6 +326,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            rate_limit: crate::config::RateLimitConfig::default(),
         };
 
         let state = AppState {

@@ -26,6 +26,7 @@ const KNOWN_UNSUPPORTED_VEHICLE_STATE_FIELDS: &[&str] = &[
     "cabinClimateExteriorTemperature",
     "cabinClimateRunning",
     "vehiclePowerOutput",
+    "regenerativeBrakingPower",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1123,6 +1124,13 @@ mod tests {
         assert!(!query.contains("vehiclePowerOutput { timeStamp value }"));
         assert!(query.contains("batteryLevel { timeStamp value }"));
         assert!(query.contains("subscription vehicleState"));
+    }
+
+    #[test]
+    fn default_subscription_omits_known_unsupported_regen_field() {
+        let query = VehicleStateSubscriptionHealth::default().build_query();
+
+        assert!(!query.contains("regenerativeBrakingPower { timeStamp value }"));
     }
 
     #[test]

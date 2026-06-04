@@ -146,6 +146,10 @@ interface ApiFailureDetail {
   method: string;
   path: string;
   rateLimitSource?: string;
+  rateLimitClass?: string;
+  rateLimitLimit?: number;
+  rateLimitRemaining?: number;
+  rateLimitResetSeconds?: number;
   retryAfterSeconds?: number;
 }
 
@@ -155,6 +159,9 @@ const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/refresh',
 ]);
 
+const CLIENT_RATE_LIMIT_SOURCE = 'client-cooldown';
+const DEFAULT_CLIENT_BACKOFF_SECONDS = 5;
+
 type AuthChangeHandler = (tokens: AuthTokens | null) => void;
 
 class ApiClient {
@@ -162,6 +169,7 @@ class ApiClient {
   private authChangeHandler: AuthChangeHandler | null = null;
   private refreshPromise: Promise<AuthTokens> | null = null;
   private authExpiredReported = false;
+  private rateLimitCooldowns = new Map<string, number>();
 
   setToken(token: string | null) {
     this.accessToken = token;
@@ -206,6 +214,38 @@ class ApiClient {
     return h;
   }
 
+  private assertRateLimitCooldown(method: string, path: string) {
+    const limiterClass = inferClientRateLimitClass(method, path);
+    const cooldownUntil = this.rateLimitCooldowns.get(limiterClass);
+    if (cooldownUntil == null) return;
+
+    const remainingMs = cooldownUntil - Date.now();
+    if (remainingMs <= 0) {
+      this.rateLimitCooldowns.delete(limiterClass);
+      return;
+    }
+
+    const retryAfterSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+    const detail: ApiFailureDetail = {
+      status: 429,
+      code: 'RATE_LIMITED',
+      message: `Local backoff active for ${limiterClass}.`,
+      method,
+      path,
+      rateLimitSource: CLIENT_RATE_LIMIT_SOURCE,
+      rateLimitClass: limiterClass,
+      retryAfterSeconds,
+      rateLimitResetSeconds: retryAfterSeconds,
+    };
+    throw Object.assign(new Error(formatApiError(detail)), { status: 429, code: detail.code, detail });
+  }
+
+  private rememberRateLimitCooldown(detail: Pick<ApiFailureDetail, 'method' | 'path' | 'rateLimitClass' | 'retryAfterSeconds' | 'rateLimitResetSeconds'>) {
+    const limiterClass = detail.rateLimitClass ?? inferClientRateLimitClass(detail.method, detail.path);
+    const waitSeconds = detail.retryAfterSeconds ?? detail.rateLimitResetSeconds ?? DEFAULT_CLIENT_BACKOFF_SECONDS;
+    this.rateLimitCooldowns.set(limiterClass, Date.now() + waitSeconds * 1000);
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -214,6 +254,8 @@ class ApiClient {
     retryOnUnauthorized = true,
     reportErrors = true
   ): Promise<T> {
+    this.assertRateLimitCooldown(method, path);
+
     let url = `${getBase()}${path}`;
     if (params) {
       const q = new URLSearchParams(
@@ -230,13 +272,7 @@ class ApiClient {
     });
 
     if (!res.ok) {
-      const rateLimitSource = res.headers.get('x-riviamigo-ratelimit-source') ?? undefined;
-      const retryAfterSeconds = (() => {
-        const header = res.headers.get('retry-after');
-        if (!header) return undefined;
-        const parsed = Number(header);
-        return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-      })();
+      const rateLimitHeaders = parseRateLimitHeaders(res.headers, method, path);
 
       if (res.status === 401 && retryOnUnauthorized && this.accessToken && !AUTH_REFRESH_EXCLUDED_PATHS.has(path)) {
         try {
@@ -251,8 +287,7 @@ class ApiClient {
             message: `Session expired while calling ${method} ${path}. Sign in again.`,
             method,
             path,
-            ...(rateLimitSource ? { rateLimitSource } : {}),
-            ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+            ...rateLimitHeaders,
           };
           this.reportFailure(detail);
           throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: detail.code, detail });
@@ -267,9 +302,9 @@ class ApiClient {
         message: err.message,
         method,
         path,
-        ...(rateLimitSource ? { rateLimitSource } : {}),
-        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+        ...rateLimitHeaders,
       };
+      if (res.status === 429) this.rememberRateLimitCooldown(detail);
       if (reportErrors) this.reportFailure(detail);
       throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
     }
@@ -526,6 +561,9 @@ class ApiClient {
   }
 
   async downloadBackupArtifact(artifactId: string): Promise<{ blob: Blob; fileName: string }> {
+    const path = '/v1/admin/backups/artifacts/:artifactId/download';
+    this.assertRateLimitCooldown('GET', path);
+
     const url = `${getBase()}/v1/admin/backups/artifacts/${artifactId}/download`;
     const res = await fetch(url, {
       method: 'GET',
@@ -534,14 +572,7 @@ class ApiClient {
     });
 
     if (!res.ok) {
-      const rateLimitSource = res.headers.get('x-riviamigo-ratelimit-source') ?? undefined;
-      const retryAfterSeconds = (() => {
-        const header = res.headers.get('retry-after');
-        if (!header) return undefined;
-        const parsed = Number(header);
-        return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-      })();
-
+      const rateLimitHeaders = parseRateLimitHeaders(res.headers, 'GET', path);
       const responseBody = await res.json().catch(() => null);
       const err: ApiError = responseBody?.error ?? { code: 'unknown', message: res.statusText };
       const detail: ApiFailureDetail = {
@@ -549,10 +580,10 @@ class ApiClient {
         code: err.code,
         message: err.message,
         method: 'GET',
-        path: '/v1/admin/backups/artifacts/:artifactId/download',
-        ...(rateLimitSource ? { rateLimitSource } : {}),
-        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+        path,
+        ...rateLimitHeaders,
       };
+      if (res.status === 429) this.rememberRateLimitCooldown(detail);
       this.reportFailure(detail);
       throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
     }
@@ -984,6 +1015,10 @@ class ApiClient {
       method: detail.method,
       path: detail.path,
       rateLimitSource: detail.rateLimitSource,
+      rateLimitClass: detail.rateLimitClass,
+      rateLimitLimit: detail.rateLimitLimit,
+      rateLimitRemaining: detail.rateLimitRemaining,
+      rateLimitResetSeconds: detail.rateLimitResetSeconds,
       retryAfterSeconds: detail.retryAfterSeconds,
       message: truncate(detail.message, 240),
     });
@@ -1118,6 +1153,56 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function parseRateLimitHeaders(headers: Headers, method: string, path: string) {
+  const rateLimitSource = headers.get('x-riviamigo-ratelimit-source') ?? undefined;
+  const rateLimitClass = headers.get('x-riviamigo-ratelimit-class') ?? inferClientRateLimitClass(method, path);
+  const rateLimitLimit = parsePositiveNumberHeader(headers.get('x-ratelimit-limit'));
+  const rateLimitRemaining = parsePositiveNumberHeader(headers.get('x-ratelimit-remaining'));
+  const rateLimitResetSeconds = parsePositiveNumberHeader(
+    headers.get('x-riviamigo-ratelimit-reset') ?? headers.get('x-ratelimit-after'),
+  );
+  const retryAfterSeconds = parsePositiveNumberHeader(headers.get('retry-after')) ?? rateLimitResetSeconds;
+
+  return {
+    ...(rateLimitSource ? { rateLimitSource } : {}),
+    ...(rateLimitClass ? { rateLimitClass } : {}),
+    ...(rateLimitLimit !== undefined ? { rateLimitLimit } : {}),
+    ...(rateLimitRemaining !== undefined ? { rateLimitRemaining } : {}),
+    ...(rateLimitResetSeconds !== undefined ? { rateLimitResetSeconds } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+  };
+}
+
+function parsePositiveNumberHeader(value: string | null) {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function inferClientRateLimitClass(method: string, path: string) {
+  if (path.startsWith('/v1/auth/login')
+    || path.startsWith('/v1/auth/register')
+    || path.startsWith('/v1/auth/refresh')) {
+    return 'auth_public';
+  }
+
+  if (path.startsWith('/v1/auth/me')
+    || path.startsWith('/v1/auth/preferences')
+    || path.startsWith('/v1/dashboards/by-slug/')) {
+    return 'auth_metadata';
+  }
+
+  if (path === '/v1/vehicles/live' || path.includes('/live-session')) {
+    return 'heavy_read';
+  }
+
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
+    return 'auth_read';
+  }
+
+  return 'auth_write';
 }
 
 function finiteNumber(value: unknown): number | undefined {

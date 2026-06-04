@@ -36,5 +36,6 @@ export function WidgetHost({ instance, ctx }: WidgetHostProps) {
 function shouldShowWidgetTitle(instance: WidgetInstance) {
   if (instance.componentType === 'sensor' || instance.componentType === 'battery' || instance.componentType === 'charging') return false;
   if (instance.componentType === 'custom' && instance.definitionId === 'charging.connection') return false;
+  if (instance.componentType === 'custom' && instance.definitionId === 'trips.stat') return false;
   return true;
 }

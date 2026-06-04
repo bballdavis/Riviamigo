@@ -5,6 +5,7 @@ describe('api client dashboard contracts', () => {
   beforeEach(() => {
     api.setToken('test-token');
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('calls the backend charging route that actually exists and normalizes pagination', async () => {
@@ -311,11 +312,12 @@ describe('api client dashboard contracts', () => {
         headers: {
           'Content-Type': 'application/json',
           'x-riviamigo-ratelimit-source': 'api',
+          'x-riviamigo-ratelimit-class': 'auth_metadata',
           'retry-after': '2',
         },
       }) as Response,
     );
-    await expect(api.vehicleStatus('vehicle-1')).rejects.toMatchObject({ status: 429 });
+    await expect(api.me()).rejects.toMatchObject({ status: 429 });
 
     const details = toast.mock.calls
       .map(([event]) => (event as CustomEvent).detail?.message)
@@ -325,5 +327,39 @@ describe('api client dashboard contracts', () => {
     expect(details.some((message) => message.includes('API rate limit reached'))).toBe(true);
 
     window.removeEventListener('riviamigo:toast', toast as EventListener);
+  });
+
+  it('backs off repeated requests against the same exhausted limiter bucket', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded' },
+      }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-riviamigo-ratelimit-source': 'api',
+          'x-riviamigo-ratelimit-class': 'auth_write',
+          'retry-after': '2',
+        },
+      }) as Response,
+    );
+
+    await expect(api.updateVehicleSettings('vehicle-1', { target_tire_pressure_psi: 48 })).rejects.toMatchObject({ status: 429 });
+    await expect(api.updateVehicleSettings('vehicle-1', { target_tire_pressure_psi: 48 })).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2100);
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await api.updateVehicleSettings('vehicle-1', { target_tire_pressure_psi: 48 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
