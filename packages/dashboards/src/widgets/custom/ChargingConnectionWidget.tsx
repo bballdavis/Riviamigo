@@ -27,9 +27,9 @@ const CHARGING_CROP_CONFIG: Record<ChargingCropFamily, ChargingCropConfig> = {
     objectPosition: 'left center',
   },
   R1S: {
-    translateX: -30,
-    translateY: 0,
-    scale: 1.78,
+    // Keep the stock crop for R1S; only the demo truck needs the tighter framing.
+    translateX: -12,
+    scale: 1.12,
     objectPosition: 'left center',
   },
   default: {
@@ -132,7 +132,7 @@ function ChargingConnectionWidget({
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/82 to-transparent" />
 
-      <div className="absolute left-4 top-4 z-10 grid w-[40%] min-w-[180px] max-w-[260px] gap-2 pb-[12%]">
+      <div className="absolute left-6 top-4 z-10 grid w-[40%] min-w-[180px] max-w-[260px] gap-2 pb-[12%]">
         {rows.map((row) => (
           <ChargingSummaryRow key={row.label} label={row.label} value={row.value} accent={row.accent === true} />
         ))}
