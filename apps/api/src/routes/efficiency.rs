@@ -87,10 +87,8 @@ async fn get_summary(
     .fetch_one(&state.pool)
     .await?;
 
-    let avg_wh_per_mi = weighted_average_from_totals(
-        row.total_distance_miles,
-        row.weighted_efficiency_wh_mi,
-    );
+    let avg_wh_per_mi =
+        weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi);
 
     Ok(Json(serde_json::json!({
         "avg_wh_per_mi":  avg_wh_per_mi,

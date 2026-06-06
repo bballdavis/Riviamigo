@@ -1,5 +1,10 @@
 //! Idle (phantom) drain endpoint built from validated parked sessions instead
 //! of raw gaps between anchors.
+//!
+//! Canonical parked-session boundaries intentionally follow TeslaMate's model:
+//! completed trips and completed charge sessions define the lifecycle anchors.
+//! Vehicle state periods and raw telemetry act only as overlays and validators
+//! so noisy state rows cannot collapse an otherwise valid parked-gap list.
 
 use axum::{
     extract::{Path, Query, State},
@@ -130,7 +135,6 @@ struct PhantomCandidateRow {
     drive_sample_count: i64,
     trip_overlap_count: i64,
     charge_overlap_count: i64,
-    active_state_seconds: Option<f64>,
     sleep_seconds: Option<f64>,
     covered_state_seconds: Option<f64>,
     has_reduced_range: Option<bool>,
@@ -179,7 +183,7 @@ pub(crate) async fn fetch_idle_drain_periods(
 ) -> Result<Vec<PhantomPeriod>, AppError> {
     let candidates = sqlx::query_as::<_, PhantomCandidateRow>(
         r#"
-        WITH active_sources AS (
+        WITH canonical_anchors AS (
             SELECT vehicle_id, started_at, ended_at
             FROM riviamigo.trips
             WHERE vehicle_id = $1
@@ -195,16 +199,6 @@ pub(crate) async fn fetch_idle_drain_periods(
               AND ended_at IS NOT NULL
               AND started_at < $3 + ($5 * INTERVAL '1 hour')
               AND ended_at > $2 - ($5 * INTERVAL '1 hour')
-
-            UNION ALL
-
-            SELECT vehicle_id, started_at, ended_at
-            FROM riviamigo.vehicle_state_periods
-            WHERE vehicle_id = $1
-              AND ended_at IS NOT NULL
-              AND state IN ('drive', 'charging')
-              AND started_at < $3 + ($5 * INTERVAL '1 hour')
-              AND ended_at > $2 - ($5 * INTERVAL '1 hour')
         ),
         active_ranked AS (
             SELECT
@@ -216,7 +210,7 @@ pub(crate) async fn fetch_idle_drain_periods(
                     ORDER BY started_at, ended_at
                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
                 ) AS prev_max_end
-            FROM active_sources
+            FROM canonical_anchors
         ),
         active_grouped AS (
             SELECT
@@ -285,7 +279,6 @@ pub(crate) async fn fetch_idle_drain_periods(
             COALESCE(telemetry_window.drive_sample_count, 0) AS drive_sample_count,
             COALESCE(trip_overlap.trip_overlap_count, 0) AS trip_overlap_count,
             COALESCE(charge_overlap.charge_overlap_count, 0) AS charge_overlap_count,
-            state_overlap.active_state_seconds,
             state_overlap.sleep_seconds,
             state_overlap.covered_state_seconds,
             telemetry_window.has_reduced_range
@@ -294,7 +287,7 @@ pub(crate) async fn fetch_idle_drain_periods(
             SELECT
                 t.ts AS sample_at,
                 t.battery_level::float8 AS soc,
-                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start))) / 60.0 AS gap_minutes
+                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
               AND t.ts >= c.period_start - INTERVAL '45 minutes'
@@ -307,7 +300,7 @@ pub(crate) async fn fetch_idle_drain_periods(
             SELECT
                 t.ts AS sample_at,
                 t.battery_level::float8 AS soc,
-                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end))) / 60.0 AS gap_minutes
+                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
               AND t.ts >= c.period_end - INTERVAL '45 minutes'
@@ -319,7 +312,7 @@ pub(crate) async fn fetch_idle_drain_periods(
         LEFT JOIN LATERAL (
             SELECT
                 t.distance_to_empty_mi::float8 AS range_mi,
-                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start))) / 60.0 AS gap_minutes
+                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
               AND t.ts >= c.period_start - INTERVAL '45 minutes'
@@ -331,7 +324,7 @@ pub(crate) async fn fetch_idle_drain_periods(
         LEFT JOIN LATERAL (
             SELECT
                 t.distance_to_empty_mi::float8 AS range_mi,
-                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end))) / 60.0 AS gap_minutes
+                ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
               AND t.ts >= c.period_end - INTERVAL '45 minutes'
@@ -414,16 +407,6 @@ pub(crate) async fn fetch_idle_drain_periods(
                         )
                     )
                 )::float8 AS covered_state_seconds,
-                SUM(
-                    EXTRACT(
-                        EPOCH FROM (
-                            LEAST(COALESCE(v.ended_at, c.period_end), c.period_end)
-                            - GREATEST(v.started_at, c.period_start)
-                        )
-                    )
-                ) FILTER (
-                    WHERE v.state IN ('drive', 'charging')
-                )::float8 AS active_state_seconds
             FROM riviamigo.vehicle_state_periods v
             WHERE v.vehicle_id = $1
               AND v.started_at < c.period_end
@@ -444,7 +427,9 @@ pub(crate) async fn fetch_idle_drain_periods(
     let mut periods = candidates
         .into_iter()
         .map(derive_phantom_period)
-        .filter(|period| include_excluded || period.validation_status == ValidationStatus::Validated)
+        .filter(|period| {
+            include_excluded || period.validation_status == ValidationStatus::Validated
+        })
         .collect::<Vec<_>>();
 
     periods.truncate(limit);
@@ -474,12 +459,10 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
     let duration_seconds = duration_hours * 3600.0;
     let overlaps_trip = row.trip_overlap_count > 0;
     let overlaps_charge = row.charge_overlap_count > 0;
-    let active_state_seconds = row.active_state_seconds.unwrap_or(0.0).max(0.0);
     let movement_detected = overlaps_trip
         || overlaps_charge
         || row.drive_sample_count > 0
-        || row.odometer_delta_mi.unwrap_or(0.0) >= MAX_ODOMETER_DELTA_MILES
-        || active_state_seconds > 0.0;
+        || row.odometer_delta_mi.unwrap_or(0.0) >= MAX_ODOMETER_DELTA_MILES;
 
     let soc_start = finite_optional(row.soc_start);
     let soc_end = finite_optional(row.soc_end);
@@ -492,8 +475,14 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
         _ => None,
     };
 
-    let sleep_seconds = row.sleep_seconds.unwrap_or(0.0).clamp(0.0, duration_seconds);
-    let covered_state_seconds = row.covered_state_seconds.unwrap_or(0.0).clamp(0.0, duration_seconds);
+    let sleep_seconds = row
+        .sleep_seconds
+        .unwrap_or(0.0)
+        .clamp(0.0, duration_seconds);
+    let covered_state_seconds = row
+        .covered_state_seconds
+        .unwrap_or(0.0)
+        .clamp(0.0, duration_seconds);
     let state_coverage_pct = if duration_seconds > 0.0 {
         Some((covered_state_seconds / duration_seconds).clamp(0.0, 1.0))
     } else {
@@ -506,7 +495,8 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
         _ => None,
     };
 
-    let validation_reason = classify_validation_reason(&row, duration_hours, soc_lost_pct, movement_detected);
+    let validation_reason =
+        classify_validation_reason(&row, duration_hours, soc_lost_pct, movement_detected);
     let validation_status = if validation_reason.is_some() {
         ValidationStatus::Excluded
     } else {
@@ -514,7 +504,9 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
     };
 
     let energy_drained_kwh = match (soc_lost_pct, finite_optional(row.capacity_wh)) {
-        (Some(loss), Some(capacity_wh)) if capacity_wh > 10000.0 => Some((loss / 100.0) * (capacity_wh / 1000.0)),
+        (Some(loss), Some(capacity_wh)) if capacity_wh > 10000.0 => {
+            Some((loss / 100.0) * (capacity_wh / 1000.0))
+        }
         _ => None,
     };
     let avg_power_w = match (energy_drained_kwh, duration_hours > 0.0) {
@@ -572,7 +564,11 @@ fn classify_validation_reason(
         return Some(ValidationReason::MovementDetected);
     }
 
-    if !boundary_gaps_are_valid(row.start_sample_gap_minutes, row.end_sample_gap_minutes, MAX_SOC_BOUNDARY_GAP_MINUTES) {
+    if !boundary_gaps_are_valid(
+        row.start_sample_gap_minutes,
+        row.end_sample_gap_minutes,
+        MAX_SOC_BOUNDARY_GAP_MINUTES,
+    ) {
         return Some(ValidationReason::SocAnchorUnreliable);
     }
 
@@ -581,7 +577,9 @@ fn classify_validation_reason(
         return Some(ValidationReason::InsufficientTelemetry);
     }
 
-    if requires_interior_soc_support(duration_hours, soc_lost_pct) && row.interior_battery_sample_count < 1 {
+    if requires_interior_soc_support(duration_hours, soc_lost_pct)
+        && row.interior_battery_sample_count < 1
+    {
         return Some(ValidationReason::InsufficientTelemetry);
     }
 
@@ -591,7 +589,9 @@ fn classify_validation_reason(
         finite_optional(row.max_soc_in_window),
     ) {
         let observed_window_span = (max_soc - min_soc).max(0.0);
-        if row.battery_sample_count >= 3 && loss - observed_window_span > SOC_WINDOW_MISMATCH_TOLERANCE_PCT {
+        if row.battery_sample_count >= 3
+            && loss - observed_window_span > SOC_WINDOW_MISMATCH_TOLERANCE_PCT
+        {
             return Some(ValidationReason::SocAnchorUnreliable);
         }
     }
@@ -600,7 +600,9 @@ fn classify_validation_reason(
 }
 
 fn required_battery_samples(duration_hours: f64, soc_lost_pct: Option<f64>) -> i64 {
-    if soc_lost_pct.unwrap_or(0.0) >= LARGE_SOC_LOSS_THRESHOLD_PCT || duration_hours >= VERY_LONG_SESSION_HOURS {
+    if soc_lost_pct.unwrap_or(0.0) >= LARGE_SOC_LOSS_THRESHOLD_PCT
+        || duration_hours >= VERY_LONG_SESSION_HOURS
+    {
         5
     } else if duration_hours >= LONG_SESSION_HOURS {
         3
@@ -610,10 +612,15 @@ fn required_battery_samples(duration_hours: f64, soc_lost_pct: Option<f64>) -> i
 }
 
 fn requires_interior_soc_support(duration_hours: f64, soc_lost_pct: Option<f64>) -> bool {
-    duration_hours >= LONG_SESSION_HOURS || soc_lost_pct.unwrap_or(0.0) >= LARGE_SOC_LOSS_THRESHOLD_PCT
+    duration_hours >= LONG_SESSION_HOURS
+        || soc_lost_pct.unwrap_or(0.0) >= LARGE_SOC_LOSS_THRESHOLD_PCT
 }
 
-fn boundary_gaps_are_valid(start_gap: Option<f64>, end_gap: Option<f64>, max_gap_minutes: f64) -> bool {
+fn boundary_gaps_are_valid(
+    start_gap: Option<f64>,
+    end_gap: Option<f64>,
+    max_gap_minutes: f64,
+) -> bool {
     match (finite_optional(start_gap), finite_optional(end_gap)) {
         (Some(start), Some(end)) => start <= max_gap_minutes && end <= max_gap_minutes,
         _ => false,
@@ -734,7 +741,6 @@ mod tests {
             drive_sample_count: 0,
             trip_overlap_count: 0,
             charge_overlap_count: 0,
-            active_state_seconds: Some(0.0),
             sleep_seconds: Some(41000.0),
             covered_state_seconds: Some(43200.0),
             has_reduced_range: Some(false),
@@ -858,7 +864,17 @@ mod tests {
         row.charge_overlap_count = 1;
         let period = derive_phantom_period(row);
         assert_eq!(period.validation_status, ValidationStatus::Excluded);
-        assert_eq!(period.validation_reason, Some(ValidationReason::OverlapsCharge));
+        assert_eq!(
+            period.validation_reason,
+            Some(ValidationReason::OverlapsCharge)
+        );
+    }
+
+    #[test]
+    fn active_state_overlap_alone_does_not_exclude_period() {
+        let period = derive_phantom_period(candidate_row());
+        assert_eq!(period.validation_status, ValidationStatus::Validated);
+        assert_eq!(period.validation_reason, None);
     }
 
     #[test]
@@ -873,7 +889,10 @@ mod tests {
         row.max_soc_in_window = Some(70.0);
         let period = derive_phantom_period(row);
         assert_eq!(period.validation_status, ValidationStatus::Excluded);
-        assert_eq!(period.validation_reason, Some(ValidationReason::InsufficientTelemetry));
+        assert_eq!(
+            period.validation_reason,
+            Some(ValidationReason::InsufficientTelemetry)
+        );
     }
 
     #[test]

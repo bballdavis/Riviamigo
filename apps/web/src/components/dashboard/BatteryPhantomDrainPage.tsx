@@ -2,69 +2,10 @@ import React from 'react';
 import { usePhantomDrainPeriods } from '@riviamigo/hooks';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
 import { DataTable, TableControls, phantomDrainColumns } from '@riviamigo/ui/tables';
-import { formatKwh, formatPercent } from '@riviamigo/ui/lib/utils';
+import { formatPercent } from '@riviamigo/ui/lib/utils';
 import { DashboardPageShell, type DashboardPageShellRenderState } from './DashboardPageShell';
 import type { DashboardPageProps } from './DashboardPage';
-
-function summarizePeriods(periods: PhantomDrainPeriod[]) {
-  const maxDrainPct = periods.reduce((max, period) => {
-    if (period.soc_lost_pct == null || Number.isNaN(period.soc_lost_pct)) return max;
-    return Math.max(max, period.soc_lost_pct);
-  }, 0);
-
-  const weightedSleep = periods.reduce(
-    (acc, period) => {
-      const duration = finiteNumber(period.duration_hours);
-      const sleepShare = finiteNumber(period.sleep_share_pct);
-      if (duration == null || sleepShare == null) return acc;
-      acc.weightedSum += duration * sleepShare;
-      acc.durationSum += duration;
-      return acc;
-    },
-    { weightedSum: 0, durationSum: 0 }
-  );
-  const avgSleepPct = weightedSleep.durationSum > 0 ? weightedSleep.weightedSum / weightedSleep.durationSum : null;
-
-  const weightedCoverage = periods.reduce(
-    (acc, period) => {
-      const duration = finiteNumber(period.duration_hours);
-      const coverage = finiteNumber(period.state_coverage_pct);
-      if (duration == null || coverage == null) return acc;
-      acc.weightedSum += duration * coverage;
-      acc.durationSum += duration;
-      return acc;
-    },
-    { weightedSum: 0, durationSum: 0 }
-  );
-  const avgStateCoveragePct = weightedCoverage.durationSum > 0 ? weightedCoverage.weightedSum / weightedCoverage.durationSum : null;
-
-  const totalEnergyDrainedKwh = periods.reduce((sum, period) => {
-    if (period.energy_drained_kwh == null || Number.isNaN(period.energy_drained_kwh)) return sum;
-    return sum + period.energy_drained_kwh;
-  }, 0);
-
-  const totalDurationHours = periods.reduce((sum, period) => {
-    const duration = finiteNumber(period.duration_hours);
-    return duration == null ? sum : sum + duration;
-  }, 0);
-  const totalSocLostPct = periods.reduce((sum, period) => {
-    const lost = finiteNumber(period.soc_lost_pct);
-    return lost == null ? sum : sum + lost;
-  }, 0);
-  const avgDrainPctPerHour = totalDurationHours > 0 ? totalSocLostPct / totalDurationHours : null;
-
-  return {
-    maxDrainPct,
-    avgSleepPct,
-    avgStateCoveragePct,
-    totalEnergyDrainedKwh,
-    avgDrainPctPerHour,
-  };
-}
-
-function finiteNumber(value: number | null | undefined) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
+import { buildPhantomDrainSummaryCards, summarizePhantomDrainPeriods } from './phantomDrainSummary';
 
 function formatPeriodSearchText(period: PhantomDrainPeriod) {
   const parts = [
@@ -116,34 +57,19 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
     return filteredPeriods.slice(start, start + pageSize);
   }, [filteredPeriods, page, pageSize]);
 
-  const summary = React.useMemo(() => summarizePeriods(periods), [periods]);
+  const summary = React.useMemo(() => summarizePhantomDrainPeriods(periods), [periods]);
+  const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
 
   return (
     <div className="grid gap-4 min-w-0">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-border bg-bg-surface px-4 py-3">
-          <p className="text-xs uppercase tracking-wide text-fg-tertiary">Max drain</p>
-          <p className="mt-1 text-xl font-semibold text-fg">{formatPercent(summary.maxDrainPct, 2)}</p>
-        </div>
-        <div className="rounded-xl border border-border bg-bg-surface px-4 py-3">
-          <p className="text-xs uppercase tracking-wide text-fg-tertiary">Avg sleep</p>
-          <p className="mt-1 text-xl font-semibold text-fg">
-            {summary.avgSleepPct == null ? '-' : formatPercent(summary.avgSleepPct, 1)}
-          </p>
-          <p className="mt-1 text-[11px] text-fg-tertiary">
-            State coverage {summary.avgStateCoveragePct == null ? 'unknown' : formatPercent(summary.avgStateCoveragePct, 0)}
-          </p>
-        </div>
-        <div className="rounded-xl border border-border bg-bg-surface px-4 py-3">
-          <p className="text-xs uppercase tracking-wide text-fg-tertiary">Total energy drained</p>
-          <p className="mt-1 text-xl font-semibold text-fg">{formatKwh(summary.totalEnergyDrainedKwh)}</p>
-        </div>
-        <div className="rounded-xl border border-border bg-bg-surface px-4 py-3">
-          <p className="text-xs uppercase tracking-wide text-fg-tertiary">Avg drain per hour</p>
-          <p className="mt-1 text-xl font-semibold text-fg">
-            {summary.avgDrainPctPerHour == null ? '-' : `${formatPercent(summary.avgDrainPctPerHour, 2)} / h`}
-          </p>
-        </div>
+        {summaryCards.map((card) => (
+          <div key={card.key} className="rounded-xl border border-border bg-bg-surface px-4 py-3">
+            <p className="text-xs uppercase tracking-wide text-fg-tertiary">{card.title}</p>
+            <p className="mt-1 text-xl font-semibold text-fg">{card.value}</p>
+            {card.secondary ? <p className="mt-1 text-[11px] text-fg-tertiary">{card.secondary}</p> : null}
+          </div>
+        ))}
       </div>
 
       <div className="min-w-0 rounded-xl border border-border bg-bg-surface p-3">

@@ -75,7 +75,10 @@ async fn log_server_errors(
                     .headers_mut()
                     .insert(http::header::RETRY_AFTER, after.clone());
             }
-            if !response.headers().contains_key("x-riviamigo-ratelimit-reset") {
+            if !response
+                .headers()
+                .contains_key("x-riviamigo-ratelimit-reset")
+            {
                 response
                     .headers_mut()
                     .insert("x-riviamigo-ratelimit-reset", after);

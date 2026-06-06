@@ -22,7 +22,10 @@ mod tests {
 
         assert!(average.is_some());
         let value = average.unwrap();
-        assert!((value - 339.6039603960396).abs() < 1e-9, "unexpected weighted average: {value}");
+        assert!(
+            (value - 339.6039603960396).abs() < 1e-9,
+            "unexpected weighted average: {value}"
+        );
     }
 
     #[test]
