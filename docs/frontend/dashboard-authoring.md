@@ -67,6 +67,7 @@ Table rules:
 - If a new table is not a good fit for `DataTable` plus `TableControls`, document why in the code and reuse the nearest shared seam rather than creating a one-off chrome block.
 - If a table shows inferred vehicle behavior, define the canonical metric, exclusion rules, and evidence thresholds before wiring the UI. Do not render low-confidence derived values as if they are first-class facts.
 - Prefer nullable secondary metrics over forced placeholders when the underlying evidence is weak. Phantom Drain is the model here: SoC-backed drain is canonical, range loss is derived, and state-based sleep share is hidden when coverage is weak.
+- When behavior is inferred from vehicle lifecycle events, keep the source-of-truth hierarchy explicit: completed trips and charge sessions are canonical facts, while state periods and raw telemetry are overlays that annotate or validate those facts. Do not let noisy state data become a first-class session builder unless the feature is explicitly about state history itself.
 
 When adding a new table page, make the search box and pagination semantics match the existing site patterns first. Only diverge when the data shape makes the shared controls genuinely misleading.
 

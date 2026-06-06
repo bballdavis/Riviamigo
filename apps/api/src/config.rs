@@ -219,11 +219,31 @@ impl Default for RateLimitConfig {
 impl RateLimitConfig {
     fn validate(&self) -> anyhow::Result<()> {
         for (name, per_minute, burst) in [
-            ("RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE", self.auth_public_per_minute, self.auth_public_burst),
-            ("RATE_LIMIT_AUTH_METADATA_PER_MINUTE", self.auth_metadata_per_minute, self.auth_metadata_burst),
-            ("RATE_LIMIT_AUTH_READ_PER_MINUTE", self.auth_read_per_minute, self.auth_read_burst),
-            ("RATE_LIMIT_AUTH_WRITE_PER_MINUTE", self.auth_write_per_minute, self.auth_write_burst),
-            ("RATE_LIMIT_HEAVY_READ_PER_MINUTE", self.heavy_read_per_minute, self.heavy_read_burst),
+            (
+                "RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE",
+                self.auth_public_per_minute,
+                self.auth_public_burst,
+            ),
+            (
+                "RATE_LIMIT_AUTH_METADATA_PER_MINUTE",
+                self.auth_metadata_per_minute,
+                self.auth_metadata_burst,
+            ),
+            (
+                "RATE_LIMIT_AUTH_READ_PER_MINUTE",
+                self.auth_read_per_minute,
+                self.auth_read_burst,
+            ),
+            (
+                "RATE_LIMIT_AUTH_WRITE_PER_MINUTE",
+                self.auth_write_per_minute,
+                self.auth_write_burst,
+            ),
+            (
+                "RATE_LIMIT_HEAVY_READ_PER_MINUTE",
+                self.heavy_read_per_minute,
+                self.heavy_read_burst,
+            ),
         ] {
             if per_minute == 0 {
                 anyhow::bail!("{name} must be greater than 0");

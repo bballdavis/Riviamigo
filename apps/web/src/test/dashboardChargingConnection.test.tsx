@@ -287,7 +287,7 @@ describe('charging connection custom widget', () => {
     expect(screen.getAllByTestId('charging-battery-led-segment')).toHaveLength(20);
   });
 
-  it('renders the live charging treatment when telemetry says the vehicle is charging', () => {
+  it('keeps the standard R1S crop when telemetry says the vehicle is charging', () => {
     chargingMocks.forcePluggedState = 'Charging';
     chargingMocks.images = vehicleImageFixtures;
 
@@ -310,7 +310,7 @@ describe('charging connection custom widget', () => {
       '/rivian/side-charging-dark.webp',
     ]);
     expect(screen.getAllByTestId('charging-side-image')[0]).toHaveStyle({
-      transform: 'translateX(-30%) scale(1.78)',
+      transform: 'translateX(-12%) scale(1.12)',
       transformOrigin: 'left top',
     });
 
