@@ -54,6 +54,11 @@ function formatPowerWatts(value: number | null) {
   return `${formatSmartNumber(value, 0)} W`;
 }
 
+function formatRatioPercent(value: number | null, decimals = 0) {
+  if (value == null || Number.isNaN(value)) return '-';
+  return formatPercent(value * 100, decimals);
+}
+
 function infoHeader(label: string, description: string) {
   return (
     <span className="inline-flex items-center gap-1">
@@ -132,7 +137,7 @@ export const phantomDrainColumns = [
     cell: (info) => {
       const value = info.getValue();
       if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">Unknown</span>;
-      return <span className="font-mono text-fg-secondary">{formatPercent(value, 0)}</span>;
+      return <span className="font-mono text-fg-secondary">{formatRatioPercent(value, 0)}</span>;
     },
   }),
   col.accessor('state_coverage_pct', {
@@ -149,7 +154,7 @@ export const phantomDrainColumns = [
     cell: (info) => {
       const value = info.getValue();
       if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
-      return <span className="font-mono text-fg-secondary">{formatPercent(value, 0)}</span>;
+      return <span className="font-mono text-fg-secondary">{formatRatioPercent(value, 0)}</span>;
     },
   }),
   col.accessor('soc_start', {
