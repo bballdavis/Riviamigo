@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_DASHBOARDS, getAllWidgets } from '@riviamigo/dashboards';
+import { DEFAULT_DASHBOARDS, getAllWidgets, getWidgetEditorMeta, sanitizeDashboardConfig } from '@riviamigo/dashboards';
 
 describe('dashboard component registry', () => {
   it('keeps default dashboards on the current component model', () => {
@@ -33,6 +33,57 @@ describe('dashboard component registry', () => {
 
     expect(registeredNames.some((name) => name.includes('legacy'))).toBe(false);
     expect(registeredNames.some((name) => name.includes('widgetid'))).toBe(false);
+  });
+
+  it('declares fixed-size metadata for compact custom chips while keeping sensor chips resizable', () => {
+    const registered = new Map(getAllWidgets().map((widget) => [`${widget.componentType}:${widget.definitionId}`, widget]));
+
+    expect(getWidgetEditorMeta(registered.get('custom:trips.stat'))).toMatchObject({
+      fixedSize: true,
+      resizable: false,
+    });
+    expect(getWidgetEditorMeta(registered.get('custom:charging.connection'))).toMatchObject({
+      fixedSize: true,
+      resizable: false,
+    });
+    expect(getWidgetEditorMeta(registered.get('sensor:total_miles'))).toMatchObject({
+      fixedSize: false,
+      resizable: true,
+    });
+  });
+
+  it('sanitizes restored/imported layouts using widget editor capabilities', () => {
+    const sanitized = sanitizeDashboardConfig({
+      schemaVersion: 2,
+      id: '11111111-1111-1111-1111-111111111111',
+      slug: 'layout-test',
+      name: 'Layout Test',
+      isDefault: false,
+      isLocked: false,
+      ownerId: null,
+      controls: { dateRange: true },
+      widgets: [
+        {
+          id: '22222222-2222-2222-2222-222222222222',
+          componentType: 'custom',
+          definitionId: 'trips.stat',
+          title: 'Trips',
+          layout: { x: 10, y: 1, w: 12, h: 9 },
+          options: {},
+        },
+        {
+          id: '33333333-3333-3333-3333-333333333333',
+          componentType: 'sensor',
+          definitionId: 'total_miles',
+          title: 'Miles',
+          layout: { x: 10, y: 2, w: 12, h: 2 },
+          options: {},
+        },
+      ],
+    });
+
+    expect(sanitized.widgets[0]?.layout).toEqual({ x: 9, y: 1, w: 3, h: 2 });
+    expect(sanitized.widgets[1]?.layout).toEqual({ x: 0, y: 2, w: 12, h: 2 });
   });
 
   it('keeps the API overview seed aligned with the frontend default layout', () => {
@@ -96,17 +147,7 @@ describe('dashboard component registry', () => {
       options: {},
       layout: { x: 3, y: 4, w: 3, h: 2 },
     });
-    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000014')).toMatchObject({
-      componentType: 'sensor',
-      definitionId: 'charging_free_sessions',
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 6, y: 4, w: 3, h: 2 },
-    });
-    expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000015')).toMatchObject({
-      componentType: 'sensor',
-      definitionId: 'charging_range_added',
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 9, y: 4, w: 3, h: 2 },
-    });
+    expect(widgets.some((widget) => widget.definitionId === 'charging_free_sessions')).toBe(false);
+    expect(widgets.some((widget) => widget.definitionId === 'charging_range_added')).toBe(false);
   });
 });

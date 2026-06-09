@@ -4,6 +4,7 @@ import { useMe } from '@riviamigo/hooks';
 import { useCreateDashboard, useUpdateDashboard, useUpdateAdminDashboard } from '@riviamigo/dashboards';
 import {
   createDefaultDashboardEditActions,
+  canManageSystemDashboards,
   renderDefaultDashboardTitleAction,
   type DashboardPageProps,
 } from './DashboardPage';
@@ -15,7 +16,7 @@ export function OverviewDashboardPage({ navKey, slug, title }: DashboardPageProp
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
   const me = useMe();
-  const isAdmin = me.data?.role === 'admin';
+  const isAdmin = canManageSystemDashboards(me.data?.role);
 
   return (
     <DashboardPageShell

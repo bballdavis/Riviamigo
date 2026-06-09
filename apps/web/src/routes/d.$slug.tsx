@@ -1,16 +1,21 @@
 import React from 'react';
 import { createRoute, useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { rootRoute } from './__root';
 import {
+  useCreateDashboard,
   useUpdateDashboard,
+  useUpdateAdminDashboard,
   useCloneDashboard,
   downloadDashboardYaml,
   importDashboardYaml,
 } from '@riviamigo/dashboards';
+import { useMe } from '@riviamigo/hooks';
 import { AuthGuard } from '../components/layout/AuthGuard';
-import { Edit2, Lock, Copy, Check, X, Download, Upload } from 'lucide-react';
+import { Edit2, Lock, Copy, Download, Upload } from 'lucide-react';
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
+import { canManageSystemDashboards, createDefaultDashboardEditActions } from '../components/dashboard/DashboardPage';
 
 const searchSchema = z.object({ edit: z.string().optional() });
 
@@ -32,7 +37,19 @@ function UserDashboardPage() {
 
   const isEditMode = search.edit === '1';
   const updateDashboard = useUpdateDashboard();
+  const updateAdminDashboard = useUpdateAdminDashboard();
+  const createDashboard = useCreateDashboard();
   const cloneDashboard = useCloneDashboard();
+  const qc = useQueryClient();
+  const me = useMe();
+  const canManageDefaults = canManageSystemDashboards(me.data?.role);
+  const renderSaveActions = createDefaultDashboardEditActions({
+    updateDashboard,
+    updateAdminDashboard,
+    createDashboard,
+    qc,
+    isAdmin: canManageDefaults,
+  });
 
   return (
     <DashboardPageShell
@@ -46,7 +63,8 @@ function UserDashboardPage() {
           search: next ? { edit: '1' } : {},
         });
       }}
-      renderActions={({ activeConfig, localConfig, setLocalConfig, isEditMode: editing, enterEdit, exitEdit }) => {
+      renderActions={(state) => {
+        const { activeConfig, setLocalConfig, isEditMode: editing, enterEdit } = state;
         const isLocked = activeConfig?.isLocked ?? false;
 
         async function handleClone() {
@@ -70,29 +88,7 @@ function UserDashboardPage() {
         }
 
         if (editing) {
-          return (
-            <>
-              <button
-                onClick={async () => {
-                  if (!localConfig) return;
-                  await updateDashboard.mutateAsync(localConfig);
-                  exitEdit();
-                }}
-                disabled={!localConfig || updateDashboard.isPending}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-accent text-white disabled:opacity-40 hover:bg-accent/90 transition-colors"
-              >
-                <Check className="h-3.5 w-3.5" />
-                Save
-              </button>
-              <button
-                onClick={exitEdit}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-bg-elevated transition-colors"
-              >
-                <X className="h-3.5 w-3.5" />
-                Cancel
-              </button>
-            </>
-          );
+          return renderSaveActions(state);
         }
 
         return (

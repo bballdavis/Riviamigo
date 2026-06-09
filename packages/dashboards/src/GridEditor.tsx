@@ -3,8 +3,9 @@ import GridLayout, { useContainerWidth } from 'react-grid-layout';
 import type { LayoutItem } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { v4 as uuidv4 } from 'uuid';
-import { X, GripVertical, Pencil } from 'lucide-react';
-import { getAllWidgets, getWidgetForInstance } from './registry';
+import { GripVertical, Lock, Pencil, X } from 'lucide-react';
+import { getAllWidgets, getWidgetEditorMeta, getWidgetForInstance } from './registry';
+import { sanitizeWidgetInstance, sanitizeWidgetLayout } from './layout';
 import { WidgetHost } from './WidgetHost';
 import type { DashboardConfig, WidgetInstance } from './schema';
 import type { WidgetCtx, WidgetDef } from './registry';
@@ -23,39 +24,63 @@ interface GridEditorProps {
 }
 
 function layoutFromConfig(widgets: WidgetInstance[]): LayoutItem[] {
-  return widgets.map((w) => ({
-    i: w.id,
-    x: w.layout.x,
-    y: w.layout.y,
-    w: w.layout.w,
-    h: w.layout.h,
-    minW: getWidgetForInstance(w)?.minSize.w ?? 1,
-    minH: getWidgetForInstance(w)?.minSize.h ?? 1,
-  }));
+  return widgets.map(layoutItemForWidget);
+}
+
+function layoutItemForWidget(widget: WidgetInstance): LayoutItem {
+  const def = getWidgetForInstance(widget);
+  const editor = getWidgetEditorMeta(def);
+  const minSize = editor.fixedSize ? widget.layout : def?.minSize ?? { w: 1, h: 1 };
+  const maxSize = editor.fixedSize ? widget.layout : editor.maxSize;
+  const item: LayoutItem = {
+    i: widget.id,
+    x: widget.layout.x,
+    y: widget.layout.y,
+    w: widget.layout.w,
+    h: widget.layout.h,
+    minW: minSize.w,
+    minH: minSize.h,
+    isDraggable: editor.movable,
+    isResizable: editor.resizable,
+  };
+
+  if (maxSize) {
+    item.maxW = maxSize.w;
+    item.maxH = maxSize.h;
+  }
+
+  return item;
 }
 
 function applyLayout(widgets: WidgetInstance[], layout: readonly LayoutItem[]): WidgetInstance[] {
-  const map = new Map(layout.map((l) => [l.i, l]));
-  return widgets.map((w) => {
-    const l = map.get(w.id);
-    if (!l) return w;
-    if (l.x === w.layout.x && l.y === w.layout.y && l.w === w.layout.w && l.h === w.layout.h) {
-      return w;
-    }
-    return { ...w, layout: { x: l.x, y: l.y, w: l.w, h: l.h } };
+  const map = new Map(layout.map((item) => [item.i, item]));
+  return widgets.map((widget) => {
+    const item = map.get(widget.id);
+    if (!item) return widget;
+
+    const next = sanitizeWidgetInstance({
+      ...widget,
+      layout: sanitizeWidgetLayout({ x: item.x, y: item.y, w: item.w, h: item.h }),
+    });
+
+    return layoutsEqual(next.layout, widget.layout) ? widget : next;
   });
 }
 
+function layoutsEqual(a: WidgetInstance['layout'], b: WidgetInstance['layout']) {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
 export default function GridEditor({ config, ctx, onConfigChange, editActions }: GridEditorProps) {
-  const widgets = Array.isArray(config.widgets) ? config.widgets : [];
+  const widgets = Array.isArray(config.widgets) ? config.widgets.map(sanitizeWidgetInstance) : [];
   const [editingId, setEditingId] = useState<string | null>(null);
   const { width, containerRef, mounted } = useContainerWidth();
 
   const commit = useCallback(
     (next: WidgetInstance[]) => {
-      onConfigChange?.({ ...config, widgets: next });
+      onConfigChange?.({ ...config, widgets: next.map(sanitizeWidgetInstance) });
     },
-    [config, onConfigChange]
+    [config, onConfigChange],
   );
 
   function handleLayoutChange(layout: readonly LayoutItem[]) {
@@ -64,113 +89,109 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
   }
 
   function removeWidget(id: string) {
-    commit(widgets.filter((w) => w.id !== id));
+    commit(widgets.filter((widget) => widget.id !== id));
     if (editingId === id) setEditingId(null);
   }
 
   function addWidget(def: WidgetDef) {
-    const maxY = widgets.reduce((m, w) => Math.max(m, w.layout.y + w.layout.h), 0);
-    const instance: WidgetInstance = {
+    const maxY = widgets.reduce((max, widget) => Math.max(max, widget.layout.y + widget.layout.h), 0);
+    const instance: WidgetInstance = sanitizeWidgetInstance({
       id: uuidv4(),
       componentType: def.componentType,
       definitionId: def.definitionId,
       title: def.title,
       layout: { x: 0, y: maxY, w: def.defaultSize.w, h: def.defaultSize.h },
       options: def.defaultOptions,
-    };
+    });
     commit([...widgets, instance]);
   }
 
   function updateWidget(next: WidgetInstance) {
-    commit(widgets.map((w) => (w.id === next.id ? next : w)));
+    const sanitized = sanitizeWidgetInstance(next);
+    commit(widgets.map((widget) => (widget.id === sanitized.id ? sanitized : widget)));
   }
 
-  const editingWidget = editingId ? widgets.find((w) => w.id === editingId) ?? null : null;
+  const editingWidget = editingId ? widgets.find((widget) => widget.id === editingId) ?? null : null;
   const drawerMode: 'palette' | 'edit' = editingWidget ? 'edit' : 'palette';
 
   return (
     <>
       <style>{`
-        /* Placeholder during drag */
         .rgl-editor .react-grid-placeholder {
-          background: color-mix(in oklab, var(--rm-accent) 50%, transparent) !important;
-          opacity: 0.2;
+          background: color-mix(in oklab, var(--rm-accent) 48%, transparent) !important;
+          border: 1px solid color-mix(in oklab, var(--rm-accent) 75%, transparent);
           border-radius: 8px;
+          opacity: 0.18;
         }
-
-        /* Resize handle — always hidden until hovered */
         .rgl-editor .react-resizable-handle {
-          z-index: 40;
+          z-index: 42;
           opacity: 0;
+          pointer-events: none;
           background-image: none;
           transition: opacity 120ms ease;
-          pointer-events: none;
         }
         .rgl-editor .react-grid-item:hover .react-resizable-handle,
-        .rgl-editor .react-grid-item.react-draggable-dragging .react-resizable-handle,
-        .rgl-editor .react-grid-item.resizing .react-resizable-handle {
+        .rgl-editor .react-grid-item.resizing .react-resizable-handle,
+        .rgl-editor .react-grid-item.react-draggable-dragging .react-resizable-handle {
           opacity: 1;
           pointer-events: auto;
         }
-        /* SE resize handle — flush with card corner, notched inner corner */
+        .rgl-editor .react-grid-item:has(.rgl-card[data-fixed-size="true"]) .react-resizable-handle {
+          display: none;
+        }
         .rgl-editor .react-resizable-handle-se {
-          position: absolute;
           right: 0;
           bottom: 0;
-          width: 26px;
-          height: 26px;
-          /* TL = inward notch, rest flush/clipped by card overflow:hidden */
+          width: 28px;
+          height: 28px;
+          border: 1px solid color-mix(in oklab, var(--rm-accent) 70%, transparent);
           border-radius: 10px 0 8px 0;
-          border: 1px solid color-mix(in oklab, var(--rm-accent) 65%, transparent);
           background: var(--rm-bg-elevated);
-          box-shadow: none;
           cursor: se-resize;
         }
         .rgl-editor .react-resizable-handle-se::after {
           content: '';
           position: absolute;
-          right: 5px;
-          bottom: 5px;
+          right: 6px;
+          bottom: 6px;
           width: 8px;
           height: 8px;
           border-right: 2px solid var(--rm-accent);
           border-bottom: 2px solid var(--rm-accent);
         }
-
-        /* All three overlay buttons — hidden by default, shown on grid-item hover */
         .rgl-editor .rgl-overlay {
           opacity: 0;
           pointer-events: none;
-          transition: opacity 120ms ease;
+          transition: opacity 120ms ease, transform 120ms ease;
         }
-        .rgl-editor .react-grid-item:hover .rgl-overlay {
-          opacity: 1;
-          pointer-events: auto;
-        }
-        /* Keep visible when the card is in 'editing' state */
+        .rgl-editor .react-grid-item:hover .rgl-overlay,
         .rgl-editor .rgl-card[data-editing="true"] .rgl-overlay {
           opacity: 1;
           pointer-events: auto;
         }
-        /* Editing state: green resize handle */
-        .rgl-editor .rgl-card[data-editing="true"] .react-resizable-handle-se {
-          border-color: color-mix(in oklab, var(--rm-status-positive) 65%, transparent);
+        .rgl-editor .rgl-action {
+          height: 1.75rem;
+          width: 1.75rem;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid var(--rm-border-default);
+          background: color-mix(in oklab, var(--rm-bg-elevated) 92%, transparent);
+          color: var(--rm-text-secondary);
+          backdrop-filter: blur(10px);
         }
-        .rgl-editor .rgl-card[data-editing="true"] .react-resizable-handle-se::after {
-          border-right-color: var(--rm-status-positive);
-          border-bottom-color: var(--rm-status-positive);
+        .rgl-editor .rgl-action:hover {
+          color: var(--rm-text-primary);
+          border-color: var(--rm-border-strong);
         }
-        /* Delete button hover state — always danger red on hover regardless of editing */
-        .rgl-editor button.rgl-delete:hover {
-          background-color: var(--rm-bg-elevated) !important;
-          border-color: color-mix(in oklab, var(--rm-status-danger) 70%, transparent) !important;
-          color: var(--rm-status-danger) !important;
+        .rgl-editor .rgl-delete:hover {
+          color: var(--rm-status-danger);
+          border-color: color-mix(in oklab, var(--rm-status-danger) 70%, transparent);
         }
       `}</style>
 
       <div className="rgl-editor min-w-0">
-        <div className="min-w-0">
-        <div ref={containerRef as React.Ref<HTMLDivElement>} className="w-full">
+        <div ref={containerRef as React.Ref<HTMLDivElement>} className="w-full min-w-0">
           {mounted ? (
             <GridLayout
               layout={layoutFromConfig(widgets)}
@@ -187,71 +208,83 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
               onLayoutChange={handleLayoutChange}
               className="rounded-xl border border-dashed border-border bg-bg-elevated/30"
             >
-              {widgets.map((w) => {
-                const isEditing = editingId === w.id;
+              {widgets.map((widget) => {
+                const isEditing = editingId === widget.id;
+                const def = getWidgetForInstance(widget);
+                const editor = getWidgetEditorMeta(def);
                 return (
                   <div
-                    key={w.id}
+                    key={widget.id}
                     data-editing={isEditing ? 'true' : 'false'}
-                    className={`rgl-card relative overflow-hidden rounded-lg border bg-bg transition-all ${
+                    data-fixed-size={editor.fixedSize ? 'true' : 'false'}
+                    className={[
+                      'rgl-card group relative overflow-hidden rounded-lg border bg-bg transition-all',
                       isEditing
                         ? 'border-status-positive shadow-[0_0_0_2px_color-mix(in_oklab,var(--rm-status-positive)_28%,transparent)]'
-                        : 'border-border'
-                    }`}
+                        : 'border-border hover:border-border-strong',
+                    ].join(' ')}
                   >
-                    {/* Widget content */}
                     <div className="h-full w-full p-2">
-                      <WidgetHost instance={w} ctx={ctx} />
+                      <WidgetHost instance={widget} ctx={ctx} />
                     </div>
 
-                    {/* Move handle — NW corner, inner notch at BR */}
-                    <div
-                      className={`drag-handle rgl-overlay absolute left-0 top-0 z-40 flex h-7 w-7 cursor-grab items-center justify-center border active:cursor-grabbing ${
-                        isEditing ? 'border-status-positive/60 text-status-positive' : 'border-accent/60 text-accent'
-                      }`}
-                      style={{ borderRadius: '0 0 10px 0', backgroundColor: 'var(--rm-bg-elevated)' }}
-                      title="Drag to move"
-                    >
-                      <GripVertical className="h-4 w-4" />
+                    <div className="rgl-overlay absolute left-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur">
+                      {editor.movable ? (
+                        <button
+                          type="button"
+                          className="drag-handle rgl-action cursor-grab rounded-md active:cursor-grabbing"
+                          title="Drag to move"
+                        >
+                          <GripVertical className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                      {editor.fixedSize ? (
+                        <span
+                          className="rgl-action rounded-md"
+                          title="Fixed-size widget"
+                          aria-label="Fixed-size widget"
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                        </span>
+                      ) : null}
                     </div>
 
-                    {/* Delete — NE corner, inner notch at BL */}
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); removeWidget(w.id); }}
-                      title="Remove widget"
-                      className={`rgl-overlay rgl-delete absolute right-0 top-0 z-40 flex h-7 w-7 items-center justify-center border transition-colors ${
-                        isEditing ? 'border-status-positive/60 text-status-positive' : 'border-accent/60 text-accent'
-                      }`}
-                      style={{ borderRadius: '0 0 0 10px', backgroundColor: 'var(--rm-bg-elevated)' }}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="rgl-overlay absolute right-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setEditingId(isEditing ? null : widget.id);
+                        }}
+                        title={isEditing ? 'Close editor' : 'Edit widget settings'}
+                        className={[
+                          'rgl-action rounded-md',
+                          isEditing ? 'border-status-positive/60 text-status-positive' : '',
+                        ].join(' ')}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeWidget(widget.id);
+                        }}
+                        title="Remove widget"
+                        className="rgl-action rgl-delete rounded-md"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
 
-                    {/* Edit — center */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingId(isEditing ? null : w.id);
-                      }}
-                      title={isEditing ? 'Close editor' : 'Edit widget settings'}
-                      className={`rgl-overlay absolute left-1/2 top-1/2 z-40 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
-                        isEditing
-                          ? 'border-status-positive text-status-positive'
-                          : 'border-accent/60 text-accent'
-                      }`}
-                      style={{ backgroundColor: isEditing ? 'color-mix(in oklab, var(--rm-status-positive) 20%, transparent)' : 'var(--rm-bg-elevated)' }}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      {isEditing ? 'Editing' : 'Edit'}
-                    </button>
+                    {isEditing ? (
+                      <div className="pointer-events-none absolute inset-0 z-30 rounded-lg ring-2 ring-status-positive/40" />
+                    ) : null}
                   </div>
                 );
               })}
             </GridLayout>
           ) : null}
-        </div>
         </div>
       </div>
 

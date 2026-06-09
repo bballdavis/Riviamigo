@@ -385,7 +385,12 @@ function renderSocHistoryChart(
     <RichTimeSeriesChart
       points={data.map((point) => ({ ts: point.ts }))}
       series={[
-        { key: definition.id, label: definition.title, values: data.map((point) => point.value), mode: definition.mode },
+        {
+          key: definition.id,
+          label: definition.title,
+          values: data.map((point) => point.value),
+          ...(definition.mode ? { mode: definition.mode } : {}),
+        },
         {
           key: `${definition.id}-avg`,
           label: 'Period Avg',

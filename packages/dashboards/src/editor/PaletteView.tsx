@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Plus, Search } from 'lucide-react';
+import { getWidgetEditorMeta } from '../registry';
 import type { WidgetDef } from '../registry';
 
 interface PaletteViewProps {
@@ -9,7 +10,7 @@ interface PaletteViewProps {
 
 export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
   const [search, setSearch] = useState('');
-  const visibleWidgets = widgets.filter((def) => !isLegacyStatWidget(def));
+  const visibleWidgets = widgets.filter((def) => !getWidgetEditorMeta(def).deprecated && !isLegacyStatWidget(def));
   const filtered = search.trim()
     ? visibleWidgets.filter(
         (def) =>
@@ -40,17 +41,36 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
           />
         </div>
       </div>
-      <div className="flex flex-col gap-1 px-3 pb-3">
-        {filtered.map((def) => (
-          <button
-            key={`${def.componentType}:${def.definitionId}`}
-            onClick={() => onAdd(def)}
-            className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left text-xs transition-colors hover:bg-bg-surface"
-          >
-            <Plus className="h-3 w-3 shrink-0 text-fg-tertiary" />
-            <span className="min-w-0 truncate">{def.title}</span>
-            <span className="ml-auto shrink-0 capitalize text-fg-tertiary">{def.componentType}</span>
-          </button>
+      <div className="flex flex-col gap-3 px-3 pb-3">
+        {groupWidgets(filtered).map(([category, defs]) => (
+          <section key={category} className="grid gap-1">
+            <p className="px-1 text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">
+              {category}
+            </p>
+            {defs.map((def) => {
+              const editor = getWidgetEditorMeta(def);
+              return (
+                <button
+                  key={`${def.componentType}:${def.definitionId}`}
+                  onClick={() => onAdd(def)}
+                  className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-left text-xs transition-colors hover:bg-bg-surface"
+                  title={editor.description}
+                >
+                  <Plus className="h-3 w-3 shrink-0 text-fg-tertiary" />
+                  <span className="min-w-0 truncate">{def.title}</span>
+                  {editor.fixedSize ? (
+                    <span className="ml-auto shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-fg-tertiary">
+                      Fixed
+                    </span>
+                  ) : (
+                    <span className="ml-auto shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-fg-tertiary">
+                      Resizable
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </section>
         ))}
         {filtered.length === 0 ? (
           <p className="px-3 py-2 text-xs text-fg-tertiary">No widgets found</p>
@@ -58,6 +78,19 @@ export function PaletteView({ widgets, onAdd }: PaletteViewProps) {
       </div>
     </div>
   );
+}
+
+function groupWidgets(widgets: WidgetDef[]) {
+  const groups = new Map<string, WidgetDef[]>();
+  for (const widget of widgets) {
+    const category = getWidgetEditorMeta(widget).category ?? titleCase(widget.componentType);
+    groups.set(category, [...(groups.get(category) ?? []), widget]);
+  }
+  return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function isLegacyStatWidget(def: WidgetDef) {

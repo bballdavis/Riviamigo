@@ -71,7 +71,7 @@ function CurrentVehicleStatePanel({
   vehicleModel?: string | undefined;
   targetTirePressurePsi?: number | null | undefined;
 }) {
-  const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] || OVERVIEW_ANCHORS.default;
+  const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');

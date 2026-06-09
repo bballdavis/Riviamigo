@@ -11,6 +11,20 @@ export interface WidgetCtx {
   chargeSessionEnergyKwh?: number | null;
 }
 
+export type ResizeHandle = 's' | 'e' | 'se';
+
+export interface WidgetEditorMeta {
+  category?: string;
+  description?: string;
+  movable?: boolean;
+  resizable?: boolean;
+  fixedSize?: boolean;
+  maxSize?: { w: number; h: number };
+  resizeHandles?: ResizeHandle[];
+  configurable?: boolean;
+  deprecated?: boolean;
+}
+
 export interface WidgetDef {
   componentType: DashboardComponentType;
   definitionId: string;
@@ -18,6 +32,7 @@ export interface WidgetDef {
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
   defaultOptions?: Record<string, unknown>;
+  editor?: WidgetEditorMeta;
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }
 
@@ -45,4 +60,15 @@ export function getAllWidgets(): WidgetDef[] {
 
 export function getWidgetKeys(): string[] {
   return Array.from(registry.keys());
+}
+
+export function getWidgetEditorMeta(def: WidgetDef | undefined): Required<Pick<WidgetEditorMeta, 'movable' | 'resizable' | 'fixedSize' | 'configurable'>> & WidgetEditorMeta {
+  const fixedSize = def?.editor?.fixedSize === true;
+  return {
+    ...def?.editor,
+    movable: def?.editor?.movable ?? true,
+    resizable: fixedSize ? false : def?.editor?.resizable ?? true,
+    fixedSize,
+    configurable: def?.editor?.configurable ?? true,
+  };
 }
