@@ -50,6 +50,9 @@ jobs:
       - name: Lint
         run: pnpm turbo lint
 
+      - name: Docs check
+        run: pnpm docs:check
+
       - name: Color-token guard
         # Enforces the mandatory CLAUDE.md rule: no hex literals, rgb(), or
         # arbitrary Tailwind palette classes (text-blue-*, bg-indigo-*, etc.)
