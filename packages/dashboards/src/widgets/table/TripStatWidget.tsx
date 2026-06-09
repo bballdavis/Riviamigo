@@ -40,7 +40,7 @@ function computeTripStat(stat: TripStat, trips: TripRow[]): number | null {
   const totalDistance = weightedTrips.reduce((sum, trip) => sum + trip.distance_mi, 0);
   if (totalDistance <= 0) return null;
   const weightedEfficiency = weightedTrips.reduce(
-    (sum, trip) => sum + (trip.distance_mi * trip.efficiency_wh_mi),
+    (sum, trip) => sum + (trip.distance_mi * (trip.efficiency_wh_mi ?? 0)),
     0,
   );
   return weightedEfficiency / totalDistance;
@@ -162,5 +162,10 @@ registerWidget({
   defaultSize: { w: 3, h: 2 },
   minSize: { w: 2, h: 2 },
   defaultOptions: {},
+  editor: {
+    category: 'Trips',
+    fixedSize: true,
+    description: 'Compact trip stat chip with a fixed dashboard footprint.',
+  },
   component: TripStatWidget,
 });

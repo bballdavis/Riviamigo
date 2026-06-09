@@ -40,6 +40,10 @@ export interface SpeedHistogramBin {
   sample_elapsed_s: number | null;
 }
 
+type ActivePayloadState<T> = {
+  activePayload?: Array<{ payload?: T }>;
+};
+
 export interface SpeedHistogramChartProps {
   bins: SpeedHistogramBin[];
   loading?: boolean;
@@ -81,7 +85,7 @@ export function SpeedHistogramChart({
         data={bins}
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
-          const payload = state?.activePayload?.[0]?.payload as SpeedHistogramBin | undefined;
+          const payload = (state as ActivePayloadState<SpeedHistogramBin> | undefined)?.activePayload?.[0]?.payload;
           onActiveElapsedSChange?.(payload?.sample_elapsed_s ?? null);
         }}
         onMouseLeave={() => onActiveElapsedSChange?.(null)}

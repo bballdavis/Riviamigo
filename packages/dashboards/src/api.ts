@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth, api } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
+import { sanitizeDashboardConfig } from './layout';
 import type { DashboardConfig, WidgetInstance } from './schema';
 
 const BASE = '/v1/dashboards';
@@ -42,7 +43,8 @@ export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
     widgets: Array.isArray(config.widgets) ? config.widgets : [],
   });
 
-  return parsed.slug === 'charging' ? normalizeChargingConnectionSwap(parsed) : parsed;
+  const normalized = parsed.slug === 'charging' ? normalizeChargingConnectionSwap(parsed) : parsed;
+  return sanitizeDashboardConfig(normalized);
 }
 
 const CHARGING_CONNECTION_VISIBILITY_OPTION = 'chargingConnectionVisibility';
@@ -160,11 +162,12 @@ function unpluggedOptions() {
 }
 
 function dashboardMutationBody(config: DashboardConfig) {
+  const sanitized = sanitizeDashboardConfig(config);
   return {
-    slug: config.slug,
-    name: config.name,
-    description: config.description,
-    config,
+    slug: sanitized.slug,
+    name: sanitized.name,
+    description: sanitized.description,
+    config: sanitized,
   };
 }
 
@@ -226,15 +229,43 @@ export function useUpdateDashboard() {
 export function useUpdateAdminDashboard() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (config: DashboardConfig) =>
-      api.apiFetch<unknown>('PUT', `/v1/admin/dashboards/${config.id}`, {
-        name: config.name,
-        description: config.description,
-        config,
-      }).then(normalizeDashboardConfig),
+    mutationFn: (config: DashboardConfig) => {
+      const sanitized = sanitizeDashboardConfig(config);
+      return api.apiFetch<unknown>('PUT', `/v1/admin/dashboards/${sanitized.id}`, {
+        name: sanitized.name,
+        description: sanitized.description,
+        config: sanitized,
+      }).then(normalizeDashboardConfig);
+    },
     onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
+    },
+  });
+}
+
+export function useSetAdminDashboardLock() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, locked }: { id: string; locked: boolean }) =>
+      api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/lock`, { locked })
+        .then(normalizeDashboardConfig),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['dashboards'] });
+      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
+    },
+  });
+}
+
+export function useRestoreAdminDashboardDefault() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/restore-default`)
+        .then(normalizeDashboardConfig),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['dashboards'] });
+      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
     },
   });
 }

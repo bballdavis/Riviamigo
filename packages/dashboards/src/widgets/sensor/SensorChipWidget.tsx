@@ -525,6 +525,12 @@ for (const definition of SENSOR_DEFINITIONS) {
       valueSize: 'md',
       ...(cumulative ? { windowDays: DEFAULT_WINDOW_DAYS } : {}),
     },
+    editor: {
+      category: 'Sensors',
+      description: definition.dataSource === 'metric'
+        ? 'Resizable sensor chip backed by the metric catalog.'
+        : 'Resizable sensor chip backed by dashboard summary data.',
+    },
     component: SensorChipWidget,
   });
 }

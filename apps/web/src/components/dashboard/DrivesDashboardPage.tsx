@@ -2,7 +2,7 @@ import React from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useMe } from '@riviamigo/hooks';
 import { useCreateDashboard, useUpdateDashboard, useUpdateAdminDashboard } from '@riviamigo/dashboards';
-import { createDefaultDashboardEditActions, renderDefaultDashboardTitleAction, type DashboardPageProps } from './DashboardPage';
+import { canManageSystemDashboards, createDefaultDashboardEditActions, renderDefaultDashboardTitleAction, type DashboardPageProps } from './DashboardPage';
 import { DashboardPageShell } from './DashboardPageShell';
 
 export function DrivesDashboardPage({ navKey, slug, title }: DashboardPageProps) {
@@ -11,7 +11,7 @@ export function DrivesDashboardPage({ navKey, slug, title }: DashboardPageProps)
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
   const me = useMe();
-  const isAdmin = me.data?.role === 'admin';
+  const isAdmin = canManageSystemDashboards(me.data?.role);
 
   return (
     <DashboardPageShell

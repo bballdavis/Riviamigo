@@ -12,7 +12,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-import { createDefaultDashboardEditActions } from '../components/dashboard/DashboardPage';
+import { canManageSystemDashboards, createDefaultDashboardEditActions } from '../components/dashboard/DashboardPage';
 import type { DashboardPageShellRenderState } from '../components/dashboard/DashboardPageShell';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
@@ -289,5 +289,11 @@ describe('createDefaultDashboardEditActions — save routing', () => {
     expect(adminUpdateMock).not.toHaveBeenCalled();
     expect(createMock).not.toHaveBeenCalled();
     expect(exitEdit).toHaveBeenCalledOnce();
+  });
+
+  it('treats super users as system-dashboard managers', () => {
+    expect(canManageSystemDashboards('super_user')).toBe(true);
+    expect(canManageSystemDashboards('admin')).toBe(true);
+    expect(canManageSystemDashboards('user')).toBe(false);
   });
 });

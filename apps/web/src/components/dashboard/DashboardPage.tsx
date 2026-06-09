@@ -33,7 +33,7 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
   const me = useMe();
-  const isAdmin = me.data?.role === 'admin';
+  const isAdmin = canManageSystemDashboards(me.data?.role);
 
   return (
     <DashboardPageShell
@@ -52,6 +52,10 @@ export interface DashboardEditMutations {
   createDashboard: ReturnType<typeof useCreateDashboard>;
   qc: ReturnType<typeof useQueryClient>;
   isAdmin: boolean;
+}
+
+export function canManageSystemDashboards(role: string | null | undefined) {
+  return role === 'admin' || role === 'super_user';
 }
 
 function findOwnedDashboardBySlug(
