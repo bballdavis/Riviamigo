@@ -49,6 +49,13 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/dashboards', () => ({
+  SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
+    <div data-testid="sensor-chip-summary">
+      <div>{title}</div>
+      <div>{value}</div>
+      {secondary ? <div>{secondary}</div> : null}
+    </div>
+  ),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   getDefaultBySlug: () => ({
     schemaVersion: 2,

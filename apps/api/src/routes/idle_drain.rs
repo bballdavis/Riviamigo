@@ -26,8 +26,11 @@ const MAX_LIMIT: usize = 500;
 const CHART_MIN_DURATION_HOURS: f64 = 0.25;
 const ACTIVE_PADDING_HOURS: i64 = 48;
 const MAX_SOC_BOUNDARY_GAP_MINUTES: f64 = 45.0;
-const MAX_RANGE_BOUNDARY_GAP_MINUTES: f64 = 45.0;
-const MAX_ODOMETER_DELTA_MILES: f64 = 0.2;
+// Very long parked windows can go days without telemetry near the exact edge,
+// so the SoC/range anchor search widens before we fall back to exclusion.
+const LONG_SOC_BOUNDARY_GAP_MINUTES: f64 = 12.0 * 60.0;
+const VERY_LONG_SOC_BOUNDARY_GAP_MINUTES: f64 = 72.0 * 60.0;
+const MAX_ODOMETER_DELTA_MILES: f64 = 2.0;
 const LONG_SESSION_HOURS: f64 = 18.0;
 const VERY_LONG_SESSION_HOURS: f64 = 48.0;
 const LARGE_SOC_LOSS_THRESHOLD_PCT: f64 = 8.0;
@@ -72,6 +75,7 @@ pub enum ValidationReason {
     OverlapsCharge,
     OverlapsTrip,
     MovementDetected,
+    NetGainDetected,
     InsufficientTelemetry,
     SocAnchorUnreliable,
 }
@@ -290,8 +294,8 @@ pub(crate) async fn fetch_idle_drain_periods(
                 ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
-              AND t.ts >= c.period_start - INTERVAL '45 minutes'
-              AND t.ts <= c.period_start + INTERVAL '45 minutes'
+            AND t.ts >= c.period_start - INTERVAL '72 hours'
+              AND t.ts <= c.period_start + INTERVAL '72 hours'
               AND t.battery_level IS NOT NULL
             ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start))) ASC
             LIMIT 1
@@ -303,8 +307,8 @@ pub(crate) async fn fetch_idle_drain_periods(
                 ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
-              AND t.ts >= c.period_end - INTERVAL '45 minutes'
-              AND t.ts <= c.period_end + INTERVAL '45 minutes'
+            AND t.ts >= c.period_end - INTERVAL '72 hours'
+              AND t.ts <= c.period_end + INTERVAL '72 hours'
               AND t.battery_level IS NOT NULL
             ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end))) ASC
             LIMIT 1
@@ -315,8 +319,8 @@ pub(crate) async fn fetch_idle_drain_periods(
                 ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
-              AND t.ts >= c.period_start - INTERVAL '45 minutes'
-              AND t.ts <= c.period_start + INTERVAL '45 minutes'
+            AND t.ts >= c.period_start - INTERVAL '72 hours'
+              AND t.ts <= c.period_start + INTERVAL '72 hours'
               AND t.distance_to_empty_mi IS NOT NULL
             ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - c.period_start))) ASC
             LIMIT 1
@@ -327,8 +331,8 @@ pub(crate) async fn fetch_idle_drain_periods(
                 ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end)))::float8 / 60.0::float8 AS gap_minutes
             FROM timeseries.telemetry t
             WHERE t.vehicle_id = $1
-              AND t.ts >= c.period_end - INTERVAL '45 minutes'
-              AND t.ts <= c.period_end + INTERVAL '45 minutes'
+            AND t.ts >= c.period_end - INTERVAL '72 hours'
+              AND t.ts <= c.period_end + INTERVAL '72 hours'
               AND t.distance_to_empty_mi IS NOT NULL
             ORDER BY ABS(EXTRACT(EPOCH FROM (t.ts - c.period_end))) ASC
             LIMIT 1
@@ -389,7 +393,7 @@ pub(crate) async fn fetch_idle_drain_periods(
         ) charge_overlap ON TRUE
         LEFT JOIN LATERAL (
             SELECT
-                SUM(
+                (SUM(
                     EXTRACT(
                         EPOCH FROM (
                             LEAST(COALESCE(v.ended_at, c.period_end), c.period_end)
@@ -398,15 +402,15 @@ pub(crate) async fn fetch_idle_drain_periods(
                     )
                 ) FILTER (
                     WHERE v.state = 'sleep'
-                )::float8 AS sleep_seconds,
-                SUM(
+                ))::float8 AS sleep_seconds,
+                (SUM(
                     EXTRACT(
                         EPOCH FROM (
                             LEAST(COALESCE(v.ended_at, c.period_end), c.period_end)
                             - GREATEST(v.started_at, c.period_start)
                         )
                     )
-                )::float8 AS covered_state_seconds,
+                ))::float8 AS covered_state_seconds
             FROM riviamigo.vehicle_state_periods v
             WHERE v.vehicle_id = $1
               AND v.started_at < c.period_end
@@ -459,13 +463,19 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
     let duration_seconds = duration_hours * 3600.0;
     let overlaps_trip = row.trip_overlap_count > 0;
     let overlaps_charge = row.charge_overlap_count > 0;
+    // Tiny odometer drift is common in parked windows; only larger mileage
+    // changes or explicit trip/charge overlaps should mark movement.
     let movement_detected = overlaps_trip
         || overlaps_charge
-        || row.drive_sample_count > 0
-        || row.odometer_delta_mi.unwrap_or(0.0) >= MAX_ODOMETER_DELTA_MILES;
+        || row.odometer_delta_mi.unwrap_or(0.0) >= MAX_ODOMETER_DELTA_MILES
+        || row.drive_sample_count >= 10;
 
     let soc_start = finite_optional(row.soc_start);
     let soc_end = finite_optional(row.soc_end);
+    let soc_gain_detected = match (soc_start, soc_end) {
+        (Some(start), Some(end)) => start < end,
+        _ => false,
+    };
     let soc_lost_pct = match (soc_start, soc_end) {
         (Some(start), Some(end)) if start >= end => Some(start - end),
         _ => None,
@@ -495,8 +505,13 @@ fn derive_phantom_period(row: PhantomCandidateRow) -> PhantomPeriod {
         _ => None,
     };
 
-    let validation_reason =
-        classify_validation_reason(&row, duration_hours, soc_lost_pct, movement_detected);
+    let validation_reason = classify_validation_reason(
+        &row,
+        duration_hours,
+        soc_lost_pct,
+        movement_detected,
+        soc_gain_detected,
+    );
     let validation_status = if validation_reason.is_some() {
         ValidationStatus::Excluded
     } else {
@@ -553,6 +568,7 @@ fn classify_validation_reason(
     duration_hours: f64,
     soc_lost_pct: Option<f64>,
     movement_detected: bool,
+    soc_gain_detected: bool,
 ) -> Option<ValidationReason> {
     if row.charge_overlap_count > 0 {
         return Some(ValidationReason::OverlapsCharge);
@@ -560,14 +576,17 @@ fn classify_validation_reason(
     if row.trip_overlap_count > 0 {
         return Some(ValidationReason::OverlapsTrip);
     }
+    if soc_gain_detected {
+        return Some(ValidationReason::NetGainDetected);
+    }
     if movement_detected {
         return Some(ValidationReason::MovementDetected);
     }
 
     if !boundary_gaps_are_valid(
+        duration_hours,
         row.start_sample_gap_minutes,
         row.end_sample_gap_minutes,
-        MAX_SOC_BOUNDARY_GAP_MINUTES,
     ) {
         return Some(ValidationReason::SocAnchorUnreliable);
     }
@@ -617,13 +636,24 @@ fn requires_interior_soc_support(duration_hours: f64, soc_lost_pct: Option<f64>)
 }
 
 fn boundary_gaps_are_valid(
+    duration_hours: f64,
     start_gap: Option<f64>,
     end_gap: Option<f64>,
-    max_gap_minutes: f64,
 ) -> bool {
+    let max_gap_minutes = max_boundary_gap_minutes(duration_hours);
     match (finite_optional(start_gap), finite_optional(end_gap)) {
         (Some(start), Some(end)) => start <= max_gap_minutes && end <= max_gap_minutes,
         _ => false,
+    }
+}
+
+fn max_boundary_gap_minutes(duration_hours: f64) -> f64 {
+    if duration_hours >= VERY_LONG_SESSION_HOURS {
+        VERY_LONG_SOC_BOUNDARY_GAP_MINUTES
+    } else if duration_hours >= LONG_SESSION_HOURS {
+        LONG_SOC_BOUNDARY_GAP_MINUTES
+    } else {
+        MAX_SOC_BOUNDARY_GAP_MINUTES
     }
 }
 
@@ -634,9 +664,9 @@ fn compute_range_loss(
     soc_lost_pct: Option<f64>,
 ) -> Option<f64> {
     if !boundary_gaps_are_valid(
+        row.duration_hours,
         row.start_range_gap_minutes,
         row.end_range_gap_minutes,
-        MAX_RANGE_BOUNDARY_GAP_MINUTES,
     ) {
         return None;
     }
@@ -871,10 +901,24 @@ mod tests {
     }
 
     #[test]
-    fn active_state_overlap_alone_does_not_exclude_period() {
-        let period = derive_phantom_period(candidate_row());
+    fn noisy_drive_samples_do_not_auto_exclude_period() {
+        let mut row = candidate_row();
+        row.drive_sample_count = 4;
+        let period = derive_phantom_period(row);
         assert_eq!(period.validation_status, ValidationStatus::Validated);
         assert_eq!(period.validation_reason, None);
+    }
+
+    #[test]
+    fn net_gain_is_excluded() {
+        let mut row = candidate_row();
+        row.soc_end = Some(72.0);
+        let period = derive_phantom_period(row);
+        assert_eq!(period.validation_status, ValidationStatus::Excluded);
+        assert_eq!(
+            period.validation_reason,
+            Some(ValidationReason::NetGainDetected)
+        );
     }
 
     #[test]

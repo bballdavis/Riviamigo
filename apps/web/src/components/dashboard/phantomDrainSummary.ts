@@ -13,7 +13,13 @@ export interface PhantomDrainSummaryCard {
   key: string;
   title: string;
   value: string;
+  icon: string;
+  accentBorder?: boolean;
   secondary?: string;
+}
+
+function formatRatioPercent(value: number | null, decimals = 0) {
+  return value == null ? '-' : formatPercent(value * 100, decimals);
 }
 
 export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): PhantomDrainSummary {
@@ -78,22 +84,27 @@ export function buildPhantomDrainSummaryCards(summary: PhantomDrainSummary): Pha
       key: 'max-drain',
       title: 'Max drain',
       value: formatPercent(summary.maxDrainPct, 2),
+      icon: 'lucide:activity',
+      accentBorder: true,
     },
     {
       key: 'avg-sleep',
       title: 'Avg sleep',
-      value: summary.avgSleepPct == null ? '-' : formatPercent(summary.avgSleepPct, 1),
-      secondary: `State coverage ${summary.avgStateCoveragePct == null ? 'unknown' : formatPercent(summary.avgStateCoveragePct, 0)}`,
+      value: formatRatioPercent(summary.avgSleepPct, 1),
+      icon: 'lucide:moon-star',
+      secondary: `State coverage ${summary.avgStateCoveragePct == null ? 'unknown' : formatRatioPercent(summary.avgStateCoveragePct, 0)}`,
     },
     {
       key: 'total-energy-drained',
       title: 'Total energy drained',
       value: formatKwh(summary.totalEnergyDrainedKwh),
+      icon: 'lucide:bolt',
     },
     {
       key: 'avg-drain-per-hour',
       title: 'Avg drain per hour',
       value: summary.avgDrainPctPerHour == null ? '-' : `${formatPercent(summary.avgDrainPctPerHour, 2)} / h`,
+      icon: 'lucide:timer',
     },
   ];
 }
