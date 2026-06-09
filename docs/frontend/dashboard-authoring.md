@@ -38,6 +38,7 @@ If the change crosses more than one row, start from the lowest reusable layer an
 3. Create the widget module in `packages/dashboards/src/widgets/`.
 4. Register it via the existing widget barrel and registry.
 5. Keep the widget focused on one concern.
+6. Declare editor capabilities in the widget registry entry.
 
 A widget should usually:
 
@@ -46,6 +47,20 @@ A widget should usually:
 - avoid knowing about route params beyond the provided widget context
 
 Do not use one widget to coordinate the rest of a page.
+
+### Widget Editor Capabilities
+
+Every widget can declare editor metadata through `WidgetDef.editor`.
+
+Use this for:
+
+- `category` and `description` in the editor palette.
+- `fixedSize: true` for composed/custom chips whose layout should not be resized.
+- `resizable: false` or `movable: false` for special-case components.
+- `maxSize` when a widget can grow but has a meaningful upper bound.
+- `deprecated: true` to hide a component from the palette without breaking existing saved dashboards.
+
+Compact source-backed sensor chips should normally stay resizable. Custom visual composites such as trip stat chips or vehicle artwork should opt into fixed size when resizing would break the composition.
 
 ## Adding A Table
 
@@ -125,6 +140,16 @@ Default dashboards and user dashboards should share the same basic behaviors:
 - import/export
 
 If you need to change one of those flows, change the shared shell or the shared action wiring. Do not add a second implementation for one route family.
+
+Dashboard configs are sanitized at the dashboard package boundary before render, import, and save. Sanitization clamps grid positions, enforces fixed-size widgets, and keeps restored/imported JSON from violating current editor capabilities.
+
+Use Settings > Dashboards for durable dashboard management:
+
+- open or edit dashboards
+- duplicate a default into a user-owned copy
+- export YAML
+- reset user-owned copies
+- admin/super-user lock, unlock, and restore bundled defaults
 
 ## Data and Adapter Rules
 

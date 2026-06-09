@@ -5,6 +5,15 @@ import { rootRoute } from './__root';
 import { api, useAuth, useMe, useVehicles } from '@riviamigo/hooks';
 import type { ApiAccessLevel, UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
+  downloadDashboardYaml,
+  useCloneDashboard,
+  useDashboards,
+  useDeleteDashboard,
+  useRestoreAdminDashboardDefault,
+  useSetAdminDashboardLock,
+} from '@riviamigo/dashboards';
+import type { DashboardConfig } from '@riviamigo/dashboards';
+import {
   formatMiles,
   formatPressure,
   formatTemp,
@@ -23,8 +32,9 @@ import { AuthGuard } from '../components/layout/AuthGuard';
 import { BackupSection } from '../components/settings/BackupSection';
 import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
+import { canManageSystemDashboards } from '../components/dashboard/DashboardPage';
 import {
-  Car, CircleHelp, Clipboard, Database, DatabaseBackup, KeyRound, ListChecks, LogOut, MapPin, Pencil, Plus, RefreshCw, Ruler, Save, ShieldCheck, Star, Trash2, Users, X,
+  Car, CircleHelp, Clipboard, Database, DatabaseBackup, Download, ExternalLink, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, ShieldCheck, Star, Trash2, Unlock, Users, X,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -53,10 +63,11 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'units' | 'places' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'dashboards' | 'units' | 'places' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
+  { id: 'dashboards', label: 'Dashboards', icon: Clipboard },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'api', label: 'API Access', icon: KeyRound },
@@ -153,6 +164,217 @@ function ThemeVehicleImage({
   );
 }
 
+function DashboardSettingsSection({
+  dashboards,
+  isLoading,
+  canManageDefaults,
+  cloneDashboard,
+  deleteDashboard,
+  setDashboardLock,
+  restoreDefaultDashboard,
+  onEdit,
+}: {
+  dashboards: DashboardConfig[];
+  isLoading: boolean;
+  canManageDefaults: boolean;
+  cloneDashboard: ReturnType<typeof useCloneDashboard>;
+  deleteDashboard: ReturnType<typeof useDeleteDashboard>;
+  setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
+  restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
+  onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
+}) {
+  const defaults = dashboards.filter((dashboard) => dashboard.isDefault);
+  const userDashboards = dashboards.filter((dashboard) => !dashboard.isDefault);
+
+  async function duplicate(dashboard: DashboardConfig) {
+    const cloned = await cloneDashboard.mutateAsync(dashboard.id);
+    onEdit(cloned, true);
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Dashboards</CardTitle>
+          <Badge variant="info">{dashboards.length} saved</Badge>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="rounded-xl border border-border bg-bg-elevated/35 p-3 text-sm text-fg-secondary">
+            Dashboard edits are saved in the database, so backup and restore carries them with the rest of Riviamigo. Use user copies for personal changes; system defaults are admin-managed.
+          </div>
+          {isLoading ? (
+            <div className="rounded-xl border border-border bg-bg-elevated/35 p-4 text-sm text-fg-tertiary">
+              Loading dashboards...
+            </div>
+          ) : (
+            <>
+              <DashboardSettingsList
+                title="System Defaults"
+                dashboards={defaults}
+                canManageDefaults={canManageDefaults}
+                cloneDashboard={cloneDashboard}
+                deleteDashboard={deleteDashboard}
+                setDashboardLock={setDashboardLock}
+                restoreDefaultDashboard={restoreDefaultDashboard}
+                onDuplicate={duplicate}
+                onEdit={onEdit}
+              />
+              <DashboardSettingsList
+                title="My Dashboards"
+                dashboards={userDashboards}
+                canManageDefaults={canManageDefaults}
+                cloneDashboard={cloneDashboard}
+                deleteDashboard={deleteDashboard}
+                setDashboardLock={setDashboardLock}
+                restoreDefaultDashboard={restoreDefaultDashboard}
+                onDuplicate={duplicate}
+                onEdit={onEdit}
+              />
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function DashboardSettingsList({
+  title,
+  dashboards,
+  canManageDefaults,
+  cloneDashboard,
+  deleteDashboard,
+  setDashboardLock,
+  restoreDefaultDashboard,
+  onDuplicate,
+  onEdit,
+}: {
+  title: string;
+  dashboards: DashboardConfig[];
+  canManageDefaults: boolean;
+  cloneDashboard: ReturnType<typeof useCloneDashboard>;
+  deleteDashboard: ReturnType<typeof useDeleteDashboard>;
+  setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
+  restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
+  onDuplicate: (dashboard: DashboardConfig) => void;
+  onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
+}) {
+  return (
+    <section className="grid gap-2">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-medium uppercase tracking-wider text-fg-tertiary">{title}</h3>
+        <span className="text-xs text-fg-tertiary">{dashboards.length}</span>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-border">
+        {dashboards.length === 0 ? (
+          <div className="p-4 text-sm text-fg-tertiary">No dashboards here yet.</div>
+        ) : (
+          dashboards.map((dashboard) => {
+            const isUserOwned = dashboard.ownerId != null;
+            const canEdit = isUserOwned || (dashboard.isDefault && canManageDefaults);
+            return (
+              <div
+                key={dashboard.id}
+                className="grid gap-3 border-b border-border bg-bg last:border-0 p-3 md:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-medium text-fg">{dashboard.name}</p>
+                    <Badge variant={dashboard.isDefault ? 'info' : 'default'} size="sm">
+                      {dashboard.isDefault ? 'Default' : 'User'}
+                    </Badge>
+                    {dashboard.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}
+                  </div>
+                  <p className="mt-1 text-xs text-fg-tertiary">
+                    {dashboard.slug} · {dashboard.widgets.length} widgets
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    iconLeft={<ExternalLink className="h-3.5 w-3.5" />}
+                    onClick={() => onEdit(dashboard, false)}
+                  >
+                    Open
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    iconLeft={<Pencil className="h-3.5 w-3.5" />}
+                    disabled={!canEdit}
+                    onClick={() => onEdit(dashboard, true)}
+                    title={canEdit ? 'Edit dashboard' : 'Duplicate this locked default before editing'}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={cloneDashboard.isPending && cloneDashboard.variables === dashboard.id}
+                    onClick={() => { void onDuplicate(dashboard); }}
+                  >
+                    Duplicate
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    iconLeft={<Download className="h-3.5 w-3.5" />}
+                    onClick={() => downloadDashboardYaml(dashboard)}
+                  >
+                    Export
+                  </Button>
+                  {dashboard.isDefault && canManageDefaults ? (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        iconLeft={dashboard.isLocked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                        loading={setDashboardLock.isPending && setDashboardLock.variables?.id === dashboard.id}
+                        onClick={() => setDashboardLock.mutate({ id: dashboard.id, locked: !dashboard.isLocked })}
+                      >
+                        {dashboard.isLocked ? 'Unlock' : 'Lock'}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
+                        loading={restoreDefaultDashboard.isPending && restoreDefaultDashboard.variables === dashboard.id}
+                        onClick={() => {
+                          if (window.confirm(`Restore "${dashboard.name}" to the bundled default layout?`)) {
+                            restoreDefaultDashboard.mutate(dashboard.id);
+                          }
+                        }}
+                      >
+                        Restore
+                      </Button>
+                    </>
+                  ) : null}
+                  {isUserOwned ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      iconLeft={<Trash2 className="h-3.5 w-3.5" />}
+                      loading={deleteDashboard.isPending && deleteDashboard.variables === dashboard.id}
+                      onClick={() => {
+                        if (window.confirm(`Reset "${dashboard.name}"? This removes your saved dashboard copy.`)) {
+                          deleteDashboard.mutate(dashboard.id);
+                        }
+                      }}
+                    >
+                      Reset
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
 function SettingsPage() {
   return <AuthGuard><SettingsContent /></AuthGuard>;
 }
@@ -187,7 +409,7 @@ export function SettingsContent() {
   const [latestInviteToken, setLatestInviteToken] = React.useState<string | null>(null);
   const [demoPickerOpen, setDemoPickerOpen] = React.useState(false);
   const canCreateDemoVehicle = me.data?.role === 'admin' || me.data?.role === 'super_user';
-  const isAdmin = me.data?.role === 'admin';
+  const isAdmin = canManageSystemDashboards(me.data?.role);
   const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const sections = React.useMemo(
     () => canManageBackups
@@ -213,6 +435,12 @@ export function SettingsContent() {
     queryFn: () => api.getRivianStewardship(),
     enabled: activeSection === 'raw' && isAdmin,
   });
+
+  const dashboards = useDashboards();
+  const cloneDashboard = useCloneDashboard();
+  const deleteDashboard = useDeleteDashboard();
+  const setDashboardLock = useSetAdminDashboardLock();
+  const restoreDefaultDashboard = useRestoreAdminDashboardDefault();
 
   const unitPreferencesQuery = useQuery({
     queryKey: ['unit-preferences'],
@@ -1012,6 +1240,25 @@ export function SettingsContent() {
                   </div>
                 </CardContent>
               </Card>
+            )}
+
+            {activeSection === 'dashboards' && (
+              <DashboardSettingsSection
+                dashboards={dashboards.data ?? []}
+                isLoading={dashboards.isLoading}
+                canManageDefaults={isAdmin}
+                cloneDashboard={cloneDashboard}
+                deleteDashboard={deleteDashboard}
+                setDashboardLock={setDashboardLock}
+                restoreDefaultDashboard={restoreDefaultDashboard}
+                onEdit={(dashboard, edit) => {
+                  navigate({
+                    to: '/d/$slug',
+                    params: { slug: dashboard.slug },
+                    search: edit ? { edit: '1' } : {},
+                  } as never);
+                }}
+              />
             )}
 
             {activeSection === 'api' && (

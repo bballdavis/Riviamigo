@@ -340,5 +340,10 @@ registerWidget({
   defaultSize: { w: 6, h: 6 },
   minSize: { w: 5, h: 5 },
   defaultOptions: {},
+  editor: {
+    category: 'Charging',
+    fixedSize: true,
+    description: 'Custom charging chip with plug-aware artwork and fixed composition.',
+  },
   component: ChargingConnectionWidget,
 });

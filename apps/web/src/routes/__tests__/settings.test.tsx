@@ -202,6 +202,15 @@ vi.mock('@riviamigo/hooks', () => ({
   }),
 }));
 
+vi.mock('@riviamigo/dashboards', () => ({
+  downloadDashboardYaml: vi.fn(),
+  useDashboards: () => ({ data: [], isLoading: false }),
+  useCloneDashboard: () => ({ mutateAsync: vi.fn(), isPending: false, variables: undefined }),
+  useDeleteDashboard: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useSetAdminDashboardLock: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useRestoreAdminDashboardDefault: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+}));
+
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('lucide-react', () => ({
@@ -219,6 +228,7 @@ vi.mock('lucide-react', () => ({
   ChevronRight: () => <svg data-testid="icon-chevron-right" />,
   Clock3: () => <svg data-testid="icon-clock" />,
   Download: () => <svg data-testid="icon-download" />,
+  ExternalLink: () => <svg data-testid="icon-external-link" />,
   HardDrive: () => <svg data-testid="icon-hard-drive" />,
   History: () => <svg data-testid="icon-history" />,
   Home: () => <svg data-testid="icon-home" />,
@@ -227,6 +237,7 @@ vi.mock('lucide-react', () => ({
   Timer: () => <svg data-testid="icon-timer" />,
   KeyRound: () => <svg data-testid="icon-key" />,
   ListChecks: () => <svg data-testid="icon-list-checks" />,
+  Lock: () => <svg data-testid="icon-lock" />,
   LogOut: () => <svg data-testid="icon-logout" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   Plus:   () => <svg data-testid="icon-plus" />,
@@ -241,6 +252,7 @@ vi.mock('lucide-react', () => ({
   Users: () => <svg data-testid="icon-users" />,
   X:      () => <svg data-testid="icon-x" />,
   Trash2: () => <svg data-testid="icon-trash" />,
+  Unlock: () => <svg data-testid="icon-unlock" />,
 }));
 
 import { SettingsContent } from '../settings';

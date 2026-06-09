@@ -51,6 +51,10 @@ pub fn router() -> Router<AppState> {
         .route("/dashboards/:id/clone", post(clone_dashboard))
         .route("/admin/dashboards/:id", put(admin_update))
         .route("/admin/dashboards/:id/lock", post(admin_set_lock))
+        .route(
+            "/admin/dashboards/:id/restore-default",
+            post(admin_restore_default),
+        )
 }
 
 pub fn metadata_router() -> Router<AppState> {
@@ -308,6 +312,48 @@ async fn admin_set_lock(
     Ok(Json(row))
 }
 
+async fn admin_restore_default(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Dashboard>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let existing = get_dashboard(&state, id).await?;
+    if existing.owner_id.is_some() || !existing.is_default {
+        return Err(AppError::Validation(
+            "Only system default dashboards can be restored".into(),
+        ));
+    }
+
+    let config = bundled_default_config(id).ok_or(AppError::NotFound)?;
+    let name = config["name"]
+        .as_str()
+        .unwrap_or(&existing.name)
+        .to_string();
+
+    let row = sqlx::query_as::<_, Dashboard>(
+        r#"
+        UPDATE dashboards
+        SET name = $1,
+            config = $2,
+            is_default = TRUE,
+            is_locked = TRUE,
+            updated_at = NOW()
+        WHERE id = $3
+        RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
+        "#,
+    )
+    .bind(name)
+    .bind(config)
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(row))
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn get_dashboard(state: &AppState, id: Uuid) -> Result<Dashboard, AppError> {
@@ -369,6 +415,20 @@ fn validate_slug(slug: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+fn bundled_default_config(id: Uuid) -> Option<Value> {
+    let id_str = id.to_string();
+    let json_str = match id_str.as_str() {
+        "00000000-0000-0000-0000-000000000001" => include_str!("../../dashboards/dashboard.json"),
+        "00000000-0000-0000-0000-000000000002" => include_str!("../../dashboards/battery.json"),
+        "00000000-0000-0000-0000-000000000003" => include_str!("../../dashboards/efficiency.json"),
+        "00000000-0000-0000-0000-000000000004" => include_str!("../../dashboards/charging.json"),
+        "00000000-0000-0000-0000-000000000005" => include_str!("../../dashboards/trips.json"),
+        _ => return None,
+    };
+
+    serde_json::from_str(json_str).ok()
 }
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -440,6 +500,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(api_config["widgets"], frontend_config["widgets"]);
+    }
+
+    #[test]
+    fn bundled_default_config_resolves_known_dashboard_ids() {
+        let id: Uuid = "00000000-0000-0000-0000-000000000004".parse().unwrap();
+        let config = bundled_default_config(id).expect("charging default");
+
+        assert_eq!(config["slug"], "charging");
+        assert!(config["widgets"]
+            .as_array()
+            .is_some_and(|widgets| !widgets.is_empty()));
     }
 
     // ── integration tests (require DATABASE_URL) ─────────────────────────────
