@@ -1,4 +1,5 @@
 import React from 'react';
+import { SensorChipSummary } from '@riviamigo/dashboards';
 import { usePhantomDrainPeriods } from '@riviamigo/hooks';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
 import { DataTable, TableControls, phantomDrainColumns } from '@riviamigo/ui/tables';
@@ -7,13 +8,18 @@ import { DashboardPageShell, type DashboardPageShellRenderState } from './Dashbo
 import type { DashboardPageProps } from './DashboardPage';
 import { buildPhantomDrainSummaryCards, summarizePhantomDrainPeriods } from './phantomDrainSummary';
 
+function formatRatioPercent(value: number | null | undefined, decimals = 0) {
+  if (value == null || Number.isNaN(value)) return null;
+  return formatPercent(value * 100, decimals);
+}
+
 function formatPeriodSearchText(period: PhantomDrainPeriod) {
   const parts = [
     period.period_start,
     period.period_end,
     period.duration_hours == null ? null : `${period.duration_hours.toFixed(1)} h`,
-    period.sleep_share_pct == null ? null : formatPercent(period.sleep_share_pct, 0),
-    period.state_coverage_pct == null ? null : `${formatPercent(period.state_coverage_pct, 0)} coverage`,
+    formatRatioPercent(period.sleep_share_pct, 0),
+    period.state_coverage_pct == null ? null : `${formatRatioPercent(period.state_coverage_pct, 0)} coverage`,
     period.soc_start == null ? null : formatPercent(period.soc_start, 0),
     period.soc_end == null ? null : formatPercent(period.soc_end, 0),
     period.soc_lost_pct == null ? null : `-${formatPercent(period.soc_lost_pct, 2)}`,
@@ -64,11 +70,14 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
     <div className="grid gap-4 min-w-0">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {summaryCards.map((card) => (
-          <div key={card.key} className="rounded-xl border border-border bg-bg-surface px-4 py-3">
-            <p className="text-xs uppercase tracking-wide text-fg-tertiary">{card.title}</p>
-            <p className="mt-1 text-xl font-semibold text-fg">{card.value}</p>
-            {card.secondary ? <p className="mt-1 text-[11px] text-fg-tertiary">{card.secondary}</p> : null}
-          </div>
+          <SensorChipSummary
+            key={card.key}
+            title={card.title}
+            value={card.value}
+            icon={card.icon}
+            accentBorder={card.accentBorder}
+            secondary={card.secondary}
+          />
         ))}
       </div>
 

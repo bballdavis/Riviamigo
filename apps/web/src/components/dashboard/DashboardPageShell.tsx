@@ -14,7 +14,9 @@ import { AuthGuard } from '../layout/AuthGuard';
 import { NoVehicleState } from '../layout/NoVehicleState';
 import {
   DEFAULT_PRESET,
+  loadDashboardTimeframe,
   presetToRange,
+  saveDashboardTimeframe,
   rangeToIso,
   type DateRange,
   type PresetKey,
@@ -74,8 +76,13 @@ function DashboardPageShellContent({
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
   const { data: vehicles } = useVehicles();
   const [internalEditMode, setInternalEditMode] = useState(false);
-  const [preset, setPreset] = useState<PresetKey | undefined>(DEFAULT_PRESET);
-  const [range, setRange] = useState(presetToRange(DEFAULT_PRESET));
+  const storedTimeframe = useMemo(() => loadDashboardTimeframe(), []);
+  const [preset, setPreset] = useState<PresetKey | undefined>(() => storedTimeframe?.preset ?? DEFAULT_PRESET);
+  const [range, setRange] = useState<DateRange>(() =>
+    storedTimeframe?.preset
+      ? presetToRange(storedTimeframe.preset)
+      : storedTimeframe?.range ?? presetToRange(DEFAULT_PRESET)
+  );
   const [efficiencyDisplay, setEfficiencyDisplayState] = useState<EfficiencyDisplay>(() => getEfficiencyDisplay());
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
   const { from, to } = rangeToIso(range);
@@ -140,6 +147,10 @@ function DashboardPageShellContent({
 
     previousEditModeRef.current = currentEditMode;
   }, [currentEditMode, savedConfig]);
+
+  useEffect(() => {
+    saveDashboardTimeframe(preset, range);
+  }, [preset, range]);
 
   useEffect(() => {
     if (!availableVehicles.length) {
