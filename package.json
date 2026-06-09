@@ -16,6 +16,7 @@
     "test:e2e": "turbo test:e2e",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
+    "docs:check": "node ./scripts/check-docs.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
     "db:migrate": "cd apps/api && sqlx migrate run",

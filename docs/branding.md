@@ -1,127 +1,101 @@
-# Riviamigo — Brand & Design System Reference
+# Riviamigo Brand And Visual System
 
-> Source of truth for visual decisions. All token values live in
-> `packages/ui/src/tokens/globals.css`. This doc explains how and why to use them.
+## Audience
 
----
+Frontend contributors and reviewers making shared UI decisions.
+
+## Source Of Truth
+
+This document is the canonical visual system reference for Riviamigo. Update it when reusable patterns, tokens, icon usage, spacing, page composition, or copy conventions change.
+
+## Adjacent Docs
+
+- [`./index.md`](./index.md)
+- [`./frontend/dashboard-architecture.md`](./frontend/dashboard-architecture.md)
+- [`./contributing.md`](./contributing.md)
 
 ## Identity
 
-| | |
+| Item | Guidance |
 |---|---|
-| **Name** | Riviamigo |
-| **Tagline** | *Your Rivian, deeply understood.* |
-| **Personality** | Precise, premium, technical — like a high-end automotive instrument cluster |
-| **Logo mark** | Bold **R** in `font-display` (Space Grotesk) at `text-accent` on a `bg-accent/10` rounded tile |
+| Name | Riviamigo |
+| Tagline | *Your Rivian, deeply understood.* |
+| Personality | Precise, premium, technical |
+| Visual mood | More instrument cluster than generic SaaS admin |
 
----
+## Tokens
 
-## Color Palette
+Token values live in `packages/ui/src/tokens/globals.css`.
 
-### Dark mode (default)
+Rules:
 
-| Token | Hex | Use |
-|---|---|---|
-| `bg-page` | `#0A0A0F` | Page background — deepest layer |
-| `bg-surface` | `#12121A` | Cards, sidebars |
-| `bg-elevated` | `#1A1A24` | Inputs, dropdowns, hover states |
-| `bg-glass` | `rgba(26,26,36,0.6)` | Backdrop-blur overlays (login card, modals) |
-| `fg` | `#FAFAFA` | Primary text |
-| `fg-secondary` | `#A1A1A1` | Labels, secondary copy |
-| `fg-tertiary` | `#71717A` | Hints, placeholders, metadata |
-| `border` | `rgba(255,255,255,0.08)` | Default borders |
-| `border-strong` | `rgba(255,255,255,0.15)` | Hover borders, dividers |
-| `accent` | `#F59E0B` | CTAs, active states, highlights |
-| `accent-hover` | `#FBBF24` | Button hover |
-| `accent-muted` | `rgba(245,158,11,0.15)` | Active nav background, subtle chips |
-| `glow-button` | `0 0 20px rgba(245,158,11,0.40)` | Primary button shadow |
-
-### Light mode
-
-Same tokens, lighter values. The accent shifts to `#D97706` (darker amber) for contrast on white.
-
----
+- Use semantic tokens only.
+- Do not add raw hex, named colors, `rgb()`, or arbitrary Tailwind palette colors.
+- If a needed color does not exist, add a token first and then use it semantically.
 
 ## Typography
 
-| Role | Font | Weight | Class |
-|---|---|---|---|
-| Brand / headings | Space Grotesk | 600–700 | `font-display font-semibold` |
-| Body / UI | Inter | 400–500 | (default body) |
-| Monospace | JetBrains Mono | 400 | `font-mono` |
+- Display and headings: Space Grotesk
+- Body and UI copy: Inter
+- Monospace: JetBrains Mono
 
-### Scale conventions
+Common usage:
+
 - Page title: `text-2xl font-bold font-display`
 - Section title: `text-base font-semibold`
 - Card label: `text-[11px] font-semibold uppercase tracking-widest text-fg-tertiary`
 - Body: `text-sm`
-- Hint / meta: `text-xs text-fg-tertiary`
+- Meta or hint: `text-xs text-fg-tertiary`
 
----
+## Core Layout Rules
 
-## Spacing & Layout
+- Preserve shared shell behavior through `PageLayout`, `AppLayout`, and dashboard shell seams.
+- Prefer existing primitives and shared dashboard widgets over route-local card systems.
+- Keep route files thin; visual composition belongs in components and shared seams, not branching routes.
+- Use consistent card radius, padding, and surface hierarchy across pages.
 
-- Content max-width: `max-w-sm` (auth), `max-w-7xl` (dashboard pages)
-- Card padding: `p-5` (default), `p-6` (prominent cards)
-- Sidebar width: `w-64` expanded, `w-[72px]` collapsed
-- Sidebar height reservation: `lg:pl-64` on main content
+## Icon And Control Rules
 
----
+- Preserve icon family consistency inside a page and within shared admin/dashboard surfaces.
+- Prefer icon-plus-label patterns already established by shared primitives instead of inventing one-off controls.
+- Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
 
-## Component Patterns
+## Shared Component Patterns
 
 ### Cards
-```tsx
-// Standard
-<div className="bg-bg-surface border border-border rounded-2xl p-5" />
 
-// Glass (auth screens, modals)
-<div className="bg-bg-glass backdrop-blur-md border border-border rounded-2xl p-6 shadow-[0_8px_32px_rgba(0,0,0,0.4)]" />
-```
+- Standard cards use the existing surface, border, and radius system.
+- Prominent cards should still look like part of Riviamigo, not a special-case microsite.
 
-### Accent glow (background decorations)
-```tsx
-// Center radial glow behind auth/hero content
-<div className="pointer-events-none fixed inset-0 flex items-center justify-center">
-  <div className="w-[700px] h-[700px] rounded-full bg-accent/[0.07] blur-[140px]" />
-</div>
-```
+### Empty, loading, and error states
 
-### Logo tile
-```tsx
-<div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/25 flex items-center justify-center shadow-[0_0_40px_rgba(245,158,11,0.2)]">
-  <span className="font-display font-bold text-3xl text-accent">R</span>
-</div>
-```
+- Use `<EmptyState>` and `<Skeleton>` from shared primitives when they fit.
+- Error states should use the established inline treatment rather than plain text.
+- Loading and empty states must match the surrounding page tone and spacing.
 
-### Error state (inline)
-```tsx
-<p className="text-xs text-[#F87171] bg-[#7F1D1D]/20 border border-[#F87171]/20 rounded-lg px-3 py-2">
-  {message}
-</p>
-```
+### Page composition
 
-### Empty / loading states
-- Use `<EmptyState>` and `<Skeleton>` from `@riviamigo/ui/primitives`
+- Start from shared shell/layout primitives.
+- Use ambient decoration sparingly and keep it `aria-hidden`.
+- Accent color is for interaction, emphasis, and active state, not decorative noise.
 
----
+## Copy Tone
 
-## Page Checklist
+- Precise, not marketing-heavy.
+- Technical but readable.
+- Prefer direct status language over celebratory or vague system messages.
+- Respect user unit preferences; never hard-code imperial-only wording.
 
-When building a new page, tick these off:
+## Do And Do Not
 
-- [ ] Wrapped in `<PageLayout>` (provides sidebar + main area)
-- [ ] Page-level title uses `font-display font-semibold`
-- [ ] Cards use `bg-bg-surface border border-border rounded-2xl`
-- [ ] Error messages use the red inline pattern (not bare text)
-- [ ] Loading states use `<Skeleton>` or `loading` prop on `<Button>`
-- [ ] Any ambient decoration (`AmbientOrbs` or custom glow) is `aria-hidden` and `pointer-events-none`
-- [ ] Accent color used only for interactive / highlight elements — never purely decorative
+### Do
 
----
+- reuse shared primitives before building route-local UI
+- update this document when a reusable visual rule changes
+- check spacing, icon consistency, control ordering, and state treatments during review
 
-## Voice & Copy
+### Do not
 
-- **Precise, not clinical.** "12 trips this week, 1,847 Wh/mi avg" not "Data loaded successfully."
-- **No marketing fluff** inside the app. The tagline is for the landing/login page only.
-- **Units** follow user preferences (miles/km, °F/°C) — never hard-code imperial.
+- add raw colors
+- create one-off visual systems for single pages that should match the rest of the app
+- treat “close enough” styling as acceptable when the app already has a documented pattern

@@ -1,0 +1,34 @@
+name: Documentation Debt
+description: Track documentation intentionally deferred from a code change.
+title: "docs debt: "
+labels:
+  - documentation
+  - follow-up
+body:
+  - type: textarea
+    id: missing-docs
+    attributes:
+      label: Missing documentation
+      description: State exactly which canonical docs or wiki drafts still need to be updated.
+      placeholder: docs/branding.md, docs/wiki-drafts/02-Quick-Start.md
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: What changed
+      description: Describe the shipped behavior or structural change that created the documentation gap.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Completion criteria
+      description: Define what must be true for the doc debt to be considered resolved.
+    validations:
+      required: true
+  - type: input
+    id: related-pr
+    attributes:
+      label: Related PR or commit
+      placeholder: #123
