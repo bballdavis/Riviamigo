@@ -1,13 +1,24 @@
 # Wiki Drafts
 
-This directory contains draft Markdown pages for the Riviamigo GitHub Wiki.
+This directory contains the repo-owned source for Riviamigo user-facing documentation.
 
-These files are the source of truth for end-user and self-hoster documentation.
-When a page is finalized, run `scripts/publish-wiki.sh` to push it to the wiki.
+## Canonical Model
 
-Wave 1 (00-06): Developer/contributor documentation  
-Wave 2 (10-15): Self-hoster/operational documentation  
-Wave 3: Auth flow and security deep-dives (written after Phase 2 auth remediation)  
-Wave 4: Production hardening and monitoring (written after Phase 8 security hardening)  
+- These files are authored and reviewed in the main repo.
+- The GitHub Wiki is a published mirror only.
+- Do not edit wiki pages directly in the GitHub UI.
 
-Do not edit these files directly in the GitHub Wiki UI — edit them here and republish.
+## Validation And Publishing
+
+- Validate draft naming and publishability:
+  `scripts/publish-wiki.sh --validate-only`
+- Run repo-level documentation checks:
+  `pnpm docs:check`
+- Publish reviewed drafts to the Wiki:
+  `scripts/publish-wiki.sh`
+
+## Waves
+
+- Wave 1: developer and contributor onboarding
+- Wave 2: self-hosting and operational setup
+- Later waves: additional product, auth, security, and maintenance guidance as the canonical repo docs evolve
