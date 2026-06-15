@@ -106,7 +106,7 @@ const mockUseVehicleHealth = vi.fn((vehicleId?: string | null) => ({
   },
   isLoading: false,
 }));
-const mockUseCurrentVehicleStatus = vi.fn(() => ({ data: statusBase }));
+const mockUseCurrentVehicleStatus = vi.fn((_vehicleId?: string | null) => ({ data: statusBase }));
 const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
   data: healthPageMocks.imagesByVehicleId[String(queryKey[2])] ?? null,
 }));

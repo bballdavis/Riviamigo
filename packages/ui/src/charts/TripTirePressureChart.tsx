@@ -30,6 +30,10 @@ export interface TripTirePressureChartProps {
   onActiveElapsedSChange?: (value: number | null) => void;
 }
 
+type ActivePayloadState<T> = {
+  activePayload?: Array<{ payload?: T }>;
+};
+
 function formatElapsed(seconds: number) {
   const min = Math.floor(seconds / 60);
   const sec = Math.max(0, Math.floor(seconds % 60));
@@ -71,7 +75,7 @@ export function TripTirePressureChart({
         data={data}
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
-          const payload = state?.activePayload?.[0]?.payload as TripTirePressurePoint | undefined;
+          const payload = (state as ActivePayloadState<TripTirePressurePoint> | undefined)?.activePayload?.[0]?.payload;
           onActiveElapsedSChange?.(payload?.elapsed_s ?? null);
         }}
         onMouseLeave={() => onActiveElapsedSChange?.(null)}
