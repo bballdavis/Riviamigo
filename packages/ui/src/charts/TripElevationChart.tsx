@@ -26,6 +26,10 @@ export interface TripElevationChartProps {
   onActiveElapsedSChange?: (value: number | null) => void;
 }
 
+type ActivePayloadState<T> = {
+  activePayload?: Array<{ payload?: T }>;
+};
+
 const M_TO_FT = 3.28084;
 
 function formatElapsed(seconds: number) {
@@ -69,7 +73,7 @@ export function TripElevationChart({
         data={chartData}
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
-          const payload = state?.activePayload?.[0]?.payload as TripElevationPoint | undefined;
+          const payload = (state as ActivePayloadState<TripElevationPoint> | undefined)?.activePayload?.[0]?.payload;
           onActiveElapsedSChange?.(payload?.elapsed_s ?? null);
         }}
         onMouseLeave={() => onActiveElapsedSChange?.(null)}

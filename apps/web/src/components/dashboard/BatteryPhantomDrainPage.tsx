@@ -75,8 +75,8 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
             title={card.title}
             value={card.value}
             icon={card.icon}
-            accentBorder={card.accentBorder}
-            secondary={card.secondary}
+            {...(card.accentBorder === undefined ? {} : { accentBorder: card.accentBorder })}
+            {...(card.secondary === undefined ? {} : { secondary: card.secondary })}
           />
         ))}
       </div>

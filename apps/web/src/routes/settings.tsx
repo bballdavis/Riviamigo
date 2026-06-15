@@ -286,7 +286,7 @@ function DashboardSettingsList({
                     {dashboard.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}
                   </div>
                   <p className="mt-1 text-xs text-fg-tertiary">
-                    {dashboard.slug} · {dashboard.widgets.length} widgets
+                    {dashboard.slug} &middot; {dashboard.widgets.length} widgets
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
