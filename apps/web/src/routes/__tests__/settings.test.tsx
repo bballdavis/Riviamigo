@@ -23,6 +23,15 @@ const settingsMocks = vi.hoisted(() => ({
   },
 }));
 
+const dashboardMocks = vi.hoisted(() => ({
+  dashboards: [] as Array<Record<string, unknown>>,
+  downloadDashboardYaml: vi.fn(),
+  cloneMutateAsync: vi.fn(),
+  deleteMutate: vi.fn(),
+  lockMutate: vi.fn(),
+  restoreMutate: vi.fn(),
+}));
+
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -203,12 +212,12 @@ vi.mock('@riviamigo/hooks', () => ({
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
-  downloadDashboardYaml: vi.fn(),
-  useDashboards: () => ({ data: [], isLoading: false }),
-  useCloneDashboard: () => ({ mutateAsync: vi.fn(), isPending: false, variables: undefined }),
-  useDeleteDashboard: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
-  useSetAdminDashboardLock: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
-  useRestoreAdminDashboardDefault: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  downloadDashboardYaml: dashboardMocks.downloadDashboardYaml,
+  useDashboards: () => ({ data: dashboardMocks.dashboards, isLoading: false }),
+  useCloneDashboard: () => ({ mutateAsync: dashboardMocks.cloneMutateAsync, isPending: false, variables: undefined }),
+  useDeleteDashboard: () => ({ mutate: dashboardMocks.deleteMutate, isPending: false, variables: undefined }),
+  useSetAdminDashboardLock: () => ({ mutate: dashboardMocks.lockMutate, isPending: false, variables: undefined }),
+  useRestoreAdminDashboardDefault: () => ({ mutate: dashboardMocks.restoreMutate, isPending: false, variables: undefined }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -273,9 +282,16 @@ function renderSettings() {
 
 describe('Settings page', () => {
   beforeEach(() => {
+    mockNavigate.mockReset();
     settingsMocks.auth.logout.mockReset();
     settingsMocks.auth.setDefaultVehicleId.mockReset();
     settingsMocks.auth.setActiveVehicleId.mockReset();
+    dashboardMocks.dashboards = [];
+    dashboardMocks.downloadDashboardYaml.mockReset();
+    dashboardMocks.cloneMutateAsync.mockReset();
+    dashboardMocks.deleteMutate.mockReset();
+    dashboardMocks.lockMutate.mockReset();
+    dashboardMocks.restoreMutate.mockReset();
     settingsMocks.me = {
       user_id: 'u1',
       email: 'user@example.com',
@@ -302,6 +318,91 @@ describe('Settings page', () => {
   it('renders the Vehicle button', () => {
     renderSettings();
     expect(screen.getByText('Vehicle')).toBeInTheDocument();
+  });
+
+  it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    dashboardMocks.dashboards = [
+      {
+        id: 'default-overview',
+        slug: 'overview',
+        name: 'Overview',
+        description: null,
+        isDefault: true,
+        isLocked: true,
+        ownerId: null,
+        widgets: [{ id: 'w1' }],
+      },
+      {
+        id: 'user-charging',
+        slug: 'my-charging',
+        name: 'My Charging',
+        description: null,
+        isDefault: false,
+        isLocked: false,
+        ownerId: 'u1',
+        widgets: [{ id: 'w2' }, { id: 'w3' }],
+      },
+    ];
+    dashboardMocks.cloneMutateAsync.mockResolvedValue({
+      id: 'clone-1',
+      slug: 'overview-copy',
+      name: 'Overview Copy',
+      description: null,
+      isDefault: false,
+      isLocked: false,
+      ownerId: 'u1',
+      widgets: [],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Dashboards'));
+
+    expect(screen.getByText('System Defaults')).toBeInTheDocument();
+    expect(screen.getByText('My Dashboards')).toBeInTheDocument();
+    expect(screen.getByText('Overview')).toBeInTheDocument();
+    expect(screen.getByText('My Charging')).toBeInTheDocument();
+    expect(screen.getByText('2 saved')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open' })[0]!);
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/d/$slug',
+      params: { slug: 'overview' },
+      search: {},
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]!);
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/d/$slug',
+      params: { slug: 'overview' },
+      search: { edit: '1' },
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Duplicate' })[0]!);
+    await waitFor(() => {
+      expect(dashboardMocks.cloneMutateAsync).toHaveBeenCalledWith('default-overview');
+    });
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/d/$slug',
+        params: { slug: 'overview-copy' },
+        search: { edit: '1' },
+      });
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Export' })[0]!);
+    expect(dashboardMocks.downloadDashboardYaml).toHaveBeenCalledWith(dashboardMocks.dashboards[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({ id: 'default-overview', locked: false });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('default-overview');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('user-charging');
+    confirmSpy.mockRestore();
   });
 
   it('navigates to /connect when Vehicle is clicked', () => {
