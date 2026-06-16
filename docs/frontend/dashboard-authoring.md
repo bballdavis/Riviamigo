@@ -143,6 +143,12 @@ If you need to change one of those flows, change the shared shell or the shared 
 
 Dashboard configs are sanitized at the dashboard package boundary before render, import, and save. Sanitization clamps grid positions, enforces fixed-size widgets, and keeps restored/imported JSON from violating current editor capabilities.
 
+In edit mode, widget chrome is split by purpose:
+
+- hover or selected state reveals move and edit affordances on the widget itself
+- resize handles appear only for resizable widgets
+- destructive removal lives in the right-side widget editor and requires confirmation
+
 Use Settings > Dashboards for durable dashboard management:
 
 - open or edit dashboards

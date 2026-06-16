@@ -3,7 +3,7 @@ import GridLayout, { useContainerWidth } from 'react-grid-layout';
 import type { LayoutItem } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { v4 as uuidv4 } from 'uuid';
-import { GripVertical, Lock, Pencil, X } from 'lucide-react';
+import { GripVertical, Lock, Pencil } from 'lucide-react';
 import { getAllWidgets, getWidgetEditorMeta, getWidgetForInstance } from './registry';
 import { sanitizeWidgetInstance, sanitizeWidgetLayout } from './layout';
 import { WidgetHost } from './WidgetHost';
@@ -159,16 +159,6 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
           border-right: 2px solid var(--rm-accent);
           border-bottom: 2px solid var(--rm-accent);
         }
-        .rgl-editor .rgl-overlay {
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 120ms ease, transform 120ms ease;
-        }
-        .rgl-editor .react-grid-item:hover .rgl-overlay,
-        .rgl-editor .rgl-card[data-editing="true"] .rgl-overlay {
-          opacity: 1;
-          pointer-events: auto;
-        }
         .rgl-editor .rgl-action {
           height: 1.75rem;
           width: 1.75rem;
@@ -183,10 +173,6 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         .rgl-editor .rgl-action:hover {
           color: var(--rm-text-primary);
           border-color: var(--rm-border-strong);
-        }
-        .rgl-editor .rgl-delete:hover {
-          color: var(--rm-status-danger);
-          border-color: color-mix(in oklab, var(--rm-status-danger) 70%, transparent);
         }
       `}</style>
 
@@ -212,6 +198,9 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                 const isEditing = editingId === widget.id;
                 const def = getWidgetForInstance(widget);
                 const editor = getWidgetEditorMeta(def);
+                const overlayVisibilityClass = isEditing
+                  ? 'opacity-100 pointer-events-auto'
+                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto';
                 return (
                   <div
                     key={widget.id}
@@ -228,12 +217,19 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                       <WidgetHost instance={widget} ctx={ctx} />
                     </div>
 
-                    <div className="rgl-overlay absolute left-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur">
+                    <div
+                      data-testid={`widget-overlay-left-${widget.id}`}
+                      className={[
+                        'absolute left-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150',
+                        overlayVisibilityClass,
+                      ].join(' ')}
+                    >
                       {editor.movable ? (
                         <button
                           type="button"
                           className="drag-handle rgl-action cursor-grab rounded-md active:cursor-grabbing"
                           title="Drag to move"
+                          aria-label="Drag to move"
                         >
                           <GripVertical className="h-3.5 w-3.5" />
                         </button>
@@ -249,7 +245,13 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                       ) : null}
                     </div>
 
-                    <div className="rgl-overlay absolute right-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur">
+                    <div
+                      data-testid={`widget-overlay-right-${widget.id}`}
+                      className={[
+                        'absolute right-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150',
+                        overlayVisibilityClass,
+                      ].join(' ')}
+                    >
                       <button
                         type="button"
                         onClick={(event) => {
@@ -257,23 +259,13 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                           setEditingId(isEditing ? null : widget.id);
                         }}
                         title={isEditing ? 'Close editor' : 'Edit widget settings'}
+                        aria-label={isEditing ? 'Close editor' : 'Edit widget settings'}
                         className={[
                           'rgl-action rounded-md',
                           isEditing ? 'border-status-positive/60 text-status-positive' : '',
                         ].join(' ')}
                       >
                         <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          removeWidget(widget.id);
-                        }}
-                        title="Remove widget"
-                        className="rgl-action rgl-delete rounded-md"
-                      >
-                        <X className="h-3.5 w-3.5" />
                       </button>
                     </div>
 

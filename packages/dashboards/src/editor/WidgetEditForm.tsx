@@ -32,6 +32,7 @@ interface WidgetEditFormProps {
 export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEditFormProps) {
   const def = getWidgetForInstance(widget);
   const { data: catalog = [] } = useMetricCatalog();
+  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
 
   const sensorMode = widget.componentType === 'sensor';
   const chartMode = widget.componentType === 'chart';
@@ -174,8 +175,9 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           {onRemove ? (
             <button
               type="button"
-              onClick={onRemove}
+              onClick={() => setConfirmRemoveOpen(true)}
               title="Remove component"
+              aria-label="Remove component"
               className="flex items-center justify-center rounded-lg border border-border p-2 text-fg-tertiary transition-colors hover:border-status-danger/60 hover:text-status-danger"
             >
               <Trash2 className="h-4 w-4" />
@@ -593,6 +595,36 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           </div>
         </details>
       </div>
+
+      {confirmRemoveOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-bg-page/80 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
+            <h3 className="text-sm font-semibold text-fg">Delete this widget?</h3>
+            <p className="mt-2 text-xs text-fg-tertiary">
+              This removes the widget from the current dashboard layout immediately.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmRemoveOpen(false)}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg-secondary transition-colors hover:border-border-strong hover:text-fg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmRemoveOpen(false);
+                  onRemove?.();
+                }}
+                className="rounded-lg border border-status-danger/60 bg-status-danger px-3 py-1.5 text-xs font-medium text-white transition-colors hover:brightness-110"
+              >
+                Delete Widget
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
