@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
@@ -11,7 +13,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
-use sqlx::{Executor, PgPool};
+use sqlx::{migrate::Migrator, Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -55,10 +57,33 @@ impl TestApp {
 
         let db_url = replace_database_name(&base_db_url, &db_name);
         let pool = PgPool::connect(&db_url).await.expect("db connect");
-        sqlx::migrate!("./migrations")
-            .run(&pool)
+        let migrator = Migrator::new(Path::new("./migrations"))
             .await
-            .expect("migrate");
+            .expect("load migrations");
+        let (before_0047, after_0047): (Vec<_>, Vec<_>) = migrator
+            .iter()
+            .cloned()
+            .partition(|migration| migration.version < 47);
+
+        Migrator {
+            migrations: Cow::Owned(before_0047),
+            ignore_missing: false,
+            locking: true,
+        }
+        .run(&pool)
+        .await
+        .expect("migrate pre-0047");
+
+        seed_super_user(&pool).await.expect("seed super user");
+
+        Migrator {
+            migrations: Cow::Owned(after_0047),
+            ignore_missing: false,
+            locking: true,
+        }
+        .run(&pool)
+        .await
+        .expect("migrate post-0047");
 
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
@@ -95,6 +120,7 @@ impl TestApp {
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
+                rate_limit: Default::default(),
                 vehicle_image_cache_dir: std::env::temp_dir()
                     .join("riviamigo-auth-test-images")
                     .to_string_lossy()
@@ -223,6 +249,20 @@ impl TestApp {
     }
 }
 
+async fn seed_super_user(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO riviamigo.users (email, password_hash, role)
+         VALUES ($1, $2, 'super_user')
+         ON CONFLICT (email) DO NOTHING",
+    )
+    .bind("seed-super-user@riviamigo.test")
+    .bind("$argon2id$v=19$m=19456,t=2,p=1$cm9vdHJvb3Ryb290cm9v$6/Ds/Z5DKq/r+z5xFo0O3sDmN5RBUQ2A6yb7z1WB1Wg")
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
     let (prefix, _) = database_url
         .rsplit_once('/')
@@ -276,6 +316,18 @@ async fn set_default_vehicle(pool: &PgPool, user_id: Uuid, vehicle_id: Uuid) {
     .execute(pool)
     .await
     .expect("set default vehicle");
+}
+
+async fn insert_trip(pool: &PgPool, vehicle_id: Uuid, started_at: chrono::DateTime<chrono::Utc>, ended_at: chrono::DateTime<chrono::Utc>) -> Uuid {
+    sqlx::query_scalar!(
+        "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at) VALUES ($1, $2, $3) RETURNING id",
+        vehicle_id,
+        started_at,
+        ended_at,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("insert trip")
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
@@ -718,6 +770,76 @@ async fn stats_summary_returns_aggregated_trip_and_charge_values() {
     assert_eq!(res.body["total_charging_sessions"], json!(1));
     assert_eq!(res.body["lifetime_efficiency_wh_mi"], json!(400.0));
     assert_eq!(res.body["estimated_total_cost_usd"], json!(5.2));
+}
+
+#[tokio::test]
+async fn trip_track_omits_zero_zero_coordinates() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "trip-track-zero@example.com").await;
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "trip-track-zero@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+    let vehicle_id = insert_vehicle(
+        &app.pool,
+        user_id,
+        "trip-track-zero-vehicle",
+        "Track Truck",
+    )
+    .await;
+    sqlx::query!(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', TRUE)
+         ON CONFLICT (vehicle_id, user_id) DO UPDATE
+         SET role = EXCLUDED.role,
+             is_default = EXCLUDED.is_default,
+             updated_at = now()",
+        vehicle_id,
+        user_id,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("seed vehicle membership");
+
+    let started_at = chrono::Utc::now() - chrono::Duration::minutes(20);
+    let ended_at = started_at + chrono::Duration::minutes(10);
+    let trip_id = insert_trip(&app.pool, vehicle_id, started_at, ended_at).await;
+
+    for (offset, lat, lng) in [
+        (0_i64, 0.0_f64, 0.0_f64),
+        (120_i64, 30.267_f64, -97.743_f64),
+        (240_i64, 0.0_f64, 0.0_f64),
+        (360_i64, 30.268_f64, -97.742_f64),
+    ] {
+        sqlx::query!(
+            "INSERT INTO timeseries.telemetry (ts, vehicle_id, latitude, longitude) VALUES ($1, $2, $3, $4)",
+            started_at + chrono::Duration::seconds(offset),
+            vehicle_id,
+            lat,
+            lng,
+        )
+        .execute(&app.pool)
+        .await
+        .expect("insert telemetry");
+    }
+
+    let res = app
+        .request(
+            Method::GET,
+            &format!("/v1/trips/{trip_id}/track?vehicle_id={vehicle_id}"),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    let points = res.body.as_array().expect("track array");
+    assert_eq!(points.len(), 2);
+    assert!(points.iter().all(|point| point["lat"] != json!(0.0) && point["lng"] != json!(0.0)));
 }
 
 #[tokio::test]

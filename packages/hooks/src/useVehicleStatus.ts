@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { VehicleStatus } from '@riviamigo/types';
 import { api } from './api';
+import { useAuth } from './useAuth';
+import { useAuthReady } from './useAuthState';
 
 interface LiveStatusStore {
   status: Record<string, VehicleStatus>;
@@ -253,11 +255,12 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
 
 export function useCurrentVehicleStatus(vehicleId: string | null) {
   const liveStatus = useLiveStatusStore((s) => (vehicleId ? s.status[vehicleId] : null));
+  const authReady = useAuthReady();
 
   const query = useQuery({
     queryKey: ['vehicles', 'status', vehicleId],
     queryFn: () => api.vehicleStatus(vehicleId!),
-    enabled: !!vehicleId,
+    enabled: authReady && !!vehicleId,
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
     refetchOnWindowFocus: false,

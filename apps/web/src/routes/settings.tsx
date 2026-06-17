@@ -380,7 +380,7 @@ function SettingsPage() {
 }
 
 export function SettingsContent() {
-  const { logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
+  const { accessToken, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
@@ -421,19 +421,19 @@ export function SettingsContent() {
   const apiKeys = useQuery({
     queryKey: ['api-keys'],
     queryFn: () => api.listApiKeys(),
-    enabled: activeSection === 'api',
+    enabled: activeSection === 'api' && !!accessToken,
   });
 
   const apiCatalog = useQuery({
     queryKey: ['api-catalog'],
     queryFn: () => api.getApiCatalog(),
-    enabled: activeSection === 'api',
+    enabled: activeSection === 'api' && !!accessToken,
   });
 
   const stewardship = useQuery({
     queryKey: ['rivian-stewardship'],
     queryFn: () => api.getRivianStewardship(),
-    enabled: activeSection === 'raw' && isAdmin,
+    enabled: activeSection === 'raw' && isAdmin && !!accessToken,
   });
 
   const dashboards = useDashboards();
@@ -445,6 +445,7 @@ export function SettingsContent() {
   const unitPreferencesQuery = useQuery({
     queryKey: ['unit-preferences'],
     queryFn: () => api.getUnitPreferences(),
+    enabled: !!accessToken,
   });
 
   React.useEffect(() => {
@@ -466,7 +467,7 @@ export function SettingsContent() {
   const rawTelemetry = useQuery({
     queryKey: ['raw-telemetry', rawVehicleId],
     queryFn: () => api.getRawTelemetry(rawVehicleId, 25),
-    enabled: activeSection === 'raw' && !!rawVehicleId,
+    enabled: activeSection === 'raw' && !!rawVehicleId && !!accessToken,
   });
 
   React.useEffect(() => {
@@ -478,12 +479,12 @@ export function SettingsContent() {
   const vehicleMembers = useQuery({
     queryKey: ['vehicle-members', sharingVehicleId],
     queryFn: () => api.listVehicleMembers(sharingVehicleId!),
-    enabled: activeSection === 'vehicles' && !!sharingVehicleId,
+    enabled: activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
   });
   const vehicleInvites = useQuery({
     queryKey: ['vehicle-invites', sharingVehicleId],
     queryFn: () => api.listVehicleInvites(sharingVehicleId!),
-    enabled: activeSection === 'vehicles' && !!sharingVehicleId,
+    enabled: activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
   });
 
   React.useEffect(() => {

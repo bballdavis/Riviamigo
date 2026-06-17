@@ -62,7 +62,7 @@ function VehicleHealthPage() {
 }
 
 function VehicleHealthContent() {
-  const { defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
+  const { accessToken, defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
   const { data: vehicles } = useVehicles();
   const availableVehicles = vehicles ?? [];
@@ -73,7 +73,7 @@ function VehicleHealthContent() {
   const { data: images } = useQuery({
     queryKey: ['vehicles', 'images', effectiveVehicleId],
     queryFn: () => api.vehicleImages(effectiveVehicleId!),
-    enabled: Boolean(effectiveVehicleId),
+    enabled: Boolean(effectiveVehicleId) && !!accessToken,
   });
 
   React.useEffect(() => {

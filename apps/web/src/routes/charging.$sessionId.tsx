@@ -71,7 +71,7 @@ export function ChargeSessionContent() {
     <AppLayout activeKey="charging">
       <PageLayout
         title={title}
-        subtitle={session?.location_name ?? undefined}
+        subtitle={session ? (session.location_name ?? 'Unknown') : undefined}
         titleAction={backButton}
         titleActionPosition="left"
       >
