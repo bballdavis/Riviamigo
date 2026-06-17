@@ -34,7 +34,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
     const bootstrap = async () => {
       const ok = await refresh();
-      if (!ok && !cancelled) navigate({ to: '/login' });
+      if (!ok && !cancelled) clearSession();
     };
 
     void bootstrap();

@@ -1,15 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
+import { useAuth } from './useAuth';
 
 const TRIPS_LIST_QUERY_VERSION = 'v2';
 
 export function useTrips(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
   const normalizedSearch = search.trim();
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     // Version the key to avoid hydrating stale list payloads from older app builds.
     queryKey: ['trips', 'list', TRIPS_LIST_QUERY_VERSION, vehicleId, from, to, page, perPage, normalizedSearch],
     queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage, normalizedSearch),
-    enabled: !!vehicleId,
+    enabled: !!vehicleId && !!accessToken,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -18,10 +20,11 @@ export function useTrips(vehicleId: string | null, from: string, to: string, pag
 }
 
 export function useTrip(tripId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['trips', 'detail', tripId, vehicleId],
     queryFn: () => api.getTrip(tripId!, vehicleId!),
-    enabled: !!tripId && !!vehicleId,
+    enabled: !!tripId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -31,10 +34,11 @@ export function useTrip(tripId: string | null, vehicleId: string | null) {
 }
 
 export function useTripTrack(tripId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['trips', 'track', tripId, vehicleId],
     queryFn: () => api.getTripTrack(tripId!, vehicleId!),
-    enabled: !!tripId && !!vehicleId,
+    enabled: !!tripId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -44,10 +48,11 @@ export function useTripTrack(tripId: string | null, vehicleId: string | null) {
 }
 
 export function useSpeedProfile(tripId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['trips', 'speed', tripId, vehicleId],
     queryFn: () => api.getSpeedProfile(tripId!, vehicleId!),
-    enabled: !!tripId && !!vehicleId,
+    enabled: !!tripId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -57,10 +62,11 @@ export function useSpeedProfile(tripId: string | null, vehicleId: string | null)
 }
 
 export function useElevationProfile(tripId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['trips', 'elevation', tripId, vehicleId],
     queryFn: () => api.getElevationProfile(tripId!, vehicleId!),
-    enabled: !!tripId && !!vehicleId,
+    enabled: !!tripId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -70,10 +76,11 @@ export function useElevationProfile(tripId: string | null, vehicleId: string | n
 }
 
 export function useTripPowerProfile(tripId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['trips', 'power', tripId, vehicleId],
     queryFn: () => api.getTripPowerProfile(tripId!, vehicleId!),
-    enabled: !!tripId && !!vehicleId,
+    enabled: !!tripId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -83,10 +90,11 @@ export function useTripPowerProfile(tripId: string | null, vehicleId: string | n
 }
 
 export function useTripDetailSeries(tripId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['trips', 'series', tripId, vehicleId],
     queryFn: () => api.getTripDetailSeries(tripId!, vehicleId!),
-    enabled: !!tripId && !!vehicleId,
+    enabled: !!tripId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

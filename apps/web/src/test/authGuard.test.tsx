@@ -137,15 +137,16 @@ describe('AuthGuard — bootstrap', () => {
 
   it('navigates to /login after bootstrap refresh failure', async () => {
     const refresh = vi.fn().mockResolvedValue(false);
-    setAuth({ isBootstrapping: true, isAuthenticated: false, refresh });
+    const clearSession = vi.fn();
+    setAuth({ isBootstrapping: true, isAuthenticated: false, refresh, clearSession });
     render(<AuthGuard><span>content</span></AuthGuard>);
 
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' });
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect(clearSession).toHaveBeenCalledTimes(1);
   });
 
   it('does not call refresh() when already authenticated', () => {
