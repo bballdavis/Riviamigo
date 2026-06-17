@@ -575,9 +575,10 @@ describe('Settings page', () => {
     });
   });
 
-  it('renders the theme toggle button', () => {
+  it('renders the theme chooser', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
+    expect(screen.getByText('Toggle between dark, light, and system appearance')).toBeInTheDocument();
     expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
   });
 

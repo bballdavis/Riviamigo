@@ -145,12 +145,12 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
         header: '',
         enableSorting: false,
         meta: {
-          headerClassName: 'w-9 text-center',
-          cellClassName: 'w-9 text-center',
+          headerClassName: 'w-[3.25rem] text-center',
+          cellClassName: 'w-[3.25rem] text-center',
           headerContentClassName: 'w-full justify-center',
         },
         cell: (info) => (
-          <div className="mx-auto h-7 w-7">
+          <div className="ml-auto mr-1 h-7 w-7">
             <button
               type="button"
               aria-label="Open trip details"
@@ -218,7 +218,7 @@ function resolveTripLocation(trip: TripRow, kind: 'start' | 'end', places: Place
   const lat = readNumber(record, `${kind}_lat`);
   const lng = readNumber(record, `${kind}_lng`);
 
-  if (lat !== null && lng !== null) {
+  if (lat !== null && lng !== null && !isZeroCoordinate(lat, lng)) {
     const matchedPlace = findMatchingPlace(lat, lng, places);
     if (matchedPlace) {
       return {
@@ -229,12 +229,16 @@ function resolveTripLocation(trip: TripRow, kind: 'start' | 'end', places: Place
   }
 
   if (addressLabel) return { label: addressLabel, title: addressLabel };
-  if (lat !== null && lng !== null) {
+  if (lat !== null && lng !== null && !isZeroCoordinate(lat, lng)) {
     const label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     return { label, title: label };
   }
 
   return null;
+}
+
+function isZeroCoordinate(lat: number, lng: number) {
+  return lat === 0 && lng === 0;
 }
 
 function findMatchingPlace(lat: number, lng: number, places: Place[]) {
