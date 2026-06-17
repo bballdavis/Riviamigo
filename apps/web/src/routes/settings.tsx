@@ -1760,7 +1760,7 @@ export function SettingsContent() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-fg">Theme</p>
-                      <p className="mt-0.5 text-xs text-fg-tertiary">Toggle between dark and light mode</p>
+                      <p className="mt-0.5 text-xs text-fg-tertiary">Toggle between dark, light, and system appearance</p>
                     </div>
                     <ThemeToggle />
                   </div>

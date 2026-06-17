@@ -6,6 +6,8 @@ use crate::models::telemetry::{ChargerState, TelemetryEvent};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use super::location::valid_location_pair;
+
 const CHARGE_TIMEOUT_SECS: i64 = 1800; // 30 min
 
 /// Threshold for classifying charger type by peak power.
@@ -102,7 +104,7 @@ impl ChargeDetectorState {
             self.battery_capacity = Some(cap);
         }
         if self.is_charging && self.start_lat.is_none() && self.start_lng.is_none() {
-            if let (Some(lat), Some(lng)) = (event.latitude, event.longitude) {
+            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
                 self.start_lat = Some(lat);
                 self.start_lng = Some(lng);
             }
@@ -163,8 +165,10 @@ impl ChargeDetectorState {
             self.active_session_id = Some(session_id);
             self.is_charging = true;
             self.started_at = Some(ts);
-            self.start_lat = event.latitude;
-            self.start_lng = event.longitude;
+            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
+                self.start_lat = Some(lat);
+                self.start_lng = Some(lng);
+            }
             self.soc_start = event.battery_level;
             self.last_charge_ts = Some(ts);
             self.last_power_ts = Some(ts);
@@ -346,6 +350,37 @@ mod tests {
         assert_eq!(session.location_lat, Some(29.81));
         assert_eq!(session.location_lng, Some(-95.38));
         assert!(session.energy_added_wh.is_some());
+    }
+
+    #[test]
+    fn skips_zero_zero_location_until_a_real_sample_arrives() {
+        let vehicle_id = Uuid::new_v4();
+        let started_at = Utc::now();
+        let mut detector = ChargeDetectorState::new(vehicle_id);
+
+        let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
+        start.latitude = Some(0.0);
+        start.longitude = Some(0.0);
+        assert!(matches!(detector.process(&start), ChargeEvent::SessionStarted));
+
+        let mut follow_up = event(vehicle_id, started_at + Duration::minutes(3), None);
+        follow_up.latitude = Some(29.81);
+        follow_up.longitude = Some(-95.38);
+        follow_up.battery_level = Some(43.0);
+        assert!(matches!(detector.process(&follow_up), ChargeEvent::NoChange));
+
+        let mut end = event(
+            vehicle_id,
+            started_at + Duration::minutes(63),
+            Some(ChargerState::Done),
+        );
+        end.battery_level = Some(55.0);
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+
+        assert_eq!(session.location_lat, Some(29.81));
+        assert_eq!(session.location_lng, Some(-95.38));
     }
 
     #[test]

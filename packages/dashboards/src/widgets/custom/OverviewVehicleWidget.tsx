@@ -138,11 +138,13 @@ function CurrentVehicleStatePanel({
               <span className="text-xs uppercase tracking-[0.16em] text-fg-tertiary">SoC</span>
               <p className="mt-1 font-mono text-4xl font-semibold tabular-nums text-fg">{formatPercent(status?.battery_level)}</p>
             </div>
-            <div className="grid gap-2 text-xs">
+            <div className="grid gap-2 text-sm">
               <SocDatum label="Range" value={formatMiles(status?.range_miles)} />
               <SocDatum label="Limit" value={formatPercent(status?.battery_limit)} />
               <SocDatum label="Charging" value={<ChargingGlyph chargerState={status?.charger_state} chargerStatus={status?.charger_status} />} />
-              <SocDatum label="Time to Full" value={formatTimeToFull(status?.time_to_end_of_charge_min)} />
+              {isCharging(status) ? (
+                <SocDatum label="To Limit" value={formatTimeToFull(status?.time_to_end_of_charge_min)} />
+              ) : null}
             </div>
           </div>
         </div>
@@ -185,9 +187,12 @@ function CurrentVehicleStatePanel({
         </div>
         <div className="md:col-span-2 xl:col-span-1 grid auto-rows-fr gap-2 md:grid-cols-2 xl:grid-cols-1">
           {stats.map((stat) => (
-            <div key={stat.label} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-xs">
-              <span className="inline-flex items-center gap-2 text-fg-tertiary">{stat.icon}{stat.label}</span>
-              <span className="font-mono font-medium tabular-nums text-fg">{stat.value}</span>
+            <div key={stat.label} className="flex min-h-10 items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-sm">
+              <span className="inline-flex min-w-0 items-center gap-2 truncate text-fg-tertiary">
+                {stat.icon}
+                <span className="truncate">{stat.label}</span>
+              </span>
+              <span className="shrink-0 font-mono font-medium tabular-nums text-fg">{stat.value}</span>
             </div>
           ))}
         </div>
@@ -198,9 +203,9 @@ function CurrentVehicleStatePanel({
 
 function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-accent/15 bg-bg-surface/55 px-2.5 py-1.5">
-      <span className="text-fg-tertiary">{label}</span>
-      <span className="min-w-0 truncate font-mono font-medium tabular-nums text-fg">{value}</span>
+    <div className="flex min-h-10 min-w-0 items-center justify-between gap-2 rounded-lg border border-accent/15 bg-bg-surface/55 px-3 py-2 leading-none">
+      <span className="min-w-0 truncate text-sm text-fg-tertiary">{label}</span>
+      <span className="shrink-0 font-mono text-sm font-medium tabular-nums text-fg">{value}</span>
     </div>
   );
 }
@@ -211,9 +216,9 @@ function ChargingGlyph({ chargerState, chargerStatus }: { chargerState: string |
     <span
       aria-label={charging ? 'Charging' : 'Not charging'}
       title={charging ? 'Charging' : 'Not charging'}
-      className={`inline-flex items-center justify-end ${charging ? 'text-accent' : 'text-fg-tertiary'}`}
+      className={`inline-flex items-center justify-center ${charging ? 'text-accent' : 'text-fg-tertiary'}`}
     >
-      {charging ? <PiPlugsConnectedFill className="h-5 w-5" /> : <PiPlugsFill className="h-5 w-5" />}
+      {charging ? <PiPlugsConnectedFill className="h-4 w-4" /> : <PiPlugsFill className="h-4 w-4" />}
     </span>
   );
 }
@@ -320,6 +325,12 @@ function formatTimeToFull(minutes: number | null | undefined) {
   if (hours === 0) return `${mins}m`;
   if (mins === 0) return `${hours}h`;
   return `${hours}h ${mins}m`;
+}
+
+function isCharging(status: VehicleStatus | null | undefined) {
+  const chargerState = status?.charger_state?.toLowerCase();
+  if (chargerState === 'charging' || status?.charger_status === 'chrgr_sts_connected_charging') return true;
+  return false;
 }
 
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {

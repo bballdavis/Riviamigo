@@ -6,6 +6,8 @@ use crate::models::telemetry::{PowerState, TelemetryEvent};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use super::location::valid_location_pair;
+
 const STOPPED_SPEED_MPH: f64 = 2.0;
 const STOPPED_DURATION_SECS: i64 = 300; // 5 min
 #[allow(dead_code)]
@@ -150,7 +152,7 @@ impl TripDetectorState {
         let is_asleep = matches!(power, Some(PowerState::Sleep));
 
         if self.active_trip_id.is_some() {
-            if let (Some(lat), Some(lng)) = (event.latitude, event.longitude) {
+            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
                 self.track_points.push(TrackPoint {
                     ts,
                     lat,
@@ -227,7 +229,7 @@ impl TripDetectorState {
             self.power_max = event.power_kw;
             self.power_min = event.power_kw;
 
-            if let (Some(lat), Some(lng)) = (event.latitude, event.longitude) {
+            if let Some((lat, lng)) = valid_location_pair(event.latitude, event.longitude) {
                 self.track_points.push(TrackPoint {
                     ts,
                     lat,
@@ -498,6 +500,31 @@ mod tests {
             TripEvent::TripEnded { trip } => assert_eq!(trip.trip_id, trip_id),
             _ => panic!("expected TripEnded"),
         }
+    }
+
+    #[test]
+    fn ignores_zero_zero_location_samples_until_valid_coordinates_arrive() {
+        let mut d = TripDetectorState::new(Uuid::nil());
+
+        let mut start = mk_event(PowerState::Drive, 35.0, 0);
+        start.latitude = Some(0.0);
+        start.longitude = Some(0.0);
+        assert!(matches!(d.process(&start), TripEvent::TripStarted { .. }));
+
+        let mut mid = mk_event(PowerState::Drive, 36.0, 60);
+        mid.latitude = Some(30.267);
+        mid.longitude = Some(-97.743);
+        assert!(matches!(d.process(&mid), TripEvent::NoChange));
+
+        let mut end = mk_event(PowerState::Sleep, 0.0, 600);
+        end.latitude = Some(30.268);
+        end.longitude = Some(-97.742);
+        let TripEvent::TripEnded { trip } = d.process(&end) else {
+            panic!("expected TripEnded");
+        };
+
+        assert_eq!(trip.points.first().map(|p| (p.lat, p.lng)), Some((30.267, -97.743)));
+        assert_eq!(trip.points.last().map(|p| (p.lat, p.lng)), Some((30.268, -97.742)));
     }
 
     #[test]

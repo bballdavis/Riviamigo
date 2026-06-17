@@ -146,85 +146,86 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
         activeKey={activeKey}
         onNavigate={(href) => navigate({ to: href })}
         items={sidebarItems}
+        mobileHeaderSlot={<ThemeToggle variant="ghost" ariaLabel="Theme options" />}
         collapsed={sidebarCollapsed}
         onCollapsedChange={setPersistedSidebarCollapsed}
-        bottomSlot={({ collapsed }) => {
-          if (collapsed) {
-            return (
-              <div className="w-full flex flex-col gap-2">
-                <div className={collapsedFooterRow}>
-                  <div
-                    className={collapsedFooterCell}
-                    title={`Vehicle status: ${
-                      onlineState === 'online'
-                        ? 'Online'
-                        : onlineState === 'connecting'
-                        ? 'Connecting...'
-                        : onlineState === 'error'
-                        ? 'Connection failed'
-                        : 'Offline'
-                    }`}
-                    aria-label="Vehicle status"
-                  >
-                    {onlineState === 'connecting' ? (
-                      <Loader2 className="h-4 w-4 text-accent animate-spin" />
-                    ) : onlineState === 'online' ? (
-                      <Wifi className="h-4 w-4 text-status-positive" />
-                    ) : onlineState === 'error' ? (
-                      <WifiOff className="h-4 w-4 text-status-danger" />
-                    ) : (
-                      <WifiOff className="h-4 w-4 text-fg-tertiary" />
-                    )}
-                  </div>
-                  <div
-                    className={collapsedFooterCell}
-                    title={showCompactBattery ? `Battery status: ${Math.round(compactBatteryLevel)}%` : 'Battery status unavailable'}
-                    aria-label="Battery status"
-                  >
-                    {compactBatteryIcon && (
-                      <compactBatteryIcon.Component
-                        className={`h-[1.44375rem] w-[1.44375rem] ${
-                          compactBatteryIcon.variant === 'charging'
-                            ? 'text-accent'
-                            : (compactBatteryLevel ?? 0) > 50
-                            ? 'text-status-positive'
-                            : (compactBatteryLevel ?? 0) > 20
-                            ? 'text-status-warning'
-                            : 'text-status-danger'
-                        }`}
-                        data-battery-icon={`tb-battery-${compactBatteryIcon.variant}`}
-                      />
-                    )}
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => navigate({ to: '/settings' })}
-                  title="Settings"
-                  aria-label="Open settings"
-                  className="-mx-1 flex h-8 w-[calc(100%+0.5rem)] items-center justify-center rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
+        bottomSlot={({ collapsed }) =>
+          collapsed ? (
+            <div className="flex w-full flex-col gap-2">
+              <div className={collapsedFooterRow}>
+                <div
+                  className={collapsedFooterCell}
+                  title={`Vehicle status: ${
+                    onlineState === 'online'
+                      ? 'Online'
+                      : onlineState === 'connecting'
+                      ? 'Connecting...'
+                      : onlineState === 'error'
+                      ? 'Connection failed'
+                      : 'Offline'
+                  }`}
+                  aria-label="Vehicle status"
                 >
-                  <Settings className="h-4 w-4 shrink-0" />
-                </button>
-
-                <div className={collapsedFooterRow}>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    title="Sign out"
-                    aria-label="Sign out"
-                    className="flex h-8 w-6 items-center justify-center rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
-                  >
-                    <LogOut className="h-4 w-4 shrink-0" />
-                  </button>
-                  <ThemeToggle className="w-6" />
+                  {onlineState === 'connecting' ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                  ) : onlineState === 'online' ? (
+                    <Wifi className="h-4 w-4 text-status-positive" />
+                  ) : onlineState === 'error' ? (
+                    <WifiOff className="h-4 w-4 text-status-danger" />
+                  ) : (
+                    <WifiOff className="h-4 w-4 text-fg-tertiary" />
+                  )}
+                </div>
+                <div
+                  className={collapsedFooterCell}
+                  title={showCompactBattery ? `Battery status: ${Math.round(compactBatteryLevel)}%` : 'Battery status unavailable'}
+                  aria-label="Battery status"
+                >
+                  {compactBatteryIcon && (
+                    <compactBatteryIcon.Component
+                      className={`h-[1.44375rem] w-[1.44375rem] ${
+                        compactBatteryIcon.variant === 'charging'
+                          ? 'text-accent'
+                          : (compactBatteryLevel ?? 0) > 50
+                          ? 'text-status-positive'
+                          : (compactBatteryLevel ?? 0) > 20
+                          ? 'text-status-warning'
+                          : 'text-status-danger'
+                      }`}
+                      data-battery-icon={`tb-battery-${compactBatteryIcon.variant}`}
+                    />
+                  )}
                 </div>
               </div>
-            );
-          }
 
-          return (
+              <button
+                type="button"
+                onClick={() => navigate({ to: '/settings' })}
+                title="Settings"
+                aria-label="Open settings"
+                className="-mx-1 flex h-8 w-[calc(100%+0.5rem)] items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
+              >
+                <Settings className="h-4 w-4 shrink-0" />
+              </button>
+
+              <div className={collapsedFooterRow}>
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sign out"
+                aria-label="Sign out"
+                className="flex h-8 w-6 items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
+              >
+                <LogOut className="h-4 w-4 shrink-0" />
+              </button>
+              <ThemeToggle
+                variant="ghost"
+                className="h-8 w-6"
+                ariaLabel="Theme options"
+              />
+              </div>
+            </div>
+          ) : (
             <div className="flex flex-col gap-2">
               <StatusBar
                 onlineState={onlineState}
@@ -239,7 +240,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 onClick={() => navigate({ to: '/settings' })}
                 title="Settings"
                 aria-label="Open settings"
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
               >
                 <Settings className="h-4 w-4 shrink-0" />
                 <span className="text-xs font-medium">Settings</span>
@@ -251,16 +252,21 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                   onClick={handleLogout}
                   title="Sign out"
                   aria-label="Sign out"
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
                 >
                   <LogOut className="h-4 w-4 shrink-0" />
                   <span className="text-xs font-medium">Sign out</span>
                 </button>
-                <ThemeToggle />
+
+                <ThemeToggle
+                  variant="ghost"
+                  className="h-8 w-8"
+                  ariaLabel="Theme options"
+                />
               </div>
             </div>
-          );
-        }}
+          )
+        }
       />
 
       {/* Main content: offset by sidebar width on lg+ */}
