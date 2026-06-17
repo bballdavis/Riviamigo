@@ -30,6 +30,51 @@ describe('api client dashboard contracts', () => {
     expect(result.per_page).toBe(25);
   });
 
+  it('treats zero-coordinate trip and charge locations as missing', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        id: 'charge-1',
+        vehicle_id: 'vehicle-1',
+        started_at: '2026-06-08T21:30:00Z',
+        ended_at: '2026-06-09T03:00:00Z',
+        location_lat: 0,
+        location_lng: 0,
+        location_name: '0.0000, 0.0000',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    ).mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        id: 'trip-1',
+        vehicle_id: 'vehicle-1',
+        started_at: '2026-06-09T12:00:00Z',
+        ended_at: '2026-06-09T13:00:00Z',
+        distance_mi: 12,
+        duration_min: 60,
+        start_lat: 0,
+        start_lng: 0,
+        end_lat: 0,
+        end_lng: 0,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    const charge = await api.getChargeSession('charge-1', 'vehicle-1');
+    const trip = await api.getTrip('trip-1', 'vehicle-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(charge.location_name).toBeNull();
+    expect(charge.location_name).not.toBe('0.0000, 0.0000');
+    expect(charge.ended_at).toBe('2026-06-09T03:00:00Z');
+    expect(trip.start_lat).toBeNull();
+    expect(trip.start_lng).toBeNull();
+    expect(trip.end_lat).toBeNull();
+    expect(trip.end_lng).toBeNull();
+  });
+
   it('normalizes null-free efficiency summary values for widgets', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({

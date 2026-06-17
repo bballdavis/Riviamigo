@@ -1073,6 +1073,8 @@ function normalizeTrip(raw: unknown): Trip {
   const energy = finiteNumber(row.energy_used_kwh)
     ?? (finiteNumber(row.energy_wh) !== undefined ? finiteNumber(row.energy_wh)! / 1000 : undefined)
     ?? (efficiency !== undefined && distance > 0 ? efficiency * distance / 1000 : undefined);
+  const startCoordinate = normalizeCoordinateValue(row.start_lat, row.start_lng);
+  const endCoordinate = normalizeCoordinateValue(row.end_lat, row.end_lng);
 
   return {
     id: String(row.id ?? ''),
@@ -1087,10 +1089,10 @@ function normalizeTrip(raw: unknown): Trip {
     drive_mode: typeof row.drive_mode === 'string' ? row.drive_mode as Trip['drive_mode'] : null,
     soc_start: finiteNumber(row.soc_start) ?? null,
     soc_end: finiteNumber(row.soc_end) ?? null,
-    start_lat: finiteNumber(row.start_lat) ?? null,
-    start_lng: finiteNumber(row.start_lng) ?? null,
-    end_lat: finiteNumber(row.end_lat) ?? null,
-    end_lng: finiteNumber(row.end_lng) ?? null,
+    start_lat: startCoordinate?.lat ?? null,
+    start_lng: startCoordinate?.lng ?? null,
+    end_lat: endCoordinate?.lat ?? null,
+    end_lng: endCoordinate?.lng ?? null,
     start_address: typeof row.start_address === 'string' ? row.start_address : null,
     end_address: typeof row.end_address === 'string' ? row.end_address : null,
     start_place: typeof row.start_place === 'string'
@@ -1108,17 +1110,15 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
   const row = isRecord(raw) ? raw : {};
   const id = String(row.id ?? '');
   if (!id) throw new Error('normalizeChargeSession: missing id in response');
-  const lat = finiteNumber(row.location_lat);
-  const lng = finiteNumber(row.location_lng);
-  const coordinateLocation =
-    lat !== undefined && lng !== undefined ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : null;
+  const coordinateLocation = formatCoordinateLabel(normalizeCoordinateValue(row.location_lat, row.location_lng));
+  const locationName = normalizeCoordinateLabel(row.location_name);
   return {
     id,
     vehicle_id: String(row.vehicle_id ?? ''),
     started_at: String(row.started_at ?? ''),
     session_day_local: typeof row.session_day_local === 'string' ? row.session_day_local : null,
     ended_at: row.ended_at == null ? null : String(row.ended_at),
-    location_name: typeof row.location_name === 'string' ? row.location_name : (row.is_home === true ? 'Home' : coordinateLocation),
+    location_name: locationName ?? (row.is_home === true ? 'Home' : coordinateLocation),
     charger_type: typeof row.charger_type === 'string' && VALID_CHARGER_TYPES.has(row.charger_type)
       ? row.charger_type as ChargeSession['charger_type']
       : null,
@@ -1173,6 +1173,26 @@ function parseRateLimitHeaders(headers: Headers, method: string, path: string) {
     ...(rateLimitResetSeconds !== undefined ? { rateLimitResetSeconds } : {}),
     ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
+}
+
+function normalizeCoordinateValue(latRaw: unknown, lngRaw: unknown) {
+  const lat = finiteNumber(latRaw);
+  const lng = finiteNumber(lngRaw);
+  if (lat === undefined || lng === undefined) return null;
+  if (lat === 0 && lng === 0) return null;
+  return { lat, lng };
+}
+
+function formatCoordinateLabel(value: { lat: number; lng: number } | null) {
+  return value ? `${value.lat.toFixed(4)}, ${value.lng.toFixed(4)}` : null;
+}
+
+function normalizeCoordinateLabel(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const label = value.trim();
+  if (!label) return null;
+  if (/^0+(?:\.0+)?\s*,\s*0+(?:\.0+)?$/.test(label)) return null;
+  return label;
 }
 
 function parsePositiveNumberHeader(value: string | null) {

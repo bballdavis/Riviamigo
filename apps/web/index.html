@@ -3,18 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Riviamigo — Rivian telemetry dashboard" />
+    <meta name="description" content="Riviamigo â€” Rivian telemetry dashboard" />
     <title>Riviamigo</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- Theme FOUC prevention: apply saved theme before first paint -->
     <script>
       (function () {
         try {
-          var raw = localStorage.getItem('rm-auth');
-        } catch (e) {}
-        var saved = localStorage.getItem('rm-theme');
-        var isDark = saved !== 'light';
-        document.documentElement.classList.add(isDark ? 'dark' : 'light');
+          var saved = localStorage.getItem('rm-theme');
+          var isDark = saved === 'dark';
+          if (saved === 'system' || saved == null) {
+            isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          }
+          var html = document.documentElement;
+          html.classList.remove('light', 'dark');
+          html.classList.add(isDark ? 'dark' : 'light');
+          html.style.colorScheme = isDark ? 'dark' : 'light';
+        } catch (e) {
+          var html = document.documentElement;
+          html.classList.remove('light', 'dark');
+          html.classList.add('dark');
+          html.style.colorScheme = 'dark';
+        }
       })();
     </script>
   </head>

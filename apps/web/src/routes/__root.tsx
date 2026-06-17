@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import type { QueryClient } from '@tanstack/react-query';
+import { ThemeModeSync } from '@riviamigo/ui/lib/theme';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -11,5 +12,10 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
 });
 
 function Root() {
-  return <Outlet />;
+  return (
+    <>
+      <ThemeModeSync />
+      <Outlet />
+    </>
+  );
 }

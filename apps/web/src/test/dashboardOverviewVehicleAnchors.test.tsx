@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewMocks = vi.hoisted(() => ({
   model: 'R1T' as 'R1T' | 'R1S' | 'R2S',
+  chargerState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
 }));
 
 const overheadImageFixtures = {
@@ -29,9 +30,14 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         range_miles: 188,
         battery_limit: 80,
         power_state: 'ready',
-        charger_state: 'Disconnected',
-        charger_status: 'chrgr_sts_not_connected',
-        time_to_end_of_charge_min: null,
+        charger_state: overviewMocks.chargerState,
+        charger_status:
+          overviewMocks.chargerState === 'Charging'
+            ? 'chrgr_sts_connected_charging'
+            : overviewMocks.chargerState === 'Connected'
+              ? 'chrgr_sts_connected_no_chrg'
+              : 'chrgr_sts_not_connected',
+        time_to_end_of_charge_min: overviewMocks.chargerState === 'Charging' ? 95 : null,
         speed_mph: 0,
         latitude: null,
         longitude: null,
@@ -129,6 +135,7 @@ function renderOverviewForModel(model: 'R1T' | 'R2S') {
 describe('overview vehicle anchors', () => {
   beforeEach(() => {
     overviewMocks.model = 'R1T';
+    overviewMocks.chargerState = 'Disconnected';
   });
 
   it.each([
@@ -147,6 +154,7 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByText('32 psi')).toHaveClass('border-status-danger/70');
     expect(screen.getByText('33 psi')).toHaveClass('border-status-danger/70');
     expect(screen.getByText('34 psi')).toHaveClass('border-status-danger/70');
+    expect(screen.queryByText('To Limit')).not.toBeInTheDocument();
 
     expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);
     expect(screen.getByTitle('Front left door lock')).toHaveClass(anchors.locks.fl);
@@ -158,6 +166,15 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Front left door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Rear right door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Front right door lock')).toHaveClass('text-status-positive');
+  });
+
+  it('shows time to limit only while charging', () => {
+    overviewMocks.chargerState = 'Charging';
+
+    renderOverviewForModel('R1T');
+
+    expect(screen.getByText('To Limit')).toBeInTheDocument();
+    expect(screen.getByText('1h 35m')).toBeInTheDocument();
   });
 
   it('renders seeded overhead demo art for the overview stage', () => {

@@ -34,6 +34,7 @@ export interface SidebarProps {
   onNavigate: (href: string) => void;
   items?: NavItem[];
   logo?: React.ReactNode;
+  mobileHeaderSlot?: React.ReactNode;
   bottomSlot?: React.ReactNode | ((context: { collapsed: boolean }) => React.ReactNode);
   defaultCollapsed?: boolean;
   collapsed?: boolean;
@@ -46,6 +47,7 @@ export function Sidebar({
   onNavigate,
   items = DEFAULT_NAV_ITEMS,
   logo,
+  mobileHeaderSlot,
   bottomSlot,
   defaultCollapsed = false,
   collapsed: collapsedProp,
@@ -163,6 +165,7 @@ export function Sidebar({
             style={{ transform: 'translateY(10%)' }}
           />
         </button>
+        {mobileHeaderSlot && <div className="ml-auto flex items-center gap-2">{mobileHeaderSlot}</div>}
       </div>
 
       {/* Sidebar panel */}

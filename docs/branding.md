@@ -59,6 +59,7 @@ Common usage:
 - Preserve icon family consistency inside a page and within shared admin/dashboard surfaces.
 - Prefer icon-plus-label patterns already established by shared primitives instead of inventing one-off controls.
 - Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
+- Theme selection is a shared shell interaction, not a route-local toggle. Support `light`, `dark`, and `system`, and make the chooser responsive so desktop can anchor to the trigger while mobile renders a viewport-aware sheet or modal that fits on screen.
 
 ## Shared Component Patterns
 

@@ -166,7 +166,8 @@ export const Button = ({ children, onClick, iconLeft, loading, ...p }: {
 export const Badge = ({ children, dot }: { children: React.ReactNode; variant?: string; dot?: boolean }) =>
   <span data-testid="badge">{children}</span>;
 
-export const ThemeToggle = () => <button data-testid="theme-toggle">Toggle theme</button>;
+export const ThemeToggle = ({ label, showLabel }: { label?: string; showLabel?: boolean; [k: string]: unknown }) =>
+  <button data-testid="theme-toggle">{showLabel ? (label ?? 'Theme') : 'Toggle theme'}</button>;
 
 export const Input = ({ label, placeholder, type, value, onChange, required }: {
   label?: string; placeholder?: string; type?: string;
