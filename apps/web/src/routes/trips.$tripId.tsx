@@ -131,7 +131,7 @@ export function TripDetailContent() {
     <AppLayout activeKey="trips">
       <PageLayout
         title={title}
-        subtitle={subtitle}
+        subtitle={trip ? (subtitle ?? 'Unknown') : undefined}
         titleAction={backButton}
         titleActionPosition="left"
       >

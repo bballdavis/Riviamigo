@@ -114,6 +114,7 @@ async fn rebuild_vehicle_history(pool: &PgPool, args: Args) -> Result<()> {
     for vehicle_id in vehicles {
         info!(vehicle_id = %vehicle_id, "rebuilding vehicle history");
 
+        clear_vehicle_history_for_vehicle(pool, vehicle_id).await?;
         let state_periods = backfill_state_periods_for_vehicle(pool, vehicle_id).await?;
         let charge_sessions = repair_charge_sessions_for_vehicle(pool, vehicle_id).await?;
         let charge_locations =
@@ -135,6 +136,20 @@ async fn rebuild_vehicle_history(pool: &PgPool, args: Args) -> Result<()> {
     }
 
     info!("historical rebuild finished");
+    Ok(())
+}
+
+async fn clear_vehicle_history_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
+    sqlx::query("DELETE FROM riviamigo.charge_sessions WHERE vehicle_id = $1")
+        .bind(vehicle_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM riviamigo.trips WHERE vehicle_id = $1")
+        .bind(vehicle_id)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
@@ -281,8 +296,20 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                 vehicle_id,
                 MIN(ts) AS started_at,
                 MAX(ts) AS ended_at,
-                (ARRAY_AGG(latitude ORDER BY ts) FILTER (WHERE latitude IS NOT NULL))[1] AS location_lat,
-                (ARRAY_AGG(longitude ORDER BY ts) FILTER (WHERE longitude IS NOT NULL))[1] AS location_lng,
+                (
+                    ARRAY_AGG(latitude ORDER BY ts) FILTER (
+                        WHERE latitude IS NOT NULL
+                          AND longitude IS NOT NULL
+                          AND NOT (latitude = 0 AND longitude = 0)
+                    )
+                )[1] AS location_lat,
+                (
+                    ARRAY_AGG(longitude ORDER BY ts) FILTER (
+                        WHERE latitude IS NOT NULL
+                          AND longitude IS NOT NULL
+                          AND NOT (latitude = 0 AND longitude = 0)
+                    )
+                )[1] AS location_lng,
                 (ARRAY_AGG(battery_level ORDER BY ts) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_start,
                 (ARRAY_AGG(battery_level ORDER BY ts DESC) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_end,
                 MAX(battery_limit) AS charge_limit,
@@ -837,13 +864,20 @@ async fn backfill_trip_ids_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Resul
     for trip in trips {
         let result = sqlx::query(
             r#"
-            UPDATE timeseries.telemetry
-            SET trip_id = $1
-            WHERE vehicle_id = $2
-              AND ts >= $3
-              AND ts <= $4
-              AND trip_id IS NULL
-            "#,
+        UPDATE timeseries.telemetry
+        SET trip_id = $1
+        WHERE vehicle_id = $2
+          AND ts >= $3
+          AND ts <= $4
+          AND (
+              trip_id IS NULL
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM riviamigo.trips existing
+                  WHERE existing.id = timeseries.telemetry.trip_id
+              )
+          )
+        "#,
         )
         .bind(trip.id)
         .bind(vehicle_id)

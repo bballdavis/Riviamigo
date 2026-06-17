@@ -290,7 +290,7 @@ async fn get_track(
         "15 seconds"
     };
 
-    let cache_key = format!("trips:track:v1:{vid}:{id}:{bucket}");
+    let cache_key = format!("trips:track:v2:{vid}:{id}:{bucket}");
     let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
 
     if let Some(conn) = redis_conn.as_mut() {
@@ -309,6 +309,8 @@ async fn get_track(
             "SELECT ts, latitude AS lat, longitude AS lng, speed_mph, altitude_m \
              FROM timeseries.telemetry \
              WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL \
+               AND longitude IS NOT NULL \
+               AND NOT (latitude = 0 AND longitude = 0) \
              ORDER BY ts LIMIT 5000",
         )
         .bind(vid)
@@ -321,6 +323,8 @@ async fn get_track(
                       avg(speed_mph) AS speed_mph, avg(altitude_m) AS altitude_m
                FROM timeseries.telemetry
                WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND latitude IS NOT NULL
+                 AND longitude IS NOT NULL
+                 AND NOT (latitude = 0 AND longitude = 0)
                GROUP BY 1 ORDER BY 1 LIMIT 5000"#,
         )
         .bind(vid)

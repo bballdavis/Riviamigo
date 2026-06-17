@@ -1,13 +1,15 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { ChargingScheduleInput, DepartureScheduleInput } from './api';
+import { useAuth } from './useAuth';
 
 export function useChargeSessions(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
   const normalizedSearch = search.trim();
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['charging', 'list', vehicleId, from, to, page, perPage, normalizedSearch],
     queryFn: () => api.listChargeSessions(vehicleId!, from, to, page, perPage, normalizedSearch),
-    enabled: !!vehicleId,
+    enabled: !!vehicleId && !!accessToken,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -17,10 +19,11 @@ export function useChargeSessions(vehicleId: string | null, from: string, to: st
 }
 
 export function useChargeSession(sessionId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['charging', 'detail', sessionId, vehicleId],
     queryFn: () => api.getChargeSession(sessionId!, vehicleId!),
-    enabled: !!sessionId && !!vehicleId,
+    enabled: !!sessionId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -30,10 +33,11 @@ export function useChargeSession(sessionId: string | null, vehicleId: string | n
 }
 
 export function useChargeCurve(sessionId: string | null, vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['charging', 'curve', sessionId, vehicleId],
     queryFn: () => api.getChargeCurve(sessionId!, vehicleId!),
-    enabled: !!sessionId && !!vehicleId,
+    enabled: !!sessionId && !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -43,10 +47,11 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
 }
 
 export function useChargeCurveAnalysis(vehicleId: string | null, from: string, to: string) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['charging', 'curve-analysis', vehicleId, from, to],
     queryFn: () => api.getChargeCurveAnalysis(vehicleId!, from, to),
-    enabled: !!vehicleId,
+    enabled: !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -56,10 +61,11 @@ export function useChargeCurveAnalysis(vehicleId: string | null, from: string, t
 }
 
 export function useChargingSummary(vehicleId: string | null, from: string, to: string) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['charging', 'summary', vehicleId, from, to],
     queryFn: () => api.getChargingSummary(vehicleId!, from, to),
-    enabled: !!vehicleId,
+    enabled: !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -68,13 +74,12 @@ export function useChargingSummary(vehicleId: string | null, from: string, to: s
   });
 }
 
-// ── Charging schedule ─────────────────────────────────────────────────────────
-
 export function useChargingSchedule(vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['schedules', 'charging', vehicleId],
     queryFn: () => api.getChargingSchedule(vehicleId!),
-    enabled: !!vehicleId,
+    enabled: !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -89,13 +94,12 @@ export function useUpdateChargingSchedule(vehicleId: string | null) {
   });
 }
 
-// ── Departure schedules ───────────────────────────────────────────────────────
-
 export function useDepartureSchedules(vehicleId: string | null) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['schedules', 'departure', vehicleId],
     queryFn: () => api.listDepartureSchedules(vehicleId!),
-    enabled: !!vehicleId,
+    enabled: !!vehicleId && !!accessToken,
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -131,13 +135,12 @@ export function useDeleteDepartureSchedule(vehicleId: string | null) {
   });
 }
 
-// ── Live charging session ─────────────────────────────────────────────────────
-
 export function useLiveSession(vehicleId: string | null, active = true) {
+  const accessToken = useAuth((state) => state.accessToken);
   return useQuery({
     queryKey: ['live-session', vehicleId],
     queryFn: () => api.getLiveSession(vehicleId!),
-    enabled: !!vehicleId && active,
+    enabled: !!vehicleId && !!accessToken && active,
     refetchInterval: active ? 30 * 1000 : false,
     staleTime: 0,
   });
