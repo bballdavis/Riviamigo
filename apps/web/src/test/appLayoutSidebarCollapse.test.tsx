@@ -10,22 +10,27 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({
-    accessToken: 'token',
-    defaultVehicleId: 'vehicle-1',
-    logout,
+  useAuth: (selector?: (state: { accessToken: string; defaultVehicleId: string; logout: typeof logout }) => unknown) => {
+    const state = {
+      accessToken: 'token',
+      defaultVehicleId: 'vehicle-1',
+      logout,
+    };
+    return selector ? selector(state) : state;
+  },
+  useResolvedVehicleSelection: () => ({
+    effectiveVehicleId: 'vehicle-1',
+    vehicleSelectionReady: true,
+    vehicles: [{ id: 'vehicle-1', model: 'R1S' }],
   }),
   useMe: () => ({
     data: { role: 'user' },
-  }),
-  useVehicles: () => ({
-    data: [{ id: 'vehicle-1', model: 'R1S' }],
   }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicleStatus: () => ({
     status: null,
     connected: true,
-    connectionState: 'connected',
+    connectionState: 'online',
   }),
 }));
 

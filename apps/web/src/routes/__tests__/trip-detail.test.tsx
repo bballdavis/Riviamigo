@@ -81,6 +81,7 @@ describe('Trip detail page', () => {
   it('renders trip stat cards and synchronized sections', () => {
     render(<TripDetailContent />);
 
+    expect(screen.getByText('Location unavailable')).toBeInTheDocument();
     expect(screen.getByText('Distance Driven')).toBeInTheDocument();
     expect(screen.getByText('Avg. Effic. (Wh/mi)')).toBeInTheDocument();
     expect(screen.getByText('Avg. Speed')).toBeInTheDocument();

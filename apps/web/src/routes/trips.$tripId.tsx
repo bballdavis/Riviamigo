@@ -25,6 +25,7 @@ import {
   formatMph,
   getEfficiencyUnitLabel,
 } from '@riviamigo/ui/lib/utils';
+import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@riviamigo/ui/lib/tripPresentation';
 import { format, parseISO } from 'date-fns';
 import { ArrowLeft } from 'lucide-react';
 
@@ -55,10 +56,13 @@ export function TripDetailContent() {
 
   const subtitle = React.useMemo(() => {
     if (!trip) return undefined;
-    const start = trip.start_place ?? trip.start_address;
-    const end = trip.end_place ?? trip.end_address;
-    if (start && end) return `${start} -> ${end}`;
-    return start ?? end ?? undefined;
+    const tripRecord = trip as unknown as Record<string, unknown>;
+    const start = resolveTripLocation(tripRecord, 'start');
+    const end = resolveTripLocation(tripRecord, 'end');
+    if (start.source === 'unavailable' && end.source === 'unavailable') {
+      return TRIP_LOCATION_UNAVAILABLE_COPY;
+    }
+    return `${start.label} -> ${end.label}`;
   }, [trip]);
 
   const durationSec = (trip as unknown as { duration_seconds?: number })?.duration_seconds;
@@ -131,7 +135,7 @@ export function TripDetailContent() {
     <AppLayout activeKey="trips">
       <PageLayout
         title={title}
-        subtitle={trip ? (subtitle ?? 'Unknown') : undefined}
+        subtitle={trip ? subtitle : undefined}
         titleAction={backButton}
         titleActionPosition="left"
       >

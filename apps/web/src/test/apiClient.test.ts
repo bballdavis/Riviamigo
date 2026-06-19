@@ -75,6 +75,40 @@ describe('api client dashboard contracts', () => {
     expect(trip.end_lng).toBeNull();
   });
 
+  it('preserves trip place and address labels while normalizing coordinates', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        id: 'trip-2',
+        vehicle_id: 'vehicle-1',
+        started_at: '2026-06-16T22:45:00Z',
+        ended_at: '2026-06-16T23:05:00Z',
+        distance_miles: 12,
+        duration_seconds: 1200,
+        efficiency_wh_per_mile: 320,
+        start_lat: 29.81831,
+        start_lng: -95.38817,
+        end_lat: 29.84793,
+        end_lng: -95.50235,
+        start_place: 'Home - Test',
+        start_address: 'North Main Street, Houston, TX 77009',
+        end_place_name: 'Aurora Street, Houston',
+        end_address: 'Aurora Street, Houston, TX 77058',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    const trip = await api.getTrip('trip-2', 'vehicle-1');
+
+    expect(trip.start_place).toBe('Home - Test');
+    expect(trip.start_address).toBe('North Main Street, Houston, TX 77009');
+    expect(trip.end_place).toBe('Aurora Street, Houston');
+    expect(trip.end_address).toBe('Aurora Street, Houston, TX 77058');
+    expect(trip.start_lat).toBe(29.81831);
+    expect(trip.end_lng).toBe(-95.50235);
+  });
+
   it('normalizes null-free efficiency summary values for widgets', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({

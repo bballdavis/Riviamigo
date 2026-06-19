@@ -1014,6 +1014,9 @@ class ApiClient {
       code: detail.code,
       method: detail.method,
       path: detail.path,
+      source: classifyClientRequestSource(detail.path),
+      startupCandidate: isStartupProtectedPath(detail.path),
+      hasAccessToken: !!this.accessToken,
       rateLimitSource: detail.rateLimitSource,
       rateLimitClass: detail.rateLimitClass,
       rateLimitLimit: detail.rateLimitLimit,
@@ -1223,6 +1226,21 @@ function inferClientRateLimitClass(method: string, path: string) {
   }
 
   return 'auth_write';
+}
+
+function classifyClientRequestSource(path: string) {
+  if (path === '/v1/auth/refresh') return 'refresh';
+  if (path === '/v1/auth/me' || path === '/v1/auth/preferences') return 'metadata';
+  if (path === '/v1/vehicles/live') return 'live_websocket';
+  if (path.startsWith('/v1/dashboards/by-slug/')) return 'dashboard_metadata';
+  return 'protected_api';
+}
+
+function isStartupProtectedPath(path: string) {
+  return path === '/v1/auth/me'
+    || path === '/v1/auth/preferences'
+    || path.startsWith('/v1/dashboards/by-slug/')
+    || path === '/v1/vehicles/live';
 }
 
 function finiteNumber(value: unknown): number | undefined {
