@@ -38,6 +38,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 | [`docs/contributing.md`](./contributing.md) | contributors and reviewers | workflow, review rules, testing expectations, or doc policy changes | AGENTS, CLAUDE |
 | [`docs/runbooks/README.md`](./runbooks/README.md) | maintainers | runbook taxonomy or recurring maintenance surface changes | documentation maintenance |
 | [`docs/runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md) | maintainers and agents | doc publishing or drift-prevention workflow changes | wiki drafts, contributing |
+| [`docs/runbooks/vehicle-history-rebuild.md`](./runbooks/vehicle-history-rebuild.md) | maintainers and agents | rebuild steps, trip enrichment behavior, or post-replay verification changes | backend data flow, metrics reference |
 | [`docs/decision-log.md`](./decision-log.md) | maintainers and future contributors | durable repo/process decisions are made | contributing, architecture |
 
 ## User-Facing Documentation

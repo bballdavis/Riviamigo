@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle, DEFAULT_NAV_ITEMS, type NavItem } from '@riviamigo/ui/primitives';
 import { getUnitSystem } from '@riviamigo/ui/lib/utils';
-import { useAuth, useCurrentVehicleStatus, useMe, useVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { useAuth, useCurrentVehicleStatus, useMe, useResolvedVehicleSelection, useVehicleStatus } from '@riviamigo/hooks';
 import { Loader2, LogOut, Settings, UserCog, Wifi, WifiOff } from 'lucide-react';
 import { GiRestingVampire } from 'react-icons/gi';
 import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff, TbCarSuv } from 'react-icons/tb';
@@ -24,13 +24,14 @@ function getCompactBatteryIcon(socPercent: number) {
 export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const navigate = useNavigate();
   const accessToken = useAuth((s) => s.accessToken);
-  const defaultVehicleId = useAuth((s) => s.defaultVehicleId);
   const logout = useAuth((s) => s.logout);
-  const { data: vehicles = [] } = useVehicles();
+  const { effectiveVehicleId, vehicleSelectionReady, vehicles } = useResolvedVehicleSelection();
   const me = useMe();
   const canAccessUsers = me.data?.role === 'admin' || me.data?.role === 'super_user';
-  const { status: liveStatus, connected, connectionState } = useVehicleStatus(defaultVehicleId, accessToken);
-  const { data: currentStatus } = useCurrentVehicleStatus(defaultVehicleId);
+  const liveVehicleId = vehicleSelectionReady ? effectiveVehicleId : null;
+  const liveAccessToken = vehicleSelectionReady ? accessToken : null;
+  const { status: liveStatus, connected, connectionState } = useVehicleStatus(liveVehicleId, liveAccessToken);
+  const { data: currentStatus } = useCurrentVehicleStatus(liveVehicleId);
   const status = currentStatus ?? liveStatus;
   const [unitSystem, setUnitSystem] = React.useState(() => getUnitSystem());
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => {
@@ -82,8 +83,10 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     };
   }, [handleUnitsChange]);
 
-  const onlineState = !defaultVehicleId
+  const onlineState = !liveVehicleId
     ? 'offline' as const
+    : !vehicleSelectionReady
+    ? 'connecting' as const
     : connectionState === 'failed'
     ? 'error' as const
     : connected

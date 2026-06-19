@@ -60,7 +60,7 @@ export function TripTemperatureChart({
   if (!hasAnyData) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        No temperature profile data for this trip.
+        Outside temp unavailable for this trip.
       </div>
     );
   }

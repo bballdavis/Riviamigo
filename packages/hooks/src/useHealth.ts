@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
-import { useAuth } from './useAuth';
+import { useAuthReady } from './useAuthState';
 
 export function useVehicleHealth(vehicleId: string | null) {
-  const accessToken = useAuth((state) => state.accessToken);
+  const authReady = useAuthReady();
   return useQuery({
     queryKey: ['vehicles', 'health', vehicleId],
     queryFn: () => api.getVehicleHealth(vehicleId!),
-    enabled: !!vehicleId && !!accessToken,
+    enabled: authReady && !!vehicleId,
     staleTime: 60 * 1000,
     placeholderData: (previous) => previous,
   });

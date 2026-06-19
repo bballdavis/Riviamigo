@@ -523,8 +523,14 @@ mod tests {
             panic!("expected TripEnded");
         };
 
-        assert_eq!(trip.points.first().map(|p| (p.lat, p.lng)), Some((30.267, -97.743)));
-        assert_eq!(trip.points.last().map(|p| (p.lat, p.lng)), Some((30.268, -97.742)));
+        assert_eq!(
+            trip.points.first().map(|p| (p.lat, p.lng)),
+            Some((30.267, -97.743))
+        );
+        assert_eq!(
+            trip.points.last().map(|p| (p.lat, p.lng)),
+            Some((30.268, -97.742))
+        );
     }
 
     #[test]

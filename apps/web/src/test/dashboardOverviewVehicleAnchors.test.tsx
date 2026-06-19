@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const overviewMocks = vi.hoisted(() => ({
   model: 'R1T' as 'R1T' | 'R1S' | 'R2S',
   chargerState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
+  batteryLevel: 64,
 }));
 
 const overheadImageFixtures = {
@@ -26,7 +27,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useCurrentVehicleStatus: () => ({
       data: {
         vehicle_id: 'vehicle-1',
-        battery_level: 64,
+        battery_level: overviewMocks.batteryLevel,
         range_miles: 188,
         battery_limit: 80,
         power_state: 'ready',
@@ -136,6 +137,7 @@ describe('overview vehicle anchors', () => {
   beforeEach(() => {
     overviewMocks.model = 'R1T';
     overviewMocks.chargerState = 'Disconnected';
+    overviewMocks.batteryLevel = 64;
   });
 
   it.each([
@@ -182,5 +184,19 @@ describe('overview vehicle anchors', () => {
     expect(screen.getAllByRole('img').map((image) => image.getAttribute('src'))).toEqual(
       expect.arrayContaining(['/rivian/overhead-light.webp', '/rivian/overhead-dark.webp']),
     );
+  });
+
+  it('keeps the SOC rail inset at full charge', () => {
+    overviewMocks.batteryLevel = 100;
+
+    renderOverviewForModel('R1T');
+
+    const rail = screen.getByTestId('overview-soc-rail');
+    const fill = screen.getByTestId('overview-soc-fill');
+
+    expect(rail).toHaveClass('absolute', 'inset-1', 'flex', 'items-end', 'overflow-hidden', 'rounded-xl', 'p-1');
+    expect(fill.parentElement).toBe(rail);
+    expect(fill).toHaveClass('w-full', 'rounded-lg');
+    expect(fill.style.height).toBe('100%');
   });
 });

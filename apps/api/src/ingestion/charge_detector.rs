@@ -361,13 +361,19 @@ mod tests {
         let mut start = event(vehicle_id, started_at, Some(ChargerState::Charging));
         start.latitude = Some(0.0);
         start.longitude = Some(0.0);
-        assert!(matches!(detector.process(&start), ChargeEvent::SessionStarted));
+        assert!(matches!(
+            detector.process(&start),
+            ChargeEvent::SessionStarted
+        ));
 
         let mut follow_up = event(vehicle_id, started_at + Duration::minutes(3), None);
         follow_up.latitude = Some(29.81);
         follow_up.longitude = Some(-95.38);
         follow_up.battery_level = Some(43.0);
-        assert!(matches!(detector.process(&follow_up), ChargeEvent::NoChange));
+        assert!(matches!(
+            detector.process(&follow_up),
+            ChargeEvent::NoChange
+        ));
 
         let mut end = event(
             vehicle_id,

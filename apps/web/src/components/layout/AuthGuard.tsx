@@ -1,7 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useAuth } from '@riviamigo/hooks';
 import { hydrateQueryCacheForUser, clearQueryCacheForUser } from '../../queryClient';
+
+type LoginLocation = Pick<Location, 'pathname' | 'replace'>;
+type LoginRedirectScheduler = (callback: () => void, delayMs: number) => unknown;
 
 /** Decode the `sub` claim from a JWT without verifying the signature. */
 function jwtUserId(token: string): string | null {
@@ -15,6 +18,38 @@ function jwtUserId(token: string): string | null {
   }
 }
 
+export function forceLoginRedirect(
+  navigate: (options: { to: '/login' }) => void,
+  locationLike: LoginLocation | null = typeof window !== 'undefined' ? window.location : null,
+  scheduleRedirect: LoginRedirectScheduler | null =
+    typeof window !== 'undefined' ? window.setTimeout.bind(window) : null,
+) {
+  try {
+    navigate({ to: '/login' });
+  } catch {
+    // Fall through to the hard redirect below if the router is already in a bad state.
+  }
+
+  if (!locationLike || !scheduleRedirect) return;
+  if (
+    typeof window !== 'undefined'
+    && locationLike === window.location
+    && typeof navigator !== 'undefined'
+    && /\bjsdom\b/i.test(navigator.userAgent)
+  ) {
+    return;
+  }
+  scheduleRedirect(() => {
+    if (locationLike.pathname !== '/login') {
+      try {
+        locationLike.replace('/login');
+      } catch {
+        // jsdom and other non-browser runtimes may not implement real navigation.
+      }
+    }
+  }, 0);
+}
+
 /**
  * Wraps a page component. On first load, attempts to rehydrate the session
  * from the HttpOnly refresh cookie before deciding whether to redirect.
@@ -25,6 +60,13 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const hydratedForRef = useRef<string | null>(null);
   const bootstrapStartedRef = useRef(false);
+  const loginRedirectStartedRef = useRef(false);
+
+  const redirectToLogin = useCallback(() => {
+    if (loginRedirectStartedRef.current) return;
+    loginRedirectStartedRef.current = true;
+    forceLoginRedirect(navigate);
+  }, [navigate]);
 
   // On mount, bootstrap the session from the HttpOnly cookie if not yet authenticated.
   useEffect(() => {
@@ -61,9 +103,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         clearQueryCacheForUser(hydratedForRef.current);
         hydratedForRef.current = null;
       }
-      navigate({ to: '/login' });
+      redirectToLogin();
     }
-  }, [isAuthenticated, isBootstrapping, navigate]);
+  }, [isAuthenticated, isBootstrapping, redirectToLogin]);
 
   useEffect(() => {
     function handleAuthExpired() {
@@ -72,12 +114,12 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         hydratedForRef.current = null;
       }
       clearSession();
-      navigate({ to: '/login' });
+      redirectToLogin();
     }
 
     window.addEventListener('riviamigo:auth-expired', handleAuthExpired);
     return () => window.removeEventListener('riviamigo:auth-expired', handleAuthExpired);
-  }, [clearSession, navigate]);
+  }, [clearSession, redirectToLogin]);
 
   if (isBootstrapping) return null;
   if (!isAuthenticated) return null;

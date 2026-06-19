@@ -177,7 +177,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
     data,
     emptyTitle,
   }: {
-    data: Array<{ label: string; value: number }>;
+    data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null }>;
     emptyTitle: string;
   }) =>
     data.length === 0 ? (
@@ -185,7 +185,12 @@ vi.mock('@riviamigo/ui/charts', () => ({
     ) : (
       <div data-testid="efficiency-pill-chart">
         {data.map((point) => (
-          <div key={point.label} data-testid="efficiency-pill-label">
+          <div
+            key={point.label}
+            data-testid="efficiency-pill-label"
+            data-distance={point.distance == null ? '' : String(point.distance)}
+            data-speed={point.speed == null ? '' : String(point.speed)}
+          >
             {point.label}
           </div>
         ))}
@@ -387,6 +392,29 @@ describe('DashboardChartWidget — efficiency_temperature', () => {
       formatTemp(10),
       formatTemp(0),
     ]);
+  });
+
+  it('drops buckets without efficiency values and preserves rounded distance and speed metadata', () => {
+    mockEfficiencyVsTemp.mockReturnValueOnce({
+      data: [
+        { temp_c_low: 0, temp_c_high: 5, avg_efficiency_wh_mi: null, trip_count: 1, total_miles: 4.4, avg_speed_mph: 20.1 },
+        { temp_c_low: 20, temp_c_high: 25, avg_efficiency_wh_mi: 290, trip_count: 2, total_miles: 7.6, avg_speed_mph: 31.2 },
+        { temp_c_low: 10, temp_c_high: 15, avg_efficiency_wh_mi: 310, trip_count: 3, total_miles: 12.2, avg_speed_mph: null },
+      ],
+      isLoading: false,
+    });
+
+    renderChart('efficiency-temperature');
+
+    const rows = screen.getAllByTestId('efficiency-pill-label');
+    expect(rows.map((node) => node.textContent)).toEqual([
+      formatTemp(20),
+      formatTemp(10),
+    ]);
+    expect(rows[0]?.getAttribute('data-distance')).toBe('8');
+    expect(rows[0]?.getAttribute('data-speed')).toBe('31.2');
+    expect(rows[1]?.getAttribute('data-distance')).toBe('12');
+    expect(rows[1]?.getAttribute('data-speed')).toBe('');
   });
 
   it('shows empty state when no temp data', () => {

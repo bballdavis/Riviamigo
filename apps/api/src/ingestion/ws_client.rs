@@ -574,6 +574,20 @@ pub async fn run_ws_loop(
                             disabled_fields = subscription_health.disabled_count(),
                             "Rivian WS subscription query degraded after schema rejection"
                         );
+                        let _ = tx
+                            .send(WsInboundEvent {
+                                kind: WsInboundKind::Control,
+                                received_at: Utc::now(),
+                                raw: json!({
+                                    "type": "ws_schema_degraded",
+                                    "disabled_vehicle_state_fields": subscription_health.disabled_count(),
+                                    "invalid_fields": rejection.invalid_fields,
+                                })
+                                .to_string(),
+                                message_type: Some("ws_schema_degraded".into()),
+                                telemetry: None,
+                            })
+                            .await;
                     }
                 }
                 let delay = jittered_backoff_secs(backoff_secs);
@@ -612,6 +626,19 @@ async fn connect_and_subscribe(
         Ok(connection) => connection,
         Err(WsError::Http(response)) => {
             let status = response.status();
+            let _ = tx
+                .send(WsInboundEvent {
+                    kind: WsInboundKind::Control,
+                    received_at: Utc::now(),
+                    raw: json!({
+                        "type": "ws_handshake_rejected",
+                        "http_status": status.as_u16(),
+                    })
+                    .to_string(),
+                    message_type: Some("ws_handshake_rejected".into()),
+                    telemetry: None,
+                })
+                .await;
             tracing::warn!(
                 vehicle_id = %vehicle_id,
                 rivian_vehicle_id = %rivian_veh_id,
@@ -732,6 +759,17 @@ async fn connect_and_subscribe(
                                 invalid_fields = ?invalid_fields,
                                 "Rivian WS subscription rejected by VehicleState schema"
                             );
+                            let _ = tx.send(WsInboundEvent {
+                                kind: WsInboundKind::Control,
+                                received_at: Utc::now(),
+                                raw: json!({
+                                    "type": "ws_schema_rejected",
+                                    "reason": reason,
+                                    "invalid_fields": invalid_fields,
+                                }).to_string(),
+                                message_type: Some("ws_schema_rejected".into()),
+                                telemetry: None,
+                            }).await;
                             return Err(RivianSubscriptionRejection {
                                 reason,
                                 invalid_fields,
@@ -778,6 +816,16 @@ async fn connect_and_subscribe(
                                 .as_ref()
                                 .map(|f| f.reason.to_string())
                                 .unwrap_or_else(|| "no active subscriptions".into());
+                            let _ = tx.send(WsInboundEvent {
+                                kind: WsInboundKind::Control,
+                                received_at: Utc::now(),
+                                raw: json!({
+                                    "type": "ws_no_active_subscriptions",
+                                    "reason": reason,
+                                }).to_string(),
+                                message_type: Some("ws_no_active_subscriptions".into()),
+                                telemetry: None,
+                            }).await;
                             tracing::warn!(
                                 vehicle_id = %vehicle_id,
                                 close_code = frame.as_ref().map(|f| f.code.to_string()),

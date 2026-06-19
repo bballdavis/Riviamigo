@@ -1,18 +1,11 @@
-//! Backfill `outside_temp_c` on trips that have no value yet by fetching the
-//! ambient temperature from Open-Meteo at the trip's start location and time.
-//!
-//! Safe to re-run: only touches rows where `outside_temp_c IS NULL`.
-//! Skips trips with no usable start lat/lng because weather lookup requires a
-//! recoverable trip origin.
+//! Report trip enrichment gaps per vehicle and per day.
 //!
 //! Usage:
-//!   DATABASE_URL=... cargo run --bin backfill_outside_temp -- [--vehicle <uuid>]
+//!   DATABASE_URL=... cargo run --bin report_trip_enrichment_gaps -- [--vehicle <uuid>]
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::Client;
-use riviamigo_api::services::trip_enrichment::backfill_trip_outside_temps;
+use riviamigo_api::services::trip_enrichment::report_trip_enrichment_gaps;
 use sqlx::postgres::PgPoolOptions;
-use tracing::info;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy)]
@@ -26,23 +19,12 @@ async fn main() -> Result<()> {
     let args = parse_args()?;
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(3)
         .connect(&database_url)
         .await?;
 
-    let http_client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-
-    let stats = backfill_trip_outside_temps(&pool, &http_client, args.vehicle_id).await?;
-    info!(
-        vehicle_id = ?args.vehicle_id,
-        scanned = stats.scanned,
-        filled = stats.filled,
-        failed = stats.failed,
-        skipped = stats.skipped,
-        "trip outside temp backfill complete"
-    );
+    let rows = report_trip_enrichment_gaps(&pool, args.vehicle_id).await?;
+    println!("{}", serde_json::to_string_pretty(&rows)?);
     Ok(())
 }
 
@@ -59,7 +41,9 @@ fn parse_args() -> Result<Args> {
                 vehicle_id = Some(raw.parse().context("invalid --vehicle UUID")?);
             }
             "--help" | "-h" => {
-                println!("Usage: cargo run --bin backfill_outside_temp -- [--vehicle <uuid>]");
+                println!(
+                    "Usage: cargo run --bin report_trip_enrichment_gaps -- [--vehicle <uuid>]"
+                );
                 std::process::exit(0);
             }
             other => return Err(anyhow!("unknown argument: {other}")),
