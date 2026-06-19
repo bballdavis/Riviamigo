@@ -318,7 +318,12 @@ async fn set_default_vehicle(pool: &PgPool, user_id: Uuid, vehicle_id: Uuid) {
     .expect("set default vehicle");
 }
 
-async fn insert_trip(pool: &PgPool, vehicle_id: Uuid, started_at: chrono::DateTime<chrono::Utc>, ended_at: chrono::DateTime<chrono::Utc>) -> Uuid {
+async fn insert_trip(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    started_at: chrono::DateTime<chrono::Utc>,
+    ended_at: chrono::DateTime<chrono::Utc>,
+) -> Uuid {
     sqlx::query_scalar!(
         "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at) VALUES ($1, $2, $3) RETURNING id",
         vehicle_id,
@@ -783,13 +788,8 @@ async fn trip_track_omits_zero_zero_coordinates() {
     .fetch_one(&app.pool)
     .await
     .expect("user id");
-    let vehicle_id = insert_vehicle(
-        &app.pool,
-        user_id,
-        "trip-track-zero-vehicle",
-        "Track Truck",
-    )
-    .await;
+    let vehicle_id =
+        insert_vehicle(&app.pool, user_id, "trip-track-zero-vehicle", "Track Truck").await;
     sqlx::query!(
         "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
          VALUES ($1, $2, 'owner', TRUE)
@@ -839,7 +839,9 @@ async fn trip_track_omits_zero_zero_coordinates() {
     assert_eq!(res.status, StatusCode::OK);
     let points = res.body.as_array().expect("track array");
     assert_eq!(points.len(), 2);
-    assert!(points.iter().all(|point| point["lat"] != json!(0.0) && point["lng"] != json!(0.0)));
+    assert!(points
+        .iter()
+        .all(|point| point["lat"] != json!(0.0) && point["lng"] != json!(0.0)));
 }
 
 #[tokio::test]

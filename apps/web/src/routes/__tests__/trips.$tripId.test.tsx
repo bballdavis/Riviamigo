@@ -83,6 +83,7 @@ import { TripDetailContent } from '../trips.$tripId';
 describe('Trip Detail page', () => {
   it('renders all four stat card labels', () => {
     render(<TripDetailContent />);
+    expect(screen.getByText('Location unavailable')).toBeInTheDocument();
     expect(screen.getByText('Distance Driven')).toBeInTheDocument();
     expect(screen.getByText('Avg. Effic. (Wh/mi)')).toBeInTheDocument();
     expect(screen.getByText('Avg. Speed')).toBeInTheDocument();

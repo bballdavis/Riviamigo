@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { VehicleStatus } from '@riviamigo/types';
 import { api } from './api';
-import { useAuth } from './useAuth';
 import { useAuthReady } from './useAuthState';
 
 interface LiveStatusStore {

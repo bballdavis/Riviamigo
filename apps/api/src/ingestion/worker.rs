@@ -23,19 +23,14 @@ use crate::{
         telemetry::{ChargerState, PowerState, TelemetryEvent},
     },
     services::{
-        cost::recompute_charge_session_cost, geofences::match_geofence,
-        weather::fetch_ambient_temp_c,
+        cost::recompute_charge_session_cost,
+        geofences::match_geofence,
+        trip_enrichment::{lookup_trip_outside_temp_c, resolve_trip_location, MatchedLocation},
     },
 };
 
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
-
-struct MatchedLocation {
-    geofence_id: Option<Uuid>,
-    address_id: Option<Uuid>,
-    is_home: Option<bool>,
-}
 
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
@@ -1079,6 +1074,18 @@ async fn handle_inbound_accounting(
         }
         _ => {}
     }
+    if let Some(update) = runtime_health_update_for_ws_control(inbound) {
+        upsert_health(
+            pool,
+            vehicle_id,
+            update.online,
+            update.worker_health,
+            &update.worker_health_msg,
+            Some(update.auth_state),
+            update.auth_reason_code,
+        )
+        .await;
+    }
     if config.rivian_persist_raw_events {
         persist_raw_event(pool, batch, vehicle_id, inbound).await;
     }
@@ -1087,8 +1094,80 @@ async fn handle_inbound_accounting(
 fn is_synthetic_control(message_type: Option<&str>) -> bool {
     matches!(
         message_type,
-        Some("connection_open" | "connection_init" | "subscribe" | "reconnect")
+        Some(
+            "connection_open"
+                | "connection_init"
+                | "subscribe"
+                | "reconnect"
+                | "ws_handshake_rejected"
+                | "ws_schema_rejected"
+                | "ws_schema_degraded"
+                | "ws_no_active_subscriptions"
+        )
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeHealthUpdate {
+    online: bool,
+    worker_health: &'static str,
+    worker_health_msg: String,
+    auth_state: &'static str,
+    auth_reason_code: Option<&'static str>,
+}
+
+fn runtime_health_update_for_ws_control(inbound: &WsInboundEvent) -> Option<RuntimeHealthUpdate> {
+    match inbound.message_type.as_deref() {
+        Some("connection_open") => Some(RuntimeHealthUpdate {
+            online: true,
+            worker_health: "connected",
+            worker_health_msg: String::new(),
+            auth_state: "authorized",
+            auth_reason_code: None,
+        }),
+        Some("ws_handshake_rejected") => Some(RuntimeHealthUpdate {
+            online: false,
+            worker_health: "error",
+            worker_health_msg: read_ws_detail_message(&inbound.raw)
+                .unwrap_or_else(|| "Rivian WS handshake rejected".into()),
+            auth_state: "authorized",
+            auth_reason_code: Some("rivian_ws_handshake_rejected"),
+        }),
+        Some("ws_schema_rejected") => Some(RuntimeHealthUpdate {
+            online: false,
+            worker_health: "degraded",
+            worker_health_msg: read_ws_detail_message(&inbound.raw)
+                .unwrap_or_else(|| "Rivian WS VehicleState schema rejected".into()),
+            auth_state: "authorized",
+            auth_reason_code: Some("rivian_ws_schema_rejected"),
+        }),
+        Some("ws_schema_degraded") => Some(RuntimeHealthUpdate {
+            online: false,
+            worker_health: "degraded",
+            worker_health_msg: "Rivian WS subscription degraded to recover from schema drift"
+                .into(),
+            auth_state: "authorized",
+            auth_reason_code: Some("rivian_ws_schema_rejected"),
+        }),
+        Some("ws_no_active_subscriptions") => Some(RuntimeHealthUpdate {
+            online: false,
+            worker_health: "degraded",
+            worker_health_msg: read_ws_detail_message(&inbound.raw).unwrap_or_else(|| {
+                "Rivian WS reported no active subscriptions; reconnecting".into()
+            }),
+            auth_state: "authorized",
+            auth_reason_code: Some("rivian_ws_no_active_subscriptions"),
+        }),
+        _ => None,
+    }
+}
+
+fn read_ws_detail_message(raw: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    value
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 async fn persist_raw_event(
@@ -1834,17 +1913,21 @@ async fn persist_trip(
     // Fetch ambient temperature from Open-Meteo using trip start location/time.
     // Falls back to None gracefully if the request fails.
     let outside_temp_c = match start {
-        Some(pt) => fetch_ambient_temp_c(http_client, pt.lat, pt.lng, trip.started_at).await,
+        Some(pt) => lookup_trip_outside_temp_c(http_client, pt.lat, pt.lng, trip.started_at).await,
         None => None,
     };
 
     let owner_id = get_vehicle_owner_id(pool, trip.vehicle_id).await?;
     let start_match = match (owner_id, start) {
-        (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
+        (Some(user_id), Some(point)) => {
+            resolve_trip_location(pool, http_client, user_id, point.lat, point.lng).await?
+        }
         _ => MatchedLocation::none(),
     };
     let end_match = match (owner_id, end) {
-        (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
+        (Some(user_id), Some(point)) => {
+            resolve_trip_location(pool, http_client, user_id, point.lat, point.lng).await?
+        }
         _ => MatchedLocation::none(),
     };
 
@@ -1934,9 +2017,15 @@ async fn persist_charge_session(
     session: &crate::ingestion::charge_detector::CompletedChargeSession,
 ) -> anyhow::Result<()> {
     let duration_minutes = ((session.ended_at - session.started_at).num_seconds() / 60) as i32;
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
     let owner_id = get_vehicle_owner_id(pool, session.vehicle_id).await?;
     let location_match = match (owner_id, session.location_lat, session.location_lng) {
-        (Some(user_id), Some(lat), Some(lon)) => match_point(pool, user_id, lat, lon).await?,
+        (Some(user_id), Some(lat), Some(lon)) => {
+            resolve_trip_location(pool, &http_client, user_id, lat, lon).await?
+        }
         _ => MatchedLocation::none(),
     };
     let energy_added_kwh = session.energy_added_wh.map(|wh| wh / 1000.0);
@@ -2005,16 +2094,7 @@ async fn persist_charge_session(
     Ok(())
 }
 
-impl MatchedLocation {
-    fn none() -> Self {
-        Self {
-            geofence_id: None,
-            address_id: None,
-            is_home: None,
-        }
-    }
-}
-
+#[allow(dead_code)]
 async fn match_point(
     pool: &PgPool,
     user_id: Uuid,
@@ -2044,6 +2124,7 @@ async fn match_point(
 /// Call Nominatim reverse geocoding, store the result in `riviamigo.addresses`,
 /// and return the row's UUID.  Returns `None` on any network / DB error so
 /// callers can degrade gracefully.
+#[allow(dead_code)]
 async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<Uuid> {
     let slot = crate::services::nominatim::acquire_slot(
         crate::services::nominatim::NominatimLane::BackgroundReverseGeocode,
@@ -2498,5 +2579,49 @@ mod stewardship_tests {
         moved.latitude = Some(30.0003);
         moved.longitude = Some(-97.0);
         assert_eq!(gate.decide(&moved), PersistenceDecision::Persist);
+    }
+
+    #[test]
+    fn ws_schema_rejection_keeps_auth_state_authorized() {
+        let inbound = WsInboundEvent {
+            kind: WsInboundKind::Control,
+            received_at: Utc::now(),
+            raw: serde_json::json!({
+                "type": "ws_schema_rejected",
+                "reason": "Cannot query field \"vehiclePowerOutput\" on type \"VehicleState\".",
+            })
+            .to_string(),
+            message_type: Some("ws_schema_rejected".into()),
+            telemetry: None,
+        };
+
+        let update = runtime_health_update_for_ws_control(&inbound).expect("update");
+        assert_eq!(update.worker_health, "degraded");
+        assert_eq!(update.auth_state, "authorized");
+        assert_eq!(update.auth_reason_code, Some("rivian_ws_schema_rejected"));
+        assert!(update.worker_health_msg.contains("vehiclePowerOutput"));
+    }
+
+    #[test]
+    fn ws_no_active_subscriptions_is_degraded_not_auth_failure() {
+        let inbound = WsInboundEvent {
+            kind: WsInboundKind::Control,
+            received_at: Utc::now(),
+            raw: serde_json::json!({
+                "type": "ws_no_active_subscriptions",
+                "reason": "Socket with no active subscriptions, disconnecting",
+            })
+            .to_string(),
+            message_type: Some("ws_no_active_subscriptions".into()),
+            telemetry: None,
+        };
+
+        let update = runtime_health_update_for_ws_control(&inbound).expect("update");
+        assert_eq!(update.worker_health, "degraded");
+        assert_eq!(update.auth_state, "authorized");
+        assert_eq!(
+            update.auth_reason_code,
+            Some("rivian_ws_no_active_subscriptions")
+        );
     }
 }

@@ -130,7 +130,13 @@ function CurrentVehicleStatePanel({
       <div className="grid flex-1 min-h-0 content-stretch gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">
         <div className="grid min-h-60 grid-cols-[3.75rem_minmax(0,1fr)] gap-4 rounded-2xl border border-accent/25 bg-accent/10 p-4">
           <div className="relative h-full min-h-48 overflow-hidden rounded-2xl border border-accent/40 bg-bg-surface">
-            <div className="absolute inset-x-1 bottom-1 rounded-xl transition-all" style={{ height: `${batteryLevel}%`, background: 'linear-gradient(to top, var(--rm-accent), var(--rm-status-positive))' }} />
+            <div data-testid="overview-soc-rail" className="absolute inset-1 flex items-end overflow-hidden rounded-xl p-1">
+              <div
+                data-testid="overview-soc-fill"
+                className="w-full rounded-lg transition-all"
+                style={{ height: `${batteryLevel}%`, background: 'linear-gradient(to top, var(--rm-accent), var(--rm-status-positive))' }}
+              />
+            </div>
             <Battery className="absolute left-1/2 top-3 h-4 w-4 -translate-x-1/2 text-fg/80" />
           </div>
           <div className="flex min-w-0 flex-col justify-between gap-4">

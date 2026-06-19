@@ -1,40 +1,21 @@
 /**
- * AuthGuard — bootstrap, redirect, and per-user cache isolation tests.
- *
- * AuthGuard handles three important behaviours that have historically been
- * sources of bugs:
- *
- *  1. Bootstrap: on mount it attempts to rehydrate the session from the
- *     HttpOnly refresh cookie.  Content must not render until the attempt
- *     resolves; a failure must redirect to /login.
- *
- *  2. Logout / auth-expired: the query cache must be wiped and the user
- *     redirected to /login.  The cache wipe is per-user-id so User A's
- *     data is never visible to User B.
- *
- *  3. Hydration guard: `hydrateQueryCacheForUser` must be called at most
- *     once per user-id within a session, even if isAuthenticated toggling
- *     causes the effect to re-run.
+ * AuthGuard bootstrap, redirect, and per-user cache isolation tests.
  */
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-
-// ── Router mock ────────────────────────────────────────────────────────────────
 
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
 }));
 
-// ── queryClient mock ───────────────────────────────────────────────────────────
-
 const mockHydrate = vi.fn();
 const mockClearQueryCache = vi.fn();
 
 vi.mock('../queryClient', () => ({
   hydrateQueryCacheForUser: (...args: unknown[]) => mockHydrate(...args),
-  clearQueryCacheForUser:   (...args: unknown[]) => mockClearQueryCache(...args),
+  clearQueryCacheForUser: (...args: unknown[]) => mockClearQueryCache(...args),
   queryClient: {
     defaultOptions: {},
     getQueryCache: () => ({ subscribe: vi.fn() }),
@@ -42,8 +23,6 @@ vi.mock('../queryClient', () => ({
     cancelQueries: vi.fn(),
   },
 }));
-
-// ── @riviamigo/hooks mock ──────────────────────────────────────────────────────
 
 type AuthState = {
   isAuthenticated: boolean;
@@ -68,14 +47,10 @@ vi.mock('@riviamigo/hooks', () => ({
   },
 }));
 
-// Deferred import so mocks are registered first.
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { AuthGuard, forceLoginRedirect } from '../components/layout/AuthGuard';
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-/** Minimal JWT with the given sub claim (no signature — AuthGuard only decodes). */
 function makeToken(sub: string) {
-  const header  = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const payload = btoa(JSON.stringify({ sub, iat: 0, exp: 9999999999 }));
   return `${header}.${payload}.sig`;
 }
@@ -84,9 +59,7 @@ function setAuth(overrides: Partial<AuthState>) {
   authState = { ...authState, ...overrides };
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────
-
-describe('AuthGuard — bootstrap', () => {
+describe('AuthGuard bootstrap', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
     mockHydrate.mockClear();
@@ -108,7 +81,7 @@ describe('AuthGuard — bootstrap', () => {
   it('renders nothing while bootstrapping', () => {
     setAuth({ isBootstrapping: true, isAuthenticated: false });
     const { container } = render(
-      <AuthGuard><span data-testid="protected">content</span></AuthGuard>
+      <AuthGuard><span data-testid="protected">content</span></AuthGuard>,
     );
     expect(container.firstChild).toBeNull();
     expect(screen.queryByTestId('protected')).not.toBeInTheDocument();
@@ -135,7 +108,7 @@ describe('AuthGuard — bootstrap', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it('navigates to /login after bootstrap refresh failure', async () => {
+  it('clears session after bootstrap refresh failure', async () => {
     const refresh = vi.fn().mockResolvedValue(false);
     const clearSession = vi.fn();
     setAuth({ isBootstrapping: true, isAuthenticated: false, refresh, clearSession });
@@ -157,7 +130,7 @@ describe('AuthGuard — bootstrap', () => {
   });
 });
 
-describe('AuthGuard — per-user cache hydration', () => {
+describe('AuthGuard cache hydration', () => {
   beforeEach(() => {
     mockHydrate.mockClear();
     mockClearQueryCache.mockClear();
@@ -192,7 +165,7 @@ describe('AuthGuard — per-user cache hydration', () => {
   });
 });
 
-describe('AuthGuard — logout / auth-expired cache wipe', () => {
+describe('AuthGuard auth-expired handling', () => {
   beforeEach(() => {
     mockHydrate.mockClear();
     mockClearQueryCache.mockClear();
@@ -210,7 +183,6 @@ describe('AuthGuard — logout / auth-expired cache wipe', () => {
     render(<AuthGuard><span>content</span></AuthGuard>);
     await act(async () => {});
 
-    // Simulate token expiry event (fired by the API client on 401 after failed refresh)
     await act(async () => {
       window.dispatchEvent(new CustomEvent('riviamigo:auth-expired'));
     });
@@ -221,7 +193,6 @@ describe('AuthGuard — logout / auth-expired cache wipe', () => {
   });
 
   it('does not call clearQueryCacheForUser if the user was never hydrated', async () => {
-    // Guard renders while still bootstrapping — no userId has been recorded yet.
     setAuth({ isBootstrapping: true, isAuthenticated: false });
     render(<AuthGuard><span>content</span></AuthGuard>);
 
@@ -251,7 +222,38 @@ describe('AuthGuard — logout / auth-expired cache wipe', () => {
       window.dispatchEvent(new CustomEvent('riviamigo:auth-expired'));
     });
 
-    // After unmount the handler is gone — wipe must not be called again
     expect(mockClearQueryCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('forceLoginRedirect', () => {
+  it('falls back to a hard redirect when router navigation leaves the user off /login', () => {
+    const navigate = vi.fn();
+    const replace = vi.fn();
+    const locationLike = { pathname: '/', replace };
+    const scheduleRedirect = (callback: () => void) => {
+      callback();
+      return 0;
+    };
+
+    forceLoginRedirect(navigate, locationLike, scheduleRedirect);
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/login' });
+    expect(replace).toHaveBeenCalledWith('/login');
+  });
+
+  it('does not hard redirect when already on /login', () => {
+    const navigate = vi.fn();
+    const replace = vi.fn();
+    const locationLike = { pathname: '/login', replace };
+    const scheduleRedirect = (callback: () => void) => {
+      callback();
+      return 0;
+    };
+
+    forceLoginRedirect(navigate, locationLike, scheduleRedirect);
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/login' });
+    expect(replace).not.toHaveBeenCalled();
   });
 });

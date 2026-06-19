@@ -14,6 +14,7 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
+use reqwest::Client;
 use riviamigo_api::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::trip_detector::{
@@ -21,7 +22,14 @@ use riviamigo_api::{
         TripDetectorState, TripEvent,
     },
     models::telemetry::{ChargerState, DriveMode, PowerState, TelemetryEvent},
-    services::{cost::recompute_charge_session_cost, geofences::match_geofence},
+    services::{
+        cost::recompute_charge_session_cost,
+        geofences::match_geofence,
+        trip_enrichment::{
+            enrich_trip_history_for_vehicle, resolve_trip_location,
+            MatchedLocation as EnrichedMatchedLocation,
+        },
+    },
 };
 use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
 use tracing::{info, warn};
@@ -70,8 +78,11 @@ async fn main() -> Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
+    let http_client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
 
-    rebuild_vehicle_history(&pool, args).await?;
+    rebuild_vehicle_history(&pool, &http_client, args).await?;
     Ok(())
 }
 
@@ -98,7 +109,7 @@ fn parse_args() -> Result<Args> {
     Ok(Args { vehicle_id })
 }
 
-async fn rebuild_vehicle_history(pool: &PgPool, args: Args) -> Result<()> {
+async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> Result<()> {
     let vehicles = load_vehicle_scope(pool, args.vehicle_id).await?;
     if vehicles.is_empty() {
         info!("No vehicles found for rebuild");
@@ -120,8 +131,9 @@ async fn rebuild_vehicle_history(pool: &PgPool, args: Args) -> Result<()> {
         let charge_locations =
             repair_charge_session_locations_for_vehicle(pool, vehicle_id).await?;
         let charge_costs = repair_charge_session_costs_for_vehicle(pool, vehicle_id).await?;
-        let trips = replay_trips_for_vehicle(pool, vehicle_id).await?;
+        let trips = replay_trips_for_vehicle(pool, vehicle_id, client).await?;
         let trip_ids = backfill_trip_ids_for_vehicle(pool, vehicle_id).await?;
+        let enrichment = enrich_trip_history_for_vehicle(pool, client, vehicle_id).await?;
 
         info!(
             vehicle_id = %vehicle_id,
@@ -131,6 +143,12 @@ async fn rebuild_vehicle_history(pool: &PgPool, args: Args) -> Result<()> {
             charge_costs,
             trips,
             trip_ids,
+            trip_geofence_filled = enrichment.geofence_matches.filled,
+            trip_geofence_failed = enrichment.geofence_matches.failed,
+            trip_address_filled = enrichment.address_matches.filled,
+            trip_address_failed = enrichment.address_matches.failed,
+            trip_temp_filled = enrichment.outside_temps.filled,
+            trip_temp_failed = enrichment.outside_temps.failed,
             "vehicle history rebuild complete"
         );
     }
@@ -592,7 +610,7 @@ struct ChargeLocationRow {
     location_lng: Option<f64>,
 }
 
-async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64> {
+async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid, client: &Client) -> Result<u64> {
     let owner_id = get_vehicle_owner_id(pool, vehicle_id).await?;
     let mut trip_det = TripDetectorState::new(vehicle_id);
     let mut rows = sqlx::query_as::<_, ReplayTelemetryRow>(
@@ -626,7 +644,8 @@ async fn replay_trips_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<u64
                 continue;
             }
 
-            let was_inserted = persist_replayed_trip(pool, owner_id, &trip, distance).await?;
+            let was_inserted =
+                persist_replayed_trip(pool, owner_id, &trip, distance, client).await?;
             if was_inserted {
                 inserted += 1;
             }
@@ -679,6 +698,7 @@ async fn persist_replayed_trip(
     owner_id: Option<Uuid>,
     trip: &CompletedTripData,
     distance: f64,
+    client: &Client,
 ) -> Result<bool> {
     let overlap: Option<Uuid> = sqlx::query_scalar(
         r#"
@@ -753,12 +773,16 @@ async fn persist_replayed_trip(
     let outside_temp_c = trip.outside_temp_avg_c;
 
     let start_match = match (owner_id, start) {
-        (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
-        _ => MatchedLocation::none(),
+        (Some(user_id), Some(point)) => {
+            resolve_trip_location(pool, client, user_id, point.lat, point.lng).await?
+        }
+        _ => EnrichedMatchedLocation::none(),
     };
     let end_match = match (owner_id, end) {
-        (Some(user_id), Some(point)) => match_point(pool, user_id, point.lat, point.lng).await?,
-        _ => MatchedLocation::none(),
+        (Some(user_id), Some(point)) => {
+            resolve_trip_location(pool, client, user_id, point.lat, point.lng).await?
+        }
+        _ => EnrichedMatchedLocation::none(),
     };
 
     sqlx::query(
@@ -897,30 +921,4 @@ struct TripRangeRow {
     id: Uuid,
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
-}
-
-struct MatchedLocation {
-    geofence_id: Option<Uuid>,
-    address_id: Option<Uuid>,
-}
-
-impl MatchedLocation {
-    fn none() -> Self {
-        Self {
-            geofence_id: None,
-            address_id: None,
-        }
-    }
-}
-
-async fn match_point(pool: &PgPool, user_id: Uuid, lat: f64, lon: f64) -> Result<MatchedLocation> {
-    let matched = match_geofence(pool, user_id, lat, lon).await?;
-
-    Ok(match matched {
-        Some(geofence) => MatchedLocation {
-            geofence_id: Some(geofence.id),
-            address_id: geofence.address_id,
-        },
-        None => MatchedLocation::none(),
-    })
 }
