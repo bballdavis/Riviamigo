@@ -31,6 +31,7 @@ use crate::{
 
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
+const WS_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
@@ -149,22 +150,26 @@ pub async fn run_vehicle_worker(
             .ok()
             .flatten();
 
-    let ws_shutdown = shutdown.resubscribe();
-    let ev_tx_ws = ev_tx.clone();
-    let tokens_clone = tokens.clone();
-    let riv_id_clone = rivian_vehicle_id.clone();
-    let ws_config = config.clone();
-    let ws_handle = tokio::spawn(async move {
-        ws_client::run_ws_loop(
-            vehicle_id,
-            riv_id_clone,
-            tokens_clone,
-            ev_tx_ws,
-            ws_shutdown,
-            ws_config,
-        )
-        .await;
-    });
+    let mut worker_shutdown = shutdown.resubscribe();
+    let spawn_ws_loop = || {
+        let ws_shutdown = shutdown.resubscribe();
+        let ev_tx_ws = ev_tx.clone();
+        let tokens_clone = tokens.clone();
+        let riv_id_clone = rivian_vehicle_id.clone();
+        let ws_config = config.clone();
+        tokio::spawn(async move {
+            ws_client::run_ws_loop(
+                vehicle_id,
+                riv_id_clone,
+                tokens_clone,
+                ev_tx_ws,
+                ws_shutdown,
+                ws_config,
+            )
+            .await;
+        })
+    };
+    let mut ws_handle = spawn_ws_loop();
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -233,10 +238,36 @@ pub async fn run_vehicle_worker(
     let mut counter_batch = CounterBatch::new(vehicle_id);
     let mut counter_flush_tick: u64 = 0;
 
-    // Wrap the WS handle in an Option so we can fuse it after it resolves.
-    let mut ws_handle = std::pin::pin!(ws_handle);
+    // Track the most recent inbound WS/control event so we can restart a
+    // connection that stays silently wedged while still holding the worker lock.
+    let mut last_ws_inbound_at = tokio::time::Instant::now();
     loop {
         let inbound = tokio::select! {
+            _ = worker_shutdown.recv() => {
+                break;
+            }
+            _ = tokio::time::sleep_until(last_ws_inbound_at + WS_WATCHDOG_TIMEOUT) => {
+                tracing::warn!(
+                    vehicle_id=%vehicle_id,
+                    timeout_seconds=WS_WATCHDOG_TIMEOUT.as_secs(),
+                    "worker watchdog detected a silent Rivian WS stream; restarting websocket collector"
+                );
+                upsert_health(
+                    &pool,
+                    vehicle_id,
+                    false,
+                    "stale",
+                    "No Rivian WS messages received within the watchdog window; restarting websocket collector",
+                    None,
+                    Some("rivian_ws_silent"),
+                )
+                .await;
+                ws_handle.abort();
+                let _ = (&mut ws_handle).await;
+                ws_handle = spawn_ws_loop();
+                last_ws_inbound_at = tokio::time::Instant::now();
+                continue;
+            }
             // Normal event path.
             msg = ev_rx.recv() => match msg {
                 Some(ev) => ev,
@@ -245,17 +276,26 @@ pub async fn run_vehicle_worker(
             // Monitor the WS task; log if it exits unexpectedly.
             result = &mut ws_handle => {
                 match result {
-                    Ok(()) => tracing::warn!(vehicle_id=%vehicle_id, "WS task exited cleanly (not expected during normal operation)"),
-                    Err(e) if e.is_panic() => tracing::error!(vehicle_id=%vehicle_id, "WS task panicked — no further WS events will be received"),
-                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "WS task exited with error"),
+                    Ok(()) => tracing::warn!(vehicle_id=%vehicle_id, "WS task exited cleanly; restarting websocket collector"),
+                    Err(e) if e.is_panic() => tracing::error!(vehicle_id=%vehicle_id, "WS task panicked; restarting websocket collector"),
+                    Err(e) => tracing::warn!(vehicle_id=%vehicle_id, err=%e, "WS task exited with error; restarting websocket collector"),
                 }
-                // After the WS handle resolves, continue draining poll-loop events.
-                while let Some(ev) = ev_rx.recv().await {
-                    handle_inbound_accounting(&pool, vehicle_id, &config, &ev, &mut counter_batch).await;
-                }
-                break;
+                upsert_health(
+                    &pool,
+                    vehicle_id,
+                    false,
+                    "degraded",
+                    "Rivian websocket collector exited unexpectedly; restarting",
+                    None,
+                    Some("rivian_ws_restarting"),
+                )
+                .await;
+                ws_handle = spawn_ws_loop();
+                last_ws_inbound_at = tokio::time::Instant::now();
+                continue;
             }
         };
+        last_ws_inbound_at = tokio::time::Instant::now();
         handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch).await;
         raw_cleanup_tick += 1;
         counter_flush_tick += 1;
@@ -276,6 +316,7 @@ pub async fn run_vehicle_worker(
                 vehicle_id,
                 event.is_online.unwrap_or(true),
                 event.ts,
+                inbound.received_at,
                 SeenKind::Heartbeat,
             )
             .await;
@@ -305,9 +346,14 @@ pub async fn run_vehicle_worker(
             vehicle_id,
             event.is_online.unwrap_or(true),
             event.ts,
+            inbound.received_at,
             SeenKind::Payload,
         )
         .await;
+
+        if let Err(error) = upsert_latest_status(&pool, &event).await {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "latest-status upsert failed");
+        }
 
         let persistence_decision = if config.rivian_suppress_duplicate_telemetry {
             persistence_gate.decide(&event)
@@ -423,6 +469,8 @@ pub async fn run_vehicle_worker(
 
     // Flush any remaining accumulated counters before the worker exits.
     counter_batch.flush(&pool).await;
+    ws_handle.abort();
+    let _ = (&mut ws_handle).await;
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
 }
 
@@ -627,14 +675,23 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, longitude);
     patch_opt!(target, source, altitude_m);
     patch_opt!(target, source, speed_mph);
+    patch_opt!(target, source, location_ts);
+    patch_opt!(target, source, speed_mph_ts);
     patch_opt!(target, source, battery_level);
     patch_opt!(target, source, battery_capacity_wh);
     patch_opt!(target, source, distance_to_empty_mi);
     patch_opt!(target, source, battery_limit);
+    patch_opt!(target, source, battery_level_ts);
+    patch_opt!(target, source, distance_to_empty_mi_ts);
+    patch_opt!(target, source, battery_limit_ts);
     patch_opt!(target, source, power_state);
     patch_opt!(target, source, charger_state);
     patch_opt!(target, source, charger_status);
     patch_opt!(target, source, time_to_end_of_charge_min);
+    patch_opt!(target, source, power_state_ts);
+    patch_opt!(target, source, charger_state_ts);
+    patch_opt!(target, source, charger_status_ts);
+    patch_opt!(target, source, time_to_end_of_charge_min_ts);
     patch_opt!(target, source, drive_mode);
     patch_opt!(target, source, gear_status);
     patch_opt!(target, source, cabin_temp_c);
@@ -645,6 +702,7 @@ fn patch_event(target: &mut TelemetryEvent, source: &TelemetryEvent) {
     patch_opt!(target, source, regen_power_kw);
     patch_opt!(target, source, heading_deg);
     patch_opt!(target, source, odometer_miles);
+    patch_opt!(target, source, odometer_miles_ts);
     patch_opt!(target, source, tire_fl_psi);
     patch_opt!(target, source, tire_fr_psi);
     patch_opt!(target, source, tire_rl_psi);
@@ -1446,18 +1504,20 @@ async fn write_telemetry(
         .bind(e.service_mode)
     .execute(pool)
     .await?;
-    upsert_latest_status(pool, e).await?;
     Ok(())
 }
 
 async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Result<()> {
     sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_latest_status (
-             vehicle_id, ts, latitude, longitude, altitude_m, speed_mph,
+             vehicle_id, ts, latitude, longitude, altitude_m, speed_mph, location_ts, speed_mph_ts,
              battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-             power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+             battery_level_ts, distance_to_empty_mi_ts, battery_limit_ts,
+             power_state, power_state_ts,
+             charger_state, charger_state_ts, charger_status, charger_status_ts,
+             time_to_end_of_charge_min, time_to_end_of_charge_min_ts,
              drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
-             heading_deg, odometer_miles,
+             heading_deg, odometer_miles, odometer_miles_ts,
              tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
              tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
              tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
@@ -1484,30 +1544,145 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
               $51,$52,$53,$54,$55,$56,$57,$58,$59,$60,
               $61,$62,$63,$64,$65,$66,$67,$68,$69,$70,
               $71,$72,$73,$74,$75,$76,$77,$78,$79,$80,
-              $81,$82,$83,$84,now()
+              $81,$82,$83,$84,$85,$86,$87,$88,$89,$90,
+              $91,$92,$93,now()
             )
            ON CONFLICT (vehicle_id) DO UPDATE SET
              ts = GREATEST(EXCLUDED.ts, riviamigo.vehicle_latest_status.ts),
-             latitude = COALESCE(EXCLUDED.latitude, riviamigo.vehicle_latest_status.latitude),
-             longitude = COALESCE(EXCLUDED.longitude, riviamigo.vehicle_latest_status.longitude),
+             latitude = CASE
+                 WHEN EXCLUDED.location_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.location_ts IS NULL OR EXCLUDED.location_ts >= riviamigo.vehicle_latest_status.location_ts)
+                 THEN COALESCE(EXCLUDED.latitude, riviamigo.vehicle_latest_status.latitude)
+                 ELSE riviamigo.vehicle_latest_status.latitude
+             END,
+             longitude = CASE
+                 WHEN EXCLUDED.location_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.location_ts IS NULL OR EXCLUDED.location_ts >= riviamigo.vehicle_latest_status.location_ts)
+                 THEN COALESCE(EXCLUDED.longitude, riviamigo.vehicle_latest_status.longitude)
+                 ELSE riviamigo.vehicle_latest_status.longitude
+             END,
              altitude_m = COALESCE(EXCLUDED.altitude_m, riviamigo.vehicle_latest_status.altitude_m),
-             speed_mph = COALESCE(EXCLUDED.speed_mph, riviamigo.vehicle_latest_status.speed_mph),
-             battery_level = COALESCE(EXCLUDED.battery_level, riviamigo.vehicle_latest_status.battery_level),
+             speed_mph = CASE
+                 WHEN EXCLUDED.speed_mph_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.speed_mph_ts IS NULL OR EXCLUDED.speed_mph_ts >= riviamigo.vehicle_latest_status.speed_mph_ts)
+                 THEN COALESCE(EXCLUDED.speed_mph, riviamigo.vehicle_latest_status.speed_mph)
+                 ELSE riviamigo.vehicle_latest_status.speed_mph
+             END,
+             location_ts = CASE
+                 WHEN EXCLUDED.location_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.location_ts IS NULL OR EXCLUDED.location_ts >= riviamigo.vehicle_latest_status.location_ts)
+                 THEN EXCLUDED.location_ts
+                 ELSE riviamigo.vehicle_latest_status.location_ts
+             END,
+             speed_mph_ts = CASE
+                 WHEN EXCLUDED.speed_mph_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.speed_mph_ts IS NULL OR EXCLUDED.speed_mph_ts >= riviamigo.vehicle_latest_status.speed_mph_ts)
+                 THEN EXCLUDED.speed_mph_ts
+                 ELSE riviamigo.vehicle_latest_status.speed_mph_ts
+             END,
+             battery_level = CASE
+                 WHEN EXCLUDED.battery_level_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.battery_level_ts IS NULL OR EXCLUDED.battery_level_ts >= riviamigo.vehicle_latest_status.battery_level_ts)
+                 THEN COALESCE(EXCLUDED.battery_level, riviamigo.vehicle_latest_status.battery_level)
+                 ELSE riviamigo.vehicle_latest_status.battery_level
+             END,
              battery_capacity_wh = COALESCE(EXCLUDED.battery_capacity_wh, riviamigo.vehicle_latest_status.battery_capacity_wh),
-             distance_to_empty_mi = COALESCE(EXCLUDED.distance_to_empty_mi, riviamigo.vehicle_latest_status.distance_to_empty_mi),
-             battery_limit = COALESCE(EXCLUDED.battery_limit, riviamigo.vehicle_latest_status.battery_limit),
-             power_state = COALESCE(EXCLUDED.power_state, riviamigo.vehicle_latest_status.power_state),
-             charger_state = COALESCE(EXCLUDED.charger_state, riviamigo.vehicle_latest_status.charger_state),
-             charger_state_ts = COALESCE(EXCLUDED.charger_state_ts, riviamigo.vehicle_latest_status.charger_state_ts),
-             charger_status = COALESCE(EXCLUDED.charger_status, riviamigo.vehicle_latest_status.charger_status),
-             time_to_end_of_charge_min = COALESCE(EXCLUDED.time_to_end_of_charge_min, riviamigo.vehicle_latest_status.time_to_end_of_charge_min),
+             distance_to_empty_mi = CASE
+                 WHEN EXCLUDED.distance_to_empty_mi_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.distance_to_empty_mi_ts IS NULL OR EXCLUDED.distance_to_empty_mi_ts >= riviamigo.vehicle_latest_status.distance_to_empty_mi_ts)
+                 THEN COALESCE(EXCLUDED.distance_to_empty_mi, riviamigo.vehicle_latest_status.distance_to_empty_mi)
+                 ELSE riviamigo.vehicle_latest_status.distance_to_empty_mi
+             END,
+             battery_limit = CASE
+                 WHEN EXCLUDED.battery_limit_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.battery_limit_ts IS NULL OR EXCLUDED.battery_limit_ts >= riviamigo.vehicle_latest_status.battery_limit_ts)
+                 THEN COALESCE(EXCLUDED.battery_limit, riviamigo.vehicle_latest_status.battery_limit)
+                 ELSE riviamigo.vehicle_latest_status.battery_limit
+             END,
+             battery_level_ts = CASE
+                 WHEN EXCLUDED.battery_level_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.battery_level_ts IS NULL OR EXCLUDED.battery_level_ts >= riviamigo.vehicle_latest_status.battery_level_ts)
+                 THEN EXCLUDED.battery_level_ts
+                 ELSE riviamigo.vehicle_latest_status.battery_level_ts
+             END,
+             distance_to_empty_mi_ts = CASE
+                 WHEN EXCLUDED.distance_to_empty_mi_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.distance_to_empty_mi_ts IS NULL OR EXCLUDED.distance_to_empty_mi_ts >= riviamigo.vehicle_latest_status.distance_to_empty_mi_ts)
+                 THEN EXCLUDED.distance_to_empty_mi_ts
+                 ELSE riviamigo.vehicle_latest_status.distance_to_empty_mi_ts
+             END,
+             battery_limit_ts = CASE
+                 WHEN EXCLUDED.battery_limit_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.battery_limit_ts IS NULL OR EXCLUDED.battery_limit_ts >= riviamigo.vehicle_latest_status.battery_limit_ts)
+                 THEN EXCLUDED.battery_limit_ts
+                 ELSE riviamigo.vehicle_latest_status.battery_limit_ts
+             END,
+             power_state = CASE
+                 WHEN EXCLUDED.power_state_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.power_state_ts IS NULL OR EXCLUDED.power_state_ts >= riviamigo.vehicle_latest_status.power_state_ts)
+                 THEN COALESCE(EXCLUDED.power_state, riviamigo.vehicle_latest_status.power_state)
+                 ELSE riviamigo.vehicle_latest_status.power_state
+             END,
+             power_state_ts = CASE
+                 WHEN EXCLUDED.power_state_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.power_state_ts IS NULL OR EXCLUDED.power_state_ts >= riviamigo.vehicle_latest_status.power_state_ts)
+                 THEN EXCLUDED.power_state_ts
+                 ELSE riviamigo.vehicle_latest_status.power_state_ts
+             END,
+             charger_state = CASE
+                 WHEN EXCLUDED.charger_state_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.charger_state_ts IS NULL OR EXCLUDED.charger_state_ts >= riviamigo.vehicle_latest_status.charger_state_ts)
+                 THEN COALESCE(EXCLUDED.charger_state, riviamigo.vehicle_latest_status.charger_state)
+                 ELSE riviamigo.vehicle_latest_status.charger_state
+             END,
+             charger_state_ts = CASE
+                 WHEN EXCLUDED.charger_state_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.charger_state_ts IS NULL OR EXCLUDED.charger_state_ts >= riviamigo.vehicle_latest_status.charger_state_ts)
+                 THEN EXCLUDED.charger_state_ts
+                 ELSE riviamigo.vehicle_latest_status.charger_state_ts
+             END,
+             charger_status = CASE
+                 WHEN EXCLUDED.charger_status_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.charger_status_ts IS NULL OR EXCLUDED.charger_status_ts >= riviamigo.vehicle_latest_status.charger_status_ts)
+                 THEN COALESCE(EXCLUDED.charger_status, riviamigo.vehicle_latest_status.charger_status)
+                 ELSE riviamigo.vehicle_latest_status.charger_status
+             END,
+             charger_status_ts = CASE
+                 WHEN EXCLUDED.charger_status_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.charger_status_ts IS NULL OR EXCLUDED.charger_status_ts >= riviamigo.vehicle_latest_status.charger_status_ts)
+                 THEN EXCLUDED.charger_status_ts
+                 ELSE riviamigo.vehicle_latest_status.charger_status_ts
+             END,
+             time_to_end_of_charge_min = CASE
+                 WHEN EXCLUDED.time_to_end_of_charge_min_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.time_to_end_of_charge_min_ts IS NULL OR EXCLUDED.time_to_end_of_charge_min_ts >= riviamigo.vehicle_latest_status.time_to_end_of_charge_min_ts)
+                 THEN COALESCE(EXCLUDED.time_to_end_of_charge_min, riviamigo.vehicle_latest_status.time_to_end_of_charge_min)
+                 ELSE riviamigo.vehicle_latest_status.time_to_end_of_charge_min
+             END,
+             time_to_end_of_charge_min_ts = CASE
+                 WHEN EXCLUDED.time_to_end_of_charge_min_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.time_to_end_of_charge_min_ts IS NULL OR EXCLUDED.time_to_end_of_charge_min_ts >= riviamigo.vehicle_latest_status.time_to_end_of_charge_min_ts)
+                 THEN EXCLUDED.time_to_end_of_charge_min_ts
+                 ELSE riviamigo.vehicle_latest_status.time_to_end_of_charge_min_ts
+             END,
              drive_mode = COALESCE(NULLIF(EXCLUDED.drive_mode, 'unknown'), riviamigo.vehicle_latest_status.drive_mode),
              gear_status = COALESCE(EXCLUDED.gear_status, riviamigo.vehicle_latest_status.gear_status),
              cabin_temp_c = COALESCE(EXCLUDED.cabin_temp_c, riviamigo.vehicle_latest_status.cabin_temp_c),
              driver_temp_c = COALESCE(EXCLUDED.driver_temp_c, riviamigo.vehicle_latest_status.driver_temp_c),
              outside_temp_c = COALESCE(EXCLUDED.outside_temp_c, riviamigo.vehicle_latest_status.outside_temp_c),
              heading_deg = COALESCE(EXCLUDED.heading_deg, riviamigo.vehicle_latest_status.heading_deg),
-             odometer_miles = COALESCE(EXCLUDED.odometer_miles, riviamigo.vehicle_latest_status.odometer_miles),
+             odometer_miles = CASE
+                 WHEN EXCLUDED.odometer_miles_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.odometer_miles_ts IS NULL OR EXCLUDED.odometer_miles_ts >= riviamigo.vehicle_latest_status.odometer_miles_ts)
+                 THEN COALESCE(EXCLUDED.odometer_miles, riviamigo.vehicle_latest_status.odometer_miles)
+                 ELSE riviamigo.vehicle_latest_status.odometer_miles
+             END,
+             odometer_miles_ts = CASE
+                 WHEN EXCLUDED.odometer_miles_ts IS NOT NULL
+                  AND (riviamigo.vehicle_latest_status.odometer_miles_ts IS NULL OR EXCLUDED.odometer_miles_ts >= riviamigo.vehicle_latest_status.odometer_miles_ts)
+                 THEN EXCLUDED.odometer_miles_ts
+                 ELSE riviamigo.vehicle_latest_status.odometer_miles_ts
+             END,
              tire_fl_psi = COALESCE(EXCLUDED.tire_fl_psi, riviamigo.vehicle_latest_status.tire_fl_psi),
              tire_fr_psi = COALESCE(EXCLUDED.tire_fr_psi, riviamigo.vehicle_latest_status.tire_fr_psi),
              tire_rl_psi = COALESCE(EXCLUDED.tire_rl_psi, riviamigo.vehicle_latest_status.tire_rl_psi),
@@ -1578,15 +1753,23 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
     .bind(e.longitude)
     .bind(e.altitude_m)
     .bind(e.speed_mph)
+    .bind(e.location_ts)
+    .bind(e.speed_mph_ts)
     .bind(e.battery_level)
     .bind(e.battery_capacity_wh)
     .bind(e.distance_to_empty_mi)
     .bind(e.battery_limit)
+    .bind(e.battery_level_ts)
+    .bind(e.distance_to_empty_mi_ts)
+    .bind(e.battery_limit_ts)
     .bind(e.power_state.as_ref().map(|p| format!("{p:?}").to_lowercase()))
+    .bind(e.power_state_ts)
     .bind(e.charger_state.as_ref().map(|c| format!("{c:?}").to_lowercase()))
-    .bind(e.charger_state.as_ref().map(|_| e.ts))
+    .bind(e.charger_state_ts)
     .bind(&e.charger_status)
+    .bind(e.charger_status_ts)
     .bind(e.time_to_end_of_charge_min)
+    .bind(e.time_to_end_of_charge_min_ts)
     .bind(e.drive_mode.as_ref().map(|d| d.as_str()))
     .bind(&e.gear_status)
     .bind(e.cabin_temp_c)
@@ -1594,6 +1777,7 @@ async fn upsert_latest_status(pool: &PgPool, e: &TelemetryEvent) -> anyhow::Resu
     .bind(e.outside_temp_c)
     .bind(e.heading_deg)
     .bind(e.odometer_miles)
+    .bind(e.odometer_miles_ts)
     .bind(e.tire_fl_psi)
     .bind(e.tire_fr_psi)
     .bind(e.tire_rl_psi)
@@ -1683,30 +1867,42 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
     }
 
     set_opt!("battery_level", e.battery_level);
+    set_opt!("battery_level_ts", e.battery_level_ts);
     set_opt!(
         "battery_capacity_kwh",
         e.battery_capacity_wh.map(|wh| wh / 1000.0)
     );
     set_opt!("distance_to_empty_mi", e.distance_to_empty_mi);
+    set_opt!("range_miles_ts", e.distance_to_empty_mi_ts);
     set_opt!("battery_limit", e.battery_limit);
+    set_opt!("battery_limit_ts", e.battery_limit_ts);
     set_opt!(
         "power_state",
         e.power_state
             .as_ref()
             .map(|p| format!("{p:?}").to_lowercase())
     );
+    set_opt!("power_state_ts", e.power_state_ts);
     set_opt!(
         "charger_state",
         e.charger_state
             .as_ref()
             .map(|c| format!("{c:?}").to_lowercase())
     );
+    set_opt!("charger_state_ts", e.charger_state_ts);
     set_opt!("charger_status", e.charger_status.as_deref());
+    set_opt!("charger_status_ts", e.charger_status_ts);
     set_opt!("time_to_end_of_charge_min", e.time_to_end_of_charge_min);
+    set_opt!(
+        "time_to_end_of_charge_min_ts",
+        e.time_to_end_of_charge_min_ts
+    );
     set_opt!("speed_mph", e.speed_mph);
+    set_opt!("speed_mph_ts", e.speed_mph_ts);
     set_opt!("altitude_m", e.altitude_m);
     set_opt!("heading_deg", e.heading_deg);
     set_opt!("odometer_miles", e.odometer_miles);
+    set_opt!("odometer_miles_ts", e.odometer_miles_ts);
     set_opt!(
         "drive_mode",
         e.drive_mode
@@ -1797,6 +1993,7 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
     if let Some((lat, lng)) = e.latitude.zip(e.longitude) {
         data.insert("location".into(), json!({ "lat": lat, "lng": lng }));
     }
+    set_opt!("location_ts", e.location_ts);
 
     // is_online is always emitted; it defaults to true when Rivian hasn't
     // included a cloudConnection field in this particular event.
@@ -1809,16 +2006,19 @@ fn build_snapshot(e: &TelemetryEvent) -> String {
 mod snapshot_tests {
     use super::build_snapshot;
     use crate::models::telemetry::{ChargerState, TelemetryEvent};
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use serde_json::Value;
     use uuid::Uuid;
 
     fn event_with_partial_fields() -> TelemetryEvent {
         TelemetryEvent {
             battery_level: Some(79.0),
+            battery_level_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap()),
             battery_capacity_wh: Some(135_000.0),
             battery_limit: Some(70.0),
+            battery_limit_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 12, 1, 0).unwrap()),
             charger_state: Some(ChargerState::Disconnected),
+            charger_state_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 12, 2, 0).unwrap()),
             tire_fl_psi: Some(36.5),
             ..TelemetryEvent::empty(Uuid::new_v4(), Utc::now())
         }
@@ -1831,9 +2031,21 @@ mod snapshot_tests {
         let data = payload["data"].as_object().unwrap();
 
         assert_eq!(data.get("battery_level").unwrap(), 79.0);
+        assert_eq!(
+            data.get("battery_level_ts").and_then(Value::as_str),
+            Some("2026-06-19T12:00:00Z")
+        );
         assert_eq!(data.get("battery_capacity_kwh").unwrap(), 135.0);
         assert_eq!(data.get("battery_limit").unwrap(), 70.0);
+        assert_eq!(
+            data.get("battery_limit_ts").and_then(Value::as_str),
+            Some("2026-06-19T12:01:00Z")
+        );
         assert_eq!(data.get("charger_state").unwrap(), "disconnected");
+        assert_eq!(
+            data.get("charger_state_ts").and_then(Value::as_str),
+            Some("2026-06-19T12:02:00Z")
+        );
         assert_eq!(data.get("tire_fl_psi").unwrap(), 36.5);
         assert_eq!(data.get("is_online").unwrap(), true);
         assert!(!data.contains_key("cabin_temp_c"));
@@ -2437,8 +2649,11 @@ async fn upsert_health(
            SET is_online=$2,
                worker_health=$3,
                worker_health_msg=$4,
-               auth_state=$5,
-               auth_reason_code=$6,
+               auth_state=COALESCE($5, riviamigo.vehicle_runtime_state.auth_state),
+               auth_reason_code=CASE
+                   WHEN $5 IS NULL AND $6 IS NULL THEN riviamigo.vehicle_runtime_state.auth_reason_code
+                   ELSE $6
+               END,
                updated_at=now()"#,
     )
     .bind(vehicle_id)
@@ -2456,22 +2671,27 @@ async fn upsert_seen(
     vehicle_id: Uuid,
     online: bool,
     ts: DateTime<Utc>,
+    received_at: DateTime<Utc>,
     kind: SeenKind,
 ) {
-    let (payload_at, heartbeat_at) = match kind {
-        SeenKind::Payload => (Some(ts), None),
-        SeenKind::Heartbeat => (None, Some(ts)),
+    let (payload_at, heartbeat_at, payload_received_at, heartbeat_received_at) = match kind {
+        SeenKind::Payload => (Some(ts), None, Some(received_at), None),
+        SeenKind::Heartbeat => (None, Some(ts), None, Some(received_at)),
     };
     let _ = sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_runtime_state
-           (vehicle_id, is_online, last_event_at, last_seen_at, last_payload_at, last_heartbeat_at, updated_at)
-           VALUES ($1,$2,$3,$3,$4,$5,now())
+           (vehicle_id, is_online, last_event_at, last_seen_at, last_payload_at, last_heartbeat_at,
+            last_ws_received_at, last_ws_payload_received_at, last_ws_heartbeat_received_at, updated_at)
+           VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,now())
            ON CONFLICT (vehicle_id) DO UPDATE
            SET is_online=$2,
                last_event_at=$3,
                last_seen_at=$3,
                last_payload_at=COALESCE($4, riviamigo.vehicle_runtime_state.last_payload_at),
                last_heartbeat_at=COALESCE($5, riviamigo.vehicle_runtime_state.last_heartbeat_at),
+               last_ws_received_at=$6,
+               last_ws_payload_received_at=COALESCE($7, riviamigo.vehicle_runtime_state.last_ws_payload_received_at),
+               last_ws_heartbeat_received_at=COALESCE($8, riviamigo.vehicle_runtime_state.last_ws_heartbeat_received_at),
                updated_at=now()"#,
     )
     .bind(vehicle_id)
@@ -2479,6 +2699,9 @@ async fn upsert_seen(
     .bind(ts)
     .bind(payload_at)
     .bind(heartbeat_at)
+    .bind(received_at)
+    .bind(payload_received_at)
+    .bind(heartbeat_received_at)
     .execute(pool)
     .await;
 }

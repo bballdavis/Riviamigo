@@ -47,9 +47,9 @@ Riviamigo does **not** collect:
 Riviamigo uses two methods to keep data current:
 
 1. **WebSocket subscription** — real-time pushes from Rivian's GraphQL subscription endpoint. This is the primary method.
-2. **REST polling** — periodic fallback that fetches vehicle state on a schedule. This kicks in when the WebSocket is disconnected or the vehicle is not pushing updates.
+2. **Adaptive poll loop** — periodic follow-up work that reconciles completed charging sessions with Rivian's charging history, captures live charging curve samples while a session is active, and keeps metadata like charge costs/vendor information catching up even after the live telemetry event has ended.
 
-The supervisor restarts the WebSocket connection automatically with **exponential backoff** if it disconnects. A short interruption (Rivian server hiccup, network blip) typically recovers within a minute.
+The supervisor restarts the WebSocket connection automatically with **exponential backoff** if it disconnects. In addition, each per-vehicle worker carries a watchdog that restarts a collector if the Rivian WebSocket stays connected but stops delivering messages, which helps recover from silent stalls without manual intervention.
 
 ---
 
@@ -58,7 +58,7 @@ The supervisor restarts the WebSocket connection automatically with **exponentia
 ### Vehicle shows as offline or data is stale
 
 - Check the API logs: `docker compose logs -f api`
-- Look for `[ingestion]` log lines showing reconnect attempts.
+- Look for `[ingestion]` log lines showing reconnect attempts or watchdog restarts.
 - If you see repeated auth failures, your Rivian session may have expired. Go to **Settings → Vehicles**, delete the vehicle, and re-add it.
 
 ### OTP not received

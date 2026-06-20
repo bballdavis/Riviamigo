@@ -43,16 +43,25 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         longitude: extract_f64(state, "/gnssLocation/longitude"),
         altitude_m: extract_f64(state, "/gnssAltitude/value"),
         speed_mph: extract_f64(state, "/gnssSpeed/value").map(ms_to_mph),
+        location_ts: extract_timestamp(state, "/gnssLocation/timeStamp"),
+        speed_mph_ts: extract_timestamp(state, "/gnssSpeed/timeStamp"),
 
         battery_level: extract_f64(state, "/batteryLevel/value"),
         battery_capacity_wh: extract_f64(state, "/batteryCapacity/value").map(kwh_to_wh),
         distance_to_empty_mi: extract_f64(state, "/distanceToEmpty/value").map(km_to_miles),
         battery_limit: extract_f64(state, "/batteryLimit/value"),
+        battery_level_ts: extract_timestamp(state, "/batteryLevel/timeStamp"),
+        distance_to_empty_mi_ts: extract_timestamp(state, "/distanceToEmpty/timeStamp"),
+        battery_limit_ts: extract_timestamp(state, "/batteryLimit/timeStamp"),
 
         power_state: extract_str(state, "/powerState/value").and_then(|s| s.parse().ok()),
         charger_state: extract_str(state, "/chargerState/value").and_then(|s| s.parse().ok()),
         charger_status: extract_str(state, "/chargerStatus/value").map(String::from),
         time_to_end_of_charge_min: extract_i32(state, "/timeToEndOfCharge/value"),
+        power_state_ts: extract_timestamp(state, "/powerState/timeStamp"),
+        charger_state_ts: extract_timestamp(state, "/chargerState/timeStamp"),
+        charger_status_ts: extract_timestamp(state, "/chargerStatus/timeStamp"),
+        time_to_end_of_charge_min_ts: extract_timestamp(state, "/timeToEndOfCharge/timeStamp"),
         drive_mode: extract_str(state, "/driveMode/value").and_then(|s| s.parse().ok()),
         gear_status: extract_str(state, "/gearStatus/value").map(String::from),
 
@@ -68,6 +77,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
             .or_else(|| extract_f64(state, "/gnssHeading/value")),
 
         odometer_miles: extract_f64(state, "/vehicleMileage/value").map(meters_to_miles),
+        odometer_miles_ts: extract_timestamp(state, "/vehicleMileage/timeStamp"),
 
         tire_fl_psi: extract_f64(state, "/tirePressureFrontLeft/value").map(bar_to_psi),
         tire_fr_psi: extract_f64(state, "/tirePressureFrontRight/value").map(bar_to_psi),
@@ -184,6 +194,10 @@ fn extract_str<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {
     v.pointer(ptr)?.as_str()
 }
 
+fn extract_timestamp(v: &Value, ptr: &str) -> Option<DateTime<Utc>> {
+    v.pointer(ptr)?.as_str()?.parse::<DateTime<Utc>>().ok()
+}
+
 fn extract_locked(v: &Value, ptr: &str) -> Option<bool> {
     match v.pointer(ptr)? {
         Value::Bool(value) => Some(*value),
@@ -285,6 +299,59 @@ mod tests {
         let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
         assert_eq!(ev.battery_level, Some(82.5));
         assert_eq!(ev.power_state, Some(PowerState::Ready));
+    }
+
+    #[test]
+    fn preserves_per_field_timestamps_for_freshness_tracking() {
+        let msg = serde_json::json!({
+            "type": "next",
+            "payload": { "data": { "vehicleState": {
+                "batteryLevel": { "timeStamp": "2024-01-15T10:25:00Z", "value": 82.5 },
+                "distanceToEmpty": { "timeStamp": "2024-01-15T10:26:00Z", "value": 161.0 },
+                "powerState": { "timeStamp": "2024-01-15T10:27:00Z", "value": "ready" },
+                "chargerStatus": { "timeStamp": "2024-01-15T10:28:00Z", "value": "chrgr_sts_not_connected" },
+                "timeToEndOfCharge": { "timeStamp": "2024-01-15T10:29:00Z", "value": 45 },
+                "gnssLocation": { "timeStamp": "2024-01-15T10:30:00Z", "latitude": 30.1, "longitude": -97.7 },
+                "gnssSpeed": { "timeStamp": "2024-01-15T10:31:00Z", "value": 0.0 },
+                "vehicleMileage": { "timeStamp": "2024-01-15T10:32:00Z", "value": 16093.44 }
+            }}}
+        })
+        .to_string();
+
+        let ev = parse_ws_message(&msg, vid()).unwrap().unwrap();
+        assert_eq!(
+            ev.battery_level_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:25:00+00:00"
+        );
+        assert_eq!(
+            ev.distance_to_empty_mi_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:26:00+00:00"
+        );
+        assert_eq!(
+            ev.power_state_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:27:00+00:00"
+        );
+        assert_eq!(
+            ev.charger_status_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:28:00+00:00"
+        );
+        assert_eq!(
+            ev.time_to_end_of_charge_min_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:29:00+00:00"
+        );
+        assert_eq!(
+            ev.location_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:30:00+00:00"
+        );
+        assert_eq!(
+            ev.speed_mph_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:31:00+00:00"
+        );
+        assert_eq!(
+            ev.odometer_miles_ts.unwrap().to_rfc3339(),
+            "2024-01-15T10:32:00+00:00"
+        );
+        assert_eq!(ev.ts.to_rfc3339(), "2024-01-15T10:32:00+00:00");
     }
 
     #[test]

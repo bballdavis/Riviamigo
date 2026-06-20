@@ -101,6 +101,11 @@ function CurrentVehicleStatePanel({
     { label: 'Speed', value: formatMph(status?.speed_mph), icon: <Gauge className="h-3.5 w-3.5" /> },
     { label: 'Software', value: formatSoftware(status), icon: <Cpu className="h-3.5 w-3.5" /> },
   ];
+  const freshnessLabel = status?.telemetry_stale
+    ? 'Telemetry stale'
+    : status?.last_updated
+      ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      : 'Awaiting telemetry';
 
   useEffect(() => {
     const element = imageStageRef.current;
@@ -124,7 +129,7 @@ function CurrentVehicleStatePanel({
       <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
         <span className="rounded-lg border border-border bg-bg-elevated px-2 py-1 text-[11px] text-fg-tertiary">
-          {status?.last_updated ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Awaiting telemetry'}
+          {freshnessLabel}
         </span>
       </div>
       <div className="grid flex-1 min-h-0 content-stretch gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">

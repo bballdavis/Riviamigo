@@ -162,6 +162,7 @@ export interface ChargeSession {
   soc_end: number | null;
   peak_power_kw: number | null;
   cost_usd: number | null;
+  cost_method?: string | null;
   source?: string | null;
   telemetry_sample_count?: number;
   network_vendor?: string | null;

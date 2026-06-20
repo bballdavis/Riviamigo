@@ -12,7 +12,7 @@ Riviamigo is a self-hosted Rivian telemetry dashboard that gives you full owners
 
 ## Charging
 
-- **Charging history** — every charge session is recorded with start/end time, kWh delivered, peak charge rate, and duration.
+- **Charging history** — every charge session is recorded with start/end time, kWh delivered, peak charge rate, and duration, with recent completed sessions re-reconciled against Rivian's charging history so vendor and paid-total fields can land after the live telemetry window closes.
 - **Charge rate curves** — per-session charging curves using 1-minute continuous aggregates (`timeseries.telemetry_1min`).
 - **Time-of-Use (TOU) cost profiles** — define electricity pricing by time of day and day of week with effective-date ranges so historical costs stay accurate after rate changes.
 

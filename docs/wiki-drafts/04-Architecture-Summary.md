@@ -81,8 +81,9 @@ A self-hosted S3-compatible object store included in the development Compose fil
 Riviamigo connects to Rivian's unofficial GraphQL API using the same protocol as the mobile app.
 
 - **WebSocket**: `wss://api.rivian.com/gql-consumer-subscriptions/graphql` — real-time telemetry pushes.
-- **REST polling** (`ingestion/poller.rs`) — periodic fallback to fetch vehicle state when the WebSocket is disconnected or the vehicle is asleep.
+- **Poll loop** (`ingestion/rivian_poll.rs` + `ingestion/poller.rs`) — adaptive follow-up work based on vehicle power state. This loop periodically reconciles completed charging sessions with Rivian's charging history, captures live charging curve data while a session is active, and records sync timestamps so stale gaps are visible.
 - **Supervisor** (`ingestion/supervisor.rs`) — keeps one active connection per vehicle, restarts with exponential backoff on failure.
+- **Worker watchdog** (`ingestion/worker.rs`) — restarts a collector that stays connected but stops receiving WebSocket messages, which prevents a silent lock-holder from leaving status, trips, and charging history stale indefinitely.
 - **Parser** (`ingestion/parser.rs`) — normalizes raw GraphQL payloads and writes rows to `timeseries.telemetry`.
 
 ---

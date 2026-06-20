@@ -390,22 +390,30 @@ struct PendingOtpChallenge {
     user_id: Uuid,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Default, sqlx::FromRow)]
 struct LatestVehicleTelemetry {
     ts: Option<chrono::DateTime<chrono::Utc>>,
     latitude: Option<f64>,
     longitude: Option<f64>,
     altitude_m: Option<f64>,
     speed_mph: Option<f64>,
+    location_ts: Option<chrono::DateTime<chrono::Utc>>,
+    speed_mph_ts: Option<chrono::DateTime<chrono::Utc>>,
     battery_level: Option<f64>,
     battery_capacity_wh: Option<f64>,
     distance_to_empty_mi: Option<f64>,
     battery_limit: Option<f64>,
+    battery_level_ts: Option<chrono::DateTime<chrono::Utc>>,
+    distance_to_empty_mi_ts: Option<chrono::DateTime<chrono::Utc>>,
+    battery_limit_ts: Option<chrono::DateTime<chrono::Utc>>,
     power_state: Option<String>,
+    power_state_ts: Option<chrono::DateTime<chrono::Utc>>,
     charger_state: Option<String>,
     charger_state_ts: Option<chrono::DateTime<chrono::Utc>>,
     charger_status: Option<String>,
+    charger_status_ts: Option<chrono::DateTime<chrono::Utc>>,
     time_to_end_of_charge_min: Option<i32>,
+    time_to_end_of_charge_min_ts: Option<chrono::DateTime<chrono::Utc>>,
     drive_mode: Option<String>,
     gear_status: Option<String>,
     cabin_temp_c: Option<f64>,
@@ -413,6 +421,7 @@ struct LatestVehicleTelemetry {
     outside_temp_c: Option<f64>,
     heading_deg: Option<f64>,
     odometer_miles: Option<f64>,
+    odometer_miles_ts: Option<chrono::DateTime<chrono::Utc>>,
     tire_fl_psi: Option<f64>,
     tire_fr_psi: Option<f64>,
     tire_rl_psi: Option<f64>,
@@ -514,10 +523,17 @@ struct RefreshCredentialsBody {
     rivian_vehicle_id: Option<String>,
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Default, sqlx::FromRow)]
 struct VehicleRuntimeStateRow {
     is_online: Option<bool>,
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_payload_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ws_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ws_payload_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ws_heartbeat_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_charge_history_sync_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_charge_history_success_at: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
     auth_state: Option<String>,
     auth_reason_code: Option<String>,
@@ -532,22 +548,37 @@ struct VehicleStatusResponse {
     is_online: bool,
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
     last_updated: Option<chrono::DateTime<chrono::Utc>>,
+    last_payload_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ws_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ws_payload_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_ws_heartbeat_received_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_charge_history_sync_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_charge_history_success_at: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
     auth_state: Option<String>,
     auth_reason_code: Option<String>,
     battery_level: Option<f64>,
+    battery_level_ts: Option<chrono::DateTime<chrono::Utc>>,
     range_miles: Option<f64>,
+    range_miles_ts: Option<chrono::DateTime<chrono::Utc>>,
     battery_capacity_kwh: Option<f64>,
     battery_limit: Option<f64>,
+    battery_limit_ts: Option<chrono::DateTime<chrono::Utc>>,
     power_state: Option<String>,
+    power_state_ts: Option<chrono::DateTime<chrono::Utc>>,
     charger_state: Option<String>,
     charger_state_ts: Option<chrono::DateTime<chrono::Utc>>,
     charger_status: Option<String>,
+    charger_status_ts: Option<chrono::DateTime<chrono::Utc>>,
     time_to_end_of_charge_min: Option<i32>,
+    time_to_end_of_charge_min_ts: Option<chrono::DateTime<chrono::Utc>>,
     speed_mph: Option<f64>,
+    speed_mph_ts: Option<chrono::DateTime<chrono::Utc>>,
     altitude_m: Option<f64>,
     latitude: Option<f64>,
     longitude: Option<f64>,
+    location_ts: Option<chrono::DateTime<chrono::Utc>>,
     drive_mode: Option<String>,
     gear_status: Option<String>,
     cabin_temp_c: Option<f64>,
@@ -555,6 +586,7 @@ struct VehicleStatusResponse {
     outside_temp_c: Option<f64>,
     heading_deg: Option<f64>,
     odometer_miles: Option<f64>,
+    odometer_miles_ts: Option<chrono::DateTime<chrono::Utc>>,
     tire_fl_psi: Option<f64>,
     tire_fr_psi: Option<f64>,
     tire_rl_psi: Option<f64>,
@@ -623,6 +655,98 @@ struct VehicleStatusResponse {
     brake_fluid_low: Option<bool>,
     alarm_active: Option<bool>,
     service_mode: Option<bool>,
+    telemetry_stale: bool,
+    telemetry_stale_reason: Option<String>,
+}
+
+const WS_RECEIVE_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(10);
+const BATTERY_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
+const RANGE_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(90);
+const CHARGING_STATUS_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(45);
+
+fn timestamp_is_older_than(
+    now: chrono::DateTime<chrono::Utc>,
+    ts: Option<chrono::DateTime<chrono::Utc>>,
+    threshold: chrono::Duration,
+) -> bool {
+    ts.is_some_and(|value| now - value >= threshold)
+}
+
+fn derive_vehicle_status_freshness(
+    now: chrono::DateTime<chrono::Utc>,
+    runtime: Option<&VehicleRuntimeStateRow>,
+    latest: &LatestVehicleTelemetry,
+) -> (Option<String>, bool, Option<String>) {
+    let ws_received_at = runtime.and_then(|row| row.last_ws_received_at);
+    let base_health = runtime.and_then(|row| row.worker_health.clone());
+
+    if timestamp_is_older_than(now, ws_received_at, WS_RECEIVE_STALE_AFTER) {
+        return (
+            Some("stale".to_string()),
+            true,
+            Some("ws_silent".to_string()),
+        );
+    }
+
+    if latest.battery_level.is_some()
+        && timestamp_is_older_than(
+            now,
+            latest.battery_level_ts.or(latest.ts),
+            BATTERY_STATUS_STALE_AFTER,
+        )
+    {
+        return (
+            Some("stale".to_string()),
+            true,
+            Some("battery_stale".to_string()),
+        );
+    }
+
+    if latest.distance_to_empty_mi.is_some()
+        && timestamp_is_older_than(
+            now,
+            latest.distance_to_empty_mi_ts.or(latest.ts),
+            RANGE_STATUS_STALE_AFTER,
+        )
+    {
+        return (
+            Some("stale".to_string()),
+            true,
+            Some("range_stale".to_string()),
+        );
+    }
+
+    let charging_active = latest
+        .charger_state
+        .as_deref()
+        .map(|state| matches!(state, "charging"))
+        .unwrap_or(false)
+        || latest
+            .charger_status
+            .as_deref()
+            .map(|status| status.eq_ignore_ascii_case("chrgr_sts_connected_charging"))
+            .unwrap_or(false)
+        || latest.time_to_end_of_charge_min.is_some();
+
+    if charging_active
+        && timestamp_is_older_than(
+            now,
+            latest
+                .charger_status_ts
+                .or(latest.charger_state_ts)
+                .or(latest.time_to_end_of_charge_min_ts)
+                .or(latest.ts),
+            CHARGING_STATUS_STALE_AFTER,
+        )
+    {
+        return (
+            Some("stale".to_string()),
+            true,
+            Some("charging_stale".to_string()),
+        );
+    }
+
+    (base_health, false, None)
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -2109,7 +2233,10 @@ async fn vehicle_status(
     .flatten();
 
     let row = sqlx::query_as::<_, VehicleRuntimeStateRow>(
-        "SELECT is_online, last_event_at, worker_health, auth_state, auth_reason_code FROM riviamigo.vehicle_runtime_state \
+        "SELECT is_online, last_event_at, last_payload_at, last_heartbeat_at, \
+                last_ws_received_at, last_ws_payload_received_at, last_ws_heartbeat_received_at, \
+                last_charge_history_sync_at, last_charge_history_success_at, \
+                worker_health, auth_state, auth_reason_code FROM riviamigo.vehicle_runtime_state \
          WHERE vehicle_id = $1",
     )
     .bind(vid)
@@ -2119,11 +2246,14 @@ async fn vehicle_status(
     let latest = sqlx::query_as::<_, LatestVehicleTelemetry>(
         r#"
         SELECT
-          ts, latitude, longitude, altitude_m, speed_mph,
+          ts, latitude, longitude, altitude_m, speed_mph, location_ts, speed_mph_ts,
           battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-          power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
+          battery_level_ts, distance_to_empty_mi_ts, battery_limit_ts,
+          power_state, power_state_ts,
+          charger_state, charger_state_ts, charger_status, charger_status_ts,
+          time_to_end_of_charge_min, time_to_end_of_charge_min_ts,
           drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c,
-          heading_deg, odometer_miles,
+          heading_deg, odometer_miles, odometer_miles_ts,
           tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
           tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
           tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
@@ -2155,15 +2285,23 @@ async fn vehicle_status(
         longitude: None,
         altitude_m: None,
         speed_mph: None,
+        location_ts: None,
+        speed_mph_ts: None,
         battery_level: None,
         battery_capacity_wh: None,
         distance_to_empty_mi: None,
         battery_limit: None,
+        battery_level_ts: None,
+        distance_to_empty_mi_ts: None,
+        battery_limit_ts: None,
         power_state: None,
+        power_state_ts: None,
         charger_state: None,
         charger_state_ts: None,
         charger_status: None,
         time_to_end_of_charge_min: None,
+        charger_status_ts: None,
+        time_to_end_of_charge_min_ts: None,
         drive_mode: None,
         gear_status: None,
         cabin_temp_c: None,
@@ -2171,6 +2309,7 @@ async fn vehicle_status(
         outside_temp_c: None,
         heading_deg: None,
         odometer_miles: None,
+        odometer_miles_ts: None,
         tire_fl_psi: None,
         tire_fr_psi: None,
         tire_rl_psi: None,
@@ -2318,6 +2457,9 @@ async fn vehicle_status(
         latest.battery_level,
         latest.battery_capacity_wh.or(vehicle),
     );
+    let now = chrono::Utc::now();
+    let (effective_worker_health, telemetry_stale, telemetry_stale_reason) =
+        derive_vehicle_status_freshness(now, row.as_ref(), &latest);
 
     Ok(Json(VehicleStatusResponse {
         vehicle_id: vid,
@@ -2326,11 +2468,20 @@ async fn vehicle_status(
         last_updated: latest
             .ts
             .or_else(|| row.as_ref().and_then(|r| r.last_event_at)),
-        worker_health: row.as_ref().and_then(|r| r.worker_health.clone()),
+        last_payload_at: row.as_ref().and_then(|r| r.last_payload_at),
+        last_heartbeat_at: row.as_ref().and_then(|r| r.last_heartbeat_at),
+        last_ws_received_at: row.as_ref().and_then(|r| r.last_ws_received_at),
+        last_ws_payload_received_at: row.as_ref().and_then(|r| r.last_ws_payload_received_at),
+        last_ws_heartbeat_received_at: row.as_ref().and_then(|r| r.last_ws_heartbeat_received_at),
+        last_charge_history_sync_at: row.as_ref().and_then(|r| r.last_charge_history_sync_at),
+        last_charge_history_success_at: row.as_ref().and_then(|r| r.last_charge_history_success_at),
+        worker_health: effective_worker_health,
         auth_state: row.as_ref().and_then(|r| r.auth_state.clone()),
         auth_reason_code: row.as_ref().and_then(|r| r.auth_reason_code.clone()),
         battery_level: latest.battery_level,
+        battery_level_ts: latest.battery_level_ts.or(latest.ts),
         range_miles: normalized_range_miles,
+        range_miles_ts: latest.distance_to_empty_mi_ts.or(latest.ts),
         battery_capacity_kwh: latest.battery_capacity_wh.map(|w| {
             if w > 1000.0 {
                 w / 1000.0
@@ -2339,15 +2490,21 @@ async fn vehicle_status(
             }
         }),
         battery_limit: latest.battery_limit,
+        battery_limit_ts: latest.battery_limit_ts,
         power_state: latest.power_state,
+        power_state_ts: latest.power_state_ts.or(latest.ts),
         charger_state: latest.charger_state,
         charger_state_ts: latest.charger_state_ts,
         charger_status: latest.charger_status,
+        charger_status_ts: latest.charger_status_ts,
         time_to_end_of_charge_min: latest.time_to_end_of_charge_min,
+        time_to_end_of_charge_min_ts: latest.time_to_end_of_charge_min_ts,
         speed_mph: latest.speed_mph,
+        speed_mph_ts: latest.speed_mph_ts,
         altitude_m: latest.altitude_m,
         latitude: latest.latitude,
         longitude: latest.longitude,
+        location_ts: latest.location_ts,
         drive_mode: latest.drive_mode,
         gear_status: latest.gear_status,
         cabin_temp_c: latest.cabin_temp_c,
@@ -2355,6 +2512,7 @@ async fn vehicle_status(
         outside_temp_c: latest.outside_temp_c,
         heading_deg: latest.heading_deg,
         odometer_miles: latest.odometer_miles,
+        odometer_miles_ts: latest.odometer_miles_ts,
         tire_fl_psi: latest.tire_fl_psi,
         tire_fr_psi: latest.tire_fr_psi,
         tire_rl_psi: latest.tire_rl_psi,
@@ -2423,6 +2581,8 @@ async fn vehicle_status(
         brake_fluid_low: latest.brake_fluid_low,
         alarm_active: latest.alarm_active,
         service_mode: latest.service_mode,
+        telemetry_stale,
+        telemetry_stale_reason,
     }))
 }
 
@@ -2449,6 +2609,77 @@ mod range_tests {
     fn leaves_high_but_plausible_miles_untouched() {
         let value = normalize_remaining_range_miles(Some(227.0), Some(71.0), Some(105_000.0));
         assert_eq!(value, Some(227.0));
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::{derive_vehicle_status_freshness, LatestVehicleTelemetry, VehicleRuntimeStateRow};
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn flags_ws_silence_as_stale() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
+        let runtime = VehicleRuntimeStateRow {
+            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 40, 0).unwrap()),
+            worker_health: Some("connected".to_string()),
+            ..Default::default()
+        };
+
+        let (worker_health, telemetry_stale, reason) = derive_vehicle_status_freshness(
+            now,
+            Some(&runtime),
+            &LatestVehicleTelemetry::default(),
+        );
+
+        assert_eq!(worker_health.as_deref(), Some("stale"));
+        assert!(telemetry_stale);
+        assert_eq!(reason.as_deref(), Some("ws_silent"));
+    }
+
+    #[test]
+    fn flags_old_battery_timestamp_even_when_worker_is_connected() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
+        let runtime = VehicleRuntimeStateRow {
+            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
+            worker_health: Some("connected".to_string()),
+            ..Default::default()
+        };
+        let latest = LatestVehicleTelemetry {
+            ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
+            battery_level: Some(71.0),
+            battery_level_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 10, 20, 0).unwrap()),
+            ..Default::default()
+        };
+
+        let (_, telemetry_stale, reason) =
+            derive_vehicle_status_freshness(now, Some(&runtime), &latest);
+
+        assert!(telemetry_stale);
+        assert_eq!(reason.as_deref(), Some("battery_stale"));
+    }
+
+    #[test]
+    fn keeps_recent_runtime_as_healthy() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
+        let runtime = VehicleRuntimeStateRow {
+            last_ws_received_at: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
+            worker_health: Some("connected".to_string()),
+            ..Default::default()
+        };
+        let latest = LatestVehicleTelemetry {
+            ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 59, 0).unwrap()),
+            battery_level: Some(71.0),
+            battery_level_ts: Some(Utc.with_ymd_and_hms(2026, 6, 19, 11, 58, 30).unwrap()),
+            ..Default::default()
+        };
+
+        let (worker_health, telemetry_stale, reason) =
+            derive_vehicle_status_freshness(now, Some(&runtime), &latest);
+
+        assert_eq!(worker_health.as_deref(), Some("connected"));
+        assert!(!telemetry_stale);
+        assert_eq!(reason, None);
     }
 }
 
