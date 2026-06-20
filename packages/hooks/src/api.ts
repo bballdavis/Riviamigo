@@ -1132,6 +1132,7 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     soc_end: finiteNumber(row.soc_end) ?? null,
     peak_power_kw: finiteNumber(row.peak_power_kw) ?? finiteNumber(row.max_charge_rate_kw) ?? finiteNumber(row.avg_charge_rate_kw) ?? null,
     cost_usd: finiteNumber(row.cost_usd) ?? null,
+    cost_method: typeof row.cost_method === 'string' ? row.cost_method : null,
     duration_min: finiteNumber(row.duration_min) ?? finiteNumber(row.duration_minutes) ?? null,
     source: typeof row.source === 'string' ? row.source : null,
     telemetry_sample_count: finiteNumber(row.telemetry_sample_count) ?? 0,

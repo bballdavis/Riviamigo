@@ -216,6 +216,11 @@ export function CurrentVehicleStatePanel({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  const freshnessLabel = status?.telemetry_stale
+    ? 'Telemetry stale'
+    : status?.last_updated
+      ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      : 'Awaiting telemetry';
 
   return (
     <section
@@ -227,7 +232,7 @@ export function CurrentVehicleStatePanel({
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-fg-tertiary">Vehicle overview</p>
         </div>
         <span className="rounded-full border border-border bg-bg-elevated px-2 py-1 text-[11px] text-fg-tertiary">
-          {status?.last_updated ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Awaiting telemetry'}
+          {freshnessLabel}
         </span>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[16rem_minmax(22rem,1fr)_18rem]">

@@ -164,7 +164,25 @@ export interface VehicleStatus {
   is_online: boolean;
   last_updated: string | null;
   last_event_at?: string | null;
+  last_payload_at?: string | null;
+  last_heartbeat_at?: string | null;
+  last_ws_received_at?: string | null;
+  last_ws_payload_received_at?: string | null;
+  last_ws_heartbeat_received_at?: string | null;
+  last_charge_history_sync_at?: string | null;
+  last_charge_history_success_at?: string | null;
   worker_health?: string | null;
   auth_state?: string | null;
   auth_reason_code?: string | null;
+  battery_level_ts?: string | null;
+  range_miles_ts?: string | null;
+  battery_limit_ts?: string | null;
+  power_state_ts?: string | null;
+  charger_status_ts?: string | null;
+  time_to_end_of_charge_min_ts?: string | null;
+  speed_mph_ts?: string | null;
+  location_ts?: string | null;
+  odometer_miles_ts?: string | null;
+  telemetry_stale?: boolean;
+  telemetry_stale_reason?: string | null;
 }

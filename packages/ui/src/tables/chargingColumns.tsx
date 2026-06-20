@@ -14,6 +14,7 @@ export interface ChargeSessionRow {
   soc_end: number | null;
   peak_power_kw: number | null;
   cost_usd: number | null;
+  cost_method?: string | null;
   charger_type: string | null;
   location_name: string | null;
   // Enrichment fields from Rivian API

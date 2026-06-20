@@ -73,6 +73,7 @@ struct SessionRow {
     max_charge_rate_kw: Option<f64>,
     duration_minutes: Option<i32>,
     cost_usd: Option<f64>,
+    cost_method: Option<String>,
     // Enrichment fields (migration 0024)
     network_vendor: Option<String>,
     range_added_km: Option<f64>,
@@ -411,7 +412,7 @@ async fn list_sessions_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
-                COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, cs.cost_method, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
@@ -496,7 +497,7 @@ async fn get_session_response(
                 ) AS charger_type, \
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, \
-                cs.network_vendor, cs.range_added_km, cs.is_free_session, \
+                cs.cost_method, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
                 cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
