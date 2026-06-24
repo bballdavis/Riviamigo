@@ -8,7 +8,9 @@
 
 use anyhow::Result;
 use riviamigo_api::{
-    db::vehicles::get_vehicle_owner_id, services::cost::recompute_charge_session_cost,
+    db::vehicles::get_vehicle_owner_id,
+    services::charge_sessions::canonicalize_charge_sessions,
+    services::cost::recompute_charge_session_cost,
     services::geofences::match_geofence,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -24,14 +26,16 @@ async fn main() -> Result<()> {
         .await?;
 
     let repaired = repair_charge_sessions_from_telemetry(&pool).await?;
-    let merged = merge_rivian_api_live_sessions(&pool).await?;
+    let canonicalized = canonicalize_charge_sessions(&pool, None).await?;
     let repaired_api_metadata = repair_api_summary_metadata(&pool).await?;
     let estimated_soc = estimate_api_session_soc_from_energy(&pool).await?;
     let retagged = repair_charge_session_locations(&pool).await?;
     let recosted = repair_charge_session_costs(&pool).await?;
     info!(
         repaired,
-        merged,
+        charge_clusters_merged = canonicalized.clusters_merged,
+        charge_duplicates_deleted = canonicalized.duplicate_rows_deleted,
+        charge_payload_reconciliations = canonicalized.payload_reconciliations,
         repaired_api_metadata,
         estimated_soc,
         retagged,
@@ -108,8 +112,8 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
               ON cs.vehicle_id = c.vehicle_id
              AND cs.started_at <= c.ended_at
              AND COALESCE(cs.ended_at, cs.started_at) >= c.started_at
+             AND COALESCE(cs.source, 'telemetry') <> 'rivian_api'
             ORDER BY c.id,
-                     (cs.source = 'rivian_api') DESC,
                      (cs.kwh_added IS NOT NULL) DESC,
                      cs.started_at
         ),
@@ -164,6 +168,8 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
                     ) / (matched_existing.duration_minutes::float8 / 60.0)
                 END,
                 cost_method = COALESCE(cs.cost_method, 'telemetry_repair'),
+                source = COALESCE(cs.source, 'telemetry'),
+                data_confidence = 'telemetry',
                 charger_type = COALESCE(
                     cs.charger_type,
                     CASE
@@ -201,7 +207,7 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
                 kwh_added, max_charge_rate_kw, cost_usd,
                 energy_added_wh, energy_used_wh,
                 avg_charge_rate_kw, peak_voltage,
-                cost_method, charger_type
+                cost_method, charger_type, source, data_confidence
             )
             SELECT
                 id, vehicle_id, started_at, ended_at,
@@ -221,7 +227,9 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
                     WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 12 THEN 'ac'
                     WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 50 THEN 'ac_l2'
                     WHEN duration_minutes > 0 THEN 'dc'
-                END
+                END,
+                'telemetry',
+                'telemetry'
             FROM candidates
             WHERE NOT EXISTS (
                   SELECT 1
@@ -234,6 +242,7 @@ async fn repair_charge_sessions_from_telemetry(pool: &sqlx::PgPool) -> Result<u6
                   WHERE cs.vehicle_id = candidates.vehicle_id
                     AND cs.started_at <= candidates.ended_at
                     AND COALESCE(cs.ended_at, cs.started_at) >= candidates.started_at
+                    AND COALESCE(cs.source, 'telemetry') <> 'rivian_api'
               )
             RETURNING id, vehicle_id, started_at, ended_at
         ),
@@ -323,97 +332,6 @@ async fn repair_charge_session_locations(pool: &sqlx::PgPool) -> Result<u64> {
     }
 
     Ok(repaired)
-}
-
-async fn merge_rivian_api_live_sessions(pool: &sqlx::PgPool) -> Result<u64> {
-    let merged: i64 = sqlx::query_scalar(
-        r#"
-        WITH pairs AS (
-            SELECT DISTINCT ON (live.id)
-                api.id AS api_id,
-                live.id AS live_id
-            FROM riviamigo.charge_sessions api
-            JOIN riviamigo.charge_sessions live
-              ON live.vehicle_id = api.vehicle_id
-             AND live.id <> api.id
-             AND COALESCE(live.source, '') <> 'rivian_api'
-             AND live.started_at <= COALESCE(api.ended_at, api.started_at)
-             AND COALESCE(live.ended_at, live.started_at) >= api.started_at
-            WHERE api.source = 'rivian_api'
-            ORDER BY live.id,
-                     ABS(EXTRACT(EPOCH FROM (live.started_at - api.started_at)))
-        ),
-        merged_values AS (
-            SELECT
-                pairs.api_id,
-                pairs.live_id,
-                api.kwh_added AS api_kwh_added,
-                api.energy_added_wh AS api_energy_added_wh,
-                live.location_lat,
-                live.location_lng,
-                live.soc_start,
-                live.soc_end,
-                live.charge_limit,
-                live.max_charge_rate_kw,
-                live.avg_charge_rate_kw,
-                live.charger_type,
-                live.geofence_id,
-                live.address_id,
-                live.is_home
-            FROM pairs
-            JOIN riviamigo.charge_sessions api ON api.id = pairs.api_id
-            JOIN riviamigo.charge_sessions live ON live.id = pairs.live_id
-        ),
-        updated AS (
-            UPDATE riviamigo.charge_sessions api
-            SET
-                location_lat = COALESCE(api.location_lat, merged_values.location_lat),
-                location_lng = COALESCE(api.location_lng, merged_values.location_lng),
-                soc_start = COALESCE(api.soc_start, merged_values.soc_start),
-                soc_end = COALESCE(api.soc_end, merged_values.soc_end),
-                charge_limit = COALESCE(api.charge_limit, merged_values.charge_limit),
-                duration_minutes = COALESCE(
-                    api.duration_minutes,
-                    CASE
-                        WHEN api.ended_at IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (api.ended_at - api.started_at))::int / 60
-                    END
-                ),
-                energy_added_wh = COALESCE(
-                    api.energy_added_wh,
-                    api.kwh_added * 1000.0,
-                    merged_values.api_energy_added_wh
-                ),
-                max_charge_rate_kw = COALESCE(api.max_charge_rate_kw, merged_values.max_charge_rate_kw),
-                avg_charge_rate_kw = COALESCE(api.avg_charge_rate_kw, merged_values.avg_charge_rate_kw),
-                charger_type = COALESCE(api.charger_type, merged_values.charger_type),
-                geofence_id = COALESCE(api.geofence_id, merged_values.geofence_id),
-                address_id = COALESCE(api.address_id, merged_values.address_id),
-                is_home = COALESCE(api.is_home, merged_values.is_home)
-            FROM merged_values
-            WHERE api.id = merged_values.api_id
-            RETURNING api.id, merged_values.live_id
-        ),
-        restamped AS (
-            UPDATE timeseries.telemetry t
-            SET charge_session_id = updated.id
-            FROM updated
-            WHERE t.charge_session_id = updated.live_id
-            RETURNING updated.live_id
-        ),
-        deleted AS (
-            DELETE FROM riviamigo.charge_sessions live
-            USING updated
-            WHERE live.id = updated.live_id
-            RETURNING live.id
-        )
-        SELECT COUNT(*)::int8 FROM deleted
-        "#
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(merged as u64)
 }
 
 async fn estimate_api_session_soc_from_energy(pool: &sqlx::PgPool) -> Result<u64> {

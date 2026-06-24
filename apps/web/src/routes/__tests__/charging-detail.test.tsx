@@ -44,6 +44,9 @@ vi.mock('@riviamigo/hooks', () => ({
       cost_usd: mockSession.cost_usd,
       duration_min: 75,
       source: mockSession.source,
+      api_started_at: '2024-01-01T11:45:00Z',
+      api_ended_at: '2024-01-01T13:30:00Z',
+      data_confidence: 'telemetry_enriched',
       telemetry_sample_count: mockSession.telemetry_sample_count,
       network_vendor: 'Rivian',
       range_added_km: 88.4,
@@ -94,7 +97,9 @@ describe('Charge session detail page', () => {
     expect(screen.getByText('Cost')).toBeInTheDocument();
     expect(screen.getAllByText('$8.75').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
+    expect(screen.getByText('Telemetry verified')).toBeInTheDocument();
     expect(screen.getByText('12 samples matched')).toBeInTheDocument();
+    expect(screen.getByText('5:45 AM -> 7:30 AM')).toBeInTheDocument();
     expect(screen.getByText('88.4 km added')).toBeInTheDocument();
     expect(screen.getByText('Austin')).toBeInTheDocument();
     // Chart title/subtitle are rendered inside DashboardChartWidget (mocked);

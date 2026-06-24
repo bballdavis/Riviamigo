@@ -23,6 +23,7 @@ use riviamigo_api::{
     },
     models::telemetry::{ChargerState, DriveMode, PowerState, TelemetryEvent},
     services::{
+        charge_sessions::canonicalize_charge_sessions,
         cost::recompute_charge_session_cost,
         geofences::match_geofence,
         trip_enrichment::{
@@ -128,6 +129,7 @@ async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> 
         clear_vehicle_history_for_vehicle(pool, vehicle_id).await?;
         let state_periods = backfill_state_periods_for_vehicle(pool, vehicle_id).await?;
         let charge_sessions = repair_charge_sessions_for_vehicle(pool, vehicle_id).await?;
+        let charge_canonicalization = canonicalize_charge_sessions(pool, Some(vehicle_id)).await?;
         let charge_locations =
             repair_charge_session_locations_for_vehicle(pool, vehicle_id).await?;
         let charge_costs = repair_charge_session_costs_for_vehicle(pool, vehicle_id).await?;
@@ -139,6 +141,9 @@ async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> 
             vehicle_id = %vehicle_id,
             state_periods,
             charge_sessions,
+            charge_clusters_merged = charge_canonicalization.clusters_merged,
+            charge_duplicates_deleted = charge_canonicalization.duplicate_rows_deleted,
+            charge_payload_reconciliations = charge_canonicalization.payload_reconciliations,
             charge_locations,
             charge_costs,
             trips,
@@ -158,11 +163,6 @@ async fn rebuild_vehicle_history(pool: &PgPool, client: &Client, args: Args) -> 
 }
 
 async fn clear_vehicle_history_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
-    sqlx::query("DELETE FROM riviamigo.charge_sessions WHERE vehicle_id = $1")
-        .bind(vehicle_id)
-        .execute(pool)
-        .await?;
-
     sqlx::query("DELETE FROM riviamigo.trips WHERE vehicle_id = $1")
         .bind(vehicle_id)
         .execute(pool)
@@ -360,8 +360,8 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
               ON cs.vehicle_id = c.vehicle_id
              AND cs.started_at <= c.ended_at
              AND COALESCE(cs.ended_at, cs.started_at) >= c.started_at
+             AND COALESCE(cs.source, 'telemetry') <> 'rivian_api'
             ORDER BY c.id,
-                     (cs.source = 'rivian_api') DESC,
                      (cs.kwh_added IS NOT NULL) DESC,
                      cs.started_at
         ),
@@ -416,6 +416,8 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                     ) / (matched_existing.duration_minutes::float8 / 60.0)
                 END,
                 cost_method = COALESCE(cs.cost_method, 'telemetry_repair'),
+                source = COALESCE(cs.source, 'telemetry'),
+                data_confidence = 'telemetry',
                 charger_type = COALESCE(
                     cs.charger_type,
                     CASE
@@ -453,7 +455,7 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                 kwh_added, max_charge_rate_kw, cost_usd,
                 energy_added_wh, energy_used_wh,
                 avg_charge_rate_kw, peak_voltage,
-                cost_method, charger_type
+                cost_method, charger_type, source, data_confidence
             )
             SELECT
                 id, vehicle_id, started_at, ended_at,
@@ -473,7 +475,9 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                     WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 12 THEN 'ac'
                     WHEN duration_minutes > 0 AND energy_added_wh / 1000.0 / (duration_minutes::float8 / 60.0) < 50 THEN 'ac_l2'
                     WHEN duration_minutes > 0 THEN 'dc'
-                END
+                END,
+                'telemetry',
+                'telemetry'
             FROM candidates
             WHERE NOT EXISTS (
                   SELECT 1
@@ -486,6 +490,7 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                   WHERE cs.vehicle_id = candidates.vehicle_id
                     AND cs.started_at <= candidates.ended_at
                     AND COALESCE(cs.ended_at, cs.started_at) >= candidates.started_at
+                    AND COALESCE(cs.source, 'telemetry') <> 'rivian_api'
               )
             RETURNING id, vehicle_id, started_at, ended_at
         ),
