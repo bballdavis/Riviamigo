@@ -117,7 +117,16 @@ const mockEfficiencyByMode = vi.fn(() => ({
   data: [{ drive_mode: 'all_purpose', avg_efficiency: 318, p10_efficiency: 0, p90_efficiency: 0, trip_count: 5 }],
   isLoading: false,
 }));
-const mockEfficiencyVsTemp = vi.fn(() => ({
+type MockEfficiencyVsTempPoint = {
+  temp_c_low: number;
+  temp_c_high: number;
+  avg_efficiency_wh_mi: number | null;
+  trip_count: number;
+  total_miles?: number | null;
+  avg_speed_mph?: number | null;
+};
+
+const mockEfficiencyVsTemp = vi.fn<() => { data: MockEfficiencyVsTempPoint[]; isLoading: boolean }>(() => ({
   data: [{ temp_c_low: 15, temp_c_high: 20, avg_efficiency_wh_mi: 300, trip_count: 3 }],
   isLoading: false,
 }));

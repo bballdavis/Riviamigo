@@ -20,6 +20,10 @@ pub struct ChargeSession {
     pub duration_minutes: Option<i32>,
     pub cost_usd: Option<f64>,
     pub rivian_session_id: Option<String>,
+    pub api_started_at: Option<DateTime<Utc>>,
+    pub api_ended_at: Option<DateTime<Utc>>,
+    pub source: Option<String>,
+    pub data_confidence: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

@@ -46,6 +46,22 @@ pub struct CompletedChargeSession {
     pub charger_type: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveChargeSessionSnapshot {
+    pub session_id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub location_lat: Option<f64>,
+    pub location_lng: Option<f64>,
+    pub soc_start: Option<f64>,
+    pub last_soc: Option<f64>,
+    pub charge_limit: Option<f64>,
+    pub battery_capacity_wh: Option<f64>,
+    pub last_charge_ts: DateTime<Utc>,
+    pub last_power_ts: Option<DateTime<Utc>>,
+    pub energy_used_wh: f64,
+    pub peak_charge_kw: f64,
+}
+
 #[derive(Debug, Default)]
 pub struct ChargeDetectorState {
     vehicle_id: Uuid,
@@ -78,6 +94,25 @@ impl ChargeDetectorState {
         Self {
             vehicle_id,
             ..Default::default()
+        }
+    }
+
+    pub fn from_snapshot(vehicle_id: Uuid, snapshot: ActiveChargeSessionSnapshot) -> Self {
+        Self {
+            vehicle_id,
+            active_session_id: Some(snapshot.session_id),
+            is_charging: true,
+            started_at: Some(snapshot.started_at),
+            start_lat: snapshot.location_lat,
+            start_lng: snapshot.location_lng,
+            soc_start: snapshot.soc_start,
+            last_soc: snapshot.last_soc,
+            charge_limit: snapshot.charge_limit,
+            battery_capacity: snapshot.battery_capacity_wh,
+            last_charge_ts: Some(snapshot.last_charge_ts),
+            last_power_ts: snapshot.last_power_ts,
+            energy_used_wh_acc: snapshot.energy_used_wh.max(0.0),
+            peak_charge_kw: snapshot.peak_charge_kw.max(0.0),
         }
     }
 
@@ -444,5 +479,50 @@ mod tests {
         assert_eq!(session.session_id, session_id.unwrap());
         assert_eq!(session.soc_start, Some(33.0));
         assert_eq!(session.soc_end, Some(75.0));
+    }
+
+    #[test]
+    fn rehydrated_session_keeps_existing_session_id_until_completion() {
+        let vehicle_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let started_at = Utc::now() - Duration::minutes(45);
+        let mut detector = ChargeDetectorState::from_snapshot(
+            vehicle_id,
+            ActiveChargeSessionSnapshot {
+                session_id,
+                started_at,
+                location_lat: Some(29.81),
+                location_lng: Some(-95.38),
+                soc_start: Some(40.0),
+                last_soc: Some(48.0),
+                charge_limit: Some(80.0),
+                battery_capacity_wh: Some(111_000.0),
+                last_charge_ts: started_at + Duration::minutes(40),
+                last_power_ts: Some(started_at + Duration::minutes(40)),
+                energy_used_wh: 18_000.0,
+                peak_charge_kw: 10.5,
+            },
+        );
+
+        let mut patch = event(vehicle_id, started_at + Duration::minutes(50), None);
+        patch.battery_level = Some(50.0);
+        patch.time_to_end_of_charge_min = Some(25);
+        assert!(matches!(detector.process(&patch), ChargeEvent::NoChange));
+        assert_eq!(detector.active_session_id(), Some(session_id));
+
+        let mut end = event(
+            vehicle_id,
+            started_at + Duration::minutes(70),
+            Some(ChargerState::Done),
+        );
+        end.battery_level = Some(60.0);
+        let ChargeEvent::SessionEnded(session) = detector.process(&end) else {
+            panic!("expected completed charge session");
+        };
+
+        assert_eq!(session.session_id, session_id);
+        assert_eq!(session.soc_start, Some(40.0));
+        assert_eq!(session.soc_end, Some(60.0));
+        assert!(session.energy_used_wh.unwrap_or_default() >= 18_000.0);
     }
 }

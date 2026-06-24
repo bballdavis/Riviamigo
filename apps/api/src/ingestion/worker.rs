@@ -10,7 +10,7 @@ use crate::{
     config::Config,
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
-        charge_detector::{ChargeDetectorState, ChargeEvent},
+        charge_detector::{ActiveChargeSessionSnapshot, ChargeDetectorState, ChargeEvent},
         rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
@@ -32,6 +32,24 @@ use crate::{
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 const WS_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+const CHARGE_DETECTOR_REHYDRATE_LOOKBACK_HOURS: i32 = 12;
+const CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES: i32 = 120;
+
+#[derive(Debug, sqlx::FromRow)]
+struct ActiveChargeDetectorRow {
+    session_id: Uuid,
+    started_at: DateTime<Utc>,
+    last_charge_ts: DateTime<Utc>,
+    last_power_ts: Option<DateTime<Utc>>,
+    location_lat: Option<f64>,
+    location_lng: Option<f64>,
+    soc_start: Option<f64>,
+    last_soc: Option<f64>,
+    charge_limit: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    energy_used_wh: Option<f64>,
+    peak_charge_kw: Option<f64>,
+}
 
 pub async fn run_vehicle_worker(
     vehicle_id: Uuid,
@@ -214,7 +232,18 @@ pub async fn run_vehicle_worker(
     // ────────────────────────────────────────────────────────────────────────
 
     let mut trip_det = TripDetectorState::new(vehicle_id);
-    let mut charge_det = ChargeDetectorState::new(vehicle_id);
+    let mut charge_det = if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await
+    {
+        tracing::info!(
+            vehicle_id=%vehicle_id,
+            charge_session_id=%snapshot.session_id,
+            started_at=%snapshot.started_at,
+            "rehydrated active charge detector state from stamped telemetry"
+        );
+        ChargeDetectorState::from_snapshot(vehicle_id, snapshot)
+    } else {
+        ChargeDetectorState::new(vehicle_id)
+    };
     let mut redis_conn = match redis.get_multiplexed_async_connection().await {
         Ok(c) => c,
         Err(e) => {
@@ -1323,6 +1352,106 @@ fn collector_lock_key(vehicle_id: Uuid) -> i64 {
     i64::from_be_bytes(first) ^ i64::from_be_bytes(second) ^ ADVISORY_LOCK_NAMESPACE
 }
 
+async fn load_active_charge_snapshot(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+) -> Option<ActiveChargeSessionSnapshot> {
+    let row = sqlx::query_as::<_, ActiveChargeDetectorRow>(
+        r#"
+        WITH active_samples AS (
+            SELECT
+                t.charge_session_id,
+                t.ts,
+                t.latitude,
+                t.longitude,
+                t.battery_level,
+                t.battery_capacity_wh,
+                t.battery_limit,
+                t.power_kw,
+                LAG(t.ts) OVER (PARTITION BY t.charge_session_id ORDER BY t.ts) AS prev_ts,
+                LAG(ABS(t.power_kw)) OVER (PARTITION BY t.charge_session_id ORDER BY t.ts) AS prev_power_kw
+            FROM timeseries.telemetry t
+            LEFT JOIN riviamigo.charge_sessions cs
+              ON cs.id = t.charge_session_id
+            WHERE t.vehicle_id = $1
+              AND t.charge_session_id IS NOT NULL
+              AND cs.id IS NULL
+              AND t.ts >= now() - ($2::int * interval '1 hour')
+        ),
+        candidate_sessions AS (
+            SELECT
+                charge_session_id AS session_id,
+                MIN(ts) AS started_at,
+                MAX(ts) AS last_charge_ts,
+                MAX(ts) FILTER (WHERE power_kw IS NOT NULL) AS last_power_ts,
+                (ARRAY_AGG(latitude ORDER BY ts) FILTER (
+                    WHERE latitude IS NOT NULL
+                      AND longitude IS NOT NULL
+                      AND NOT (latitude = 0 AND longitude = 0)
+                ))[1] AS location_lat,
+                (ARRAY_AGG(longitude ORDER BY ts) FILTER (
+                    WHERE latitude IS NOT NULL
+                      AND longitude IS NOT NULL
+                      AND NOT (latitude = 0 AND longitude = 0)
+                ))[1] AS location_lng,
+                (ARRAY_AGG(battery_level ORDER BY ts) FILTER (WHERE battery_level IS NOT NULL))[1] AS soc_start,
+                (ARRAY_AGG(battery_level ORDER BY ts DESC) FILTER (WHERE battery_level IS NOT NULL))[1] AS last_soc,
+                MAX(battery_limit) AS charge_limit,
+                (ARRAY_AGG(battery_capacity_wh ORDER BY ts DESC) FILTER (WHERE battery_capacity_wh IS NOT NULL))[1] AS battery_capacity_wh,
+                SUM(
+                    CASE
+                        WHEN prev_ts IS NULL OR prev_power_kw IS NULL THEN 0
+                        WHEN prev_power_kw <= 0 OR prev_power_kw > 300 THEN 0
+                        ELSE prev_power_kw * 1000.0 * (EXTRACT(EPOCH FROM (ts - prev_ts)) / 3600.0)
+                    END
+                ) AS energy_used_wh,
+                MAX(ABS(power_kw)) FILTER (WHERE power_kw IS NOT NULL AND ABS(power_kw) <= 300) AS peak_charge_kw
+            FROM active_samples
+            GROUP BY charge_session_id
+        )
+        SELECT
+            session_id,
+            started_at,
+            last_charge_ts,
+            last_power_ts,
+            location_lat,
+            location_lng,
+            soc_start,
+            last_soc,
+            charge_limit,
+            battery_capacity_wh,
+            energy_used_wh,
+            peak_charge_kw
+        FROM candidate_sessions
+        WHERE last_charge_ts >= now() - ($3::int * interval '1 minute')
+        ORDER BY last_charge_ts DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(vehicle_id)
+    .bind(CHARGE_DETECTOR_REHYDRATE_LOOKBACK_HOURS)
+    .bind(CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()?;
+
+    Some(ActiveChargeSessionSnapshot {
+        session_id: row.session_id,
+        started_at: row.started_at,
+        location_lat: row.location_lat,
+        location_lng: row.location_lng,
+        soc_start: row.soc_start,
+        last_soc: row.last_soc,
+        charge_limit: row.charge_limit,
+        battery_capacity_wh: row.battery_capacity_wh,
+        last_charge_ts: row.last_charge_ts,
+        last_power_ts: row.last_power_ts,
+        energy_used_wh: row.energy_used_wh.unwrap_or(0.0),
+        peak_charge_kw: row.peak_charge_kw.unwrap_or(0.0),
+    })
+}
+
 async fn acquire_collector_lock(
     pool: &PgPool,
     vehicle_id: Uuid,
@@ -2252,8 +2381,8 @@ async fn persist_charge_session(
             energy_added_wh, energy_used_wh,
             avg_charge_rate_kw, peak_voltage,
             geofence_id, address_id, cost_profile_id, cost_method,
-            charger_type, source)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry')"#,
+            charger_type, source, data_confidence)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry','telemetry')"#,
     )
     .bind(session.session_id)
     .bind(session.vehicle_id)
