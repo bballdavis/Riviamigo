@@ -53,6 +53,7 @@ Use these entrypoints in this order:
 - Prefer targeted verification close to the changed seam.
 - Frontend: use `pnpm -C apps/web exec vitest run ...` for focused tests.
 - Backend: use focused `cargo test` when full workspace validation is noisy.
+- If you touch shared seams, ingestion, routing, or any other significant runtime path, run the relevant build check before handing off. In practice that means `pnpm build` for workspace-wide TypeScript/Vite changes and the relevant backend build/test command for Rust changes.
 - If a behavior change affects shared UX or repo workflow, add or update verification where practical.
 
 ## Documentation System

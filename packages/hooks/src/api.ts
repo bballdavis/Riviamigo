@@ -90,6 +90,7 @@ export interface BackfillStatus {
   status: string | null;
   rivian_session_count: number | null;
   local_session_count: number;
+  missing_source_count?: number | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1135,6 +1136,9 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     cost_method: typeof row.cost_method === 'string' ? row.cost_method : null,
     duration_min: finiteNumber(row.duration_min) ?? finiteNumber(row.duration_minutes) ?? null,
     source: typeof row.source === 'string' ? row.source : null,
+    api_started_at: row.api_started_at == null ? null : String(row.api_started_at),
+    api_ended_at: row.api_ended_at == null ? null : String(row.api_ended_at),
+    data_confidence: typeof row.data_confidence === 'string' ? row.data_confidence : null,
     telemetry_sample_count: finiteNumber(row.telemetry_sample_count) ?? 0,
     network_vendor: typeof row.network_vendor === 'string' ? row.network_vendor : null,
     range_added_km: finiteNumber(row.range_added_km) ?? null,

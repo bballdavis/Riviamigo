@@ -2200,9 +2200,9 @@ async fn create_demo_vehicle(
 
     sqlx::query(
         "INSERT INTO riviamigo.charge_sessions
-          (vehicle_id, started_at, ended_at, charger_type, kwh_added, soc_start, soc_end, max_charge_rate_kw, duration_minutes, cost_usd, currency_code)
+          (vehicle_id, started_at, ended_at, charger_type, kwh_added, soc_start, soc_end, max_charge_rate_kw, duration_minutes, cost_usd, currency_code, source, data_confidence)
          VALUES
-          ($1, now() - interval '10 days', now() - interval '10 days' + interval '42 minutes', 'ac', 12.4, 51, 63, 10.8, 42, 2.48, 'USD')
+          ($1, now() - interval '10 days', now() - interval '10 days' + interval '42 minutes', 'ac', 12.4, 51, 63, 10.8, 42, 2.48, 'USD', 'telemetry', 'telemetry')
          ON CONFLICT DO NOTHING",
     )
     .bind(vehicle_id)

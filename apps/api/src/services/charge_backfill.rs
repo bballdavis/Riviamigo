@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::ingestion::{rivian_poll, session_store};
+use crate::services::charge_sessions::canonicalize_charge_sessions;
 
 const BACKFILL_STALE_AFTER_MINUTES: i64 = 120;
 
@@ -19,6 +20,7 @@ pub struct ChargeBackfillStatus {
     pub status: Option<String>,
     pub rivian_session_count: Option<i32>,
     pub local_session_count: i64,
+    pub missing_source_count: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -48,9 +50,11 @@ pub async fn get_status(
         Option<String>,
         Option<i32>,
         i64,
+        i64,
     )> = sqlx::query_as(
         "SELECT v.history_backfilled_at, v.history_backfill_status, v.history_session_count,
-                    COUNT(cs.id)
+                    COUNT(cs.id),
+                    COUNT(*) FILTER (WHERE cs.source IS NULL)
              FROM riviamigo.vehicles v
              LEFT JOIN riviamigo.charge_sessions cs ON cs.vehicle_id = v.id
              WHERE v.id = $1
@@ -60,8 +64,8 @@ pub async fn get_status(
     .fetch_optional(pool)
     .await?;
 
-    let (history_backfilled_at, status, rivian_session_count, local_session_count) =
-        row.unwrap_or((None, None, None, 0));
+    let (history_backfilled_at, status, rivian_session_count, local_session_count, missing_source_count) =
+        row.unwrap_or((None, None, None, 0, 0));
 
     Ok(ChargeBackfillStatus {
         vehicle_id,
@@ -69,6 +73,7 @@ pub async fn get_status(
         status,
         rivian_session_count,
         local_session_count,
+        missing_source_count,
     })
 }
 
@@ -234,5 +239,18 @@ async fn run_claimed_inner(
         &tokens,
     )
     .await
-    .map_err(ChargeBackfillError::Other)
+    .map_err(ChargeBackfillError::Other)?;
+
+    canonicalize_charge_sessions(pool, Some(claimed.vehicle_id))
+        .await
+        .map_err(ChargeBackfillError::Other)?;
+
+    let canonical_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::int8 FROM riviamigo.charge_sessions WHERE vehicle_id = $1",
+    )
+    .bind(claimed.vehicle_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(canonical_count as usize)
 }

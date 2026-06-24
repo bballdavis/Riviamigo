@@ -78,6 +78,8 @@ vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: 
 vi.mock('../../lib/dates', () => ({
   presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  loadDashboardTimeframe: () => null,
+  saveDashboardTimeframe: vi.fn(),
   DEFAULT_PRESET: '30d',
 }));
 

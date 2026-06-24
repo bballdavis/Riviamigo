@@ -18,6 +18,9 @@ use uuid::Uuid;
 use crate::ingestion::rivian_auth::rivian_refresh_csrf;
 use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
 use crate::services::charge_backfill::{self, ChargeBackfillError};
+use crate::services::charge_sessions::{
+    self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
+};
 
 // ── URL constants ────────────────────────────────────────────────────────────
 
@@ -774,7 +777,7 @@ pub async fn fetch_wallboxes_for_vehicle(
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompletedSessionsData {
-    get_completed_session_summaries: Option<Vec<CompletedSessionItem>>,
+    get_completed_session_summaries: Option<Vec<ChargeSessionSummaryPayload>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -880,20 +883,6 @@ async fn record_charge_history_sync_succeeded(pool: &PgPool, vehicle_id: Uuid) {
     .await;
 }
 
-fn should_insert_unmatched_completed_session(
-    full_backfill: bool,
-    start: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> bool {
-    if full_backfill {
-        return start.is_some();
-    }
-
-    start.is_some_and(|started_at| {
-        started_at >= now - chrono::Duration::days(RECENT_INCREMENTAL_INSERT_LOOKBACK_DAYS)
-    })
-}
-
 /// Fetch completed charge sessions from Rivian's charging endpoint.
 ///
 /// ## Modes
@@ -911,7 +900,7 @@ pub async fn fetch_charge_history(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    fetch_charge_history_inner(rivian_vehicle_id, vehicle_id, false, pool, client, tokens).await
+    fetch_charge_history_inner_v2(rivian_vehicle_id, vehicle_id, false, pool, client, tokens).await
 }
 
 pub async fn fetch_charge_history_for_vehicle(
@@ -951,280 +940,7 @@ pub async fn fetch_charge_history_full(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    fetch_charge_history_inner(rivian_vehicle_id, vehicle_id, true, pool, client, tokens).await
-}
-
-async fn fetch_charge_history_inner(
-    _rivian_vehicle_id: &str,
-    vehicle_id: Uuid,
-    full_backfill: bool,
-    pool: &PgPool,
-    client: &reqwest::Client,
-    tokens: &RivianTokenBundle,
-) -> Result<usize> {
-    const Q: &str = r#"
-        query getCompletedSessionSummaries {
-          getCompletedSessionSummaries {
-            transactionId
-            startInstant
-            endInstant
-            totalEnergyKwh
-            rangeAddedKm
-            vendor
-            paidTotal
-            chargerType
-            currencyCode
-            city
-            vehicleId
-            vehicleName
-            isPublic
-            isHomeCharger
-            isRoamingNetwork
-            meta {
-              transactionIdGroupingKey
-              dataSources
-            }
-          }
-        }
-    "#;
-
-    let mut total_processed = 0usize;
-    let mut total_inserted = 0usize;
-    let data: CompletedSessionsData = gql_request(
-        client,
-        CHRG_URL,
-        tokens,
-        "getCompletedSessionSummaries",
-        Q,
-        serde_json::Value::Null,
-    )
-    .await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-
-    for s in &data.get_completed_session_summaries.unwrap_or_default() {
-        let Some(rivian_id) = &s.transaction_id else {
-            continue;
-        };
-        let is_free_session = s.paid_total.map(|total| total == 0.0);
-        let is_rivian_network = infer_is_rivian_network(s.vendor.as_deref());
-        let normalized_charger_type = normalize_api_charger_type(s.charger_type.as_deref())
-            .or_else(|| infer_api_charger_type(s.vendor.as_deref(), s.is_home_charger));
-
-        // Try to enrich an existing row matched by rivian_session_id.
-        let mut matched_session_id = sqlx::query_scalar::<_, Uuid>(
-                "UPDATE riviamigo.charge_sessions SET
-                     rivian_session_id  = $2,
-                 ended_at           = COALESCE(ended_at, $10),
-                 kwh_added          = COALESCE(kwh_added, $19),
-                     network_vendor     = COALESCE(network_vendor, $3),
-                     range_added_km     = COALESCE(range_added_km, $4),
-                     is_free_session    = COALESCE(is_free_session, $5),
-                     is_rivian_network  = COALESCE(is_rivian_network, $6),
-                     rivian_paid_total  = COALESCE(rivian_paid_total, $7),
-                     is_home            = COALESCE(is_home, $8),
-                     duration_minutes   = COALESCE(duration_minutes, CASE WHEN $10::timestamptz IS NOT NULL THEN EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz))::int / 60 END),
-                     charger_type       = COALESCE(charger_type, $11, CASE WHEN $8 THEN 'ac' WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' END),
-                     source             = CASE WHEN source = 'telemetry' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'rivian_api') END,
-                     rivian_charger_type = COALESCE(rivian_charger_type, $12),
-                     currency_code       = COALESCE(currency_code, $13),
-                     rivian_city         = COALESCE(rivian_city, $14),
-                     rivian_vehicle_id   = COALESCE(rivian_vehicle_id, $15),
-                     rivian_vehicle_name = COALESCE(rivian_vehicle_name, $16),
-                     is_public           = COALESCE(is_public, $17),
-                     rivian_meta         = COALESCE(rivian_meta, $18)
-                 WHERE vehicle_id = $1
-                                     AND rivian_session_id = $2
-                                 RETURNING id",
-            )
-            .bind(vehicle_id)
-            .bind(rivian_id)
-            .bind(&s.vendor)
-            .bind(s.range_added_km)
-            .bind(is_free_session)
-            .bind(is_rivian_network)
-            .bind(s.paid_total)
-            .bind(s.is_home_charger)
-            .bind(s.start_instant)
-            .bind(s.end_instant)
-            .bind(normalized_charger_type)
-            .bind(&s.charger_type)
-            .bind(&s.currency_code)
-            .bind(&s.city)
-            .bind(&s.vehicle_id)
-            .bind(&s.vehicle_name)
-            .bind(s.is_public)
-            .bind(&s.meta)
-            .bind(s.total_energy_kwh)
-            .fetch_optional(pool)
-            .await?;
-
-        if matched_session_id.is_none() {
-            // Try to match by start-time window. A ±5 min window is too tight
-            // for home sessions with scheduled charging delay, so keep ±60 min
-            // but require a deterministic winner by timestamp proximity.
-            // If multiple candidates are similarly close, skip matching rather
-            // than risk attaching a Rivian session ID to the wrong local row.
-            let time_matched = if let Some(start) = s.start_instant {
-                let window_start = start - chrono::Duration::minutes(60);
-                let window_end = start + chrono::Duration::minutes(60);
-
-                sqlx::query_scalar::<_, Uuid>(
-                                                "WITH ranked AS (
-                                                         SELECT id,
-                                                                        ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz))) AS delta_secs,
-                                                                        ROW_NUMBER() OVER (
-                                                                                ORDER BY ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz))) ASC,
-                                                                                                 started_at ASC,
-                                                                                                 id ASC
-                                                                        ) AS rn,
-                                                                        LEAD(ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz)))) OVER (
-                                                                                ORDER BY ABS(EXTRACT(EPOCH FROM (started_at - $11::timestamptz))) ASC,
-                                                                                                 started_at ASC,
-                                                                                                 id ASC
-                                                                        ) AS next_delta_secs
-                                                             FROM riviamigo.charge_sessions
-                                                            WHERE vehicle_id = $1
-                                                                AND rivian_session_id IS NULL
-                                                                AND started_at BETWEEN $8 AND $9
-                                                 ),
-                                                 candidate AS (
-                                                         SELECT id
-                                                             FROM ranked
-                                                            WHERE rn = 1
-                                                                AND (next_delta_secs IS NULL OR (next_delta_secs - delta_secs) >= 900)
-                                                 )
-                                                 UPDATE riviamigo.charge_sessions SET
-                             rivian_session_id  = $2,
-                             ended_at           = COALESCE(ended_at, $12),
-                             kwh_added          = COALESCE(kwh_added, $21),
-                             network_vendor     = COALESCE(network_vendor, $3),
-                             range_added_km     = COALESCE(range_added_km, $4),
-                             is_free_session    = COALESCE(is_free_session, $5),
-                             is_rivian_network  = COALESCE(is_rivian_network, $6),
-                             rivian_paid_total  = COALESCE(rivian_paid_total, $7),
-                             is_home            = COALESCE(is_home, $10),
-                             duration_minutes   = COALESCE(duration_minutes, CASE WHEN $12::timestamptz IS NOT NULL THEN EXTRACT(EPOCH FROM ($12::timestamptz - $11::timestamptz))::int / 60 END),
-                             charger_type       = COALESCE(charger_type, $13, CASE WHEN $10 THEN 'ac' WHEN lower(COALESCE($3, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc' END),
-                             source             = CASE WHEN source = 'telemetry' THEN 'telemetry+rivian_api' ELSE COALESCE(source, 'rivian_api') END,
-                             rivian_charger_type = COALESCE(rivian_charger_type, $14),
-                             currency_code       = COALESCE(currency_code, $15),
-                             rivian_city         = COALESCE(rivian_city, $16),
-                             rivian_vehicle_id   = COALESCE(rivian_vehicle_id, $17),
-                             rivian_vehicle_name = COALESCE(rivian_vehicle_name, $18),
-                             is_public           = COALESCE(is_public, $19),
-                             rivian_meta         = COALESCE(rivian_meta, $20)
-                                                     FROM candidate
-                                                    WHERE riviamigo.charge_sessions.id = candidate.id
-                                                 RETURNING riviamigo.charge_sessions.id",
-                    )
-                    .bind(vehicle_id)
-                    .bind(rivian_id)
-                    .bind(&s.vendor)
-                    .bind(s.range_added_km)
-                    .bind(is_free_session)
-                    .bind(is_rivian_network)
-                    .bind(s.paid_total)
-                    .bind(window_start)
-                    .bind(window_end)
-                    .bind(s.is_home_charger)
-                    .bind(s.start_instant)
-                    .bind(s.end_instant)
-                    .bind(normalized_charger_type)
-                    .bind(&s.charger_type)
-                    .bind(&s.currency_code)
-                    .bind(&s.city)
-                    .bind(&s.vehicle_id)
-                    .bind(&s.vehicle_name)
-                    .bind(s.is_public)
-                    .bind(&s.meta)
-                    .bind(s.total_energy_kwh)
-                    .fetch_optional(pool)
-                    .await?
-            } else {
-                None
-            };
-            matched_session_id = time_matched;
-
-            if matched_session_id.is_none()
-                && should_insert_unmatched_completed_session(
-                    full_backfill,
-                    s.start_instant,
-                    Utc::now(),
-                )
-            {
-                if let Some(start) = s.start_instant {
-                    let inserted_session_id = sqlx::query_scalar::<_, Uuid>(
-                        "INSERT INTO riviamigo.charge_sessions
-                             (vehicle_id, started_at, ended_at, kwh_added,
-                              rivian_session_id, network_vendor, range_added_km,
-                              is_free_session, is_rivian_network, rivian_paid_total,
-                              is_home, charger_type, duration_minutes, source,
-                              rivian_charger_type, currency_code, rivian_city,
-                              rivian_vehicle_id, rivian_vehicle_name, is_public, rivian_meta)
-                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'rivian_api',$14,$15,$16,$17,$18,$19,$20)
-                         ON CONFLICT DO NOTHING
-                         RETURNING id",
-                    )
-                    .bind(vehicle_id)
-                    .bind(start)
-                    .bind(s.end_instant)
-                    .bind(s.total_energy_kwh)
-                    .bind(rivian_id)
-                    .bind(&s.vendor)
-                    .bind(s.range_added_km)
-                    .bind(is_free_session)
-                    .bind(is_rivian_network)
-                    .bind(s.paid_total)
-                    .bind(s.is_home_charger)
-                    .bind(normalized_charger_type)
-                    .bind(s.end_instant.map(|end| (end - start).num_minutes() as i32))
-                    .bind(&s.charger_type)
-                    .bind(&s.currency_code)
-                    .bind(&s.city)
-                    .bind(&s.vehicle_id)
-                    .bind(&s.vehicle_name)
-                    .bind(s.is_public)
-                    .bind(&s.meta)
-                    .fetch_optional(pool)
-                    .await?;
-
-                    if inserted_session_id.is_some() {
-                        total_inserted += 1;
-                    }
-                    matched_session_id = inserted_session_id;
-                }
-            }
-        }
-
-        if let Some(session_id) = matched_session_id {
-            let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
-        }
-
-        if let Err(error) = record_charge_payload(
-            pool,
-            vehicle_id,
-            "getCompletedSessionSummaries",
-            Some(rivian_id),
-            s.vehicle_id.as_deref(),
-            serde_json::to_value(s).unwrap_or_else(|_| serde_json::json!({})),
-        )
-        .await
-        {
-            tracing::debug!(vehicle_id=%vehicle_id, error=%error, "charge history payload audit failed");
-        }
-
-        total_processed += 1;
-    }
-
-    tracing::debug!(
-        vehicle_id=%vehicle_id,
-        total_processed,
-        total_inserted,
-        full_backfill,
-        "charge history synced"
-    );
-    Ok(total_processed)
+    fetch_charge_history_inner_v2(rivian_vehicle_id, vehicle_id, true, pool, client, tokens).await
 }
 
 async fn record_charge_payload(
@@ -1266,6 +982,172 @@ async fn record_charge_payload(
     Ok(())
 }
 
+async fn fetch_charge_history_inner_v2(
+    _rivian_vehicle_id: &str,
+    vehicle_id: Uuid,
+    full_backfill: bool,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<usize> {
+    const Q: &str = r#"
+        query getCompletedSessionSummaries {
+          getCompletedSessionSummaries {
+            transactionId
+            startInstant
+            endInstant
+            totalEnergyKwh
+            rangeAddedKm
+            vendor
+            paidTotal
+            chargerType
+            currencyCode
+            city
+            vehicleId
+            vehicleName
+            isPublic
+            isHomeCharger
+            isRoamingNetwork
+            meta {
+              transactionIdGroupingKey
+              dataSources
+            }
+          }
+        }
+    "#;
+
+    let data: CompletedSessionsData = gql_request(
+        client,
+        CHRG_URL,
+        tokens,
+        "getCompletedSessionSummaries",
+        Q,
+        serde_json::Value::Null,
+    )
+    .await?;
+
+    increment_poll_counter(pool, vehicle_id).await;
+
+    let insert_policy = if full_backfill {
+        UnmatchedInsertPolicy::Always
+    } else {
+        UnmatchedInsertPolicy::RecentOnly {
+            now: Utc::now(),
+            lookback_days: RECENT_INCREMENTAL_INSERT_LOOKBACK_DAYS,
+        }
+    };
+
+    let mut total_processed = 0usize;
+    let mut total_linked = 0usize;
+    for summary in &data.get_completed_session_summaries.unwrap_or_default() {
+        let payload_ref = match record_charge_payload_with_ref(
+            pool,
+            vehicle_id,
+            "getCompletedSessionSummaries",
+            summary.transaction_id.as_deref(),
+            summary.vehicle_id.as_deref(),
+            serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({})),
+        )
+        .await
+        {
+            Ok(payload_ref) => Some(payload_ref),
+            Err(error) => {
+                tracing::debug!(vehicle_id=%vehicle_id, error=%error, "charge history payload audit failed");
+                None
+            }
+        };
+
+        let matched_session_id = charge_sessions::reconcile_completed_session_summary(
+            pool,
+            vehicle_id,
+            summary,
+            insert_policy,
+            payload_ref,
+        )
+        .await?;
+
+        if let (Some(payload_ref), Some(session_id)) = (payload_ref, matched_session_id) {
+            sqlx::query(
+                "UPDATE riviamigo.rivian_charge_payloads
+                 SET charge_session_id = $2
+                 WHERE id = $1",
+            )
+            .bind(payload_ref.payload_id)
+            .bind(session_id)
+            .execute(pool)
+            .await?;
+        }
+
+        if let Some(session_id) = matched_session_id {
+            total_linked += 1;
+            let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
+        }
+
+        total_processed += 1;
+    }
+
+    tracing::debug!(
+        vehicle_id=%vehicle_id,
+        total_processed,
+        total_linked,
+        full_backfill,
+        "charge history synced"
+    );
+
+    Ok(total_processed)
+}
+
+async fn record_charge_payload_with_ref(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    operation: &str,
+    rivian_transaction_id: Option<&str>,
+    rivian_vehicle_id: Option<&str>,
+    payload: serde_json::Value,
+) -> Result<ChargeSessionPayloadRef> {
+    let charge_session_id: Option<Uuid> = if let Some(transaction_id) = rivian_transaction_id {
+        sqlx::query_scalar(
+            r#"SELECT cs.id
+               FROM riviamigo.charge_sessions cs
+               LEFT JOIN riviamigo.charge_session_external_aliases alias
+                 ON alias.charge_session_id = cs.id
+               WHERE cs.vehicle_id = $1
+                 AND (
+                     cs.rivian_session_id = $2
+                     OR alias.external_id = $2
+                 )
+               ORDER BY cs.started_at DESC
+               LIMIT 1"#,
+        )
+        .bind(vehicle_id)
+        .bind(transaction_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        None
+    };
+
+    let (payload_id, captured_at) = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+        "INSERT INTO riviamigo.rivian_charge_payloads
+             (vehicle_id, charge_session_id, operation, rivian_transaction_id, rivian_vehicle_id, payload)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id, captured_at",
+    )
+    .bind(vehicle_id)
+    .bind(charge_session_id)
+    .bind(operation)
+    .bind(rivian_transaction_id)
+    .bind(rivian_vehicle_id)
+    .bind(payload)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ChargeSessionPayloadRef {
+        payload_id,
+        captured_at,
+    })
+}
+
 /// Decide whether a charge session belongs to a paid public network ("Rivian
 /// Adventure" or a roaming partner) based on the vendor string only.
 ///
@@ -1276,46 +1158,6 @@ async fn record_charge_payload(
 /// home AC sessions into "Rivian network" rows and let the cost service treat
 /// `rivian_paid_total` as authoritative — producing wildly inflated home
 /// charging costs.
-pub fn infer_is_rivian_network(vendor: Option<&str>) -> Option<bool> {
-    let v = vendor?.to_ascii_lowercase();
-    Some(matches!(
-        v.as_str(),
-        "rivian" | "tesla" | "electrify america" | "evgo" | "chargepoint"
-    ))
-}
-
-fn normalize_api_charger_type(value: Option<&str>) -> Option<&'static str> {
-    let value = value?.to_ascii_lowercase();
-    match value.as_str() {
-        "wallbox" | "home" | "ac" | "l1" | "l2" | "level1" | "level2" => Some("ac"),
-        "dc" | "dcfc" | "fast" | "fast_charger" | "public_dc" => Some("dc"),
-        _ => None,
-    }
-}
-
-fn infer_api_charger_type(vendor: Option<&str>, is_home: Option<bool>) -> Option<&'static str> {
-    // is_home must win over vendor.  "Tesla" as a vendor name is ambiguous: it
-    // could be a Tesla Supercharger (DC) or a Tesla Wall Connector at home (AC).
-    // Checking vendor first caused Wall Connector sessions to be mis-tagged as
-    // 'dc', which disabled the 22 kW AC cap in the charge curve query and let
-    // SOC-gap spikes from overnight sleep periods show as 200+ kW.
-    if is_home == Some(true) {
-        return Some("ac");
-    }
-    if vendor
-        .map(|name| {
-            matches!(
-                name.to_ascii_lowercase().as_str(),
-                "tesla" | "rivian" | "electrify america" | "evgo"
-            )
-        })
-        .unwrap_or(false)
-    {
-        return Some("dc");
-    }
-    None
-}
-
 pub async fn fetch_live_charge_session(
     rivian_vehicle_id: &str,
     vehicle_id: Uuid,
@@ -1367,7 +1209,10 @@ pub async fn fetch_live_charge_session(
                  range_added_km         = COALESCE(range_added_km, $3),
                  source = CASE WHEN source = 'rivian_api'
                                THEN 'telemetry+rivian_api'
-                               ELSE COALESCE(source, 'telemetry') END
+                               ELSE COALESCE(source, 'telemetry') END,
+                 data_confidence = CASE WHEN source = 'rivian_api'
+                                        THEN 'telemetry_enriched'
+                                        ELSE COALESCE(data_confidence, 'telemetry') END
              WHERE id = $1
              RETURNING id",
         )
@@ -2499,11 +2344,7 @@ pub async fn run_poll_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        infer_is_rivian_network, normalize_api_charger_type,
-        should_insert_unmatched_completed_session,
-    };
-    use chrono::{TimeZone, Utc};
+    use crate::services::charge_sessions::{infer_is_rivian_network, normalize_api_charger_type};
 
     #[test]
     fn normalizes_documented_charger_types() {
@@ -2552,28 +2393,5 @@ mod tests {
     fn vendor_matching_is_case_insensitive() {
         assert_eq!(infer_is_rivian_network(Some("RIVIAN")), Some(true));
         assert_eq!(infer_is_rivian_network(Some("rivian")), Some(true));
-    }
-
-    #[test]
-    fn incremental_sync_inserts_recent_unmatched_sessions() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let recent = Some(Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap());
-        assert!(should_insert_unmatched_completed_session(
-            false, recent, now
-        ));
-    }
-
-    #[test]
-    fn incremental_sync_skips_old_unmatched_sessions() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let old = Some(Utc.with_ymd_and_hms(2026, 4, 1, 12, 0, 0).unwrap());
-        assert!(!should_insert_unmatched_completed_session(false, old, now));
-    }
-
-    #[test]
-    fn full_backfill_accepts_any_timestamped_session() {
-        let now = Utc.with_ymd_and_hms(2026, 6, 19, 12, 0, 0).unwrap();
-        let old = Some(Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).unwrap());
-        assert!(should_insert_unmatched_completed_session(true, old, now));
     }
 }

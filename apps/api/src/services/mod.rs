@@ -1,5 +1,6 @@
 pub mod backups;
 pub mod charge_backfill;
+pub mod charge_sessions;
 pub mod charging;
 pub mod cost;
 pub mod geofences;

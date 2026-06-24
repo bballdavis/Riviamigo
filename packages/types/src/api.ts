@@ -164,6 +164,9 @@ export interface ChargeSession {
   cost_usd: number | null;
   cost_method?: string | null;
   source?: string | null;
+  api_started_at?: string | null;
+  api_ended_at?: string | null;
+  data_confidence?: string | null;
   telemetry_sample_count?: number;
   network_vendor?: string | null;
   range_added_km?: number | null;

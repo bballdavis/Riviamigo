@@ -93,6 +93,7 @@ packages/
 - Use design tokens only; no raw colors.
 - If UI behavior changes a reusable pattern, update [`docs/branding.md`](./docs/branding.md).
 - If routes, env vars, auth flows, or operational behavior change, update the relevant canonical docs in the same change.
+- If a change touches shared seams, ingestion, routing, or other significant runtime behavior, run `pnpm build` before handing it off.
 - User-facing documentation belongs in `docs/wiki-drafts/`, not directly in the GitHub Wiki UI.
 
 ## References

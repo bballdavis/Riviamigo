@@ -95,15 +95,17 @@ describe('Charge Session Detail page', () => {
     render(<ChargeSessionContent />);
     expect(screen.getByText('Source')).toBeInTheDocument();
     expect(screen.getByText('Live telemetry')).toBeInTheDocument();
+    expect(screen.getByText('Confidence')).toBeInTheDocument();
+    expect(screen.getByText('Telemetry verified')).toBeInTheDocument();
     expect(screen.getByText('Telemetry')).toBeInTheDocument();
     expect(screen.getByText('No telemetry samples matched')).toBeInTheDocument();
-    expect(screen.getByText('Network')).toBeInTheDocument();
+    expect(screen.getAllByText('Network').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Home').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders the Charge Curve section title', () => {
+  it('renders the charge curve widget container', () => {
     render(<ChargeSessionContent />);
-    expect(screen.getByText('Charge Curve')).toBeInTheDocument();
+    expect(screen.getByTestId('dashboard-chart-widget')).toBeInTheDocument();
   });
 
   it('renders Back button', () => {

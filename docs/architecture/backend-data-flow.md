@@ -14,7 +14,7 @@ This document is canonical for the high-level backend flow. Update it when the A
 2. Vehicle credentials and session state are stored by the API.
 3. Per-vehicle ingestion workers maintain Rivian connectivity through WebSocket and supporting poll flows, with a watchdog that restarts a collector if the WebSocket stream goes silent while still holding the worker lock.
 4. Parsed telemetry updates a canonical `vehicle_latest_status` row using per-field Rivian timestamps so older partial payloads cannot overwrite fresher SoC, range, charge-state, or odometer values.
-5. Supporting poll flows reconcile completed charging sessions and live charge-curve data so recent vendor/cost metadata can land even when live telemetry has already ended.
+5. Supporting poll flows reconcile completed charging sessions and live charge-curve data into canonical `charge_sessions`, preserving telemetry-backed windows as the public session timeline while storing Rivian aliases and API-only history as enrichment evidence.
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
 
 ## Major Backend Areas

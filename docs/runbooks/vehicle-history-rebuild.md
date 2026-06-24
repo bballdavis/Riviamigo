@@ -12,11 +12,13 @@ This runbook is canonical for the `rebuild_vehicle_history` maintenance workflow
 
 `apps/api/src/bin/rebuild_vehicle_history.rs` rebuilds durable per-vehicle history from telemetry by:
 
-1. clearing existing `charge_sessions` and `trips` rows for the target vehicle
+1. clearing existing `trips` rows for the target vehicle
 2. rebuilding state periods
-3. rebuilding charge sessions and their derived fields
-4. replaying trips and telemetry `trip_id` links
-5. re-enriching rebuilt trips with geofence/address matching and missing outside temperatures
+3. rebuilding telemetry-derived charge evidence without deleting canonical `charge_sessions`
+4. replaying Rivian completed-session payloads back into canonical matching
+5. canonicalizing duplicate charge rows and recovering API-only charge history
+6. replaying trips and telemetry `trip_id` links
+7. re-enriching rebuilt trips with geofence/address matching and missing outside temperatures
 
 The rebuild is intentionally self-healing for trip presentation and efficiency analysis. A completed rebuild should leave `/v1/trips` with human-readable start/destination labels when enrichment is available and `/v1/efficiency/vs-temp` with rebuilt trips included once outside temperatures are restored.
 
@@ -27,6 +29,13 @@ cargo run --bin rebuild_vehicle_history -- [--vehicle <uuid>]
 ```
 
 Run from `apps/api` with `DATABASE_URL` set.
+
+Supporting charge-session maintenance commands:
+
+```bash
+cargo run --bin diagnose_charge_sessions -- [--vehicle <uuid>]
+cargo run --bin canonicalize_charge_sessions -- [--vehicle <uuid>]
+```
 
 ## Diagnostics First
 
@@ -79,8 +88,9 @@ cargo run --bin backfill_outside_temp -- --vehicle <uuid>
 ```
 
 3. Re-run `report_trip_enrichment_gaps -- --vehicle <uuid>` and confirm the missing-field counts actually improved.
-4. Only if coordinate-bearing trips are still missing enrichment should you run `rebuild_vehicle_history -- --vehicle <uuid>`.
-5. Immediately rerun the diagnostics report after a rebuild. A rebuild is only accepted when the post-run counts improve.
+4. Run `diagnose_charge_sessions -- --vehicle <uuid>` before and after any charge-session rebuild or repair.
+5. Only if coordinate-bearing trips are still missing enrichment should you run `rebuild_vehicle_history -- --vehicle <uuid>`.
+6. Immediately rerun the diagnostics report after a rebuild. A rebuild is only accepted when the post-run counts improve and charge-session diagnostics no longer show canonical overlaps, null `source` rows, or unresolved payload gaps.
 
 After a targeted repair or rebuild, verify the affected vehicle through the shared product seams:
 

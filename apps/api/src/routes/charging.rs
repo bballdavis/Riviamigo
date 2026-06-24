@@ -81,6 +81,9 @@ struct SessionRow {
     is_rivian_network: Option<bool>,
     rivian_paid_total: Option<f64>,
     source: Option<String>,
+    api_started_at: Option<DateTime<Utc>>,
+    api_ended_at: Option<DateTime<Utc>>,
+    data_confidence: Option<String>,
     telemetry_sample_count: i64,
     rivian_charger_type: Option<String>,
     currency_code: Option<String>,
@@ -413,16 +416,22 @@ async fn list_sessions_response(
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, \
                 COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, cs.cost_method, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
-                cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
+                cs.is_rivian_network, cs.rivian_paid_total, cs.source, cs.api_started_at, cs.api_ended_at, cs.data_confidence, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
                 cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
-                0::int8 AS telemetry_sample_count \
+                COALESCE(telem.sample_count, 0)::int8 AS telemetry_sample_count \
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.charge_session_user_annotations csa ON csa.charge_session_id = cs.id AND csa.user_id = $6 \
          LEFT JOIN riviamigo.geofences g ON g.id = COALESCE(csa.geofence_id, cs.geofence_id) \
          LEFT JOIN riviamigo.addresses a ON a.id = COALESCE(csa.address_id, cs.address_id) \
-            LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
+         LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
+         LEFT JOIN LATERAL ( \
+             SELECT COUNT(*)::int8 AS sample_count \
+             FROM timeseries.telemetry t \
+             WHERE t.vehicle_id = cs.vehicle_id \
+               AND t.charge_session_id = cs.id \
+         ) telem ON true \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
                   AND ($7::text IS NULL OR \
                          COALESCE(g.name, '') ILIKE '%' || $7 || '%' ESCAPE '\\' OR \
@@ -498,7 +507,7 @@ async fn get_session_response(
                 COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS kwh_added, cs.soc_start, cs.soc_end, \
                 COALESCE(cs.max_charge_rate_kw, cs.avg_charge_rate_kw, CASE WHEN cs.duration_minutes > 0 THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0) END) AS max_charge_rate_kw, cs.duration_minutes, COALESCE(csa.cost_usd, cs.cost_usd) AS cost_usd, \
                 cs.cost_method, cs.network_vendor, cs.range_added_km, cs.is_free_session, \
-                cs.is_rivian_network, cs.rivian_paid_total, cs.source, \
+                cs.is_rivian_network, cs.rivian_paid_total, cs.source, cs.api_started_at, cs.api_ended_at, cs.data_confidence, \
                 cs.rivian_charger_type, cs.currency_code, cs.rivian_city, cs.is_public, cs.charger_id, \
                 cs.live_current_price, cs.live_current_currency, cs.live_total_charged_kwh, \
                 cs.live_range_added_km, cs.live_power_kw, cs.live_charge_rate_kph, \
@@ -512,8 +521,7 @@ async fn get_session_response(
              SELECT COUNT(*)::int8 AS sample_count \
              FROM timeseries.telemetry t \
              WHERE t.vehicle_id = cs.vehicle_id \
-               AND t.ts BETWEEN cs.started_at \
-                            AND COALESCE(cs.ended_at, cs.started_at) \
+               AND t.charge_session_id = cs.id \
          ) telem ON true \
             WHERE cs.id=$1 AND cs.vehicle_id=$2"
     )

@@ -165,6 +165,9 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
     : 'No telemetry samples matched';
   const networkLabel = formatNetworkSummary(session) === '-' ? 'Unknown' : formatNetworkSummary(session);
   const evidence = [
+    formatApiWindow(session)
+      ? { icon: <Database className="h-4 w-4" />, label: 'API window', value: formatApiWindow(session) as string }
+      : null,
     session.range_added_km != null
       ? { icon: <Route className="h-4 w-4" />, label: 'Range', value: `${session.range_added_km.toFixed(1)} km added` }
       : null,
@@ -186,6 +189,11 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
         label="Source"
         value={formatSourceLabel(session.source, telemetryCount)}
       />
+      <SourceFact
+        icon={<Database className="h-4 w-4" />}
+        label="Confidence"
+        value={formatConfidenceLabel(session.data_confidence)}
+      />
       <SourceFact icon={<RadioTower className="h-4 w-4" />} label="Telemetry" value={telemetryLabel} />
       <SourceFact icon={<Zap className="h-4 w-4" />} label="Network" value={networkLabel} />
       {evidence.map((fact) => (
@@ -200,6 +208,19 @@ function formatSourceLabel(source: string | null | undefined, telemetryCount: nu
   if (source === 'rivian_api') return 'Rivian API backfill';
   if (source === 'telemetry+rivian_api') return 'Telemetry + Rivian API';
   return 'Live telemetry';
+}
+
+function formatConfidenceLabel(confidence: string | null | undefined) {
+  if (confidence === 'api_only') return 'Approximate API-only';
+  if (confidence === 'telemetry_enriched') return 'Telemetry verified';
+  return 'Telemetry verified';
+}
+
+function formatApiWindow(session: ChargeSessionDetail) {
+  if (!session.api_started_at && !session.api_ended_at) return null;
+  const apiStart = session.api_started_at ? format(parseISO(session.api_started_at), 'h:mm a') : 'Unknown';
+  const apiEnd = session.api_ended_at ? format(parseISO(session.api_ended_at), 'h:mm a') : 'Unknown';
+  return `${apiStart} -> ${apiEnd}`;
 }
 
 function SourceFact({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
