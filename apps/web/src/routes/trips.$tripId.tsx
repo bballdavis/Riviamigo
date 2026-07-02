@@ -16,7 +16,7 @@ import {
   TripTirePressureChart as TirePressureChart,
 } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { NoVehicleState } from '../components/layout/NoVehicleState';
 import {
   formatMiles,
@@ -36,7 +36,7 @@ export const tripDetailRoute = createRoute({
 });
 
 function TripDetailPage() {
-  return <AuthGuard><TripDetailContent /></AuthGuard>;
+  return <ProtectedRoute><TripDetailContent /></ProtectedRoute>;
 }
 
 export function TripDetailContent() {

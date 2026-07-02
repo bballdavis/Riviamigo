@@ -10,13 +10,13 @@ interface AuthState {
   defaultVehicleId: string | null;
   activeVehicleId: string | null;
   isAuthenticated: boolean;
-  // True while an initial refresh is in flight on page load.
+  // True while an initial bootstrap session resume is in flight on page load.
   isBootstrapping: boolean;
 
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  refresh: () => Promise<boolean>;
+  resumeSession: () => Promise<boolean>;
   setTokens: (accessToken: string, defaultVehicleId: string | null) => void;
   setDefaultVehicleId: (vehicleId: string | null) => void;
   setActiveVehicleId: (vehicleId: string | null) => void;
@@ -90,9 +90,13 @@ export const useAuth = create<AuthState>()(
         get().clearSession();
       },
 
-      refresh: async () => {
+      resumeSession: async () => {
         try {
-          const tokens = await api.refresh();
+          const tokens = await api.resumeSession();
+          if (!tokens) {
+            set({ isBootstrapping: false });
+            return false;
+          }
           api.setToken(tokens.access_token);
           set({
             accessToken: tokens.access_token,

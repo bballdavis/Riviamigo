@@ -28,7 +28,7 @@ type AuthState = {
   isAuthenticated: boolean;
   isBootstrapping: boolean;
   accessToken: string | null;
-  refresh: () => Promise<boolean>;
+  resumeSession: () => Promise<boolean>;
   clearSession: () => void;
 };
 
@@ -36,7 +36,7 @@ let authState: AuthState = {
   isAuthenticated: false,
   isBootstrapping: true,
   accessToken: null,
-  refresh: vi.fn().mockResolvedValue(true),
+  resumeSession: vi.fn().mockResolvedValue(true),
   clearSession: vi.fn(),
 };
 
@@ -47,7 +47,7 @@ vi.mock('@riviamigo/hooks', () => ({
   },
 }));
 
-import { AuthGuard, forceLoginRedirect } from '../components/layout/AuthGuard';
+import { AuthGuard, forceLoginRedirect, normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
 
 function makeToken(sub: string) {
   const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -69,7 +69,7 @@ describe('AuthGuard bootstrap', () => {
       isAuthenticated: false,
       isBootstrapping: true,
       accessToken: null,
-      refresh: vi.fn().mockResolvedValue(true),
+      resumeSession: vi.fn().mockResolvedValue(true),
       clearSession: vi.fn(),
     };
   });
@@ -97,36 +97,36 @@ describe('AuthGuard bootstrap', () => {
     setAuth({ isBootstrapping: false, isAuthenticated: false });
     render(<AuthGuard><span>content</span></AuthGuard>);
     await act(async () => {});
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { redirect: '/' } });
   });
 
-  it('calls refresh() on mount when not authenticated', async () => {
-    const refresh = vi.fn().mockResolvedValue(false);
-    setAuth({ isBootstrapping: true, isAuthenticated: false, refresh });
+  it('calls resumeSession() on mount when not authenticated', async () => {
+    const resumeSession = vi.fn().mockResolvedValue(false);
+    setAuth({ isBootstrapping: true, isAuthenticated: false, resumeSession });
     render(<AuthGuard><span>content</span></AuthGuard>);
     await act(async () => {});
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(resumeSession).toHaveBeenCalledTimes(1);
   });
 
-  it('clears session after bootstrap refresh failure', async () => {
-    const refresh = vi.fn().mockResolvedValue(false);
+  it('clears session after bootstrap resume failure', async () => {
+    const resumeSession = vi.fn().mockResolvedValue(false);
     const clearSession = vi.fn();
-    setAuth({ isBootstrapping: true, isAuthenticated: false, refresh, clearSession });
+    setAuth({ isBootstrapping: true, isAuthenticated: false, resumeSession, clearSession });
     render(<AuthGuard><span>content</span></AuthGuard>);
 
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(resumeSession).toHaveBeenCalledTimes(1);
     expect(clearSession).toHaveBeenCalledTimes(1);
   });
 
-  it('does not call refresh() when already authenticated', () => {
-    const refresh = vi.fn().mockResolvedValue(true);
-    setAuth({ isBootstrapping: false, isAuthenticated: true, accessToken: makeToken('user-1'), refresh });
+  it('does not call resumeSession() when already authenticated', () => {
+    const resumeSession = vi.fn().mockResolvedValue(true);
+    setAuth({ isBootstrapping: false, isAuthenticated: true, accessToken: makeToken('user-1'), resumeSession });
     render(<AuthGuard><span>content</span></AuthGuard>);
-    expect(refresh).not.toHaveBeenCalled();
+    expect(resumeSession).not.toHaveBeenCalled();
   });
 });
 
@@ -189,7 +189,7 @@ describe('AuthGuard auth-expired handling', () => {
 
     expect(mockClearQueryCache).toHaveBeenCalledWith('user-7');
     expect(clearSession).toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login' });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { redirect: '/' } });
   });
 
   it('does not call clearQueryCacheForUser if the user was never hydrated', async () => {
@@ -230,7 +230,7 @@ describe('forceLoginRedirect', () => {
   it('falls back to a hard redirect when router navigation leaves the user off /login', () => {
     const navigate = vi.fn();
     const replace = vi.fn();
-    const locationLike = { pathname: '/', replace };
+    const locationLike = { pathname: '/', search: '?tab=overview', hash: '#card', replace };
     const scheduleRedirect = (callback: () => void) => {
       callback();
       return 0;
@@ -238,8 +238,8 @@ describe('forceLoginRedirect', () => {
 
     forceLoginRedirect(navigate, locationLike, scheduleRedirect);
 
-    expect(navigate).toHaveBeenCalledWith({ to: '/login' });
-    expect(replace).toHaveBeenCalledWith('/login');
+    expect(navigate).toHaveBeenCalledWith({ to: '/login', search: { redirect: '/?tab=overview#card' } });
+    expect(replace).toHaveBeenCalledWith('/login?redirect=%2F%3Ftab%3Doverview%23card');
   });
 
   it('does not hard redirect when already on /login', () => {
@@ -255,5 +255,17 @@ describe('forceLoginRedirect', () => {
 
     expect(navigate).toHaveBeenCalledWith({ to: '/login' });
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe('normalizeLoginRedirectTarget', () => {
+  it('keeps relative in-app paths', () => {
+    expect(normalizeLoginRedirectTarget('/charging?view=table#curve')).toBe('/charging?view=table#curve');
+  });
+
+  it('rejects external or protocol-relative redirects', () => {
+    expect(normalizeLoginRedirectTarget('https://example.com')).toBeNull();
+    expect(normalizeLoginRedirectTarget('//example.com')).toBeNull();
+    expect(normalizeLoginRedirectTarget('charging')).toBeNull();
   });
 });

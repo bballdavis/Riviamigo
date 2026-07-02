@@ -71,7 +71,7 @@ export function ChargeSessionContent() {
     <AppLayout activeKey="charging">
       <PageLayout
         title={title}
-        subtitle={session ? (session.location_name ?? 'Unknown') : undefined}
+        subtitle={session?.location_name ?? undefined}
         titleAction={backButton}
         titleActionPosition="left"
       >
@@ -101,14 +101,6 @@ export function ChargeSessionContent() {
               <StatCard
                 label="Cost"
                 value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : '-'}
-              />
-              <StatCard
-                label="AC / DC"
-                value={session ? formatAcDcLabel(session) : '-'}
-              />
-              <StatCard
-                label="Network"
-                value={session ? formatNetworkSummary(session) : '-'}
               />
             </StatCardGrid>
 
@@ -140,34 +132,17 @@ export function ChargeSessionContent() {
 
 type ChargeSessionDetail = NonNullable<ReturnType<typeof useChargeSession>['data']>;
 
-function formatAcDcLabel(session: ChargeSessionDetail) {
-  const normalized = (session.charger_type ?? '').toLowerCase();
-  if (normalized === 'dc' || normalized === 'dcfc') return 'DC';
-  if (normalized === 'ac' || normalized === 'ac_l2') return 'AC';
-  if (session.peak_power_kw != null && Number.isFinite(session.peak_power_kw)) {
-    return session.peak_power_kw < 20 ? 'AC' : 'DC';
-  }
-  return '-';
-}
-
-function formatNetworkSummary(session: ChargeSessionDetail) {
-  return session.network_vendor
-    ?? (session.location_name?.toLowerCase().includes('home') ? 'Home' : null)
-    ?? session.charger_id
-    ?? session.rivian_charger_type
-    ?? '-';
-}
-
 function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
   const telemetryCount = session.telemetry_sample_count ?? 0;
   const telemetryLabel = telemetryCount > 0
     ? `${telemetryCount.toLocaleString()} samples matched`
     : 'No telemetry samples matched';
-  const networkLabel = formatNetworkSummary(session) === '-' ? 'Unknown' : formatNetworkSummary(session);
+  const networkLabel = session.network_vendor
+    ?? (session.location_name?.toLowerCase().includes('home') ? 'Home' : null)
+    ?? session.charger_id
+    ?? session.rivian_charger_type
+    ?? (session.charger_type ? session.charger_type.toUpperCase() : 'Unknown');
   const evidence = [
-    formatApiWindow(session)
-      ? { icon: <Database className="h-4 w-4" />, label: 'API window', value: formatApiWindow(session) as string }
-      : null,
     session.range_added_km != null
       ? { icon: <Route className="h-4 w-4" />, label: 'Range', value: `${session.range_added_km.toFixed(1)} km added` }
       : null,
@@ -189,11 +164,6 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
         label="Source"
         value={formatSourceLabel(session.source, telemetryCount)}
       />
-      <SourceFact
-        icon={<Database className="h-4 w-4" />}
-        label="Confidence"
-        value={formatConfidenceLabel(session.data_confidence)}
-      />
       <SourceFact icon={<RadioTower className="h-4 w-4" />} label="Telemetry" value={telemetryLabel} />
       <SourceFact icon={<Zap className="h-4 w-4" />} label="Network" value={networkLabel} />
       {evidence.map((fact) => (
@@ -208,19 +178,6 @@ function formatSourceLabel(source: string | null | undefined, telemetryCount: nu
   if (source === 'rivian_api') return 'Rivian API backfill';
   if (source === 'telemetry+rivian_api') return 'Telemetry + Rivian API';
   return 'Live telemetry';
-}
-
-function formatConfidenceLabel(confidence: string | null | undefined) {
-  if (confidence === 'api_only') return 'Approximate API-only';
-  if (confidence === 'telemetry_enriched') return 'Telemetry verified';
-  return 'Telemetry verified';
-}
-
-function formatApiWindow(session: ChargeSessionDetail) {
-  if (!session.api_started_at && !session.api_ended_at) return null;
-  const apiStart = session.api_started_at ? format(parseISO(session.api_started_at), 'h:mm a') : 'Unknown';
-  const apiEnd = session.api_ended_at ? format(parseISO(session.api_ended_at), 'h:mm a') : 'Unknown';
-  return `${apiStart} -> ${apiEnd}`;
 }
 
 function SourceFact({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

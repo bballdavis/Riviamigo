@@ -61,6 +61,8 @@ vi.mock('../../lib/dates', () => ({
   presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
   rangeToIso:    () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
   DEFAULT_PRESET: '30d',
+  loadDashboardTimeframe: () => undefined,
+  saveDashboardTimeframe: vi.fn(),
 }));
 
 const mockConfig = {

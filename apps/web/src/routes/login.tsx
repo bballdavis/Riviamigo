@@ -1,18 +1,24 @@
 import React, { useState } from 'react';
-import { createRoute, useNavigate } from '@tanstack/react-router';
+import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
+import { z } from 'zod';
 import { rootRoute } from './__root';
 import { useAuth, useDocumentTheme } from '@riviamigo/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
 import { Zap, Route, Battery } from 'lucide-react';
+import { normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
+  validateSearch: z.object({
+    redirect: z.string().optional(),
+  }),
   component: LoginPage,
 });
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const search = useSearch({ from: '/login' });
   const { login, register } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -20,6 +26,7 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const isDark = useDocumentTheme();
+  const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,7 +38,7 @@ export function LoginPage() {
       } else {
         await register(email, password);
       }
-      navigate({ to: '/' });
+      navigate({ to: (redirectTarget ?? '/') as never });
     } catch (err) {
       const status = (err as { status?: number }).status;
       if (status === 401) {

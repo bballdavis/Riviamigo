@@ -5,9 +5,9 @@ import { PageLayout } from '@riviamigo/ui/primitives';
 import { useDashboards } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import { AppLayout } from '../components/layout/AppLayout';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { Lock, Unlock, Edit2, ExternalLink } from 'lucide-react';
-import { useAuth } from '@riviamigo/hooks';
+import { api } from '@riviamigo/hooks';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 export const adminDashboardsRoute = createRoute({
@@ -17,31 +17,17 @@ export const adminDashboardsRoute = createRoute({
 });
 
 function AdminDashboardsWrapper() {
-  return <AuthGuard><AdminDashboardsPage /></AuthGuard>;
+  return <ProtectedRoute><AdminDashboardsPage /></ProtectedRoute>;
 }
 
 function AdminDashboardsPage() {
   const navigate = useNavigate();
   const { data: dashboards, isLoading } = useDashboards();
-  const { accessToken } = useAuth();
   const qc = useQueryClient();
 
   const toggleLock = useMutation({
-    mutationFn: async ({ id, locked }: { id: string; locked: boolean }) => {
-      const res = await fetch(`/v1/admin/dashboards/${id}/lock`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({ locked }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error?.message ?? `HTTP ${res.status}`);
-      }
-      return res.json();
-    },
+    mutationFn: ({ id, locked }: { id: string; locked: boolean }) =>
+      api.apiFetch('POST', `/v1/admin/dashboards/${id}/lock`, { locked }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboards'] }),
   });
 

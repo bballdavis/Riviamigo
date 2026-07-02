@@ -2,9 +2,9 @@ import React from 'react';
 import { createRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
-import { api, useAuth, useMe } from '@riviamigo/hooks';
+import { api, useAuth, useAuthReady, useMe } from '@riviamigo/hooks';
 import { AppLayout } from '../components/layout/AppLayout';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, PageLayout } from '@riviamigo/ui/primitives';
 
 export const usersRoute = createRoute({
@@ -14,12 +14,13 @@ export const usersRoute = createRoute({
 });
 
 function UsersPage() {
-  return <AuthGuard><UsersContent /></AuthGuard>;
+  return <ProtectedRoute><UsersContent /></ProtectedRoute>;
 }
 
 function UsersContent() {
   const queryClient = useQueryClient();
   const { accessToken } = useAuth();
+  const authReady = useAuthReady();
   const [search, setSearch] = React.useState('');
   const [newEmail, setNewEmail] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
@@ -36,7 +37,7 @@ function UsersContent() {
   const users = useQuery({
     queryKey: ['admin-users', search],
     queryFn: () => api.listUsers(search.trim()),
-    enabled: isPrivileged && !!accessToken,
+    enabled: authReady && isPrivileged && !!accessToken,
   });
 
   React.useEffect(() => {
@@ -57,7 +58,7 @@ function UsersContent() {
   const detail = useQuery({
     queryKey: ['admin-user-detail', selectedUserId],
     queryFn: () => api.getUserDetail(selectedUserId!),
-    enabled: isPrivileged && !!selectedUserId && !!accessToken,
+    enabled: authReady && isPrivileged && !!selectedUserId && !!accessToken,
   });
 
   const createUser = useMutation({

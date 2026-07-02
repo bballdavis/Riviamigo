@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
+        .route("/auth/bootstrap", post(bootstrap))
         .route("/auth/refresh", post(refresh))
         .route("/auth/logout", post(logout))
 }
@@ -212,23 +213,48 @@ async fn refresh(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
-    let cookie_str = headers
+    refresh_from_cookie(&state, &headers)
+        .await?
+        .ok_or(AppError::Unauthorized)
+}
+
+async fn bootstrap(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, AppError> {
+    if let Some(response) = refresh_from_cookie(&state, &headers).await? {
+        return Ok(response);
+    }
+
+    let clear_cookie = refresh_cookie("", 0);
+    Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
+}
+
+async fn refresh_from_cookie(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<Response>, AppError> {
+    let Some(cookie_str) = headers
         .get("cookie")
         .and_then(|v| v.to_str().ok())
-        .ok_or(AppError::Unauthorized)?;
+    else {
+        return Ok(None);
+    };
 
-    let token = cookie_str
+    let Some(token) = cookie_str
         .split(';')
         .find_map(|part| {
             let p = part.trim();
             p.strip_prefix("refresh_token=")
         })
-        .ok_or(AppError::Unauthorized)?;
+    else {
+        return Ok(None);
+    };
 
     let hash = sha2_hash(token);
 
     // Revoke the presented token and return its user_id atomically.
-    let user_id: Uuid = sqlx::query_scalar(
+    let Some(user_id) = sqlx::query_scalar(
         "UPDATE riviamigo.refresh_tokens
          SET revoked_at = now()
          WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
@@ -237,7 +263,9 @@ async fn refresh(
     .bind(hash.as_slice())
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::Unauthorized)?;
+    else {
+        return Ok(None);
+    };
 
     let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
 
@@ -248,7 +276,7 @@ async fn refresh(
     let max_age = 30 * 24 * 3600;
     let cookie = refresh_cookie(&new_refresh, max_age);
 
-    Ok((
+    Ok(Some((
         [(axum::http::header::SET_COOKIE, cookie)],
         Json(AccessTokenResponse {
             access_token,
@@ -256,7 +284,7 @@ async fn refresh(
             default_vehicle_id,
         }),
     )
-        .into_response())
+        .into_response()))
 }
 
 async fn logout(
@@ -1018,11 +1046,24 @@ mod tests {
             .header("cookie", format!("refresh_token={token_value}"))
             .body(Body::empty())
             .unwrap();
-        let refresh_resp = app.oneshot(refresh_req).await.unwrap();
+        let refresh_resp = app.clone().oneshot(refresh_req).await.unwrap();
         assert_eq!(
             refresh_resp.status(),
             StatusCode::UNAUTHORIZED,
             "refresh after logout should return 401"
+        );
+
+        let bootstrap_req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/bootstrap")
+            .header("cookie", format!("refresh_token={token_value}"))
+            .body(Body::empty())
+            .unwrap();
+        let bootstrap_resp = app.oneshot(bootstrap_req).await.unwrap();
+        assert_eq!(
+            bootstrap_resp.status(),
+            StatusCode::NO_CONTENT,
+            "bootstrap after logout should quietly return 204"
         );
     }
 }

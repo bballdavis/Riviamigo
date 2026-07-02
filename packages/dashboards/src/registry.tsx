@@ -11,18 +11,14 @@ export interface WidgetCtx {
   chargeSessionEnergyKwh?: number | null;
 }
 
-export type ResizeHandle = 's' | 'e' | 'se';
-
 export interface WidgetEditorMeta {
   category?: string;
   description?: string;
-  movable?: boolean;
-  resizable?: boolean;
-  fixedSize?: boolean;
+  deprecated: boolean;
+  fixedSize: boolean;
+  movable: boolean;
+  resizable: boolean;
   maxSize?: { w: number; h: number };
-  resizeHandles?: ResizeHandle[];
-  configurable?: boolean;
-  deprecated?: boolean;
 }
 
 export interface WidgetDef {
@@ -32,18 +28,35 @@ export interface WidgetDef {
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
   defaultOptions?: Record<string, unknown>;
-  editor?: WidgetEditorMeta;
+  editor?: Partial<WidgetEditorMeta>;
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }
 
 const registry = new Map<string, WidgetDef>();
+const editorRegistry = new Map<string, WidgetEditorMeta>();
+
+const DEFAULT_EDITOR_META: WidgetEditorMeta = {
+  deprecated: false,
+  fixedSize: false,
+  movable: true,
+  resizable: true,
+};
 
 export function widgetKey(componentType: DashboardComponentType, definitionId: string) {
   return `${componentType}:${definitionId}`;
 }
 
 export function registerWidget(def: WidgetDef) {
-  registry.set(widgetKey(def.componentType, def.definitionId), def);
+  const key = widgetKey(def.componentType, def.definitionId);
+  const editorMeta: WidgetEditorMeta = {
+    ...DEFAULT_EDITOR_META,
+    ...def.editor,
+  };
+  if (editorMeta.fixedSize) {
+    editorMeta.resizable = false;
+  }
+  registry.set(key, def);
+  editorRegistry.set(key, editorMeta);
 }
 
 export function getWidget(componentType: DashboardComponentType, definitionId: string): WidgetDef | undefined {
@@ -62,13 +75,7 @@ export function getWidgetKeys(): string[] {
   return Array.from(registry.keys());
 }
 
-export function getWidgetEditorMeta(def: WidgetDef | undefined): Required<Pick<WidgetEditorMeta, 'movable' | 'resizable' | 'fixedSize' | 'configurable'>> & WidgetEditorMeta {
-  const fixedSize = def?.editor?.fixedSize === true;
-  return {
-    ...def?.editor,
-    movable: def?.editor?.movable ?? true,
-    resizable: fixedSize ? false : def?.editor?.resizable ?? true,
-    fixedSize,
-    configurable: def?.editor?.configurable ?? true,
-  };
+export function getWidgetEditorMeta(def: WidgetDef | undefined): WidgetEditorMeta {
+  if (!def) return DEFAULT_EDITOR_META;
+  return editorRegistry.get(widgetKey(def.componentType, def.definitionId)) ?? DEFAULT_EDITOR_META;
 }

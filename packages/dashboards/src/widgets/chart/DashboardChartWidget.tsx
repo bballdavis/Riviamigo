@@ -14,7 +14,7 @@ import {
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
-import { CHART_COLORS, ChargeSessionDistributionChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { CHART_COLORS, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
@@ -244,7 +244,7 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
   const { data: soc = [], isLoading: socLoading } = useSocHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: range = [], isLoading: rangeLoading } = useRangeHistory(source === 'range_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: chargeSummary, isLoading: chargeSummaryLoading } = useChargingSummary(
-    source === 'charging_weekly_energy' ? ctx.vehicleId : null,
+    source === 'charging_weekly_energy' || source === 'charging_sessions_energy' ? ctx.vehicleId : null,
     ctx.from,
     ctx.to,
   );
@@ -271,8 +271,6 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
   const { data: degradation = [], isLoading: degradationLoading } = useDegradation(source === 'battery_degradation' ? ctx.vehicleId : null);
   const { data: mileage = [], isLoading: mileageLoading } = useBatteryMileage(
     source === 'battery_capacity_mileage' || source === 'projected_range_mileage' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
   );
 
   if (!definition) {
@@ -304,7 +302,10 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
         <ChargingSessionsChart
           definition={definition}
           sessions={sessions}
-          loading={sessionsLoading}
+          weekly={weekly}
+          totalEnergyKwh={chargeSummary?.total_energy_kwh ?? null}
+          totalEnergyUsedKwh={chargeSummary?.total_energy_used_kwh ?? null}
+          loading={sessionsLoading || chargeSummaryLoading}
           height={height}
         />
       );
@@ -385,12 +386,7 @@ function renderSocHistoryChart(
     <RichTimeSeriesChart
       points={data.map((point) => ({ ts: point.ts }))}
       series={[
-        {
-          key: definition.id,
-          label: definition.title,
-          values: data.map((point) => point.value),
-          ...(definition.mode ? { mode: definition.mode } : {}),
-        },
+        { key: definition.id, label: definition.title, values: data.map((point) => point.value), mode: definition.mode },
         {
           key: `${definition.id}-avg`,
           label: 'Period Avg',
@@ -437,57 +433,66 @@ function renderSingleChart(
 function ChargingSessionsChart({
   definition,
   sessions,
+  weekly,
+  totalEnergyKwh,
+  totalEnergyUsedKwh,
   loading,
   height,
 }: {
   definition: DashboardChartDefinition;
   sessions: ChargeSession[];
+  weekly: Array<{ week_start: string; energy_kwh: number | null }>;
+  totalEnergyKwh: number | null;
+  totalEnergyUsedKwh: number | null;
   loading: boolean;
   height: number;
 }) {
-  const bands = buildSessionDistributionBands(sessions);
+  const usageRatio =
+    totalEnergyKwh != null && totalEnergyUsedKwh != null && totalEnergyKwh > 0
+      ? totalEnergyUsedKwh / totalEnergyKwh
+      : null;
+
+  const fallbackWeek = sessions[0]?.started_at ?? new Date().toISOString();
+  const points = weekly.length > 0
+    ? weekly
+    : totalEnergyKwh != null && totalEnergyKwh > 0
+      ? [{ week_start: fallbackWeek, energy_kwh: totalEnergyKwh }]
+      : [];
 
   return (
-    <ChargeSessionDistributionChart
-      bands={bands}
+    <RichTimeSeriesChart
+      points={points.map((point) => ({ ts: point.week_start }))}
+      series={[
+        {
+          key: 'energy-added',
+          label: 'Energy Added',
+          values: points.map((point) => point.energy_kwh ?? null),
+          color: CHART_COLORS.emerald,
+          mode: 'bar',
+        },
+        {
+          key: 'energy-used',
+          label: 'Energy Used',
+          values: points.map((point) => {
+            if (point.energy_kwh == null || usageRatio == null) return null;
+            return point.energy_kwh * usageRatio;
+          }),
+          color: CHART_COLORS.accent,
+          mode: 'bar',
+        },
+      ]}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
+      yUnit="kWh"
+      mode="bar"
+      xValueFormatter={(seconds) => {
+        const date = new Date(seconds * 1000);
+        return date.toLocaleString([], { month: 'short', day: 'numeric' });
+      }}
+      smoothing={0}
     />
   );
-}
-
-function buildSessionDistributionBands(sessions: ChargeSession[]) {
-  const buckets: Array<{ label: string; min: number; max?: number }> = [
-    { label: '<10 kWh', min: 0, max: 10 },
-    { label: '10-25 kWh', min: 10, max: 25 },
-    { label: '25-50 kWh', min: 25, max: 50 },
-    { label: '50-75 kWh', min: 50, max: 75 },
-    { label: '75-100 kWh', min: 75, max: 100 },
-    { label: '100+ kWh', min: 100 },
-  ];
-
-  return buckets.map((bucket) => {
-    const inBand = sessions.filter((session) => {
-      const energy = session.energy_added_kwh;
-      if (energy == null || !Number.isFinite(energy) || energy <= 0) return false;
-      if (bucket.max == null) return energy >= bucket.min;
-      return energy >= bucket.min && energy < bucket.max;
-    });
-
-    const rates = inBand
-      .map((session) => session.peak_power_kw)
-      .filter((value): value is number => value != null && Number.isFinite(value) && value > 0);
-    const averageRateKw = rates.length > 0
-      ? rates.reduce((sum, value) => sum + value, 0) / rates.length
-      : null;
-
-    return {
-      label: bucket.label,
-      count: inBand.length,
-      averageRateKw,
-    };
-  });
 }
 
 function ChargeSessionCurveChart({
@@ -941,28 +946,6 @@ function ProjectedRangeMileageChart({
     }))
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
 
-  const projectedValues = rows
-    .map((point) => point.projectedRangeMi)
-    .filter((value): value is number => value != null && Number.isFinite(value));
-
-  let yRange: [number, number] | undefined;
-  let ySplits: number[] | undefined;
-  if (projectedValues.length > 0) {
-    const minProjected = Math.min(...projectedValues);
-    const maxProjected = Math.max(...projectedValues);
-
-    const maxAxis = Math.ceil(maxProjected / 10) * 10 + 10;
-    const minAxis = Math.min(200, Math.floor(minProjected / 10) * 10);
-    const span = maxAxis - minAxis;
-    const tickStep = span <= 80 ? 5 : 10;
-
-    yRange = [minAxis, maxAxis];
-    ySplits = Array.from(
-      { length: Math.floor((maxAxis - minAxis) / tickStep) + 1 },
-      (_, index) => minAxis + index * tickStep,
-    );
-  }
-
   return (
     <RichTimeSeriesChart
       points={rows.map((point) => ({ ts: point.ts }))}
@@ -987,8 +970,6 @@ function ProjectedRangeMileageChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
-      yRange={yRange}
-      ySplits={ySplits}
       yRightUnit="mi"
       mode={definition.mode}
       smoothing={smoothing}

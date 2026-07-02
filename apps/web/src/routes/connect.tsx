@@ -7,7 +7,7 @@ import { api, useAuth, useVehicles } from '@riviamigo/hooks';
 import type { ConnectedRivianVehicle, ConnectResult } from '@riviamigo/types';
 import { PageLayout, Button, Input, Card } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { ConnectedVehicleSuccess } from '../components/connect/ConnectedVehicleSuccess';
 import { Car, Check, KeyRound, ShieldCheck, Zap } from 'lucide-react';
 
@@ -22,7 +22,7 @@ export const connectRoute = createRoute({
 });
 
 function ConnectPage() {
-  return <AuthGuard><ConnectContent /></AuthGuard>;
+  return <ProtectedRoute><ConnectContent /></ProtectedRoute>;
 }
 
 export function ConnectContent() {

@@ -12,7 +12,7 @@ import {
   importDashboardYaml,
 } from '@riviamigo/dashboards';
 import { useMe } from '@riviamigo/hooks';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { Edit2, Lock, Copy, Download, Upload } from 'lucide-react';
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
 import { canManageSystemDashboards, createDefaultDashboardEditActions } from '../components/dashboard/DashboardPage';
@@ -27,7 +27,7 @@ export const userDashboardRoute = createRoute({
 });
 
 function UserDashboardPageWrapper() {
-  return <AuthGuard><UserDashboardPage /></AuthGuard>;
+  return <ProtectedRoute><UserDashboardPage /></ProtectedRoute>;
 }
 
 function UserDashboardPage() {

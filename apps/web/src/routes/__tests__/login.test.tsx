@@ -9,15 +9,21 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 });
 
 const mockNavigate = vi.fn();
+let mockSearch = {} as { redirect?: string };
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
-  return { ...actual, useNavigate: () => mockNavigate };
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useSearch: () => mockSearch,
+  };
 });
 
 const mockLogin    = vi.fn();
 const mockRegister = vi.fn();
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ login: mockLogin, register: mockRegister }),
+  useDocumentTheme: () => false,
 }));
 
 import { LoginPage } from '../login';
@@ -26,6 +32,7 @@ beforeEach(() => {
   mockNavigate.mockClear();
   mockLogin.mockClear();
   mockRegister.mockClear();
+  mockSearch = {};
 });
 
 describe('LoginPage', () => {
@@ -99,6 +106,21 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: '/' }));
+  });
+
+  it('navigates back to the requested protected route after successful login', async () => {
+    mockLogin.mockResolvedValue(undefined);
+    mockSearch = { redirect: '/charging?view=table' };
+    const user = userEvent.setup();
+    render(<LoginPage />);
+    const passwordInput = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'a@b.com');
+    expect(passwordInput).not.toBeNull();
+    await user.type(passwordInput!, 'pw');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging?view=table' }));
   });
 
   it('shows an error message when login fails', async () => {

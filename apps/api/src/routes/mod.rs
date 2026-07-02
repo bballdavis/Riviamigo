@@ -350,6 +350,7 @@ async fn health() -> &'static str {
 fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClass {
     if path.starts_with("/v1/auth/login")
         || path.starts_with("/v1/auth/register")
+        || path.starts_with("/v1/auth/bootstrap")
         || path.starts_with("/v1/auth/refresh")
     {
         return RateLimitClass::AuthPublic;

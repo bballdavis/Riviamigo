@@ -157,6 +157,7 @@ interface ApiFailureDetail {
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/login',
   '/v1/auth/register',
+  '/v1/auth/bootstrap',
   '/v1/auth/refresh',
 ]);
 
@@ -255,6 +256,19 @@ class ApiClient {
     retryOnUnauthorized = true,
     reportErrors = true
   ): Promise<T> {
+    const res = await this.requestResponse(method, path, body, params, retryOnUnauthorized, reportErrors);
+    if (res.status === 204) return undefined as T;
+    return res.json() as Promise<T>;
+  }
+
+  private async requestResponse(
+    method: string,
+    path: string,
+    body?: unknown,
+    params?: Record<string, string | number>,
+    retryOnUnauthorized = true,
+    reportErrors = true,
+  ): Promise<Response> {
     this.assertRateLimitCooldown(method, path);
 
     let url = `${getBase()}${path}`;
@@ -279,7 +293,7 @@ class ApiClient {
         try {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
-          return this.request<T>(method, path, body, params, false);
+          return this.requestResponse(method, path, body, params, false, reportErrors);
         } catch {
           this.clearTokens();
           const detail: ApiFailureDetail = {
@@ -310,8 +324,7 @@ class ApiClient {
       throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
     }
 
-    if (res.status === 204) return undefined as T;
-    return res.json() as Promise<T>;
+    return res;
   }
 
   // ── Public escape-hatch for packages that can't depend on `request` directly ──
@@ -336,9 +349,14 @@ class ApiClient {
   }
 
   async refresh(): Promise<AuthTokens> {
-    // Refresh can legitimately return 401 when no refresh cookie exists
-    // (first load, logged out, expired session). Keep this path quiet.
+    // Used for automatic retry after a protected API call gets a 401.
     return this.request('POST', '/v1/auth/refresh', undefined, undefined, true, false);
+  }
+
+  async resumeSession(): Promise<AuthTokens | null> {
+    const res = await this.requestResponse('POST', '/v1/auth/bootstrap', undefined, undefined, false, false);
+    if (res.status === 204) return null;
+    return res.json() as Promise<AuthTokens>;
   }
 
   async me(): Promise<AuthMeResponse> {
@@ -562,32 +580,14 @@ class ApiClient {
   }
 
   async downloadBackupArtifact(artifactId: string): Promise<{ blob: Blob; fileName: string }> {
-    const path = '/v1/admin/backups/artifacts/:artifactId/download';
-    this.assertRateLimitCooldown('GET', path);
-
-    const url = `${getBase()}/v1/admin/backups/artifacts/${artifactId}/download`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: this.headers(),
-      credentials: 'include',
-    });
-
-    if (!res.ok) {
-      const rateLimitHeaders = parseRateLimitHeaders(res.headers, 'GET', path);
-      const responseBody = await res.json().catch(() => null);
-      const err: ApiError = responseBody?.error ?? { code: 'unknown', message: res.statusText };
-      const detail: ApiFailureDetail = {
-        status: res.status,
-        code: err.code,
-        message: err.message,
-        method: 'GET',
-        path,
-        ...rateLimitHeaders,
-      };
-      if (res.status === 429) this.rememberRateLimitCooldown(detail);
-      this.reportFailure(detail);
-      throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
-    }
+    const res = await this.requestResponse(
+      'GET',
+      `/v1/admin/backups/artifacts/${artifactId}/download`,
+      undefined,
+      undefined,
+      true,
+      true,
+    );
 
     const disposition = res.headers.get('content-disposition') ?? '';
     const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
@@ -1212,6 +1212,7 @@ function parsePositiveNumberHeader(value: string | null) {
 function inferClientRateLimitClass(method: string, path: string) {
   if (path.startsWith('/v1/auth/login')
     || path.startsWith('/v1/auth/register')
+    || path.startsWith('/v1/auth/bootstrap')
     || path.startsWith('/v1/auth/refresh')) {
     return 'auth_public';
   }
@@ -1234,6 +1235,7 @@ function inferClientRateLimitClass(method: string, path: string) {
 }
 
 function classifyClientRequestSource(path: string) {
+  if (path === '/v1/auth/bootstrap') return 'bootstrap';
   if (path === '/v1/auth/refresh') return 'refresh';
   if (path === '/v1/auth/me' || path === '/v1/auth/preferences') return 'metadata';
   if (path === '/v1/vehicles/live') return 'live_websocket';
