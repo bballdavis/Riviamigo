@@ -24,7 +24,7 @@ import {
   TriangleAlert,
   Wrench,
 } from 'lucide-react';
-import { api, useAuth, useCurrentVehicleStatus, useVehicleHealth, useVehicles } from '@riviamigo/hooks';
+import { api, useAuth, useAuthReady, useCurrentVehicleStatus, useVehicleHealth, useVehicles } from '@riviamigo/hooks';
 import type { VehicleHealthClosures, VehicleHealthTires, VehicleImages } from '@riviamigo/types';
 import {
   Badge,
@@ -39,7 +39,7 @@ import {
 } from '@riviamigo/ui/primitives';
 import { formatPressure } from '@riviamigo/ui/lib/utils';
 import { AppLayout } from '../components/layout/AppLayout';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { rootRoute } from './__root';
 
@@ -54,15 +54,12 @@ export const healthRoute = createRoute({
 });
 
 function VehicleHealthPage() {
-  return (
-    <AuthGuard>
-      <VehicleHealthContent />
-    </AuthGuard>
-  );
+  return <ProtectedRoute><VehicleHealthContent /></ProtectedRoute>;
 }
 
 function VehicleHealthContent() {
   const { accessToken, defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
+  const authReady = useAuthReady();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
   const { data: vehicles } = useVehicles();
   const availableVehicles = vehicles ?? [];
@@ -73,7 +70,7 @@ function VehicleHealthContent() {
   const { data: images } = useQuery({
     queryKey: ['vehicles', 'images', effectiveVehicleId],
     queryFn: () => api.vehicleImages(effectiveVehicleId!),
-    enabled: Boolean(effectiveVehicleId) && !!accessToken,
+    enabled: authReady && Boolean(effectiveVehicleId) && !!accessToken,
   });
 
   React.useEffect(() => {

@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
-import { api, useAuth, useMe, useVehicles } from '@riviamigo/hooks';
+import { api, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
 import type { ApiAccessLevel, UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
@@ -28,7 +28,7 @@ import {
   Button, Badge, ThemeToggle, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
-import { AuthGuard } from '../components/layout/AuthGuard';
+import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { BackupSection } from '../components/settings/BackupSection';
 import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
@@ -376,11 +376,12 @@ function DashboardSettingsList({
 }
 
 function SettingsPage() {
-  return <AuthGuard><SettingsContent /></AuthGuard>;
+  return <ProtectedRoute><SettingsContent /></ProtectedRoute>;
 }
 
 export function SettingsContent() {
   const { accessToken, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
+  const authReady = useAuthReady();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
@@ -421,19 +422,19 @@ export function SettingsContent() {
   const apiKeys = useQuery({
     queryKey: ['api-keys'],
     queryFn: () => api.listApiKeys(),
-    enabled: activeSection === 'api' && !!accessToken,
+    enabled: authReady && activeSection === 'api' && !!accessToken,
   });
 
   const apiCatalog = useQuery({
     queryKey: ['api-catalog'],
     queryFn: () => api.getApiCatalog(),
-    enabled: activeSection === 'api' && !!accessToken,
+    enabled: authReady && activeSection === 'api' && !!accessToken,
   });
 
   const stewardship = useQuery({
     queryKey: ['rivian-stewardship'],
     queryFn: () => api.getRivianStewardship(),
-    enabled: activeSection === 'raw' && isAdmin && !!accessToken,
+    enabled: authReady && activeSection === 'raw' && isAdmin && !!accessToken,
   });
 
   const dashboards = useDashboards();
@@ -445,7 +446,7 @@ export function SettingsContent() {
   const unitPreferencesQuery = useQuery({
     queryKey: ['unit-preferences'],
     queryFn: () => api.getUnitPreferences(),
-    enabled: !!accessToken,
+    enabled: authReady && !!accessToken,
   });
 
   React.useEffect(() => {
@@ -467,7 +468,7 @@ export function SettingsContent() {
   const rawTelemetry = useQuery({
     queryKey: ['raw-telemetry', rawVehicleId],
     queryFn: () => api.getRawTelemetry(rawVehicleId, 25),
-    enabled: activeSection === 'raw' && !!rawVehicleId && !!accessToken,
+    enabled: authReady && activeSection === 'raw' && !!rawVehicleId && !!accessToken,
   });
 
   React.useEffect(() => {
@@ -479,12 +480,12 @@ export function SettingsContent() {
   const vehicleMembers = useQuery({
     queryKey: ['vehicle-members', sharingVehicleId],
     queryFn: () => api.listVehicleMembers(sharingVehicleId!),
-    enabled: activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
+    enabled: authReady && activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
   });
   const vehicleInvites = useQuery({
     queryKey: ['vehicle-invites', sharingVehicleId],
     queryFn: () => api.listVehicleInvites(sharingVehicleId!),
-    enabled: activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
+    enabled: authReady && activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
   });
 
   React.useEffect(() => {

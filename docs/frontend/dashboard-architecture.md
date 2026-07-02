@@ -30,6 +30,7 @@ This document defines the approved layering for dashboard work and the package b
 Route files should do only the following:
 
 - declare path, params, and search state
+- mount the protected-route wrapper for authenticated dashboard pages
 - mount a shared dashboard shell or route-local page component
 - pass explicit page composition hooks such as hero panels or tabs
 
@@ -39,7 +40,6 @@ Route files should not directly recreate dashboard scaffolding that already exis
 
 `DashboardPageShell` is the shared page scaffold. It owns:
 
-- auth guard wrapping
 - app layout and page layout
 - dashboard config fetch with fallback to bundled defaults
 - date range state
@@ -48,6 +48,8 @@ Route files should not directly recreate dashboard scaffolding that already exis
 - rendering of common actions around the dashboard
 
 If a new dashboard page needs standard dashboard behavior, start here instead of creating a second scaffold.
+
+Authenticated route entrypoints own the auth boundary. They should mount the shared protected-route wrapper before any dashboard page component so protected hooks cannot fire during auth bootstrap or stale-session recovery.
 
 ### 3. Page Composition Layer
 

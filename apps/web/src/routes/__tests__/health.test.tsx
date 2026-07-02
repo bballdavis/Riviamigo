@@ -113,6 +113,7 @@ const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => healthPageMocks.auth,
+  useAuthReady: () => true,
   useVehicles: () => ({ data: healthPageMocks.vehicles }),
   useVehicleHealth: (vehicleId?: string | null) => mockUseVehicleHealth(vehicleId),
   useCurrentVehicleStatus: (vehicleId?: string | null) => mockUseCurrentVehicleStatus(vehicleId),

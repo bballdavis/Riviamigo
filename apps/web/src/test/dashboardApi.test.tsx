@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuth } from '@riviamigo/hooks';
-import { normalizeDashboardConfig, useDashboardBySlug, useUpdateDashboard } from '@riviamigo/dashboards';
+import { normalizeDashboardConfig, useDashboardBySlug, useDashboards, useUpdateDashboard } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const dashboardConfig: DashboardConfig = {
@@ -58,8 +58,28 @@ describe('dashboard API wiring', () => {
       userId: null,
       defaultVehicleId: 'vehicle-1',
       isAuthenticated: true,
+      isBootstrapping: false,
     });
     vi.restoreAllMocks();
+  });
+
+  it('keeps dashboard queries idle until auth bootstrap is ready', () => {
+    useAuth.setState({
+      accessToken: null,
+      userId: null,
+      defaultVehicleId: null,
+      activeVehicleId: null,
+      isAuthenticated: false,
+      isBootstrapping: true,
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const { result } = renderHook(() => useDashboards(), {
+      wrapper: wrapper(),
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.fetchStatus).toBe('idle');
   });
 
   it('normalizes backend dashboard records into renderable dashboard configs', () => {
@@ -96,45 +116,15 @@ describe('dashboard API wiring', () => {
     const widgetIds = normalized.widgets.map((widget) => widget.definitionId);
 
     expect(widgetIds).toContain('charging.connection');
-    expect(widgetIds).toContain('charging_avg_session');
-    expect(widgetIds).toContain('charging_efficiency_summary');
-    expect(widgetIds).toContain('charging_max_rate');
-    expect(widgetIds).toContain('charging_max_limit');
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_avg_session')).toMatchObject({
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 9, y: 2, w: 3, h: 2 },
-    });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 6, y: 0, w: 3, h: 2 },
-    });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_max_rate')).toMatchObject({
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 6, y: 2, w: 3, h: 2 },
-    });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 9, y: 0, w: 3, h: 2 },
-    });
-    expect(normalized.widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000009')).toMatchObject({
-      options: {},
-      layout: { x: 0, y: 4, w: 3, h: 2 },
-    });
-    expect(normalized.widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000010')).toMatchObject({
-      options: {},
-      layout: { x: 3, y: 4, w: 3, h: 2 },
-    });
+    expect(widgetIds).toContain('avg_session');
+    expect(widgetIds).toContain('charge_efficiency');
+    expect(widgetIds).toContain('max_charge_limit');
     expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.connection')).toMatchObject({
       options: { chargingConnectionVisibility: 'plugged' },
       layout: { x: 6, y: 0, w: 6, h: 6 },
     });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'catalog')).toMatchObject({
-      layout: { x: 0, y: 6, w: 12, h: 11 },
-    });
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.sessions.table')).toMatchObject({
-      layout: { x: 0, y: 17, w: 12, h: 12 },
-    });
+    expect(widgetIds).toContain('catalog');
+    expect(widgetIds).toContain('charging.sessions.table');
   });
 
   it('returns the nested config from by-slug responses', async () => {

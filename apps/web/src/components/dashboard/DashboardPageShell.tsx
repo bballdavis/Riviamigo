@@ -10,7 +10,6 @@ import {
 import type { DashboardConfig, WidgetCtx } from '@riviamigo/dashboards';
 import { PiSpeedometerFill, PiSpeedometerLight } from 'react-icons/pi';
 import { AppLayout } from '../layout/AppLayout';
-import { AuthGuard } from '../layout/AuthGuard';
 import { NoVehicleState } from '../layout/NoVehicleState';
 import {
   DEFAULT_PRESET,
@@ -53,11 +52,7 @@ export interface DashboardPageShellProps {
 }
 
 export function DashboardPageShell(props: DashboardPageShellProps) {
-  return (
-    <AuthGuard>
-      <DashboardPageShellContent {...props} />
-    </AuthGuard>
-  );
+  return <DashboardPageShellContent {...props} />;
 }
 
 function DashboardPageShellContent({
