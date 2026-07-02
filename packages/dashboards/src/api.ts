@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuth, api } from '@riviamigo/hooks';
+import { useAuthReady, api } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
 import { sanitizeDashboardConfig } from './layout';
 import type { DashboardConfig, WidgetInstance } from './schema';
@@ -172,14 +172,14 @@ function dashboardMutationBody(config: DashboardConfig) {
 }
 
 export function useDashboards() {
-  const { accessToken } = useAuth();
+  const authReady = useAuthReady();
   return useQuery<DashboardConfig[]>({
     queryKey: ['dashboards'],
     queryFn: async () => {
       const records = await api.apiFetch<unknown[]>('GET', BASE);
       return records.map(normalizeDashboardConfig);
     },
-    enabled: !!accessToken,
+    enabled: authReady,
     staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -188,11 +188,11 @@ export function useDashboards() {
 }
 
 export function useDashboardBySlug(slug: string | null) {
-  const { accessToken } = useAuth();
+  const authReady = useAuthReady();
   return useQuery<DashboardConfig>({
     queryKey: ['dashboards', 'slug', slug],
     queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/by-slug/${slug}`)),
-    enabled: !!accessToken && !!slug,
+    enabled: authReady && !!slug,
     staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

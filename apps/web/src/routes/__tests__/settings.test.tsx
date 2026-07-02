@@ -194,6 +194,7 @@ vi.mock('@riviamigo/hooks', () => ({
     updateVehicleName: vi.fn().mockResolvedValue({}),
   },
   useAuth:    () => settingsMocks.auth,
+  useAuthReady: () => true,
   useMe:      () => ({ data: settingsMocks.me }),
   useVehicles: () => ({
     data: [{

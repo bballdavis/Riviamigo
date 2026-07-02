@@ -5,6 +5,8 @@
 - 30-day HttpOnly refresh tokens, rotated on use
 - API keys with SHA256 hashing, configurable TTL (default 1 year)
 - Argon2 password hashing
+- Protected-route bootstrap uses `POST /v1/auth/bootstrap`, which returns fresh tokens when a valid refresh cookie exists and `204 No Content` when no resumable session exists, so first-load logged-out state does not depend on a visible refresh 401.
+- The web app attempts one refresh on protected 401s, then emits a single auth-expired flow: toast, session clear, redirect to `/login`, and resume to the original in-app route after successful sign-in.
 
 ## Transport Security
 - All traffic via nginx, TLS 1.2/1.3 only

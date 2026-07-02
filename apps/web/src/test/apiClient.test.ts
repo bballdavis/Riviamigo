@@ -289,6 +289,45 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/login');
   });
 
+  it('quietly treats bootstrap without a resumable session as no auth state', async () => {
+    const authExpired = vi.fn();
+    const toast = vi.fn();
+    window.addEventListener('riviamigo:auth-expired', authExpired);
+    window.addEventListener('riviamigo:toast', toast as EventListener);
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, { status: 204 }) as Response,
+    );
+
+    await expect(api.resumeSession()).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/bootstrap');
+    expect(authExpired).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+
+    window.removeEventListener('riviamigo:auth-expired', authExpired);
+    window.removeEventListener('riviamigo:toast', toast as EventListener);
+  });
+
+  it('returns tokens from a successful bootstrap session resume', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        access_token: 'fresh-token',
+        expires_in: 900,
+        default_vehicle_id: 'vehicle-1',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await expect(api.resumeSession()).resolves.toMatchObject({
+      access_token: 'fresh-token',
+      default_vehicle_id: 'vehicle-1',
+    });
+  });
+
   it('coalesces simultaneous automatic refreshes behind one refresh request', async () => {
     api.setToken('expired-token');
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -357,6 +396,28 @@ describe('api client dashboard contracts', () => {
       api.vehicleStatus('vehicle-1'),
       api.vehicleStatus('vehicle-1'),
     ])).rejects.toMatchObject({
+      status: 401,
+      code: 'AUTH_EXPIRED',
+    });
+
+    expect(authExpired).toHaveBeenCalledTimes(1);
+    window.removeEventListener('riviamigo:auth-expired', authExpired);
+  });
+
+  it('routes backup downloads through the shared auth-expired flow', async () => {
+    api.setToken('expired-token');
+    const authExpired = vi.fn();
+    window.addEventListener('riviamigo:auth-expired', authExpired);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        error: { code: 'unauthorized', message: 'expired' },
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await expect(api.downloadBackupArtifact('artifact-1')).rejects.toMatchObject({
       status: 401,
       code: 'AUTH_EXPIRED',
     });
