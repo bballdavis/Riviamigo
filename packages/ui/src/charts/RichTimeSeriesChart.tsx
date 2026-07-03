@@ -5,7 +5,7 @@ import 'uplot/dist/uPlot.min.css';
 import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_COLORS, CHART_FONT } from './ChartProvider';
-import { formatSmartNumber } from '../lib/utils';
+import { formatNumber, formatSmartNumber } from '../lib/utils';
 
 export interface RichSeries {
   key: string;
@@ -35,7 +35,9 @@ export interface RichTimeSeriesChartProps {
   xSecondaryFormatter?: ((value: number) => string) | undefined;
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
   smoothing?: number | undefined;
+  xRange?: [number, number] | undefined;
   yRange?: [number, number] | undefined;
+  yRightRange?: [number, number] | undefined;
   stepInterpolation?: boolean | undefined;
   xSplits?: number[] | undefined;
 }
@@ -61,15 +63,38 @@ function formatDateForSpan(seconds: number, spanSeconds: number) {
   return d.toLocaleString([], { month: 'short', year: '2-digit' });
 }
 
-function formatValue(value: number | null | undefined, unit?: string) {
-  if (value == null || !Number.isFinite(value)) return '-';
-  if (unit === '%') return `${Math.round(value)}%`;
-  const formatted = formatSmartNumber(value, Math.abs(value) >= 100 ? 0 : 1);
-  return unit ? `${formatted} ${unit}` : formatted;
+export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) {
+  const finiteValues = values
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Math.abs(value) < 1e-12 ? 0 : value)
+    .sort((a, b) => a - b);
+
+  if (finiteValues.length < 2) return 0;
+
+  let minStep = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < finiteValues.length; index += 1) {
+    const step = Math.abs(finiteValues[index]! - finiteValues[index - 1]!);
+    if (step > 1e-9 && step < minStep) {
+      minStep = step;
+    }
+  }
+
+  if (!Number.isFinite(minStep)) return 0;
+
+  let precision = 0;
+  let scaled = minStep;
+  while (precision < maxPrecision && Math.abs(scaled - Math.round(scaled)) > 1e-6) {
+    precision += 1;
+    scaled *= 10;
+  }
+
+  return precision;
 }
 
-function formatNumericAxis(value: number, unit?: string) {
-  const formatted = unit === '%' ? `${Math.round(value)}` : formatSmartNumber(value, Math.abs(value) >= 100 ? 0 : 1);
+export function formatChartNumber(value: number | null | undefined, unit?: string, precision = 0) {
+  if (value == null || !Number.isFinite(value)) return '-';
+  const decimals = Math.max(0, precision);
+  const formatted = decimals > 0 ? formatNumber(value, decimals) : formatSmartNumber(value, 0);
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
@@ -268,9 +293,11 @@ export function RichTimeSeriesChart({
   xUnit,
   xValueFormatter,
   xSecondaryFormatter,
-  yValueFormatter = formatValue,
+  yValueFormatter,
   smoothing = 0,
+  xRange,
   yRange,
+  yRightRange,
   stepInterpolation = false,
   xSplits,
 }: RichTimeSeriesChartProps) {
@@ -287,6 +314,8 @@ export function RichTimeSeriesChart({
   const xUnitRef = React.useRef(xUnit);
   const xValueFormatterRef = React.useRef(xValueFormatter);
   const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
+  const yPrecisionRef = React.useRef(0);
+  const yRightPrecisionRef = React.useRef(0);
   const alignedDataRef = React.useRef<AlignedData>([[], []]);
   seriesRef.current = series;
   yUnitRef.current = yUnit;
@@ -314,11 +343,11 @@ export function RichTimeSeriesChart({
   const structureKey = React.useMemo(
     () =>
       `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
-      `${yRange ? yRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
+      `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, yRange, xSplits, xSecondaryFormatter, yRightUnit, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -386,6 +415,19 @@ export function RichTimeSeriesChart({
           : {}),
     };
 
+    const xScaleConfig: uPlot.Scale = {
+      time: xTime,
+      auto: !xRange,
+      ...(xRange ? { range: () => xRange } : {}),
+    };
+
+    const rightYScaleConfig: uPlot.Scale | undefined = hasRightAxis
+      ? {
+          auto: !yRightRange,
+          ...(yRightRange ? { range: () => yRightRange } : {}),
+        }
+      : undefined;
+
     const xAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
       grid: { stroke: CHART_COLORS.grid, width: 1 },
@@ -402,7 +444,7 @@ export function RichTimeSeriesChart({
         if (xTimeRef.current) {
           return vals.map((v) => formatDateForSpan(v, xSpan));
         }
-        return vals.map((v) => formatNumericAxis(v, xUnitRef.current));
+        return vals.map((v) => formatChartNumber(v, xUnitRef.current, 0));
       },
     };
 
@@ -436,7 +478,16 @@ export function RichTimeSeriesChart({
         return estimateYLabelWidth(values as string[]);
       },
       gap: 8,
-      values: (_u, vals) => vals.map((v) => yValueFormatterRef.current(v, yUnitRef.current)),
+      values: (_u, vals) => {
+        const precision = getAdaptiveDecimalPrecision(vals);
+        yPrecisionRef.current = precision;
+        return vals.map((v) => {
+          if (yValueFormatterRef.current) {
+            return yValueFormatterRef.current(v, yUnitRef.current);
+          }
+          return formatChartNumber(v, yUnitRef.current, precision);
+        });
+      },
     };
 
     // Right Y axis — only added when at least one series uses scale 'y2'.
@@ -452,8 +503,16 @@ export function RichTimeSeriesChart({
             return estimateYLabelWidth(values as string[]);
           },
           gap: 8,
-          values: (_u, vals) =>
-            vals.map((v) => yValueFormatterRef.current(v, yRightUnitRef.current)),
+          values: (_u, vals) => {
+            const precision = getAdaptiveDecimalPrecision(vals);
+            yRightPrecisionRef.current = precision;
+            return vals.map((v) => {
+              if (yValueFormatterRef.current) {
+                return yValueFormatterRef.current(v, yRightUnitRef.current);
+              }
+              return formatChartNumber(v, yRightUnitRef.current, precision);
+            });
+          },
         }
       : null;
 
@@ -478,9 +537,9 @@ export function RichTimeSeriesChart({
       },
       legend: { show: false },
       scales: {
-        x: { time: xTime },
+        x: xScaleConfig,
         y: yScaleConfig,
-        ...(hasRightAxis ? { y2: { auto: true } } : {}),
+        ...(hasRightAxis && rightYScaleConfig ? { y2: rightYScaleConfig } : {}),
       },
       axes: allAxes,
       series: makeUSeries(),
@@ -501,7 +560,11 @@ export function RichTimeSeriesChart({
                 const value = data[seriesIndex + 1]?.[idx] as number | null | undefined;
                 // Use the right-axis unit for y2 series, primary unit for y series.
                 const unit = item.yScale === 'y2' ? yRightUnitRef.current : yUnitRef.current;
-                return `${item.label}: ${yValueFormatterRef.current(value, unit)}`;
+                const precision = item.yScale === 'y2' ? yRightPrecisionRef.current : yPrecisionRef.current;
+                if (yValueFormatterRef.current) {
+                  return `${item.label}: ${yValueFormatterRef.current(value, unit)}`;
+                }
+                return `${item.label}: ${formatChartNumber(value, unit, precision)}`;
               })
               .filter((row): row is string => Boolean(row));
 
@@ -512,11 +575,11 @@ export function RichTimeSeriesChart({
                 tooltipHeader = xValueFormatterRef.current(timestamp as number);
               } else if (xTimeRef.current) {
                 // Use actual data span so tooltip granularity matches axis labels.
-                const xs = u.data[0] as number[];
+                const xs = u.data[0] as number[]; 
                 const span = xs.length > 1 ? xs[xs.length - 1]! - xs[0]! : 86400;
                 tooltipHeader = formatDateForSpan(timestamp as number, span);
               } else {
-                tooltipHeader = formatNumericAxis(timestamp as number, xUnitRef.current);
+                tooltipHeader = formatChartNumber(timestamp as number, xUnitRef.current, 0);
               }
               if (xSecondaryFormatterRef.current) {
                 tooltipSubHeader = xSecondaryFormatterRef.current(timestamp as number);

@@ -54,8 +54,11 @@ vi.mock('@riviamigo/dashboards', () => ({
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <div data-testid="app-layout">{children}</div> }));
 vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('../../lib/dates', () => ({
+  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
   presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  getTimeframeRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
+  timeframeToQuery: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
   DEFAULT_PRESET: '30d',
   loadDashboardTimeframe: () => undefined,
   saveDashboardTimeframe: vi.fn(),
