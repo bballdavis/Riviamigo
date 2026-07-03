@@ -122,7 +122,14 @@ fn trusted_client_ip<T>(req: &Request<T>) -> Option<IpAddr> {
     let peer_ip = req
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
-        .map(|addr| addr.ip())?;
+        .map(|addr| addr.ip());
+
+    let Some(peer_ip) = peer_ip else {
+        // In some non-socket test/proxy contexts we do not get a connect-info
+        // extension. Fall back to loopback so the rate limiter can still key
+        // the request instead of turning the request into a hard failure.
+        return Some(IpAddr::from([127, 0, 0, 1]));
+    };
 
     if !is_trusted_proxy(peer_ip) {
         return Some(peer_ip);
@@ -146,4 +153,27 @@ fn parse_forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
 
 fn is_trusted_proxy(ip: IpAddr) -> bool {
     ip.is_loopback()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Request;
+
+    #[test]
+    fn trusted_proxy_key_extractor_falls_back_without_connect_info() {
+        let extractor = TrustedProxyIpKeyExtractor;
+        let req = Request::builder().uri("/v1/charging/chart-series").body(()).unwrap();
+
+        let key = extractor.extract(&req).expect("key should be extractable");
+
+        assert_eq!(key, "ip:127.0.0.1");
+    }
+
+    #[test]
+    fn trusted_client_ip_falls_back_without_connect_info() {
+        let req = Request::builder().uri("/v1/charging/chart-series").body(()).unwrap();
+
+        assert_eq!(trusted_client_ip(&req), Some(IpAddr::from([127, 0, 0, 1])));
+    }
 }
