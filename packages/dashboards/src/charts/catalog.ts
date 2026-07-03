@@ -79,7 +79,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: true,
         axes: {
-          y: { label: 'Battery level', unit: definition.yUnit },
+          y: axisCapability('Battery level', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };
@@ -87,7 +87,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: true,
         axes: {
-          y: { label: 'Range', unit: definition.yUnit },
+          y: axisCapability('Range', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };
@@ -95,7 +95,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: false,
         axes: {
-          y: { label: 'Energy charged', unit: definition.yUnit },
+          y: axisCapability('Energy charged', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };
@@ -129,7 +129,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: true,
         axes: {
-          y: { label: 'Battery drain', unit: definition.yUnit },
+          y: axisCapability('Battery drain', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };
@@ -137,7 +137,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: true,
         axes: {
-          y: { label: 'Battery health', unit: definition.yUnit },
+          y: axisCapability('Battery health', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };
@@ -146,7 +146,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
         smoothing: true,
         axes: {
           x: { label: 'Mileage', unit: 'mi' },
-          y: { label: 'Usable capacity', unit: definition.yUnit },
+          y: axisCapability('Usable capacity', definition.yUnit),
         },
         xDomainSource: 'chart-local',
       };
@@ -154,7 +154,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: true,
         axes: {
-          y: { label: 'Projected max range', unit: definition.yUnit },
+          y: axisCapability('Projected max range', definition.yUnit),
           y2: { label: 'Mileage', unit: 'mi' },
         },
         xDomainSource: 'dashboard-timeframe',
@@ -166,6 +166,10 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
         xDomainSource: 'dashboard-timeframe',
       };
   }
+}
+
+function axisCapability(label: string, unit?: string): DashboardChartAxisCapability {
+  return unit ? { label, unit } : { label };
 }
 
 function normalizeChartDefinition(definition: DashboardChartDefinition): DashboardChartDefinition {

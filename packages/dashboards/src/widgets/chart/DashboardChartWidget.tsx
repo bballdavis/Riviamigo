@@ -1,6 +1,6 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal, X } from 'lucide-react';
 import {
   useBatteryMileage,
   useChargeCurve,
@@ -179,7 +179,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     >
       <SlidersHorizontal className="h-4 w-4" />
     </button>
-      {settingsOpen ? (
+      {false ? (
         <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 w-52 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
           {/* Smooth curves toggle row */}
           <div className="flex items-center justify-between gap-3">
@@ -280,6 +280,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         chartTitle={activeChartDefinition?.title ?? instance.title ?? 'Chart'}
         capabilities={activeCapabilities}
         settings={activeSettings}
+        persistent={Boolean(ctx.updateWidgetOptions)}
         onClose={() => setSettingsOpen(false)}
         onToggleSmoothing={() =>
           updateActiveChartSettings((current) => ({
@@ -418,7 +419,7 @@ export function DashboardChartRenderer({
           daily={dailyChargeSeries}
           loading={chargingChartSeriesLoading}
           height={height}
-          yRange={yRange}
+          {...(yRange ? { yRange } : {})}
         />
       );
     case 'charge_session_curve':
@@ -431,8 +432,8 @@ export function DashboardChartRenderer({
           smoothing={rendererSmoothing}
           startedAt={ctx.from || null}
           sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
-          yRange={yRange}
-          yRightRange={yRightRange}
+          {...(yRange ? { yRange } : {})}
+          {...(yRightRange ? { yRightRange } : {})}
         />
       );
     case 'charging_curve_analysis':
@@ -442,12 +443,12 @@ export function DashboardChartRenderer({
           data={chargeCurveAnalysis}
           loading={chargeCurveAnalysisLoading}
           height={height}
-          xRange={xRange}
-          yRange={yRange}
+          {...(xRange ? { xRange } : {})}
+          {...(yRange ? { yRange } : {})}
         />
       );
     case 'efficiency_trend':
-      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={rendererSmoothing} yRange={yRange} />;
+      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={rendererSmoothing} {...(yRange ? { yRange } : {})} />;
     case 'efficiency_temperature':
       return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} />;
     case 'efficiency_mode':
@@ -464,8 +465,8 @@ export function DashboardChartRenderer({
           height={height}
           points={mileagePoints}
           smoothing={rendererSmoothing}
-          xRange={xRange}
-          yRange={yRange}
+          {...(xRange ? { xRange } : {})}
+          {...(yRange ? { yRange } : {})}
         />
       );
     case 'projected_range_mileage':
@@ -476,8 +477,8 @@ export function DashboardChartRenderer({
           height={height}
           points={mileagePoints}
           smoothing={rendererSmoothing}
-          yRange={yRange}
-          yRightRange={yRightRange}
+          {...(yRange ? { yRange } : {})}
+          {...(yRightRange ? { yRightRange } : {})}
         />
       );
   }
@@ -489,6 +490,7 @@ function renderSocHistoryChart(
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
   smoothing = 0,
+  manualYRange?: [number, number],
 ) {
   const values = data.map((point) => point.value).filter((value): value is number => value != null && Number.isFinite(value));
   const average = values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -510,7 +512,7 @@ function renderSocHistoryChart(
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
-      yRange={definition.yRange}
+      yRange={manualYRange ?? definition.yRange}
       stepInterpolation={definition.stepInterpolation && smoothing <= 0}
       mode={definition.mode}
       smoothing={smoothing}
@@ -524,6 +526,7 @@ function renderSingleChart(
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
   smoothing = 0,
+  manualYRange?: [number, number],
 ) {
   return (
     <RichTimeSeriesChart
@@ -533,7 +536,7 @@ function renderSingleChart(
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
-      yRange={definition.yRange}
+      yRange={manualYRange ?? definition.yRange}
       stepInterpolation={definition.stepInterpolation && smoothing <= 0}
       mode={definition.mode}
       smoothing={smoothing}
@@ -581,6 +584,8 @@ function ChargeSessionCurveChart({
   smoothing,
   startedAt,
   sessionEnergyKwh,
+  yRange,
+  yRightRange,
 }: {
   definition: DashboardChartDefinition;
   data: ChargeCurvePoint[];
@@ -589,6 +594,8 @@ function ChargeSessionCurveChart({
   smoothing: number;
   startedAt: string | null;
   sessionEnergyKwh: number | null;
+  yRange?: [number, number];
+  yRightRange?: [number, number];
 }) {
   const allRows = data.filter((point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw));
 
@@ -716,6 +723,8 @@ function ChargeSessionCurveChart({
       xUnit={useTime ? undefined : '%'}
       yUnit="kW"
       yRightUnit="kWh"
+      yRange={yRange}
+      yRightRange={yRightRange}
       mode="line"
       xValueFormatter={useTime ? undefined : (value) => `${Math.round(value)}%`}
       xSplits={xSplits}
@@ -729,11 +738,15 @@ function ChargingCurveAnalysisChart({
   data,
   loading,
   height,
+  xRange,
+  yRange,
 }: {
   definition: DashboardChartDefinition;
   data: ChargeCurveAnalysisPoint[];
   loading: boolean;
   height: number;
+  xRange?: [number, number];
+  yRange?: [number, number];
 }) {
   const rows = data
     .filter((point): point is ChargeCurveAnalysisPoint & { soc_pct: number; charge_rate_kw: number } =>
@@ -789,6 +802,8 @@ function ChargingCurveAnalysisChart({
       xTime={false}
       xUnit="%"
       yUnit="kW"
+      xRange={xRange}
+      yRange={yRange}
       mode="scatter"
       xValueFormatter={(value) => `${Math.round(value)}%`}
       smoothing={0}
@@ -904,11 +919,13 @@ function DailyEnergyChart({
   daily,
   loading,
   height,
+  yRange,
 }: {
   definition: DashboardChartDefinition;
   daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number }>;
   loading: boolean;
   height: number;
+  yRange?: [number, number];
 }) {
   const formatDayLabel = (seconds: number) => {
     const d = new Date(seconds * 1000);
@@ -923,6 +940,7 @@ function DailyEnergyChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
+      yRange={yRange}
       mode="bar"
       xValueFormatter={formatDayLabel}
       smoothing={0}
@@ -936,12 +954,14 @@ function EfficiencyTrendChart({
   loading,
   height,
   smoothing,
+  yRange,
 }: {
   definition: DashboardChartDefinition;
   trend: Array<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }>;
   loading: boolean;
   height: number;
   smoothing?: number;
+  yRange?: [number, number];
 }) {
   const unit = getEfficiencyUnit();
   return (
@@ -955,6 +975,7 @@ function EfficiencyTrendChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={unit}
+      yRange={yRange}
       mode={definition.mode}
       smoothing={smoothing}
     />
@@ -1034,12 +1055,16 @@ function BatteryCapacityMileageChart({
   loading,
   height,
   smoothing,
+  xRange,
+  yRange,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ x: number | null; y: number | null; degradationPct: number | null }>;
   loading: boolean;
   height: number;
   smoothing?: number;
+  xRange?: [number, number];
+  yRange?: [number, number];
 }) {
   const rows = points
     .filter((point): point is { x: number; y: number; degradationPct: number | null } => point.x != null && point.y != null)
@@ -1093,7 +1118,8 @@ function BatteryCapacityMileageChart({
       xTime={false}
       xUnit="mi"
       yUnit={definition.yUnit}
-      yRange={definition.yRange}
+      xRange={xRange}
+      yRange={yRange ?? definition.yRange}
       mode="scatter"
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
       smoothing={smoothing}
@@ -1107,12 +1133,16 @@ function ProjectedRangeMileageChart({
   loading,
   height,
   smoothing,
+  yRange: manualYRange,
+  yRightRange,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ ts: string; rangeMi: number | null; projectedMaxRangeMi: number | null; x: number | null }>;
   loading: boolean;
   height: number;
   smoothing?: number;
+  yRange?: [number, number];
+  yRightRange?: [number, number];
 }) {
   const rows = points
     .filter((point) => point.x != null)
@@ -1122,7 +1152,7 @@ function ProjectedRangeMileageChart({
       odometerMi: point.x,
     }))
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-  const yRange = getProjectedRangeMileageYRange(rows.map((point) => point.projectedRangeMi));
+  const yRange = manualYRange ?? getProjectedRangeMileageYRange(rows.map((point) => point.projectedRangeMi));
 
   return (
     <RichTimeSeriesChart
@@ -1150,6 +1180,7 @@ function ProjectedRangeMileageChart({
       yUnit={definition.yUnit}
       yRange={yRange}
       yRightUnit="mi"
+      yRightRange={yRightRange}
       mode={definition.mode}
       smoothing={smoothing}
     />
@@ -1194,6 +1225,432 @@ function normalizeCurveSmoothing(value: unknown) {
   if (typeof value === 'boolean') return value ? DEFAULT_SMOOTHING : 0;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.min(1, Math.max(0, value));
   return DEFAULT_SMOOTHING;
+}
+
+function normalizeChartSettingsMap(value: unknown): Record<string, DashboardChartDisplaySettings> {
+  if (!value || typeof value !== 'object') return {};
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(([chartId, chartSettings]) => {
+      const normalized = normalizeChartDisplaySettings(chartSettings);
+      return normalized ? [[chartId, normalized] as const] : [];
+    }),
+  );
+}
+
+function normalizeChartDisplaySettings(value: unknown): DashboardChartDisplaySettings | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const settings = value as Record<string, unknown>;
+  const normalizedAxes = normalizeChartAxisSettingsMap(settings.axes);
+  const normalized: DashboardChartDisplaySettings = {};
+
+  if ('smoothing' in settings) {
+    normalized.smoothing = normalizeCurveSmoothing(settings.smoothing);
+  }
+  if (Object.keys(normalizedAxes).length > 0) {
+    normalized.axes = normalizedAxes;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function normalizeChartAxisSettingsMap(value: unknown): Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> {
+  if (!value || typeof value !== 'object') return {};
+
+  const result: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> = {};
+  for (const [key, axisSettings] of Object.entries(value as Record<string, unknown>)) {
+    if (!AXIS_ORDER.includes(key as DashboardChartAxisId)) continue;
+    const normalized = normalizeChartAxisRangeSetting(axisSettings);
+    if (normalized) {
+      result[key as DashboardChartAxisId] = normalized;
+    }
+  }
+
+  return result;
+}
+
+function normalizeChartAxisRangeSetting(value: unknown): DashboardChartAxisRangeSetting | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const settings = value as Record<string, unknown>;
+  const mode = settings.mode === 'manual' ? 'manual' : settings.mode === 'auto' ? 'auto' : undefined;
+  const min = typeof settings.min === 'number' && Number.isFinite(settings.min) ? settings.min : undefined;
+  const max = typeof settings.max === 'number' && Number.isFinite(settings.max) ? settings.max : undefined;
+
+  if (!mode && min == null && max == null) return null;
+  return { ...(mode ? { mode } : {}), ...(min != null ? { min } : {}), ...(max != null ? { max } : {}) };
+}
+
+function resolveChartDisplaySettings(
+  allSettings: Record<string, DashboardChartDisplaySettings>,
+  chartId: string,
+  legacyCurveSmoothing: number,
+) {
+  const chartSettings = allSettings[chartId] ?? {};
+  const axes = chartSettings.axes ?? {};
+  return {
+    smoothing: chartSettings.smoothing ?? legacyCurveSmoothing,
+    axes,
+  };
+}
+
+function setChartSettingsEntry(
+  current: Record<string, DashboardChartDisplaySettings>,
+  chartId: string,
+  chartSettings: DashboardChartDisplaySettings,
+) {
+  const normalized = normalizeChartDisplaySettings(chartSettings);
+  if (!normalized) {
+    const { [chartId]: _removed, ...rest } = current;
+    return rest;
+  }
+  return {
+    ...current,
+    [chartId]: normalized,
+  };
+}
+
+function getManualAxisRange(setting: DashboardChartAxisRangeSetting | undefined) {
+  if (!setting || setting.mode !== 'manual') return undefined;
+  if (typeof setting.min !== 'number' || typeof setting.max !== 'number') return undefined;
+  if (!Number.isFinite(setting.min) || !Number.isFinite(setting.max)) return undefined;
+  if (setting.min >= setting.max) return undefined;
+  return [setting.min, setting.max] as [number, number];
+}
+
+function isMobileViewport() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  return window.matchMedia('(max-width: 639px)').matches;
+}
+
+interface ChartSettingsPanelProps {
+  open: boolean;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  chartTitle: string;
+  capabilities: DashboardChartSettingsCapabilities;
+  settings: DashboardChartDisplaySettings & { smoothing: number; axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> };
+  persistent: boolean;
+  onClose: () => void;
+  onToggleSmoothing: () => void;
+  onSmoothingChange: (next: number) => void;
+  onAxisModeChange: (axisId: DashboardChartAxisId, mode: DashboardChartAxisMode) => void;
+  onAxisValueChange: (axisId: DashboardChartAxisId, bound: 'min' | 'max', value: number | undefined) => void;
+}
+
+function ChartSettingsPanel({
+  open,
+  triggerRef,
+  chartTitle,
+  capabilities,
+  settings,
+  persistent,
+  onClose,
+  onToggleSmoothing,
+  onSmoothingChange,
+  onAxisModeChange,
+  onAxisValueChange,
+}: ChartSettingsPanelProps) {
+  const [isMobile, setIsMobile] = React.useState(isMobileViewport);
+  const [position, setPosition] = React.useState({ top: 0, left: 0, visibility: 'hidden' as 'hidden' | 'visible' });
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
+  const smoothingOn = settings.smoothing > 0;
+  const smoothingTrackPercent = Math.min(
+    100,
+    Math.max(0, ((settings.smoothing - MIN_ENABLED_SMOOTHING) / (1 - MIN_ENABLED_SMOOTHING)) * 100),
+  );
+  const axisEntries = AXIS_ORDER.flatMap((axisId) =>
+    capabilities.axes[axisId] ? [[axisId, capabilities.axes[axisId]] as const] : [],
+  );
+  const hasControls = capabilities.smoothing || axisEntries.length > 0;
+
+  React.useEffect(() => {
+    const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 639px)')
+      : null;
+    const handleViewportChange = () => setIsMobile(mediaQuery ? mediaQuery.matches : false);
+    handleViewportChange();
+    mediaQuery?.addEventListener?.('change', handleViewportChange);
+    mediaQuery?.addListener?.(handleViewportChange);
+    return () => {
+      mediaQuery?.removeEventListener?.('change', handleViewportChange);
+      mediaQuery?.removeListener?.(handleViewportChange);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      onClose();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, onClose, triggerRef]);
+
+  React.useLayoutEffect(() => {
+    if (!open || isMobile) return;
+
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      const panel = panelRef.current;
+      if (!trigger || !panel) return;
+
+      const gap = 8;
+      const padding = 8;
+      const triggerRect = trigger.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      let top = triggerRect.bottom + gap;
+      if (top + panelRect.height > viewportHeight - padding) {
+        top = triggerRect.top - panelRect.height - gap;
+      }
+      top = Math.min(Math.max(top, padding), Math.max(padding, viewportHeight - padding - panelRect.height));
+
+      let left = triggerRect.right - panelRect.width;
+      left = Math.min(Math.max(left, padding), Math.max(padding, viewportWidth - padding - panelRect.width));
+
+      setPosition({ top, left, visibility: 'visible' });
+    };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isMobile, open, triggerRef]);
+
+  if (!open || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <>
+      {isMobile ? (
+        <button
+          type="button"
+          aria-label="Close chart settings"
+          className="fixed inset-0 z-40 bg-bg-page/70 backdrop-blur-sm"
+          onClick={onClose}
+        />
+      ) : null}
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-label="Chart settings"
+        className={cn(
+          'fixed z-50 overflow-hidden rounded-2xl border border-border bg-bg-surface shadow-xl',
+          isMobile ? 'inset-x-2 bottom-2 max-h-[calc(100vh-1rem)] w-auto' : 'w-[min(22rem,calc(100vw-1rem))]',
+        )}
+        style={
+          isMobile
+            ? { paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' }
+            : { top: position.top, left: position.left, visibility: position.visibility }
+        }
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border px-3 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Chart settings</p>
+            <h3 className="truncate text-sm font-semibold text-fg">{chartTitle}</h3>
+          </div>
+          <button
+            type="button"
+            aria-label="Close chart settings"
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-bg-elevated text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 p-3">
+          {capabilities.smoothing ? (
+            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve</p>
+                  <p className="text-sm text-fg">Smooth curves</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Toggle smooth curves"
+                  aria-checked={smoothingOn}
+                  onClick={onToggleSmoothing}
+                  className={cn(
+                    'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border px-0.5 transition-all duration-200 ease-in-out',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2',
+                    smoothingOn
+                      ? 'border-accent bg-accent shadow-[0_0_0_1px_var(--rm-accent)]'
+                      : 'border-border-strong bg-bg-elevated',
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      'pointer-events-none inline-block h-4 w-4 rounded-full border bg-white shadow-sm transition-transform duration-200 ease-in-out',
+                      smoothingOn ? 'translate-x-5 border-accent' : 'translate-x-0 border-border-strong',
+                    )}
+                  />
+                </button>
+              </div>
+              {smoothingOn ? (
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                    <span>Amount</span>
+                    <span>{settings.smoothing < 0.25 ? 'Light' : settings.smoothing < 0.6 ? 'Medium' : 'Heavy'}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={MIN_ENABLED_SMOOTHING}
+                    max={1}
+                    step={0.05}
+                    value={settings.smoothing}
+                    onChange={(event) => onSmoothingChange(Number(event.target.value))}
+                    className="rm-accent-range w-full"
+                    style={{
+                      background: `linear-gradient(to right, var(--rm-accent) 0%, var(--rm-accent) ${smoothingTrackPercent}%, var(--rm-border-strong) ${smoothingTrackPercent}%, var(--rm-border-strong) 100%)`,
+                    }}
+                  />
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+          {axisEntries.length > 0 ? (
+            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Axes</p>
+                <p className="text-sm text-fg">Auto or manual range per supported axis.</p>
+              </div>
+              <div className="grid gap-2">
+                {axisEntries.map(([axisId, capability]) => (
+                  <ChartAxisRangeField
+                    key={axisId}
+                    axisId={axisId}
+                    capability={capability}
+                    setting={settings.axes[axisId]}
+                    onModeChange={onAxisModeChange}
+                    onValueChange={onAxisValueChange}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {!hasControls ? (
+            <div className="rounded-xl border border-border bg-bg-elevated/50 px-3 py-4 text-sm text-fg-secondary">
+              This chart does not expose shared display controls yet.
+            </div>
+          ) : null}
+          {!persistent && hasControls ? (
+            <p className="text-[11px] text-fg-tertiary">
+              Preview only while viewing. Save chart settings from dashboard edit mode.
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+function ChartAxisRangeField({
+  axisId,
+  capability,
+  setting,
+  onModeChange,
+  onValueChange,
+}: {
+  axisId: DashboardChartAxisId;
+  capability: DashboardChartAxisCapability;
+  setting: DashboardChartAxisRangeSetting | undefined;
+  onModeChange: (axisId: DashboardChartAxisId, mode: DashboardChartAxisMode) => void;
+  onValueChange: (axisId: DashboardChartAxisId, bound: 'min' | 'max', value: number | undefined) => void;
+}) {
+  const mode = setting?.mode === 'manual' ? 'manual' : 'auto';
+  const hasValidRange = Boolean(getManualAxisRange(setting));
+
+  return (
+    <div className="rounded-lg border border-border bg-bg-surface/70 p-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-fg">
+          {capability.label}
+          {capability.unit ? <span className="ml-1 text-fg-tertiary">({capability.unit})</span> : null}
+        </p>
+        <div className="inline-flex rounded-lg border border-border bg-bg-elevated p-0.5">
+          {(['auto', 'manual'] as const).map((nextMode) => (
+            <button
+              key={nextMode}
+              type="button"
+              onClick={() => onModeChange(axisId, nextMode)}
+              className={cn(
+                'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                mode === nextMode ? 'bg-accent text-fg-on-accent' : 'text-fg-secondary hover:text-fg',
+              )}
+            >
+              {nextMode === 'auto' ? 'Auto' : 'Manual'}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === 'manual' ? (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+            <span>Min</span>
+            <input
+              aria-label={`${capability.label} minimum`}
+              type="number"
+              inputMode="decimal"
+              step={getAxisInputStep(capability.unit)}
+              value={setting?.min ?? ''}
+              onChange={(event) => onValueChange(axisId, 'min', parseAxisInputValue(event.target.value))}
+              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+            />
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+            <span>Max</span>
+            <input
+              aria-label={`${capability.label} maximum`}
+              type="number"
+              inputMode="decimal"
+              step={getAxisInputStep(capability.unit)}
+              value={setting?.max ?? ''}
+              onChange={(event) => onValueChange(axisId, 'max', parseAxisInputValue(event.target.value))}
+              className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+            />
+          </label>
+          {!hasValidRange ? (
+            <p className="text-[11px] text-fg-tertiary sm:col-span-2">
+              Manual range applies after both values are valid and max is greater than min.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function getAxisInputStep(unit: string | undefined) {
+  return unit === '%' || unit === 'mi' ? 1 : 0.1;
+}
+
+function parseAxisInputValue(value: string) {
+  if (!value.trim()) return undefined;
+  const next = Number(value);
+  return Number.isFinite(next) ? next : undefined;
 }
 
 registerWidget({
