@@ -1,12 +1,14 @@
 import React from 'react';
+import type { DashboardTimeframe } from '@riviamigo/types';
 import type { DashboardComponentType, WidgetInstance } from './schema';
 
 export type { WidgetInstance };
 
 export interface WidgetCtx {
   vehicleId: string | null;
-  from: string;
-  to: string;
+  timeframe?: DashboardTimeframe;
+  from: string | null;
+  to: string | null;
   chargeSessionId?: string | null;
   chargeSessionEnergyKwh?: number | null;
 }

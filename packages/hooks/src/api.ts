@@ -5,7 +5,7 @@
 
 import type {
   Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripDetailSeriesPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
-  StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, PaginatedResponse,
+  StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, ChargingChartSeries, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   CreateDemoVehicleBody, CreateDemoVehicleResult,
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
@@ -599,47 +599,55 @@ class ApiClient {
 
   // ── Battery ───────────────────────────────────────────────────────────────
 
-  async getSoc(vehicleId: string, from: string, to: string) {
+  async getSoc(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     return this.request<{ ts: string; value: number | null }[]>('GET', '/v1/battery/soc', undefined, {
-      vehicle_id: vehicleId, from, to,
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
     });
   }
 
-  async getRange(vehicleId: string, from: string, to: string) {
+  async getRange(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     return this.request<{ ts: string; value: number | null }[]>('GET', '/v1/battery/range', undefined, {
-      vehicle_id: vehicleId, from, to,
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
     });
   }
 
-  async getPhantomDrain(vehicleId: string, from: string, to: string) {
+  async getPhantomDrain(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     return this.request<{ day: string; total_soc_lost: number | null; avg_drain_rate: number | null; hours_parked: number | null }[]>(
-      'GET', '/v1/battery/phantom-drain', undefined, { vehicle_id: vehicleId, from, to }
+      'GET', '/v1/battery/phantom-drain', undefined, {
+        vehicle_id: vehicleId,
+        ...buildTimeframeParams(from, to, lifetime),
+      }
     );
   }
 
   async getIdleDrainPeriods(
     vehicleId: string,
-    from: string,
-    to: string,
+    from: string | null,
+    to: string | null,
     limit = 250,
     minDurationHours = 6,
+    lifetime = false,
   ): Promise<IdleDrainResponse> {
     return this.request(
       'GET',
       `/v1/vehicles/${vehicleId}/idle-drain`,
       undefined,
       {
-        from,
-        to,
+        ...buildTimeframeParams(from, to, lifetime),
         limit,
         min_duration_hours: minDurationHours,
       },
     );
   }
 
-  async getDegradation(vehicleId: string) {
+  async getDegradation(vehicleId: string, from?: string | null, to?: string | null, lifetime = false) {
     return this.request<{ ts: string; usable_kwh: number; rated_kwh: number | null; capacity_pct: number; odometer_mi?: number | null }[]>(
-      'GET', '/v1/battery/degradation', undefined, { vehicle_id: vehicleId }
+      'GET', '/v1/battery/degradation', undefined, {
+        vehicle_id: vehicleId,
+        ...buildTimeframeParams(from ?? null, to ?? null, lifetime),
+      }
     );
   }
 
@@ -647,15 +655,14 @@ class ApiClient {
     return this.request('GET', '/v1/battery/health', undefined, { vehicle_id: vehicleId });
   }
 
-  async getBatteryMileage(vehicleId: string, from?: string, to?: string): Promise<BatteryMileagePoint[]> {
+  async getBatteryMileage(vehicleId: string, from?: string | null, to?: string | null, lifetime = false): Promise<BatteryMileagePoint[]> {
     const rows = await this.request<Array<Record<string, unknown>>>(
       'GET',
       '/v1/battery/mileage',
       undefined,
       {
         vehicle_id: vehicleId,
-        ...(from ? { from } : {}),
-        ...(to ? { to } : {}),
+        ...buildTimeframeParams(from ?? null, to ?? null, lifetime),
       },
     );
 
@@ -671,13 +678,12 @@ class ApiClient {
 
   // ── Trips ─────────────────────────────────────────────────────────────────
 
-  async listTrips(vehicleId: string, from: string, to: string, page = 1, perPage = 25, search = '') {
+  async listTrips(vehicleId: string, from: string | null, to: string | null, page = 1, perPage = 25, search = '', lifetime = false) {
     const offset = (page - 1) * perPage;
     const trimmedSearch = search.trim();
     const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/trips', undefined, {
       vehicle_id: vehicleId,
-      from,
-      to,
+      ...buildTimeframeParams(from, to, lifetime),
       page,
       per_page: perPage,
       limit: perPage,
@@ -760,13 +766,12 @@ class ApiClient {
 
   // ── Charging ──────────────────────────────────────────────────────────────
 
-  async listChargeSessions(vehicleId: string, from: string, to: string, page = 1, perPage = 25, search = '') {
+  async listChargeSessions(vehicleId: string, from: string | null, to: string | null, page = 1, perPage = 25, search = '', lifetime = false) {
     const offset = (page - 1) * perPage;
     const trimmedSearch = search.trim();
     const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
       vehicle_id: vehicleId,
-      from,
-      to,
+      ...buildTimeframeParams(from, to, lifetime),
       page,
       per_page: perPage,
       limit: perPage,
@@ -796,20 +801,26 @@ class ApiClient {
     })) satisfies ChargeCurvePoint[];
   }
 
-  async getChargeCurveAnalysis(vehicleId: string, from: string, to: string) {
+  async getChargeCurveAnalysis(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     const rows = await this.request<Array<Record<string, unknown>>>(
-      'GET', '/v1/charging/curve-analysis', undefined, { vehicle_id: vehicleId, from, to }
+      'GET', '/v1/charging/curve-analysis', undefined, {
+        vehicle_id: vehicleId,
+        ...buildTimeframeParams(from, to, lifetime),
+      }
     );
     return rows.map((row) => ({
-      soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
+      session_id: typeof row.session_id === 'string' ? row.session_id : '',
+      minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
+      soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? null,
       charge_rate_kw: finiteNumber(row.charge_rate_kw) ?? finiteNumber(row.power_kw) ?? 0,
       charger_type: typeof row.charger_type === 'string'
         ? row.charger_type as ChargeCurveAnalysisPoint['charger_type']
         : null,
+      sample_source: typeof row.sample_source === 'string' ? row.sample_source : 'telemetry',
     })) satisfies ChargeCurveAnalysisPoint[];
   }
 
-  async getChargingSummary(vehicleId: string, from: string, to: string) {
+  async getChargingSummary(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     const summary = await this.request<{
       total_energy_kwh?: number;
       total_kwh?: number;
@@ -842,7 +853,8 @@ class ApiClient {
       }>;
       weekly?: Array<{ week_start: string; kwh?: number; energy_kwh?: number; sessions: number }>;
     }>('GET', '/v1/charging/summary', undefined, {
-      vehicle_id: vehicleId, from, to,
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
     });
     const acKwh = (summary.ac_kwh ?? summary.by_type?.ac_kwh ?? 0) + (summary.ac_l2_kwh ?? summary.by_type?.ac_l2_kwh ?? 0);
     const dcKwh = summary.dc_kwh ?? summary.by_type?.dc_kwh ?? 0;
@@ -873,6 +885,41 @@ class ApiClient {
         sessions: week.sessions,
       })),
     } satisfies ChargingSummary;
+  }
+
+  async getChargingChartSeries(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
+    const response = await this.request<{
+      daily?: Array<{
+        day_local?: string;
+        day_start?: string;
+        total_energy_kwh?: number | null;
+        session_count?: number | null;
+      }>;
+      daily_sessions?: Array<Record<string, unknown>>;
+    }>('GET', '/v1/charging/chart-series', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+    });
+
+    return {
+      daily: (response.daily ?? []).map((point) => ({
+        day_local: typeof point.day_local === 'string' ? point.day_local : '',
+        day_start: typeof point.day_start === 'string' ? point.day_start : new Date().toISOString(),
+        total_energy_kwh: finiteNumber(point.total_energy_kwh) ?? 0,
+        session_count: finiteNumber(point.session_count) ?? 0,
+      })),
+      daily_sessions: (response.daily_sessions ?? []).map((row) => ({
+        session_id: typeof row.session_id === 'string' ? row.session_id : '',
+        day_local: typeof row.day_local === 'string' ? row.day_local : '',
+        day_start: typeof row.day_start === 'string' ? row.day_start : new Date().toISOString(),
+        started_at: typeof row.started_at === 'string' ? row.started_at : new Date().toISOString(),
+        energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? null,
+        charger_type: typeof row.charger_type === 'string'
+          ? row.charger_type as ChargingChartSeries['daily_sessions'][number]['charger_type']
+          : null,
+        location_name: typeof row.location_name === 'string' ? row.location_name : null,
+      })),
+    } satisfies ChargingChartSeries;
   }
 
   async getVehicleHealth(vehicleId: string): Promise<VehicleHealth> {
@@ -923,13 +970,16 @@ class ApiClient {
     return this.request<StatsSummary>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
   }
 
-  async getEfficiencySummary(vehicleId: string, from: string, to: string) {
+  async getEfficiencySummary(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     const summary = await this.request<{
       avg_wh_per_mi: number;
       p10_wh_per_mi: number;
       p90_wh_per_mi: number;
       total_miles: number;
-    }>('GET', '/v1/efficiency/summary', undefined, { vehicle_id: vehicleId, from, to });
+    }>('GET', '/v1/efficiency/summary', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+    });
 
     return {
       avg: summary.avg_wh_per_mi,
@@ -939,13 +989,14 @@ class ApiClient {
     } satisfies EfficiencySummary;
   }
 
-  async getEfficiencyByMode(vehicleId: string, from: string, to: string) {
+  async getEfficiencyByMode(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     const rows = await this.request<Array<{
       drive_mode: string;
       avg_wh_per_mi: number;
       trip_count: number;
     }>>('GET', '/v1/efficiency/by-mode', undefined, {
-      vehicle_id: vehicleId, from, to,
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
     });
 
     return rows.map((row) => ({
@@ -957,15 +1008,21 @@ class ApiClient {
     })) satisfies EfficiencyByMode[];
   }
 
-  async getEfficiencyTrend(vehicleId: string, from: string, to: string) {
+  async getEfficiencyTrend(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     return this.request<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }[]>(
-      'GET', '/v1/efficiency/trend', undefined, { vehicle_id: vehicleId, from, to }
+      'GET', '/v1/efficiency/trend', undefined, {
+        vehicle_id: vehicleId,
+        ...buildTimeframeParams(from, to, lifetime),
+      }
     );
   }
 
-  async getEfficiencyVsTemp(vehicleId: string, from: string, to: string) {
+  async getEfficiencyVsTemp(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
     return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number; total_miles: number | null; avg_speed_mph: number | null }[]>(
-      'GET', '/v1/efficiency/vs-temp', undefined, { vehicle_id: vehicleId, from, to }
+      'GET', '/v1/efficiency/vs-temp', undefined, {
+        vehicle_id: vehicleId,
+        ...buildTimeframeParams(from, to, lifetime),
+      }
     );
   }
 
@@ -981,15 +1038,15 @@ class ApiClient {
   async getMetricSeries(
     vehicleId: string,
     metric: string,
-    from: string,
-    to: string,
+    from: string | null,
+    to: string | null,
     bucket = 'day',
+    lifetime = false,
   ): Promise<MetricSeriesPoint[]> {
     return this.request('GET', '/v1/metrics/series', undefined, {
       vehicle_id: vehicleId,
       metric,
-      from,
-      to,
+      ...buildTimeframeParams(from, to, lifetime),
       bucket,
     });
   }
@@ -1156,6 +1213,17 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     live_range_added_km: finiteNumber(row.live_range_added_km) ?? null,
     live_power_kw: finiteNumber(row.live_power_kw) ?? null,
     live_charge_rate_kph: finiteNumber(row.live_charge_rate_kph) ?? null,
+  };
+}
+
+function buildTimeframeParams(from: string | null, to: string | null, lifetime = false) {
+  if (lifetime || (!from && !to)) {
+    return { lifetime: 'true' };
+  }
+
+  return {
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
   };
 }
 

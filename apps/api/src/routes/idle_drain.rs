@@ -46,6 +46,7 @@ pub fn router() -> Router<AppState> {
 struct IdleDrainParams {
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
+    lifetime: Option<bool>,
     #[serde(default = "default_min_duration_hours")]
     min_duration_hours: f64,
     #[serde(default = "default_limit")]
@@ -60,6 +61,21 @@ fn default_limit() -> i64 {
 
 fn default_min_duration_hours() -> f64 {
     DEFAULT_MIN_DURATION_HOURS
+}
+
+fn resolve_time_bounds(
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: bool,
+    default_days: i64,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let resolved_to = to.unwrap_or_else(Utc::now);
+    let resolved_from = if lifetime {
+        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
+    } else {
+        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
+    };
+    (resolved_from, resolved_to)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -152,10 +168,12 @@ async fn idle_drain(
 ) -> Result<Json<IdleDrainResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let from = params
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
-    let to = params.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(
+        params.from,
+        params.to,
+        params.lifetime.unwrap_or(false),
+        30,
+    );
     let min_duration_hours = params.min_duration_hours.max(0.0);
     let limit = params.limit.clamp(1, MAX_LIMIT as i64) as usize;
 

@@ -1051,6 +1051,114 @@ async fn charging_sessions_include_local_charging_window_day() {
 }
 
 #[tokio::test]
+async fn charging_curve_analysis_uses_fallback_history_for_longer_windows() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "charging-curve-fallback@example.com").await;
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "charging-curve-fallback@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+
+    let vehicle_id = insert_vehicle(
+        &app.pool,
+        user_id,
+        "charging-curve-fallback-vehicle",
+        "Fallback Truck",
+    )
+    .await;
+
+    sqlx::query!(
+        r#"INSERT INTO riviamigo.vehicle_memberships
+           (vehicle_id, user_id, role, is_default)
+           VALUES ($1, $2, 'owner', TRUE)
+           ON CONFLICT (vehicle_id, user_id) DO UPDATE
+           SET role = EXCLUDED.role,
+               is_default = EXCLUDED.is_default"#,
+        vehicle_id,
+        user_id,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("vehicle membership");
+
+    let started_at = chrono::Utc::now() - chrono::Duration::days(60);
+    let ended_at = started_at + chrono::Duration::minutes(24);
+    let session_id = sqlx::query_scalar!(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (vehicle_id, started_at, ended_at, charger_type, soc_start, soc_end, duration_minutes, kwh_added)
+           VALUES ($1, $2, $3, 'dc', $4, $5, 24, 44.0)
+           RETURNING id"#,
+        vehicle_id,
+        started_at,
+        ended_at,
+        18.0_f64,
+        78.0_f64,
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("charge session");
+
+    let query_time = |value: chrono::DateTime<chrono::Utc>| value.to_rfc3339().replace('+', "%2B");
+
+    sqlx::query!(
+        r#"INSERT INTO riviamigo.rivian_charge_curve_points
+           (vehicle_id, charge_session_id, ts, power_kw)
+           VALUES ($1, $2, $3, $4), ($1, $2, $5, $6)"#,
+        vehicle_id,
+        session_id,
+        started_at + chrono::Duration::minutes(4),
+        176.0_f64,
+        started_at + chrono::Duration::minutes(14),
+        118.0_f64,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("insert fallback curve points");
+
+    let thirty_day_res = app
+        .request(
+            Method::GET,
+            &format!(
+                "/v1/charging/curve-analysis?vehicle_id={vehicle_id}&from={}&to={}",
+                query_time(chrono::Utc::now() - chrono::Duration::days(30)),
+                query_time(chrono::Utc::now())
+            ),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(thirty_day_res.status, StatusCode::OK);
+    assert!(thirty_day_res.body.as_array().expect("30-day array").is_empty());
+
+    let ninety_day_res = app
+        .request(
+            Method::GET,
+            &format!(
+                "/v1/charging/curve-analysis?vehicle_id={vehicle_id}&from={}&to={}",
+                query_time(chrono::Utc::now() - chrono::Duration::days(90)),
+                query_time(chrono::Utc::now())
+            ),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(ninety_day_res.status, StatusCode::OK);
+    let rows = ninety_day_res.body.as_array().expect("90-day array");
+    assert!(!rows.is_empty(), "expected fallback-backed curve rows");
+    assert!(rows.iter().all(|row| row["session_id"] == json!(session_id)));
+    assert!(rows
+        .iter()
+        .all(|row| row["sample_source"] == json!("rivian_charge_curve_points")));
+}
+
+#[tokio::test]
 async fn auth_public_limit_uses_forwarded_ip_and_sets_api_source_header() {
     let app = TestApp::new().await;
 

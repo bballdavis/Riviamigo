@@ -4,6 +4,7 @@ import {
   useBatteryHealth,
   useChargingSummary,
   useCurrentVehicleStatus,
+  useEfficiencySummary,
   useMetricSeries,
   useMetricValue,
 } from '@riviamigo/hooks';
@@ -13,7 +14,7 @@ import {
   type ChartColorKey,
   type MiniSparklineType,
 } from '@riviamigo/ui/charts';
-import { Card } from '@riviamigo/ui/primitives';
+import { Badge, Card } from '@riviamigo/ui/primitives';
 import {
   cn,
   formatCurrency,
@@ -64,6 +65,7 @@ interface SensorChipOptions {
   curveSmoothing?: number | boolean;
   curveColor?: ChartColorKey;
   windowDays?: number;
+  timeframeScope?: 'range' | 'current' | 'lifetime';
 }
 
 const DEFAULT_CURVE_SMOOTHING = 0.45;
@@ -98,6 +100,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     valueColor: options.valueColor ?? definition.valueColor ?? 'accent',
     valueMode: options.valueMode ?? definition.valueMode,
     curveColor: options.curveColor ?? 'accent',
+    timeframeScope: options.timeframeScope ?? definition.timeframeScope ?? 'range',
     curveSmoothing: normalizeCurveSmoothing(
       options.curveSmoothing,
       defaultCurveSmoothing(chartType)
@@ -118,12 +121,20 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const needsStatus = options.dataSource === 'vehicleStatus' || usesStatus(options);
   const { data: value } = useMetricValue(ctx.vehicleId, metric);
   const { data: series = [] } = useMetricSeries(ctx.vehicleId, metric, ctx.from, ctx.to);
+  const { data: efficiencySummary } = useEfficiencySummary(
+    metric === 'avg_efficiency' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
+  );
   const { data: health, isLoading: healthLoading } = useBatteryHealth(needsHealth ? ctx.vehicleId : null);
   const { data: chargingSummary, isLoading: chargingLoading } = useChargingSummary(needsCharging ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: status, isLoading: statusLoading } = useCurrentVehicleStatus(needsStatus ? ctx.vehicleId : null);
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
   const iconId = resolveIconId(options.icon);
   const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, status);
+  const timeframeScope = options.timeframeScope;
+  const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
+  const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
   const isLoading = options.dataSource === 'batteryHealth'
     ? healthLoading || (needsStatus && statusLoading)
     : options.dataSource === 'chargingSummary'
@@ -132,12 +143,18 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         ? statusLoading
         : false;
   const hasFiniteSeriesPoint = series.some((point) => typeof point.value === 'number' && Number.isFinite(point.value));
-  const resolvedMetricLatest = value?.value ?? (hasFiniteSeriesPoint ? deriveMetricValue('latest', null, series) : null);
+  const resolvedMetricLatest = hasFiniteSeriesPoint
+    ? deriveMetricValue('latest', null, series)
+    : allowLatestFallback
+      ? (value?.value ?? null)
+      : null;
   const effectiveMetricMode = definition?.cumulative ? 'sum' : options.valueMode;
   const useSeriesForValue = options.dataSource === 'metric' && metric !== 'avg_efficiency' && hasFiniteSeriesPoint;
   const resolvedValue = options.dataSource === 'metric'
     ? (
-      useSeriesForValue
+      metric === 'avg_efficiency'
+        ? (efficiencySummary?.avg ?? (allowLatestFallback ? value?.value ?? null : null))
+        : useSeriesForValue
         ? deriveMetricValue(effectiveMetricMode, resolvedMetricLatest, series)
         : (resolvedMetricLatest ?? null)
     )
@@ -153,7 +170,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     : (options.chartType as MiniSparklineType);
   const spriteData = isDailyDelta
     ? seriesToDailyDeltas(series, options.windowDays)
-    : deriveSpriteData(series, resolvedValue, value?.ts ?? ctx.to);
+    : deriveSpriteData(series, allowLatestFallback ? resolvedValue : null, value?.ts ?? ctx.to ?? new Date().toISOString());
   const showSprite = options.showSprite && options.chartType !== 'none';
 
   return (
@@ -188,14 +205,25 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
       <div className={cn('relative z-10 flex flex-col', !showSprite && 'flex-1 justify-center')}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-              {title}
-              {options.labelSuffix ? (
-                <span className="ml-1 text-[10px] font-normal normal-case tracking-normal">
-                  ({options.labelSuffix})
-                </span>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <p className="min-w-0 truncate text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+                {title}
+                {options.labelSuffix ? (
+                  <span className="ml-1 text-[10px] font-normal normal-case tracking-normal">
+                    ({options.labelSuffix})
+                  </span>
+                ) : null}
+              </p>
+              {timeframeScope === 'lifetime' ? (
+                <Badge
+                  size="sm"
+                  variant="default"
+                  className="shrink-0 rounded-full font-semibold"
+                >
+                  Lifetime
+                </Badge>
               ) : null}
-            </p>
+            </div>
             {options.showSubtitle && options.subtitle ? (
               <p className="mt-1 truncate text-xs text-fg-tertiary">{options.subtitle}</p>
             ) : null}

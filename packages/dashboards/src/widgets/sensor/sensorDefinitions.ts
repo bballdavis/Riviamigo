@@ -1,4 +1,5 @@
 import type { MiniSparklineType } from '@riviamigo/ui/charts';
+import type { TimeframeScope } from '@riviamigo/types';
 
 /** Iconify-style id (e.g. "lucide:battery") OR legacy short key (resolved at render time). */
 export type SensorIconKey = string;
@@ -29,6 +30,7 @@ export interface SensorDefinition {
   labelSuffix?: string;
   valueColor?: SensorValueColor;
   accent?: boolean;
+  timeframeScope?: TimeframeScope;
   /** Cumulative metrics (always-rising) auto-default to daily-delta sprite. */
   cumulative?: boolean;
 }
@@ -51,8 +53,8 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
   { id: 'charging_sessions', title: 'Charging Sessions', metric: 'charging_sessions', icon: 'lucide:calendar-days', chartType: 'bar', valueMode: 'latest' },
   { id: 'total_cost', title: 'Total Cost', metric: 'total_cost', icon: 'lucide:activity', chartType: 'daily_delta', valueMode: 'latest', cumulative: true },
   { id: 'avg_session_energy', title: 'Avg Session', metric: 'avg_session_energy', icon: 'lucide:bolt', chartType: 'bar', valueMode: 'latest' },
-  { id: 'battery_health_pct', title: 'Battery Health', dataSource: 'batteryHealth', valuePath: 'battery_health_pct', unit: '%', icon: 'lucide:shield-check', chartType: 'none', valueMode: 'latest', accent: true, valueColor: 'accent' },
-  { id: 'estimated_degradation_pct', title: 'Estimated Degradation', dataSource: 'batteryHealth', valuePath: 'estimated_degradation_pct', unit: '%', icon: 'lucide:trending-down', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'battery_health_pct', title: 'Battery Health', dataSource: 'batteryHealth', valuePath: 'battery_health_pct', unit: '%', icon: 'lucide:shield-check', chartType: 'none', valueMode: 'latest', accent: true, valueColor: 'accent', timeframeScope: 'current' },
+  { id: 'estimated_degradation_pct', title: 'Estimated Degradation', dataSource: 'batteryHealth', valuePath: 'estimated_degradation_pct', unit: '%', icon: 'lucide:trending-down', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'current' },
   {
     id: 'usable_capacity',
     title: 'Usable Capacity',
@@ -67,6 +69,7 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
     chartType: 'none',
     valueMode: 'latest',
     valueColor: 'default',
+    timeframeScope: 'current',
   },
   {
     id: 'max_range',
@@ -82,11 +85,12 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
     chartType: 'none',
     valueMode: 'latest',
     valueColor: 'default',
+    timeframeScope: 'current',
   },
-  { id: 'charge_count', title: 'Charges', dataSource: 'batteryHealth', valuePath: 'charge_count', secondaryTemplate: '[charging_cycles:int] cycles', icon: 'lucide:refresh-cw', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
-  { id: 'charging_cycles_health', title: 'Charging Cycles', dataSource: 'batteryHealth', valuePath: 'charging_cycles', fallbackValuePath: 'charge_count', icon: 'lucide:refresh-ccw', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
-  { id: 'battery_energy_added', title: 'Energy Added', dataSource: 'batteryHealth', valuePath: 'total_energy_added_kwh', unit: 'kWh', icon: 'lucide:bolt', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
-  { id: 'battery_charge_efficiency', title: 'Charge Efficiency', dataSource: 'batteryHealth', valuePath: 'charging_efficiency_pct', unit: '%', icon: 'lucide:zap', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
+  { id: 'charge_count', title: 'Charges', dataSource: 'batteryHealth', valuePath: 'charge_count', secondaryTemplate: '[charging_cycles:int] cycles', icon: 'lucide:refresh-cw', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
+  { id: 'charging_cycles_health', title: 'Charging Cycles', dataSource: 'batteryHealth', valuePath: 'charging_cycles', fallbackValuePath: 'charge_count', icon: 'lucide:refresh-ccw', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
+  { id: 'battery_energy_added', title: 'Energy Added', dataSource: 'batteryHealth', valuePath: 'total_energy_added_kwh', unit: 'kWh', icon: 'lucide:bolt', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
+  { id: 'battery_charge_efficiency', title: 'Charge Efficiency', dataSource: 'batteryHealth', valuePath: 'charging_efficiency_pct', unit: '%', icon: 'lucide:zap', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
   { id: 'charging_sessions_summary', title: 'Sessions', dataSource: 'chargingSummary', valuePath: 'session_count', icon: 'lucide:calendar-days', chartType: 'none', valueMode: 'latest', valueColor: 'default' },
   { id: 'charging_total_energy', title: 'Total Energy', dataSource: 'chargingSummary', valuePath: 'total_energy_kwh', unit: 'kWh', icon: 'lucide:bolt', chartType: 'none', valueMode: 'latest', accent: true, valueColor: 'accent' },
   { id: 'charging_total_cost', title: 'Total Cost', dataSource: 'chargingSummary', valuePath: 'total_cost_usd', unit: 'USD', icon: 'lucide:dollar-sign', chartType: 'none', valueMode: 'latest', valueColor: 'default' },

@@ -28,6 +28,36 @@ struct Params {
     vehicle_id: Option<Uuid>,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
+    lifetime: Option<bool>,
+}
+
+#[cfg(test)]
+mod timeframe_tests {
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn lifetime_time_bounds_use_epoch_instead_of_default_window() {
+        let to = Utc.with_ymd_and_hms(2026, 7, 2, 12, 0, 0).unwrap();
+        let (from, resolved_to) = super::resolve_time_bounds(None, Some(to), true, 90);
+
+        assert_eq!(resolved_to, to);
+        assert_eq!(from, chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    }
+}
+
+fn resolve_time_bounds(
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: bool,
+    default_days: i64,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let resolved_to = to.unwrap_or_else(Utc::now);
+    let resolved_from = if lifetime {
+        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
+    } else {
+        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
+    };
+    (resolved_from, resolved_to)
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -65,10 +95,7 @@ async fn get_summary(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
     let row = sqlx::query_as::<_, SummaryRow>(
         "SELECT COALESCE(SUM(distance_miles), 0)::float8 AS total_distance_miles,
@@ -107,10 +134,7 @@ async fn get_by_mode(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(180));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 180);
 
     let rows = sqlx::query!(
         "SELECT drive_mode, COUNT(*) AS trip_count,
@@ -147,10 +171,7 @@ async fn get_vs_temp_binned(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let rows = sqlx::query_as::<_, VsTempPoint>(
         "SELECT
@@ -185,10 +206,7 @@ async fn get_trend(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
     let rows = sqlx::query_as::<_, TrendPoint>(
         "WITH daily AS (
@@ -228,10 +246,7 @@ async fn get_range_vs_temp(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let rows = sqlx::query!(
         "SELECT t.id,

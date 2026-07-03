@@ -20,7 +20,7 @@ Sources:
 | Dashboard | total miles, trips, energy, efficiency, SoC chart, efficiency trend | latest telemetry, trips, charges | Total miles now uses live odometer; efficiency waits for completed trips. |
 | Battery | current SoC, estimated range, phantom drain, capacity health, SoC/range/drain/degradation charts | latest telemetry plus battery time-series views | Current SoC/range now use latest vehicle status; capacity falls back to latest usable kWh. |
 | Efficiency | avg Wh/mi, best/worst bands, efficiency by mode, trend, temp bins | completed trips | Needs more trip finalization and outside-temp capture before it becomes rich. |
-| Charging | energy, cost, sessions, charge mix, weekly energy | charge session detector | Endpoint now returns stable empty states; needs real completed sessions. |
+| Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts now use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
 | Trips | trip list, track, speed, elevation | completed trip detector and raw telemetry points | Needs trip detector confidence after longer drives. |
 | Settings Raw Data | telemetry field coverage and recent samples | raw Timescale telemetry | Use this to verify ingestion before wiring new dashboard cards. |
 
