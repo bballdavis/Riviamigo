@@ -4,6 +4,20 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const dashboardConfigs = vi.hoisted(() => ({
+  dashboard: {
+    schemaVersion: 2,
+    id: 'dashboard-default',
+    slug: 'dashboard',
+    name: 'Overview',
+    isDefault: true,
+    isLocked: true,
+    ownerId: null,
+    controls: { dateRange: true },
+    widgets: [
+      { id: 'overview-vehicle', componentType: 'custom', definitionId: 'overview.vehicle', title: 'Vehicle overview', options: {}, layout: { x: 0, y: 0, w: 12, h: 7 } },
+      { id: 'overview-sensor', componentType: 'sensor', definitionId: 'total_miles', title: 'Total miles', options: {}, layout: { x: 0, y: 7, w: 3, h: 2 } },
+    ],
+  },
   battery: {
     schemaVersion: 2,
     id: 'battery-default',
@@ -82,11 +96,13 @@ vi.mock('@riviamigo/dashboards', () => ({
   DashboardRenderer: ({
     config,
     ctx,
+    mode,
   }: {
     config: { widgets: Array<{ id: string; title?: string; definitionId: string }> };
     ctx: { timeframe?: { kind: string }; from: string | null; to: string | null };
+    mode?: 'view' | 'edit';
   }) => (
-    <div data-testid="dashboard-renderer">
+    <div data-testid="dashboard-renderer" data-mode={mode ?? 'view'}>
       {config.widgets.map((widget) => (
         <div
           key={widget.id}
@@ -193,4 +209,13 @@ describe('DashboardPageShell timeframe sync', () => {
       expect(widget).toHaveAttribute('data-to', '');
     }
   });
+
+  it.each(['dashboard', 'battery', 'charging', 'efficiency', 'trips'] as const)(
+    'passes edit mode through the shared renderer for %s',
+    (slug) => {
+      render(<DashboardPageShell navKey={slug} slug={slug} title={slug} isEditMode />);
+
+      expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
+    },
+  );
 });

@@ -11,6 +11,7 @@ export interface WidgetCtx {
   to: string | null;
   chargeSessionId?: string | null;
   chargeSessionEnergyKwh?: number | null;
+  updateWidgetOptions?: (widgetId: string, patch: Record<string, unknown>) => void;
 }
 
 export interface WidgetEditorMeta {

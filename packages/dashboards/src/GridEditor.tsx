@@ -111,6 +111,18 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
     commit(widgets.map((widget) => (widget.id === sanitized.id ? sanitized : widget)));
   }
 
+  function patchWidgetOptions(widgetId: string, patch: Record<string, unknown>) {
+    const widget = widgets.find((entry) => entry.id === widgetId);
+    if (!widget) return;
+    updateWidget({
+      ...widget,
+      options: {
+        ...(widget.options ?? {}),
+        ...patch,
+      },
+    });
+  }
+
   const editingWidget = editingId ? widgets.find((widget) => widget.id === editingId) ?? null : null;
   const drawerMode: 'palette' | 'edit' = editingWidget ? 'edit' : 'palette';
 
@@ -133,6 +145,18 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         .rgl-editor .react-grid-item:hover .react-resizable-handle,
         .rgl-editor .react-grid-item.resizing .react-resizable-handle,
         .rgl-editor .react-grid-item.react-draggable-dragging .react-resizable-handle {
+          opacity: 1;
+          pointer-events: auto;
+        }
+        .rgl-editor .rgl-widget-overlay {
+          opacity: 0;
+          pointer-events: none;
+        }
+        .rgl-editor .react-grid-item:hover .rgl-widget-overlay,
+        .rgl-editor .react-grid-item:focus-within .rgl-widget-overlay,
+        .rgl-editor .react-grid-item.resizing .rgl-widget-overlay,
+        .rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-overlay,
+        .rgl-editor .react-grid-item:has(.rgl-card[data-editing="true"]) .rgl-widget-overlay {
           opacity: 1;
           pointer-events: auto;
         }
@@ -198,30 +222,26 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                 const isEditing = editingId === widget.id;
                 const def = getWidgetForInstance(widget);
                 const editor = getWidgetEditorMeta(def);
-                const overlayVisibilityClass = isEditing
-                  ? 'opacity-100 pointer-events-auto'
-                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto';
                 return (
                   <div
                     key={widget.id}
                     data-editing={isEditing ? 'true' : 'false'}
                     data-fixed-size={editor.fixedSize ? 'true' : 'false'}
                     className={[
-                      'rgl-card group relative overflow-hidden rounded-lg border bg-bg transition-all',
+                      'rgl-card relative overflow-hidden rounded-lg border bg-bg transition-all',
                       isEditing
                         ? 'border-status-positive shadow-[0_0_0_2px_color-mix(in_oklab,var(--rm-status-positive)_28%,transparent)]'
                         : 'border-border hover:border-border-strong',
                     ].join(' ')}
                   >
                     <div className="h-full w-full p-2">
-                      <WidgetHost instance={widget} ctx={ctx} />
+                      <WidgetHost instance={widget} ctx={{ ...ctx, updateWidgetOptions: patchWidgetOptions }} />
                     </div>
 
                     <div
                       data-testid={`widget-overlay-left-${widget.id}`}
                       className={[
-                        'absolute left-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150',
-                        overlayVisibilityClass,
+                        'rgl-widget-overlay absolute left-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150',
                       ].join(' ')}
                     >
                       {editor.movable ? (
@@ -248,8 +268,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
                     <div
                       data-testid={`widget-overlay-right-${widget.id}`}
                       className={[
-                        'absolute right-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150',
-                        overlayVisibilityClass,
+                        'rgl-widget-overlay absolute right-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150',
                       ].join(' ')}
                     >
                       <button
