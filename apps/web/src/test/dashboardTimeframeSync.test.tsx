@@ -1,0 +1,196 @@
+import React from 'react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const dashboardConfigs = vi.hoisted(() => ({
+  battery: {
+    schemaVersion: 2,
+    id: 'battery-default',
+    slug: 'battery',
+    name: 'Battery',
+    isDefault: true,
+    isLocked: true,
+    ownerId: null,
+    controls: { dateRange: true },
+    widgets: [
+      { id: 'battery-chart', componentType: 'chart', definitionId: 'catalog', title: 'Battery chart', options: {}, layout: { x: 0, y: 0, w: 6, h: 4 } },
+      { id: 'battery-table', componentType: 'custom', definitionId: 'battery.table', title: 'Battery table', options: {}, layout: { x: 6, y: 0, w: 6, h: 4 } },
+    ],
+  },
+  charging: {
+    schemaVersion: 2,
+    id: 'charging-default',
+    slug: 'charging',
+    name: 'Charging',
+    isDefault: true,
+    isLocked: true,
+    ownerId: null,
+    controls: { dateRange: true },
+    widgets: [
+      { id: 'charging-chart', componentType: 'chart', definitionId: 'catalog', title: 'Charging chart', options: {}, layout: { x: 0, y: 0, w: 6, h: 4 } },
+      { id: 'charging-table', componentType: 'custom', definitionId: 'charging.sessions.table', title: 'Charging sessions', options: {}, layout: { x: 6, y: 0, w: 6, h: 4 } },
+    ],
+  },
+  efficiency: {
+    schemaVersion: 2,
+    id: 'efficiency-default',
+    slug: 'efficiency',
+    name: 'Efficiency',
+    isDefault: true,
+    isLocked: true,
+    ownerId: null,
+    controls: { dateRange: true },
+    widgets: [
+      { id: 'efficiency-chart', componentType: 'chart', definitionId: 'catalog', title: 'Efficiency chart', options: {}, layout: { x: 0, y: 0, w: 6, h: 4 } },
+      { id: 'efficiency-sensor', componentType: 'sensor', definitionId: 'avg_efficiency', title: 'Avg efficiency', options: {}, layout: { x: 6, y: 0, w: 3, h: 2 } },
+    ],
+  },
+  trips: {
+    schemaVersion: 2,
+    id: 'trips-default',
+    slug: 'trips',
+    name: 'Trips',
+    isDefault: true,
+    isLocked: true,
+    ownerId: null,
+    controls: { dateRange: true },
+    widgets: [
+      { id: 'trips-chart', componentType: 'chart', definitionId: 'catalog', title: 'Trips chart', options: {}, layout: { x: 0, y: 0, w: 6, h: 4 } },
+      { id: 'trips-table', componentType: 'custom', definitionId: 'trips.table', title: 'Trips table', options: {}, layout: { x: 6, y: 0, w: 6, h: 4 } },
+      { id: 'trips-map', componentType: 'custom', definitionId: 'trips.map', title: 'Trips map', options: {}, layout: { x: 0, y: 4, w: 12, h: 5 } },
+    ],
+  },
+}));
+
+vi.mock('@riviamigo/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
+  return {
+    ...actual,
+    useAuth: () => ({
+      defaultVehicleId: 'vehicle-1',
+      activeVehicleId: null,
+      setActiveVehicleId: vi.fn(),
+    }),
+    useVehicles: () => ({
+      data: [{ id: 'vehicle-1', display_name: 'Truck', model: 'R1T' }],
+    }),
+  };
+});
+
+vi.mock('@riviamigo/dashboards', () => ({
+  DashboardRenderer: ({
+    config,
+    ctx,
+  }: {
+    config: { widgets: Array<{ id: string; title?: string; definitionId: string }> };
+    ctx: { timeframe?: { kind: string }; from: string | null; to: string | null };
+  }) => (
+    <div data-testid="dashboard-renderer">
+      {config.widgets.map((widget) => (
+        <div
+          key={widget.id}
+          data-testid={`widget-${widget.id}`}
+          data-timeframe-kind={ctx.timeframe?.kind ?? 'missing'}
+          data-from={ctx.from ?? ''}
+          data-to={ctx.to ?? ''}
+        >
+          {widget.title ?? widget.definitionId}
+        </div>
+      ))}
+    </div>
+  ),
+  getDefaultBySlug: (slug: keyof typeof dashboardConfigs) => dashboardConfigs[slug],
+  useDashboardBySlug: () => ({ data: undefined, isLoading: false }),
+}));
+
+vi.mock('@riviamigo/ui/primitives', () => ({
+  PageLayout: ({
+    title,
+    actions,
+    children,
+  }: {
+    title: string;
+    actions?: React.ReactNode;
+    children: React.ReactNode;
+  }) => (
+    <div>
+      <h1>{title}</h1>
+      {actions}
+      {children}
+    </div>
+  ),
+  DateRangePicker: ({
+    onChange,
+  }: {
+    onChange: (timeframe: unknown) => void;
+  }) => (
+    <div>
+      <button type="button" onClick={() => onChange({ kind: 'custom', from: new Date('2025-01-07T18:30:00Z'), to: new Date('2025-01-09T06:15:00Z') })}>
+        Set custom timeframe
+      </button>
+      <button type="button" onClick={() => onChange({ kind: 'lifetime' })}>
+        Set lifetime timeframe
+      </button>
+    </div>
+  ),
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../components/layout/AppLayout', () => ({
+  AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../components/layout/NoVehicleState', () => ({
+  NoVehicleState: () => null,
+}));
+
+import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
+
+describe('DashboardPageShell timeframe sync', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it.each([
+    ['trips', ['Trips chart', 'Trips table', 'Trips map']],
+    ['charging', ['Charging chart', 'Charging sessions']],
+    ['efficiency', ['Efficiency chart', 'Avg efficiency']],
+    ['battery', ['Battery chart', 'Battery table']],
+  ] as const)('updates all visible %s widgets to the same custom timeframe', async (slug, titles) => {
+    const user = userEvent.setup();
+
+    render(<DashboardPageShell navKey={slug} slug={slug} title={slug} />);
+
+    await user.click(screen.getByRole('button', { name: 'Set custom timeframe' }));
+
+    const renderer = screen.getByTestId('dashboard-renderer');
+    const firstWidget = within(renderer).getByText(titles[0]!);
+    const expectedFrom = firstWidget.getAttribute('data-from');
+    const expectedTo = firstWidget.getAttribute('data-to');
+    expect(expectedFrom).toContain('2025-01-07');
+    expect(expectedTo).toContain('2025-01-09');
+    for (const title of titles) {
+      const widget = within(renderer).getByText(title);
+      expect(widget).toHaveAttribute('data-timeframe-kind', 'custom');
+      expect(widget.getAttribute('data-from')).toBe(expectedFrom);
+      expect(widget.getAttribute('data-to')).toBe(expectedTo);
+    }
+  });
+
+  it('switches battery range-aware content to lifetime bounds together', async () => {
+    const user = userEvent.setup();
+
+    render(<DashboardPageShell navKey="battery" slug="battery" title="Battery" />);
+
+    await user.click(screen.getByRole('button', { name: 'Set lifetime timeframe' }));
+
+    const renderer = screen.getByTestId('dashboard-renderer');
+    for (const title of ['Battery chart', 'Battery table']) {
+      const widget = within(renderer).getByText(title);
+      expect(widget).toHaveAttribute('data-timeframe-kind', 'lifetime');
+      expect(widget).toHaveAttribute('data-from', '');
+      expect(widget).toHaveAttribute('data-to', '');
+    }
+  });
+});

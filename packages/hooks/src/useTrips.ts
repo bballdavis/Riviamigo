@@ -4,13 +4,14 @@ import { useAuthReady } from './useAuthState';
 
 const TRIPS_LIST_QUERY_VERSION = 'v2';
 
-export function useTrips(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
+export function useTrips(vehicleId: string | null, from: string | null, to: string | null, page = 1, perPage = 25, search = '') {
   const normalizedSearch = search.trim();
   const authReady = useAuthReady();
+  const lifetime = !from && !to;
   return useQuery({
     // Version the key to avoid hydrating stale list payloads from older app builds.
-    queryKey: ['trips', 'list', TRIPS_LIST_QUERY_VERSION, vehicleId, from, to, page, perPage, normalizedSearch],
-    queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage, normalizedSearch),
+    queryKey: ['trips', 'list', TRIPS_LIST_QUERY_VERSION, vehicleId, from, to, lifetime, page, perPage, normalizedSearch],
+    queryFn: () => api.listTrips(vehicleId!, from, to, page, perPage, normalizedSearch, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,

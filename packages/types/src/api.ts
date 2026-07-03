@@ -193,9 +193,34 @@ export interface ChargeCurvePoint {
 }
 
 export interface ChargeCurveAnalysisPoint {
-  soc_pct: number;
+  session_id: string;
+  minutes_elapsed: number | null;
+  soc_pct: number | null;
   charge_rate_kw: number;
   charger_type: ChargerType | null;
+  sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
+}
+
+export interface ChargingChartDailyPoint {
+  day_local: string;
+  day_start: string;
+  total_energy_kwh: number;
+  session_count: number;
+}
+
+export interface ChargingChartSessionPoint {
+  session_id: string;
+  day_local: string;
+  day_start: string;
+  started_at: string;
+  energy_added_kwh: number | null;
+  charger_type: ChargerType | null;
+  location_name: string | null;
+}
+
+export interface ChargingChartSeries {
+  daily: ChargingChartDailyPoint[];
+  daily_sessions: ChargingChartSessionPoint[];
 }
 
 export interface StatsSummary {

@@ -4,8 +4,7 @@ import {
   useBatteryMileage,
   useChargeCurve,
   useChargeCurveAnalysis,
-  useChargeSessions,
-  useChargingSummary,
+  useChargingChartSeries,
   useDegradation,
   useEfficiencyByMode,
   useEfficiencyTrend,
@@ -14,7 +13,7 @@ import {
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
-import { CHART_COLORS, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { CHART_COLORS, DailyChargeSessionsChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
@@ -27,7 +26,7 @@ import {
   whPerMileToMiPerKwh,
   whPerMileToWhPerKm,
 } from '@riviamigo/ui/lib/utils';
-import type { ChargeCurveAnalysisPoint, ChargeCurvePoint, ChargeSession } from '@riviamigo/types';
+import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@riviamigo/types';
 import {
   getChartDefinition,
   getChartDefinitions,
@@ -243,17 +242,10 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
   const needsSoc = source === 'soc_history';
   const { data: soc = [], isLoading: socLoading } = useSocHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: range = [], isLoading: rangeLoading } = useRangeHistory(source === 'range_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: chargeSummary, isLoading: chargeSummaryLoading } = useChargingSummary(
+  const { data: chargingChartSeries, isLoading: chargingChartSeriesLoading } = useChargingChartSeries(
     source === 'charging_weekly_energy' || source === 'charging_sessions_energy' ? ctx.vehicleId : null,
     ctx.from,
     ctx.to,
-  );
-  const { data: sessionsPage, isLoading: sessionsLoading } = useChargeSessions(
-    source === 'charging_sessions_energy' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-    1,
-    200,
   );
   const { data: selectedChargeCurve = [], isLoading: selectedChargeCurveLoading } = useChargeCurve(
     source === 'charge_session_curve' ? ctx.chargeSessionId ?? null : null,
@@ -268,9 +260,15 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
   const { data: efficiencyByMode = [], isLoading: efficiencyByModeLoading } = useEfficiencyByMode(source === 'efficiency_mode' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: efficiencyByTemp = [], isLoading: efficiencyByTempLoading } = useEfficiencyVsTemp(source === 'efficiency_temperature' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: phantom = [], isLoading: phantomLoading } = usePhantomDrain(source === 'phantom_drain' ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: degradation = [], isLoading: degradationLoading } = useDegradation(source === 'battery_degradation' ? ctx.vehicleId : null);
+  const { data: degradation = [], isLoading: degradationLoading } = useDegradation(
+    source === 'battery_degradation' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
+  );
   const { data: mileage = [], isLoading: mileageLoading } = useBatteryMileage(
     source === 'battery_capacity_mileage' || source === 'projected_range_mileage' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
   );
 
   if (!definition) {
@@ -281,8 +279,8 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
     );
   }
 
-  const sessions = sessionsPage?.items ?? [];
-  const weekly = chargeSummary?.weekly ?? [];
+  const dailyChargeSeries = chargingChartSeries?.daily ?? [];
+  const dailyChargeSessions = chargingChartSeries?.daily_sessions ?? [];
   const mileagePoints = mileage.map((point) => ({
     ts: point.ts,
     x: point.odometer_mi,
@@ -301,20 +299,18 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
       return (
         <ChargingSessionsChart
           definition={definition}
-          sessions={sessions}
-          weekly={weekly}
-          totalEnergyKwh={chargeSummary?.total_energy_kwh ?? null}
-          totalEnergyUsedKwh={chargeSummary?.total_energy_used_kwh ?? null}
-          loading={sessionsLoading || chargeSummaryLoading}
+          daily={dailyChargeSeries}
+          dailySessions={dailyChargeSessions}
+          loading={chargingChartSeriesLoading}
           height={height}
         />
       );
     case 'charging_weekly_energy':
       return (
-        <WeeklyEnergyChart
+        <DailyEnergyChart
           definition={definition}
-          weekly={weekly}
-          loading={chargeSummaryLoading}
+          daily={dailyChargeSeries}
+          loading={chargingChartSeriesLoading}
           height={height}
         />
       );
@@ -386,7 +382,7 @@ function renderSocHistoryChart(
     <RichTimeSeriesChart
       points={data.map((point) => ({ ts: point.ts }))}
       series={[
-        { key: definition.id, label: definition.title, values: data.map((point) => point.value), mode: definition.mode },
+        { key: definition.id, label: definition.title, values: data.map((point) => point.value), mode: definition.mode ?? 'line' },
         {
           key: `${definition.id}-avg`,
           label: 'Period Avg',
@@ -432,65 +428,32 @@ function renderSingleChart(
 
 function ChargingSessionsChart({
   definition,
-  sessions,
-  weekly,
-  totalEnergyKwh,
-  totalEnergyUsedKwh,
+  daily,
+  dailySessions,
   loading,
   height,
 }: {
   definition: DashboardChartDefinition;
-  sessions: ChargeSession[];
-  weekly: Array<{ week_start: string; energy_kwh: number | null }>;
-  totalEnergyKwh: number | null;
-  totalEnergyUsedKwh: number | null;
+  daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number; session_count: number }>;
+  dailySessions: Array<{
+    session_id: string;
+    day_local: string;
+    day_start: string;
+    started_at: string;
+    energy_added_kwh: number | null;
+    charger_type: string | null;
+    location_name: string | null;
+  }>;
   loading: boolean;
   height: number;
 }) {
-  const usageRatio =
-    totalEnergyKwh != null && totalEnergyUsedKwh != null && totalEnergyKwh > 0
-      ? totalEnergyUsedKwh / totalEnergyKwh
-      : null;
-
-  const fallbackWeek = sessions[0]?.started_at ?? new Date().toISOString();
-  const points = weekly.length > 0
-    ? weekly
-    : totalEnergyKwh != null && totalEnergyKwh > 0
-      ? [{ week_start: fallbackWeek, energy_kwh: totalEnergyKwh }]
-      : [];
-
   return (
-    <RichTimeSeriesChart
-      points={points.map((point) => ({ ts: point.week_start }))}
-      series={[
-        {
-          key: 'energy-added',
-          label: 'Energy Added',
-          values: points.map((point) => point.energy_kwh ?? null),
-          color: CHART_COLORS.emerald,
-          mode: 'bar',
-        },
-        {
-          key: 'energy-used',
-          label: 'Energy Used',
-          values: points.map((point) => {
-            if (point.energy_kwh == null || usageRatio == null) return null;
-            return point.energy_kwh * usageRatio;
-          }),
-          color: CHART_COLORS.accent,
-          mode: 'bar',
-        },
-      ]}
+    <DailyChargeSessionsChart
+      daily={daily}
+      dailySessions={dailySessions}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      yUnit="kWh"
-      mode="bar"
-      xValueFormatter={(seconds) => {
-        const date = new Date(seconds * 1000);
-        return date.toLocaleString([], { month: 'short', day: 'numeric' });
-      }}
-      smoothing={0}
     />
   );
 }
@@ -657,37 +620,52 @@ function ChargingCurveAnalysisChart({
   loading: boolean;
   height: number;
 }) {
-  const rows = data.filter((point) =>
-    Number.isFinite(point.soc_pct) &&
-    Number.isFinite(point.charge_rate_kw) &&
-    point.charge_rate_kw > 0
-  );
-  const points = rows
-    .filter((point) => normalizeChargeCurveType(point.charger_type) === 'dc')
+  const rows = data
+    .filter((point): point is ChargeCurveAnalysisPoint & { soc_pct: number; charge_rate_kw: number } =>
+      Number.isFinite(point.soc_pct) &&
+      Number.isFinite(point.charge_rate_kw) &&
+      point.charge_rate_kw > 0 &&
+      normalizeChargeCurveType(point.charger_type) === 'dc'
+    )
     .map((point) => ({
-    x: point.soc_pct,
-    y: point.charge_rate_kw,
-  }))
-    .sort((a, b) => a.x - b.x);
-  const dcRegression = buildRegression(points);
+      ...point,
+      sample_source: normalizeSampleSource(point.sample_source),
+    }))
+    .sort((left, right) =>
+      left.soc_pct - right.soc_pct ||
+      (left.session_id || '').localeCompare(right.session_id || '') ||
+      (left.minutes_elapsed ?? 0) - (right.minutes_elapsed ?? 0)
+    );
+
+  const trendValues = buildChargeCurveTrend(rows);
+  const telemetryValues = rows.map((row) => (row.sample_source === 'rivian_charge_curve_points' ? null : row.charge_rate_kw));
+  const fallbackValues = rows.map((row) => (row.sample_source === 'rivian_charge_curve_points' ? row.charge_rate_kw : null));
+  const hasFallbackSamples = fallbackValues.some((value) => value != null);
 
   return (
     <RichTimeSeriesChart
-      points={points.map((point) => ({ ts: point.x }))}
+      points={rows.map((point) => ({ ts: point.soc_pct }))}
       series={[
         {
-          key: 'dc-points',
+          key: 'dc-telemetry',
           label: 'DC Samples',
           color: CHART_COLORS.rose,
           mode: 'scatter',
-          values: points.map((point) => point.y),
+          values: telemetryValues,
         },
+        ...(hasFallbackSamples ? [{
+          key: 'dc-fallback',
+          label: 'Fallback Samples',
+          color: CHART_COLORS.amber,
+          mode: 'scatter' as const,
+          values: fallbackValues,
+        }] : []),
         {
-          key: 'dc-fit',
-          label: 'DC Regression',
+          key: 'dc-trend',
+          label: 'Smoothed Trend',
           color: CHART_COLORS.orange,
           mode: 'line',
-          values: points.map((point) => dcRegression ? dcRegression(point.x) : null),
+          values: trendValues,
         },
       ]}
       loading={loading}
@@ -703,11 +681,88 @@ function ChargingCurveAnalysisChart({
   );
 }
 
-function normalizeChargeCurveType(chargerType: ChargeCurveAnalysisPoint['charger_type']) {
-  const normalized = chargerType as string | null;
-  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
-  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
-  return 'unknown';
+function normalizeSampleSource(value: unknown) {
+  const source = typeof value === 'string' ? value : '';
+  return source === 'rivian_charge_curve_points' ? source : 'telemetry';
+}
+
+function buildChargeCurveTrend(rows: Array<{ session_id: string; soc_pct: number; charge_rate_kw: number; sample_source: string }>) {
+  if (rows.length < 4) {
+    return rows.map(() => null);
+  }
+
+  const binSize = 5;
+  const sessionBins = new Map<string, Map<number, number[]>>();
+
+  for (const row of rows) {
+    const sessionId = row.session_id || 'unknown';
+    const bin = Math.max(0, Math.min(20, Math.floor(row.soc_pct / binSize)));
+    const perSession = sessionBins.get(sessionId) ?? new Map<number, number[]>();
+    const values = perSession.get(bin) ?? [];
+    values.push(row.charge_rate_kw);
+    perSession.set(bin, values);
+    sessionBins.set(sessionId, perSession);
+  }
+
+  const binValues = new Map<number, number[]>();
+  for (const perSession of sessionBins.values()) {
+    for (const [bin, values] of perSession.entries()) {
+      const sessionMedian = median(values);
+      const existing = binValues.get(bin) ?? [];
+      existing.push(sessionMedian);
+      binValues.set(bin, existing);
+    }
+  }
+
+  const trendPoints = Array.from(binValues.entries())
+    .map(([bin, values]) => ({
+      x: bin * binSize + binSize / 2,
+      y: median(values),
+    }))
+    .sort((left, right) => left.x - right.x);
+
+  const smoothed = smoothTrendPoints(trendPoints);
+  return rows.map((row) => interpolateTrend(smoothed, row.soc_pct));
+}
+
+function smoothTrendPoints(points: Array<{ x: number; y: number }>) {
+  if (points.length < 3) return points;
+
+  return points.map((point, index) => {
+    const window = points.slice(Math.max(0, index - 1), Math.min(points.length, index + 2));
+    return {
+      x: point.x,
+      y: median(window.map((item) => item.y)),
+    };
+  });
+}
+
+function interpolateTrend(points: Array<{ x: number; y: number }>, x: number) {
+  if (points.length === 0) return null;
+  if (points.length === 1) return points[0]!.y;
+  if (x <= points[0]!.x) return points[0]!.y;
+  if (x >= points[points.length - 1]!.x) return points[points.length - 1]!.y;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const left = points[index]!;
+    const right = points[index + 1]!;
+    if (x < left.x || x > right.x) continue;
+    const span = right.x - left.x;
+    if (span <= 0) return right.y;
+    const ratio = (x - left.x) / span;
+    return left.y + (right.y - left.y) * ratio;
+  }
+
+  return points[points.length - 1]!.y;
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1]! + sorted[mid]!) / 2
+    : sorted[mid]!;
 }
 
 function buildRegression(points: Array<{ x: number; y: number }>) {
@@ -722,32 +777,39 @@ function buildRegression(points: Array<{ x: number; y: number }>) {
   return (x: number) => Math.max(0, intercept + slope * x);
 }
 
-function WeeklyEnergyChart({
+function normalizeChargeCurveType(chargerType: ChargeCurveAnalysisPoint['charger_type']) {
+  const normalized = chargerType as string | null;
+  if (normalized === 'dc' || normalized === 'dcfc') return 'dc';
+  if (normalized === 'ac' || normalized === 'ac_l2') return 'ac';
+  return 'unknown';
+}
+
+function DailyEnergyChart({
   definition,
-  weekly,
+  daily,
   loading,
   height,
 }: {
   definition: DashboardChartDefinition;
-  weekly: Array<{ week_start: string; energy_kwh: number | null }>;
+  daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number }>;
   loading: boolean;
   height: number;
 }) {
-  const formatWeekLabel = (seconds: number) => {
+  const formatDayLabel = (seconds: number) => {
     const d = new Date(seconds * 1000);
     return d.toLocaleString([], { month: 'short', day: 'numeric' });
   };
 
   return (
     <RichTimeSeriesChart
-      points={weekly.map((point) => ({ ts: point.week_start }))}
-      series={[{ key: 'energy', label: 'Energy Charged', values: weekly.map((point) => point.energy_kwh ?? null) }]}
+      points={daily.map((point) => ({ ts: point.day_start }))}
+      series={[{ key: 'energy', label: 'Energy Charged', values: daily.map((point) => point.total_energy_kwh ?? null) }]}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
       mode="bar"
-      xValueFormatter={formatWeekLabel}
+      xValueFormatter={formatDayLabel}
       smoothing={0}
     />
   );
@@ -945,6 +1007,7 @@ function ProjectedRangeMileageChart({
       odometerMi: point.x,
     }))
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  const yRange = getProjectedRangeMileageYRange(rows.map((point) => point.projectedRangeMi));
 
   return (
     <RichTimeSeriesChart
@@ -970,11 +1033,24 @@ function ProjectedRangeMileageChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       yUnit={definition.yUnit}
+      yRange={yRange}
       yRightUnit="mi"
       mode={definition.mode}
       smoothing={smoothing}
     />
   );
+}
+
+export function getProjectedRangeMileageYRange(values: Array<number | null | undefined>) {
+  const populated = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (populated.length === 0) return undefined;
+
+  const min = 200;
+  const step = 25;
+  const max = Math.max(...populated);
+  const upper = Math.max(min + step, Math.ceil(max / step) * step);
+
+  return [min, upper] as [number, number];
 }
 
 function getEfficiencyUnit() {

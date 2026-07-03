@@ -3,12 +3,13 @@ import { api } from './api';
 import type { ChargingScheduleInput, DepartureScheduleInput } from './api';
 import { useAuthReady } from './useAuthState';
 
-export function useChargeSessions(vehicleId: string | null, from: string, to: string, page = 1, perPage = 25, search = '') {
+export function useChargeSessions(vehicleId: string | null, from: string | null, to: string | null, page = 1, perPage = 25, search = '') {
   const normalizedSearch = search.trim();
   const authReady = useAuthReady();
+  const lifetime = !from && !to;
   return useQuery({
-    queryKey: ['charging', 'list', vehicleId, from, to, page, perPage, normalizedSearch],
-    queryFn: () => api.listChargeSessions(vehicleId!, from, to, page, perPage, normalizedSearch),
+    queryKey: ['charging', 'list', vehicleId, from, to, lifetime, page, perPage, normalizedSearch],
+    queryFn: () => api.listChargeSessions(vehicleId!, from, to, page, perPage, normalizedSearch, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
@@ -46,11 +47,12 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
   });
 }
 
-export function useChargeCurveAnalysis(vehicleId: string | null, from: string, to: string) {
+export function useChargeCurveAnalysis(vehicleId: string | null, from: string | null, to: string | null) {
   const authReady = useAuthReady();
+  const lifetime = !from && !to;
   return useQuery({
-    queryKey: ['charging', 'curve-analysis', vehicleId, from, to],
-    queryFn: () => api.getChargeCurveAnalysis(vehicleId!, from, to),
+    queryKey: ['charging', 'curve-analysis', vehicleId, from, to, lifetime],
+    queryFn: () => api.getChargeCurveAnalysis(vehicleId!, from, to, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
@@ -60,11 +62,27 @@ export function useChargeCurveAnalysis(vehicleId: string | null, from: string, t
   });
 }
 
-export function useChargingSummary(vehicleId: string | null, from: string, to: string) {
+export function useChargingSummary(vehicleId: string | null, from: string | null, to: string | null) {
   const authReady = useAuthReady();
+  const lifetime = !from && !to;
   return useQuery({
-    queryKey: ['charging', 'summary', vehicleId, from, to],
-    queryFn: () => api.getChargingSummary(vehicleId!, from, to),
+    queryKey: ['charging', 'summary', vehicleId, from, to, lifetime],
+    queryFn: () => api.getChargingSummary(vehicleId!, from, to, lifetime),
+    enabled: authReady && !!vehicleId,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useChargingChartSeries(vehicleId: string | null, from: string | null, to: string | null) {
+  const authReady = useAuthReady();
+  const lifetime = !from && !to;
+  return useQuery({
+    queryKey: ['charging', 'chart-series', vehicleId, from, to, lifetime],
+    queryFn: () => api.getChargingChartSeries(vehicleId!, from, to, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,

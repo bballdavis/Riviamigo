@@ -114,6 +114,11 @@ export function ChargeSessionContent() {
                     instance={chargeCurveInstance}
                     ctx={{
                       vehicleId: defaultVehicleId,
+                      timeframe: {
+                        kind: 'custom',
+                        from: new Date(session.started_at),
+                        to: new Date(session.ended_at ?? session.started_at),
+                      },
                       from: session.started_at,
                       to: session.ended_at ?? session.started_at,
                       chargeSessionId: sessionId,

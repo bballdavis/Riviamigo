@@ -35,11 +35,41 @@ struct TripListParams {
     vehicle_id: Option<Uuid>,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
+    lifetime: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
     page: Option<i64>,
     per_page: Option<i64>,
     search: Option<String>,
+}
+
+#[cfg(test)]
+mod timeframe_tests {
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn lifetime_time_bounds_use_epoch_instead_of_default_window() {
+        let to = Utc.with_ymd_and_hms(2026, 7, 2, 12, 0, 0).unwrap();
+        let (from, resolved_to) = super::resolve_time_bounds(None, Some(to), true, 90);
+
+        assert_eq!(resolved_to, to);
+        assert_eq!(from, chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    }
+}
+
+fn resolve_time_bounds(
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: bool,
+    default_days: i64,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let resolved_to = to.unwrap_or_else(Utc::now);
+    let resolved_from = if lifetime {
+        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
+    } else {
+        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
+    };
+    (resolved_from, resolved_to)
 }
 
 #[derive(Deserialize)]
@@ -133,10 +163,7 @@ async fn list_trips(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
     let offset = p.offset.unwrap_or((page - 1) * limit).max(0);

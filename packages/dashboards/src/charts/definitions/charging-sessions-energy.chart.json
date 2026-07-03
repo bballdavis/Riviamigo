@@ -1,7 +1,7 @@
 {
   "id": "charging-sessions-energy",
-  "title": "Session Charge Distribution",
-  "description": "Session frequency by energy band with average charge rate overlay.",
+  "title": "Daily Charge Sessions",
+  "description": "Daily stacked charge sessions, with each session contributing to its local charge day.",
   "pages": ["overview", "charging"],
   "source": "charging_sessions_energy",
   "mode": "bar",

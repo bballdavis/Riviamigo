@@ -27,6 +27,14 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         { ts: '2026-05-03T00:00:00Z', value: 999 },
       ],
     }),
+    useEfficiencySummary: () => ({
+      data: {
+        avg: 200,
+        p10: 180,
+        p90: 220,
+        total_miles: 120,
+      },
+    }),
   };
 });
 
@@ -65,7 +73,16 @@ describe('Trips weighted efficiency stat', () => {
     render(
       <DashboardRenderer
         config={config()}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01T00:00:00Z', to: '2026-05-07T00:00:00Z' }}
+        ctx={{
+          vehicleId: 'vehicle-1',
+          timeframe: {
+            kind: 'custom',
+            from: new Date('2026-05-01T00:00:00Z'),
+            to: new Date('2026-05-07T00:00:00Z'),
+          },
+          from: '2026-05-01T00:00:00Z',
+          to: '2026-05-07T00:00:00Z',
+        }}
       />
     );
 

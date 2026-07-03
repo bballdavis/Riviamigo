@@ -87,7 +87,23 @@ struct SeriesParams {
     metric: String,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
+    lifetime: Option<bool>,
     bucket: Option<String>,
+}
+
+fn resolve_time_bounds(
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: bool,
+    default_days: i64,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let resolved_to = to.unwrap_or_else(Utc::now);
+    let resolved_from = if lifetime {
+        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
+    } else {
+        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
+    };
+    (resolved_from, resolved_to)
 }
 
 fn resolve_bucket(
@@ -386,10 +402,7 @@ async fn get_series(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let metric = find_metric(&p.metric)?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
 
     let points = match metric.source {

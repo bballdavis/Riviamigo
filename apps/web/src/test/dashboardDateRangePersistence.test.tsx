@@ -55,20 +55,17 @@ vi.mock('@riviamigo/ui/primitives', () => ({
     </div>
   ),
   DateRangePicker: ({
-    preset,
+    timeframe,
     onChange,
   }: {
-    preset?: string;
-    onChange: (range: { from: Date; to: Date }, preset?: string) => void;
+    timeframe?: { kind: string; preset?: string };
+    onChange: (timeframe: unknown) => void;
   }) => (
     <div>
-      <span data-testid="preset-value">{preset ?? 'custom'}</span>
+      <span data-testid="preset-value">{timeframe?.kind === 'preset' ? timeframe.preset : timeframe?.kind ?? 'custom'}</span>
       <button
         type="button"
-        onClick={() => onChange(
-          { from: new Date('2025-01-01T00:00:00Z'), to: new Date('2025-01-31T23:59:59Z') },
-          '1y',
-        )}
+        onClick={() => onChange({ kind: 'preset', preset: '1y' })}
       >
         Select last year
       </button>
@@ -108,7 +105,7 @@ describe('DashboardPageShell timeframe persistence', () => {
 
     await user.click(screen.getByRole('button', { name: 'Select last year' }));
 
-    expect(JSON.parse(sessionStorage.getItem('rm-dashboard-timeframe') ?? '{}')).toEqual({ preset: '1y' });
+    expect(JSON.parse(sessionStorage.getItem('rm-dashboard-timeframe') ?? '{}')).toEqual({ kind: 'preset', preset: '1y' });
 
     unmount();
     dashboardMocks.slug = 'charging';
