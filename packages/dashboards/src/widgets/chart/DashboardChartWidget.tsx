@@ -19,6 +19,7 @@ import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import {
   formatMiles,
+  formatSmartNumber,
   formatTemp,
   getEfficiencyDisplay,
   getUnitSystem,
@@ -83,6 +84,22 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
 
 const DEFAULT_SMOOTHING = 0.2;
 const MIN_ENABLED_SMOOTHING = 0.05;
+
+function shouldUseBatteryCapacityMileageDecimals(values: number[]) {
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (finiteValues.length < 2) return false;
+
+  const integerLabels = new Set(finiteValues.map((value) => formatSmartNumber(value, 0)));
+  const decimalLabels = new Set(finiteValues.map((value) => formatSmartNumber(value, 1)));
+
+  return decimalLabels.size > integerLabels.size;
+}
+
+function formatBatteryCapacityMileageValue(value: number | null | undefined, unit: string | undefined, useDecimals: boolean) {
+  if (value == null || !Number.isFinite(value)) return '-';
+  const formatted = formatSmartNumber(value, useDecimals ? 1 : 0);
+  return unit ? `${formatted} ${unit}` : formatted;
+}
 
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
@@ -931,6 +948,7 @@ function BatteryCapacityMileageChart({
     .sort((a, b) => a.x - b.x);
 
   const trendline = buildRegression(rows.map((point) => ({ x: point.x, y: point.y })));
+  const useDecimalCapacityLabels = shouldUseBatteryCapacityMileageDecimals(rows.map((point) => point.y));
 
   return (
     <RichTimeSeriesChart
@@ -978,6 +996,7 @@ function BatteryCapacityMileageChart({
       xTime={false}
       xUnit="mi"
       yUnit={definition.yUnit}
+      yValueFormatter={(value, unit) => formatBatteryCapacityMileageValue(value, unit, useDecimalCapacityLabels)}
       yRange={definition.yRange}
       mode="scatter"
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
