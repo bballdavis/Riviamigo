@@ -67,6 +67,8 @@ Common usage:
 
 - Standard cards use the existing surface, border, and radius system.
 - Prominent cards should still look like part of Riviamigo, not a special-case microsite.
+- Compact card badges should use the shared `Badge` primitive instead of ad hoc border pills.
+- Only show timeframe badges when the timeframe itself adds meaning. For battery and charging summary cards, omit `Current` labels and use a small `Lifetime` badge only on lifetime-scoped history cards.
 
 ### Empty, loading, and error states
 

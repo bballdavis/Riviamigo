@@ -307,7 +307,7 @@ describe('dashboard sensor chips', () => {
     expect(screen.getByText('/109.0 kWh')).toHaveClass('text-fg-tertiary');
   });
 
-  it('labels static battery cards as Current or Lifetime', () => {
+  it('shows lifetime badges only on lifetime battery cards', () => {
     metricMocks.batteryHealth = {
       usable_now_kwh: 111.6,
       usable_new_kwh: 109.0,
@@ -326,20 +326,68 @@ describe('dashboard sensor chips', () => {
           ...config(false),
           widgets: [
             {
-              id: 'd9000009-0000-0000-0000-000000000002',
+              id: 'd9000009-0000-0000-0000-000000000010',
               componentType: 'sensor',
-              definitionId: 'usable_capacity',
-              title: 'Usable Capacity',
+              definitionId: 'battery_health_pct',
+              title: 'Battery Health',
               options: {},
               layout: { x: 0, y: 0, w: 3, h: 2 },
             },
             {
-              id: 'd9000009-0000-0000-0000-000000000004',
+              id: 'd9000009-0000-0000-0000-000000000011',
+              componentType: 'sensor',
+              definitionId: 'estimated_degradation_pct',
+              title: 'Estimated Degradation',
+              options: {},
+              layout: { x: 3, y: 0, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000012',
+              componentType: 'sensor',
+              definitionId: 'usable_capacity',
+              title: 'Usable Capacity',
+              options: {},
+              layout: { x: 6, y: 0, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000013',
+              componentType: 'sensor',
+              definitionId: 'max_range',
+              title: 'Max Range',
+              options: {},
+              layout: { x: 9, y: 0, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000014',
               componentType: 'sensor',
               definitionId: 'charge_count',
               title: 'Charges',
               options: {},
-              layout: { x: 3, y: 0, w: 3, h: 2 },
+              layout: { x: 0, y: 2, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000015',
+              componentType: 'sensor',
+              definitionId: 'charging_cycles_health',
+              title: 'Charging Cycles',
+              options: {},
+              layout: { x: 3, y: 2, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000016',
+              componentType: 'sensor',
+              definitionId: 'battery_energy_added',
+              title: 'Energy Added',
+              options: {},
+              layout: { x: 6, y: 2, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000017',
+              componentType: 'sensor',
+              definitionId: 'battery_charge_efficiency',
+              title: 'Charge Efficiency',
+              options: {},
+              layout: { x: 9, y: 2, w: 3, h: 2 },
             },
           ],
         }}
@@ -347,8 +395,8 @@ describe('dashboard sensor chips', () => {
       />
     );
 
-    expect(screen.getByText('Current')).toBeInTheDocument();
-    expect(screen.getByText('Lifetime')).toBeInTheDocument();
+    expect(screen.queryByText('Current')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Lifetime')).toHaveLength(4);
   });
 
   it('folds unknown charging energy into away for the home share chip', () => {
