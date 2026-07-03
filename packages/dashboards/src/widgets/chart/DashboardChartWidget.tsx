@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { SlidersHorizontal } from 'lucide-react';
 import {
   useBatteryMileage,
@@ -19,7 +20,6 @@ import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import {
   formatMiles,
-  formatSmartNumber,
   formatTemp,
   getEfficiencyDisplay,
   getUnitSystem,
@@ -32,8 +32,12 @@ import {
   getChartDefinition,
   getChartDefinitions,
   getChartOptions,
+  getChartSettingsCapabilities,
+  type DashboardChartAxisCapability,
+  type DashboardChartAxisId,
   type DashboardChartDefinition,
   type DashboardChartPage,
+  type DashboardChartSettingsCapabilities,
 } from '../../charts/catalog';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
@@ -45,8 +49,22 @@ interface DashboardChartOptions {
   page?: DashboardChartPage;
   showPicker?: boolean;
   curveSmoothing?: number | boolean;
+  chartSettings?: Record<string, DashboardChartDisplaySettings>;
   /** Optional subtitle shown in the compact header when showPicker is false. */
   headerSubtitle?: string;
+}
+
+type DashboardChartAxisMode = 'auto' | 'manual';
+
+interface DashboardChartAxisRangeSetting {
+  mode?: DashboardChartAxisMode;
+  min?: number;
+  max?: number;
+}
+
+interface DashboardChartDisplaySettings {
+  smoothing?: number;
+  axes?: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>>;
 }
 
 interface ResolvedDashboardChartOptions {
@@ -54,7 +72,8 @@ interface ResolvedDashboardChartOptions {
   chartIds: string[];
   page?: DashboardChartPage;
   showPicker: boolean;
-  curveSmoothing: number;
+  legacyCurveSmoothing: number;
+  chartSettings: Record<string, DashboardChartDisplaySettings>;
   headerSubtitle?: string;
 }
 
@@ -76,7 +95,8 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
     chartId,
     chartIds: fallbackIds,
     showPicker: options.showPicker ?? fallbackIds.length > 1,
-    curveSmoothing: normalizeCurveSmoothing(options.curveSmoothing),
+    legacyCurveSmoothing: normalizeCurveSmoothing(options.curveSmoothing),
+    chartSettings: normalizeChartSettingsMap(options.chartSettings),
     ...(page ? { page } : {}),
     ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
   };
@@ -84,22 +104,12 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
 
 const DEFAULT_SMOOTHING = 0.2;
 const MIN_ENABLED_SMOOTHING = 0.05;
-
-function shouldUseBatteryCapacityMileageDecimals(values: number[]) {
-  const finiteValues = values.filter((value) => Number.isFinite(value));
-  if (finiteValues.length < 2) return false;
-
-  const integerLabels = new Set(finiteValues.map((value) => formatSmartNumber(value, 0)));
-  const decimalLabels = new Set(finiteValues.map((value) => formatSmartNumber(value, 1)));
-
-  return decimalLabels.size > integerLabels.size;
-}
-
-function formatBatteryCapacityMileageValue(value: number | null | undefined, unit: string | undefined, useDecimals: boolean) {
-  if (value == null || !Number.isFinite(value)) return '-';
-  const formatted = formatSmartNumber(value, useDecimals ? 1 : 0);
-  return unit ? `${formatted} ${unit}` : formatted;
-}
+const AXIS_ORDER: DashboardChartAxisId[] = ['x', 'y', 'y2'];
+const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
+  smoothing: false,
+  axes: {},
+  xDomainSource: 'dashboard-timeframe',
+};
 
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
@@ -107,16 +117,10 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const [chartId, setChartId] = React.useState(options.chartId);
   const [search, setSearch] = React.useState('');
   // smoothing: 0 = off, >0 = smoothing amount (0–1)
-  const [smoothing, setSmoothing] = React.useState(options.curveSmoothing);
+  const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const settingsRef = React.useRef<HTMLDivElement>(null);
+  const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
-
-  const smoothingOn = smoothing > 0;
-  const smoothingTrackPercent = Math.min(
-    100,
-    Math.max(0, ((smoothing - MIN_ENABLED_SMOOTHING) / (1 - MIN_ENABLED_SMOOTHING)) * 100),
-  );
 
   React.useEffect(() => {
     if (!options.chartIds.includes(chartId)) {
@@ -125,35 +129,56 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   }, [chartId, options.chartId, options.chartIds]);
 
   React.useEffect(() => {
-    setSmoothing(options.curveSmoothing);
-  }, [options.curveSmoothing]);
-
-  React.useEffect(() => {
-    function handlePointerDown(event: MouseEvent) {
-      if (!settingsRef.current?.contains(event.target as Node)) {
-        setSettingsOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, []);
+    setDraftChartSettings(options.chartSettings);
+  }, [options.chartSettings]);
 
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
+  const activeChartDefinition = getChartDefinition(activeChartId);
+  const activeCapabilities = activeChartDefinition ? getChartSettingsCapabilities(activeChartDefinition) : EMPTY_CAPABILITIES;
+  const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyCurveSmoothing);
+  const smoothing = activeSettings.smoothing;
+  const smoothingOn = smoothing > 0;
+  const smoothingTrackPercent = Math.min(
+    100,
+    Math.max(0, ((smoothing - MIN_ENABLED_SMOOTHING) / (1 - MIN_ENABLED_SMOOTHING)) * 100),
+  );
+
+  function updateActiveChartSettings(
+    updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings,
+  ) {
+    setDraftChartSettings((current) => {
+      const nextEntry = updater(current[activeChartId] ?? {});
+      const nextMap = setChartSettingsEntry(current, activeChartId, nextEntry);
+      ctx.updateWidgetOptions?.(instance.id, { chartSettings: nextMap });
+      return nextMap;
+    });
+  }
+
+  function setSmoothing(next: number | ((current: number) => number)) {
+    const resolvedNext = typeof next === 'function' ? next(activeSettings.smoothing) : next;
+    updateActiveChartSettings((current) => ({
+      ...current,
+      smoothing: normalizeCurveSmoothing(resolvedNext),
+    }));
+  }
 
   const settingsButton = (
-    <div ref={settingsRef} className="relative">
-      <button
-        type="button"
-        aria-label="Chart settings"
-        onClick={() => setSettingsOpen((v) => !v)}
-        className={cn(
-          'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
-          'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent',
-          settingsOpen && 'border-accent text-accent',
-        )}
-      >
-        <SlidersHorizontal className="h-4 w-4" />
-      </button>
+    <div className="relative">
+    <button
+      ref={settingsTriggerRef}
+      type="button"
+      aria-label="Chart settings"
+      aria-haspopup="dialog"
+      aria-expanded={settingsOpen}
+      onClick={() => setSettingsOpen((value) => !value)}
+      className={cn(
+        'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
+        'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent',
+        settingsOpen && 'border-accent text-accent',
+      )}
+    >
+      <SlidersHorizontal className="h-4 w-4" />
+    </button>
       {settingsOpen ? (
         <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 w-52 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
           {/* Smooth curves toggle row */}
@@ -247,13 +272,73 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         <div className="absolute right-0 top-0 z-10">{settingsButton}</div>
       )}
       <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
-        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} smoothing={smoothing} />
+        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} settings={activeSettings} />
       </div>
+      <ChartSettingsPanel
+        open={settingsOpen}
+        triggerRef={settingsTriggerRef}
+        chartTitle={activeChartDefinition?.title ?? instance.title ?? 'Chart'}
+        capabilities={activeCapabilities}
+        settings={activeSettings}
+        onClose={() => setSettingsOpen(false)}
+        onToggleSmoothing={() =>
+          updateActiveChartSettings((current) => ({
+            ...current,
+            smoothing:
+              activeSettings.smoothing > 0
+                ? 0
+                : Math.max(current.smoothing ?? options.legacyCurveSmoothing, MIN_ENABLED_SMOOTHING),
+          }))
+        }
+        onSmoothingChange={(next) =>
+          updateActiveChartSettings((current) => ({
+            ...current,
+            smoothing: normalizeCurveSmoothing(next),
+          }))
+        }
+        onAxisModeChange={(axisId, mode) =>
+          updateActiveChartSettings((current) => ({
+            ...current,
+            axes: {
+              ...(current.axes ?? {}),
+              [axisId]: {
+                ...(current.axes?.[axisId] ?? {}),
+                mode,
+              },
+            },
+          }))
+        }
+        onAxisValueChange={(axisId, bound, rawValue) =>
+          updateActiveChartSettings((current) => ({
+            ...current,
+            axes: {
+              ...(current.axes ?? {}),
+              [axisId]: {
+                ...(current.axes?.[axisId] ?? {}),
+                mode: current.axes?.[axisId]?.mode ?? 'manual',
+                [bound]: rawValue,
+              },
+            },
+          }))
+        }
+      />
     </div>
   );
 }
 
-export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: { chartId: string; ctx: WidgetCtx; height: number; smoothing?: number }) {
+export function DashboardChartRenderer({
+  chartId,
+  ctx,
+  height,
+  smoothing = 0,
+  settings,
+}: {
+  chartId: string;
+  ctx: WidgetCtx;
+  height: number;
+  smoothing?: number;
+  settings?: DashboardChartDisplaySettings;
+}) {
   const definition = getChartDefinition(chartId);
   const source = definition?.source;
   const needsSoc = source === 'soc_history';
@@ -306,12 +391,16 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
     projectedMaxRangeMi: point.projected_max_range_mi,
     degradationPct: point.degradation_pct,
   }));
+  const rendererSmoothing = settings?.smoothing ?? smoothing;
+  const xRange = getManualAxisRange(settings?.axes?.x);
+  const yRange = getManualAxisRange(settings?.axes?.y);
+  const yRightRange = getManualAxisRange(settings?.axes?.y2);
 
   switch (definition.source) {
     case 'soc_history':
-      return renderSocHistoryChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })), smoothing);
+      return renderSocHistoryChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })), rendererSmoothing, yRange);
     case 'range_history':
-      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })), smoothing);
+      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })), rendererSmoothing, yRange);
     case 'charging_sessions_energy':
       return (
         <ChargingSessionsChart
@@ -329,6 +418,7 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           daily={dailyChargeSeries}
           loading={chargingChartSeriesLoading}
           height={height}
+          yRange={yRange}
         />
       );
     case 'charge_session_curve':
@@ -338,9 +428,11 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           data={selectedChargeCurve}
           loading={selectedChargeCurveLoading}
           height={height}
-          smoothing={smoothing}
+          smoothing={rendererSmoothing}
           startedAt={ctx.from || null}
           sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
+          yRange={yRange}
+          yRightRange={yRightRange}
         />
       );
     case 'charging_curve_analysis':
@@ -350,18 +442,20 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           data={chargeCurveAnalysis}
           loading={chargeCurveAnalysisLoading}
           height={height}
+          xRange={xRange}
+          yRange={yRange}
         />
       );
     case 'efficiency_trend':
-      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={smoothing} />;
+      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={rendererSmoothing} yRange={yRange} />;
     case 'efficiency_temperature':
       return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} />;
     case 'efficiency_mode':
       return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
     case 'phantom_drain':
-      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })), smoothing);
+      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })), rendererSmoothing, yRange);
     case 'battery_degradation':
-      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), smoothing);
+      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), rendererSmoothing, yRange);
     case 'battery_capacity_mileage':
       return (
         <BatteryCapacityMileageChart
@@ -369,7 +463,9 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           loading={mileageLoading}
           height={height}
           points={mileagePoints}
-          smoothing={smoothing}
+          smoothing={rendererSmoothing}
+          xRange={xRange}
+          yRange={yRange}
         />
       );
     case 'projected_range_mileage':
@@ -379,7 +475,9 @@ export function DashboardChartRenderer({ chartId, ctx, height, smoothing = 0 }: 
           loading={mileageLoading}
           height={height}
           points={mileagePoints}
-          smoothing={smoothing}
+          smoothing={rendererSmoothing}
+          yRange={yRange}
+          yRightRange={yRightRange}
         />
       );
   }
@@ -948,7 +1046,6 @@ function BatteryCapacityMileageChart({
     .sort((a, b) => a.x - b.x);
 
   const trendline = buildRegression(rows.map((point) => ({ x: point.x, y: point.y })));
-  const useDecimalCapacityLabels = shouldUseBatteryCapacityMileageDecimals(rows.map((point) => point.y));
 
   return (
     <RichTimeSeriesChart
@@ -996,7 +1093,6 @@ function BatteryCapacityMileageChart({
       xTime={false}
       xUnit="mi"
       yUnit={definition.yUnit}
-      yValueFormatter={(value, unit) => formatBatteryCapacityMileageValue(value, unit, useDecimalCapacityLabels)}
       yRange={definition.yRange}
       mode="scatter"
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}

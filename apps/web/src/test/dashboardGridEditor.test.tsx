@@ -1,7 +1,8 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import '../../../../packages/dashboards/src';
+import '../../../../packages/dashboards/src/widgets/sensor/SensorChipWidget';
+import '../../../../packages/dashboards/src/widgets/table/TripStatWidget';
 import GridEditor from '../../../../packages/dashboards/src/GridEditor';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
@@ -50,8 +51,14 @@ const BASE_CONFIG: DashboardConfig = {
   ],
 };
 
+function getEditorStyles() {
+  return Array.from(document.querySelectorAll('style'))
+    .map((style) => style.textContent ?? '')
+    .join('\n');
+}
+
 describe('GridEditor overlays', () => {
-  it('renders move and edit overlays for resizable and fixed widgets, while only resizable widgets get resize handles', () => {
+  it('renders shared edit chrome for resizable and fixed widgets, while only resizable widgets have usable resize handles', () => {
     render(
       <GridEditor
         config={BASE_CONFIG}
@@ -70,6 +77,10 @@ describe('GridEditor overlays', () => {
     expect(within(fixedLeft).getByRole('button', { name: 'Drag to move' })).toBeInTheDocument();
     expect(within(fixedLeft).getByLabelText('Fixed-size widget')).toBeInTheDocument();
     expect(within(fixedRight).getByRole('button', { name: 'Edit widget settings' })).toBeInTheDocument();
+    expect(resizableLeft.className).toContain('rgl-widget-overlay');
+    expect(resizableRight.className).toContain('rgl-widget-overlay');
+    expect(fixedLeft.className).toContain('rgl-widget-overlay');
+    expect(fixedRight.className).toContain('rgl-widget-overlay');
 
     const resizableCard = screen.getByTestId('widget-host-22222222-2222-2222-2222-222222222222').closest('[data-fixed-size="false"]');
     const fixedCard = screen.getByTestId('widget-host-33333333-3333-3333-3333-333333333333').closest('[data-fixed-size="true"]');
@@ -78,6 +89,24 @@ describe('GridEditor overlays', () => {
     expect(resizableCard?.querySelector('.react-resizable-handle')).not.toBeNull();
     expect(fixedCard?.querySelector('.react-resizable-handle')).not.toBeNull();
     expect(fixedGridItem?.className).toContain('react-resizable-hide');
+    expect(getEditorStyles()).toContain('.rgl-editor .react-grid-item:has(.rgl-card[data-fixed-size="true"]) .react-resizable-handle');
+  });
+
+  it('ties overlay visibility to shared grid item hover, focus, drag, resize, and selected states', () => {
+    render(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={() => undefined}
+      />
+    );
+
+    const styles = getEditorStyles();
+    expect(styles).toContain('.rgl-editor .react-grid-item:hover .rgl-widget-overlay');
+    expect(styles).toContain('.rgl-editor .react-grid-item:focus-within .rgl-widget-overlay');
+    expect(styles).toContain('.rgl-editor .react-grid-item.resizing .rgl-widget-overlay');
+    expect(styles).toContain('.rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-overlay');
+    expect(styles).toContain('.rgl-editor .react-grid-item:has(.rgl-card[data-editing="true"]) .rgl-widget-overlay');
   });
 
   it('keeps move and edit overlays visible while the widget editor drawer is open', () => {
@@ -92,14 +121,34 @@ describe('GridEditor overlays', () => {
     const leftOverlay = screen.getByTestId('widget-overlay-left-22222222-2222-2222-2222-222222222222');
     const rightOverlay = screen.getByTestId('widget-overlay-right-22222222-2222-2222-2222-222222222222');
 
-    expect(leftOverlay.className).toContain('opacity-0');
-    expect(rightOverlay.className).toContain('opacity-0');
+    expect(leftOverlay.className).toContain('rgl-widget-overlay');
+    expect(rightOverlay.className).toContain('rgl-widget-overlay');
 
     fireEvent.click(within(rightOverlay).getByRole('button', { name: 'Edit widget settings' }));
 
-    expect(leftOverlay.className).toContain('opacity-100');
-    expect(rightOverlay.className).toContain('opacity-100');
+    const selectedCard = screen.getByTestId('widget-host-22222222-2222-2222-2222-222222222222').closest('[data-editing="true"]');
+    expect(selectedCard).not.toBeNull();
+    expect(leftOverlay.className).toContain('rgl-widget-overlay');
+    expect(rightOverlay.className).toContain('rgl-widget-overlay');
     expect(screen.getByRole('button', { name: 'Remove component' })).toBeInTheDocument();
+  });
+
+  it('keeps overlay actions keyboard-focusable through the focus-within visibility rule', () => {
+    render(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={() => undefined}
+      />
+    );
+
+    const rightOverlay = screen.getByTestId('widget-overlay-right-22222222-2222-2222-2222-222222222222');
+    const editButton = within(rightOverlay).getByRole('button', { name: 'Edit widget settings' });
+
+    editButton.focus();
+
+    expect(document.activeElement).toBe(editButton);
+    expect(getEditorStyles()).toContain('.rgl-editor .react-grid-item:focus-within .rgl-widget-overlay');
   });
 
   it('confirms widget deletion from the drawer before removing the widget', () => {
