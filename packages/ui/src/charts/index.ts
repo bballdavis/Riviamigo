@@ -21,6 +21,12 @@ export type {
   ChargeSessionDistributionBand,
   ChargeSessionDistributionChartProps,
 } from './ChargeSessionDistributionChart';
+export { DailyChargeSessionsChart } from './DailyChargeSessionsChart';
+export type {
+  DailyChargeSessionsChartProps,
+  DailyChargeSessionsDay,
+  DailyChargeSessionsSession,
+} from './DailyChargeSessionsChart';
 export { EfficiencyPillBarChart } from './EfficiencyPillBarChart';
 export type {
   EfficiencyPillBarChartProps,

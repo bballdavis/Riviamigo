@@ -11,6 +11,7 @@ import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
+import { getProjectedRangeMileageYRange } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
 // ── uPlot mock ────────────────────────────────────────────────────────────────
 vi.mock('uplot', () => {
@@ -77,36 +78,37 @@ describe('DashboardChartRenderer - smoothing data flow', () => {
 // ── Hook mocks ────────────────────────────────────────────────────────────────
 const mockSoc = vi.fn(() => ({ data: [{ ts: '2024-01-01T00:00:00Z', value: 79 }], isLoading: false }));
 const mockRange = vi.fn(() => ({ data: [{ ts: '2024-01-01T00:00:00Z', value: 210 }], isLoading: false }));
-const mockChargeSessions = vi.fn(() => ({
+const mockChargingChartSeries = vi.fn(() => ({
   data: {
-    items: [
+    daily: [
+      { day_local: '2024-01-01', day_start: '2024-01-01T00:00:00Z', total_energy_kwh: 40, session_count: 2 },
+      { day_local: '2024-01-02', day_start: '2024-01-02T00:00:00Z', total_energy_kwh: 15, session_count: 1 },
+    ],
+    daily_sessions: [
       {
-        id: 's1', started_at: '2024-01-01T10:00:00Z', ended_at: '2024-01-01T11:00:00Z',
-        soc_start: 30, soc_end: 85, energy_added_kwh: 40,
+        session_id: 's1', day_local: '2024-01-01', day_start: '2024-01-01T00:00:00Z',
+        started_at: '2024-01-01T10:00:00Z', energy_added_kwh: 24, charger_type: 'AC', location_name: 'Home',
+      },
+      {
+        session_id: 's2', day_local: '2024-01-01', day_start: '2024-01-01T00:00:00Z',
+        started_at: '2024-01-01T17:00:00Z', energy_added_kwh: 16, charger_type: 'DC', location_name: 'Office',
+      },
+      {
+        session_id: 's3', day_local: '2024-01-02', day_start: '2024-01-02T00:00:00Z',
+        started_at: '2024-01-02T09:00:00Z', energy_added_kwh: 15, charger_type: 'AC', location_name: 'Home',
       },
     ],
-    total: 1, page: 1, per_page: 25, total_pages: 1,
   },
   isLoading: false,
 }));
 const mockChargeCurve = vi.fn(() => ({ data: [{ minutes_elapsed: 0, soc_pct: 20, power_kw: 11.5 }], isLoading: false }));
 const mockChargeCurveAnalysis = vi.fn(() => ({
   data: [
-    { soc_pct: 20, charge_rate_kw: 11.5, charger_type: 'ac' },
-    { soc_pct: 70, charge_rate_kw: 6.5, charger_type: 'ac' },
-    { soc_pct: 25, charge_rate_kw: 150, charger_type: 'dc' },
-    { soc_pct: 80, charge_rate_kw: 70, charger_type: 'dc' },
+    { session_id: 's1', minutes_elapsed: 0, soc_pct: 20, charge_rate_kw: 11.5, charger_type: 'ac', sample_source: 'telemetry' },
+    { session_id: 's1', minutes_elapsed: 5, soc_pct: 70, charge_rate_kw: 6.5, charger_type: 'ac', sample_source: 'telemetry' },
+    { session_id: 's2', minutes_elapsed: 0, soc_pct: 25, charge_rate_kw: 150, charger_type: 'dc', sample_source: 'telemetry' },
+    { session_id: 's2', minutes_elapsed: 10, soc_pct: 80, charge_rate_kw: 70, charger_type: 'dc', sample_source: 'telemetry' },
   ],
-  isLoading: false,
-}));
-const mockChargingSummary = vi.fn(() => ({
-  data: {
-    total_energy_kwh: 200, total_cost_usd: 20, session_count: 5, home_kwh: 150, away_kwh: 50,
-    ac_kwh: 80, dc_kwh: 120, charging_cycles: null, charging_efficiency_pct: null,
-    total_energy_used_kwh: null, max_charge_limit_pct: null, max_charge_rate_kw: null,
-    typed_session_count: 5,
-    weekly: [{ week_start: '2024-01-01T00:00:00Z', energy_kwh: 40, sessions: 2 }],
-  },
   isLoading: false,
 }));
 const mockEfficiencyTrend = vi.fn(() => ({
@@ -146,10 +148,9 @@ const mockBatteryMileage = vi.fn(() => ({
 vi.mock('@riviamigo/hooks', () => ({
   useSocHistory: () => mockSoc(),
   useRangeHistory: () => mockRange(),
-  useChargeSessions: () => mockChargeSessions(),
+  useChargingChartSeries: () => mockChargingChartSeries(),
   useChargeCurve: () => mockChargeCurve(),
   useChargeCurveAnalysis: () => mockChargeCurveAnalysis(),
-  useChargingSummary: () => mockChargingSummary(),
   useEfficiencyTrend: () => mockEfficiencyTrend(),
   useEfficiencyByMode: () => mockEfficiencyByMode(),
   useEfficiencyVsTemp: () => mockEfficiencyVsTemp(),
@@ -170,15 +171,21 @@ vi.mock('@riviamigo/ui/charts', () => ({
     grid: 'rgba(255,255,255,0.06)',
     muted: '#94a3b8',
   },
-  ChargeSessionDistributionChart: ({
-    bands,
+  DailyChargeSessionsChart: ({
+    daily,
+    dailySessions,
     emptyTitle,
   }: {
-    bands: Array<{ count: number }>;
+    daily: Array<{ day_local: string; total_energy_kwh: number }>;
+    dailySessions: Array<{ session_id: string; day_local: string }>;
     emptyTitle: string;
   }) =>
-    bands.some((band) => band.count > 0) ? (
-      <div data-testid="distribution-chart" />
+    daily.length > 0 || dailySessions.length > 0 ? (
+      <div
+        data-testid="daily-charge-sessions-chart"
+        data-day-count={String(daily.length)}
+        data-session-count={String(dailySessions.length)}
+      />
     ) : (
       <div>{emptyTitle}</div>
     ),
@@ -207,17 +214,19 @@ vi.mock('@riviamigo/ui/charts', () => ({
     ),
   RichTimeSeriesChart: ({
     points,
+    series,
     emptyTitle,
     smoothing,
   }: {
     points: Array<{ ts: string | number | Date }>;
+    series: Array<{ label: string }>;
     emptyTitle: string;
     smoothing?: number;
   }) =>
     points.length === 0 ? (
       <div>{emptyTitle}</div>
     ) : (
-      <div data-testid="rich-chart" data-smoothing={String(smoothing ?? 0)} />
+      <div data-testid="rich-chart" data-smoothing={String(smoothing ?? 0)} data-series={series.map((item) => item.label).join('|')} />
     ),
 }));
 
@@ -295,45 +304,25 @@ describe('DashboardChartWidget — charging_sessions_energy', () => {
   it('renders chart when session data is present', () => {
     renderChart('charging-sessions-energy');
     expectChartHasData('No charging sessions for this period');
+    expect(screen.getByTestId('daily-charge-sessions-chart').getAttribute('data-day-count')).toBe('2');
+    expect(screen.getByTestId('daily-charge-sessions-chart').getAttribute('data-session-count')).toBe('3');
   });
 
   it('shows empty state when no sessions', () => {
-    mockChargeSessions.mockReturnValueOnce({ data: { items: [], total: 0, page: 1, per_page: 25, total_pages: 0 }, isLoading: false });
-    mockChargingSummary.mockReturnValueOnce({
-      data: {
-        weekly: [],
-        total_energy_kwh: 0,
-        total_cost_usd: 0,
-        session_count: 0,
-        home_kwh: 0,
-        away_kwh: 0,
-        ac_kwh: 0,
-        dc_kwh: 0,
-        charging_cycles: null,
-        charging_efficiency_pct: null,
-        total_energy_used_kwh: null,
-        max_charge_limit_pct: null,
-        max_charge_rate_kw: null,
-        typed_session_count: 0,
-      },
-      isLoading: false,
-    });
+    mockChargingChartSeries.mockReturnValueOnce({ data: { daily: [], daily_sessions: [] }, isLoading: false });
     renderChart('charging-sessions-energy');
     expectChartEmpty('No charging sessions for this period');
   });
 });
 
 describe('DashboardChartWidget — charging_weekly_energy', () => {
-  it('renders chart when weekly data is present', () => {
+  it('renders chart when daily data is present', () => {
     renderChart('charging-weekly-energy');
     expectChartHasData('No charging energy for this period');
   });
 
-  it('shows empty state when no weekly data', () => {
-    mockChargingSummary.mockReturnValueOnce({
-      data: { weekly: [], total_energy_kwh: 0, total_cost_usd: 0, session_count: 0, home_kwh: 0, away_kwh: 0, ac_kwh: 0, dc_kwh: 0, charging_cycles: null, charging_efficiency_pct: null, total_energy_used_kwh: null, max_charge_limit_pct: null, max_charge_rate_kw: null, typed_session_count: 0 },
-      isLoading: false,
-    });
+  it('shows empty state when no daily data', () => {
+    mockChargingChartSeries.mockReturnValueOnce({ data: { daily: [], daily_sessions: [] }, isLoading: false });
     renderChart('charging-weekly-energy');
     expectChartEmpty('No charging energy for this period');
   });
@@ -356,12 +345,27 @@ describe('DashboardChartWidget — charging_curve_analysis', () => {
   it('renders cross-session charge curve analysis data', () => {
     renderChart('charging-curve-analysis');
     expectChartHasData('No charging curve history is available for this period');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Smoothed Trend');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).not.toContain('DC Regression');
   });
 
   it('shows empty state when no curve-analysis data exists', () => {
     mockChargeCurveAnalysis.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('charging-curve-analysis');
     expectChartEmpty('No charging curve history is available for this period');
+  });
+
+  it('keeps fallback samples visible when the source is approximate historical curve data', () => {
+    mockChargeCurveAnalysis.mockReturnValueOnce({
+      data: [
+        { session_id: 's9', minutes_elapsed: 0, soc_pct: 18, charge_rate_kw: 160, charger_type: 'dc', sample_source: 'rivian_charge_curve_points' },
+        { session_id: 's9', minutes_elapsed: 5, soc_pct: 42, charge_rate_kw: 120, charger_type: 'dc', sample_source: 'rivian_charge_curve_points' },
+      ],
+      isLoading: false,
+    });
+
+    renderChart('charging-curve-analysis');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Fallback Samples');
   });
 });
 
@@ -495,6 +499,10 @@ describe('DashboardChartWidget — projected_range_mileage', () => {
     mockBatteryMileage.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('projected-range-mileage');
     expectChartEmpty('No projected range mileage data recorded yet');
+  });
+
+  it('rounds the projected range axis to 200 and the next 25-mile step', () => {
+    expect(getProjectedRangeMileageYRange([null, 334, 333.4, 328])).toEqual([200, 350]);
   });
 });
 

@@ -40,6 +40,17 @@ const metricMocks = vi.hoisted(() => ({
     max_charge_rate_kw: number | null;
     max_charge_limit_pct: number | null;
   },
+  efficiencySummary: {
+    avg: 200,
+    p10: 180,
+    p90: 220,
+    total_miles: 120,
+  } as null | {
+    avg: number;
+    p10: number;
+    p90: number;
+    total_miles: number;
+  },
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -52,6 +63,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useMetricSeries: () => ({
       data: metricMocks.series,
     }),
+    useEfficiencySummary: () => ({ data: metricMocks.efficiencySummary, isLoading: false }),
     useBatteryHealth: () => ({ data: metricMocks.batteryHealth, isLoading: false }),
     useChargingSummary: () => ({ data: metricMocks.chargingSummary, isLoading: false }),
     useCurrentVehicleStatus: () => ({ data: null, isLoading: false }),
@@ -61,6 +73,13 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 
 import { DashboardRenderer } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
+
+const defaultCtx = {
+  vehicleId: 'vehicle-1',
+  timeframe: { kind: 'custom' as const, from: new Date('2026-05-01T00:00:00Z'), to: new Date('2026-05-07T00:00:00Z') },
+  from: '2026-05-01',
+  to: '2026-05-07',
+};
 
 function config(
   showSprite: boolean,
@@ -115,13 +134,14 @@ describe('dashboard sensor chips', () => {
     ];
     metricMocks.batteryHealth = null;
     metricMocks.chargingSummary = null;
+    metricMocks.efficiencySummary = { avg: 200, p10: 180, p90: 220, total_miles: 120 };
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
     render(
       <DashboardRenderer
         config={config(true)}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -139,7 +159,7 @@ describe('dashboard sensor chips', () => {
     render(
       <DashboardRenderer
         config={config(true, false, { curveSmoothing: 0 })}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -153,7 +173,7 @@ describe('dashboard sensor chips', () => {
     render(
       <DashboardRenderer
         config={config(true, false, { curveColor: 'sky' })}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -165,7 +185,7 @@ describe('dashboard sensor chips', () => {
     render(
       <DashboardRenderer
         config={config(false, true)}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -173,13 +193,33 @@ describe('dashboard sensor chips', () => {
     expect(screen.getByTestId('sensor-chip')).toHaveClass('border-accent/60');
   });
 
-  it('keeps a visible sprite for sparse live data', () => {
+  it('shows an empty sprite state for sparse bounded range data instead of falling back to latest', () => {
     metricMocks.series = [];
 
     render(
       <DashboardRenderer
         config={config(true)}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
+      />
+    );
+
+    const layer = screen.getByTestId('sensor-sprite-layer');
+    expect(layer.querySelector('[data-sparkline-state="empty"]')).not.toBeNull();
+    expect(layer.querySelectorAll('path, rect').length).toBeGreaterThan(0);
+  });
+
+  it('keeps a visible sprite for sparse lifetime data', () => {
+    metricMocks.series = [];
+
+    render(
+      <DashboardRenderer
+        config={config(true)}
+        ctx={{
+          vehicleId: 'vehicle-1',
+          timeframe: { kind: 'lifetime' },
+          from: null,
+          to: null,
+        }}
       />
     );
 
@@ -195,7 +235,7 @@ describe('dashboard sensor chips', () => {
     render(
       <DashboardRenderer
         config={config(true)}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -221,7 +261,7 @@ describe('dashboard sensor chips', () => {
     render(
       <DashboardRenderer
         config={config(true, false, {}, 'avg_efficiency', 'Avg Efficiency')}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -257,7 +297,7 @@ describe('dashboard sensor chips', () => {
             },
           ],
         }}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 
@@ -265,6 +305,50 @@ describe('dashboard sensor chips', () => {
     expect(screen.getByText('(now/new)')).toBeInTheDocument();
     expect(screen.getByText('111.6 kWh')).toHaveClass('text-fg');
     expect(screen.getByText('/109.0 kWh')).toHaveClass('text-fg-tertiary');
+  });
+
+  it('labels static battery cards as Current or Lifetime', () => {
+    metricMocks.batteryHealth = {
+      usable_now_kwh: 111.6,
+      usable_new_kwh: 109.0,
+      battery_health_pct: 102.4,
+      estimated_degradation_pct: 0,
+      charging_cycles: 18,
+      charge_count: 22,
+      total_energy_added_kwh: 1800,
+      total_energy_used_kwh: 1900,
+      charging_efficiency_pct: 94.4,
+    };
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...config(false),
+          widgets: [
+            {
+              id: 'd9000009-0000-0000-0000-000000000002',
+              componentType: 'sensor',
+              definitionId: 'usable_capacity',
+              title: 'Usable Capacity',
+              options: {},
+              layout: { x: 0, y: 0, w: 3, h: 2 },
+            },
+            {
+              id: 'd9000009-0000-0000-0000-000000000004',
+              componentType: 'sensor',
+              definitionId: 'charge_count',
+              title: 'Charges',
+              options: {},
+              layout: { x: 3, y: 0, w: 3, h: 2 },
+            },
+          ],
+        }}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByText('Current')).toBeInTheDocument();
+    expect(screen.getByText('Lifetime')).toBeInTheDocument();
   });
 
   it('folds unknown charging energy into away for the home share chip', () => {
@@ -298,7 +382,7 @@ describe('dashboard sensor chips', () => {
             },
           ],
         }}
-        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-07' }}
+        ctx={defaultCtx}
       />
     );
 

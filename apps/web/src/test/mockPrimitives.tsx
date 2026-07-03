@@ -121,7 +121,7 @@ export const ChartPicker = ({
 export const Tooltip = ({ children }: { children: React.ReactNode; content?: React.ReactNode; contentClassName?: string }) => <>{children}</>;
 
 export const DateRangePicker = ({ onChange }: {
-  value?: unknown; preset?: string; onChange?: (r: unknown, p?: string) => void;
+  timeframe?: unknown; onChange?: (timeframe: unknown) => void;
 }) => <div data-testid="date-range-picker" />;
 
 export function presetToRange(_preset: string) {

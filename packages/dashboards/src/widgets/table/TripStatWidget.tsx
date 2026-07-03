@@ -1,6 +1,6 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
-import { useMetricValue, useMetricSeries } from '@riviamigo/hooks';
+import { useEfficiencySummary, useMetricValue, useMetricSeries } from '@riviamigo/hooks';
 import { getChartColor, MiniSparkline } from '@riviamigo/ui/charts';
 import { Card } from '@riviamigo/ui/primitives';
 import { cn, formatMiles, formatDuration, formatEfficiency } from '@riviamigo/ui/lib/utils';
@@ -80,6 +80,11 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const { selectedIds, tripRegistry } = useTripSelection();
   const { data: value } = useMetricValue(ctx.vehicleId, options.metric);
   const { data: series = [] } = useMetricSeries(ctx.vehicleId, options.metric, ctx.from, ctx.to);
+  const { data: efficiencySummary } = useEfficiencySummary(
+    options.stat === 'efficiency' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
+  );
 
   React.useEffect(() => {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
@@ -89,12 +94,16 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
   const iconId = resolveIconId(options.icon);
   const selectedTrips = selectedIds.map((id) => tripRegistry[id]).filter((t): t is TripRow => Boolean(t));
   const hasSelection = selectedTrips.length > 0;
+  const isLifetime = ctx.timeframe?.kind === 'lifetime';
+  const aggregatedValue = aggregateSeriesForStat(options.stat, series);
+  const fallbackValue = isLifetime ? value?.value : null;
+  const summaryValue = options.stat === 'efficiency' ? efficiencySummary?.avg ?? null : null;
 
   const displayValue = hasSelection
     ? formatTripStat(options.stat, computeTripStat(options.stat, selectedTrips))
     : options.stat === 'efficiency'
-      ? formatApiValue(value?.value ?? aggregateSeriesForStat(options.stat, series), value?.unit)
-      : formatApiValue(aggregateSeriesForStat(options.stat, series) ?? value?.value, value?.unit);
+      ? formatApiValue(summaryValue ?? aggregatedValue ?? fallbackValue, value?.unit)
+      : formatApiValue(aggregatedValue ?? fallbackValue, value?.unit);
 
   const spriteData = series.filter(
     (p): p is { ts: string; value: number } =>

@@ -12,13 +12,13 @@ import { PiSpeedometerFill, PiSpeedometerLight } from 'react-icons/pi';
 import { AppLayout } from '../layout/AppLayout';
 import { NoVehicleState } from '../layout/NoVehicleState';
 import {
-  DEFAULT_PRESET,
+  DEFAULT_TIMEFRAME,
+  getTimeframeRange,
   loadDashboardTimeframe,
-  presetToRange,
   saveDashboardTimeframe,
-  rangeToIso,
+  timeframeToQuery,
   type DateRange,
-  type PresetKey,
+  type DashboardTimeframe,
 } from '../../lib/dates';
 
 export interface DashboardPageShellRenderState {
@@ -30,10 +30,9 @@ export interface DashboardPageShellRenderState {
   isLoading: boolean;
   vehicleId: string | null;
   ctx: WidgetCtx;
-  range: DateRange;
-  preset: PresetKey | undefined;
-  setRange: React.Dispatch<React.SetStateAction<DateRange>>;
-  setPreset: React.Dispatch<React.SetStateAction<PresetKey | undefined>>;
+  timeframe: DashboardTimeframe;
+  range: DateRange | null;
+  setTimeframe: React.Dispatch<React.SetStateAction<DashboardTimeframe>>;
   enterEdit: () => void;
   exitEdit: () => void;
 }
@@ -72,15 +71,13 @@ function DashboardPageShellContent({
   const { data: vehicles } = useVehicles();
   const [internalEditMode, setInternalEditMode] = useState(false);
   const storedTimeframe = useMemo(() => loadDashboardTimeframe(), []);
-  const [preset, setPreset] = useState<PresetKey | undefined>(() => storedTimeframe?.preset ?? DEFAULT_PRESET);
-  const [range, setRange] = useState<DateRange>(() =>
-    storedTimeframe?.preset
-      ? presetToRange(storedTimeframe.preset)
-      : storedTimeframe?.range ?? presetToRange(DEFAULT_PRESET)
+  const [timeframe, setTimeframe] = useState<DashboardTimeframe>(
+    () => storedTimeframe ?? DEFAULT_TIMEFRAME,
   );
   const [efficiencyDisplay, setEfficiencyDisplayState] = useState<EfficiencyDisplay>(() => getEfficiencyDisplay());
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
-  const { from, to } = rangeToIso(range);
+  const range = useMemo(() => getTimeframeRange(timeframe), [timeframe]);
+  const { from, to } = useMemo(() => timeframeToQuery(timeframe), [timeframe]);
 
   const availableVehicles = vehicles ?? [];
   const hasVehicleChoices = availableVehicles.length > 1;
@@ -93,8 +90,8 @@ function DashboardPageShellContent({
   const currentEditMode = controlledEditMode ?? internalEditMode;
   const activeConfig = localConfig ?? savedConfig;
   const ctx = useMemo<WidgetCtx>(
-    () => ({ vehicleId: effectiveVehicleId, from, to }),
-    [effectiveVehicleId, from, to],
+    () => ({ vehicleId: effectiveVehicleId, timeframe, from, to }),
+    [effectiveVehicleId, timeframe, from, to],
   );
   const previousEditModeRef = useRef(currentEditMode);
 
@@ -144,8 +141,8 @@ function DashboardPageShellContent({
   }, [currentEditMode, savedConfig]);
 
   useEffect(() => {
-    saveDashboardTimeframe(preset, range);
-  }, [preset, range]);
+    saveDashboardTimeframe(timeframe);
+  }, [timeframe]);
 
   useEffect(() => {
     if (!availableVehicles.length) {
@@ -171,22 +168,17 @@ function DashboardPageShellContent({
     isLoading,
     vehicleId: effectiveVehicleId,
     ctx,
+    timeframe,
     range,
-    preset,
-    setRange,
-    setPreset,
+    setTimeframe,
     enterEdit,
     exitEdit,
   };
 
   const dateRangeAction = activeConfig?.controls?.dateRange && !currentEditMode ? (
     <DateRangePicker
-      value={range}
-      preset={preset}
-      onChange={(nextRange, nextPreset) => {
-        setRange(nextRange);
-        setPreset(nextPreset);
-      }}
+      timeframe={timeframe}
+      onChange={setTimeframe}
       triggerClassName="h-9"
     />
   ) : null;

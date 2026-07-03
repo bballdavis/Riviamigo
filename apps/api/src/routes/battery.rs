@@ -63,6 +63,7 @@ pub struct TimeRangeParams {
     pub vehicle_id: Option<Uuid>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    pub lifetime: Option<bool>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -82,6 +83,21 @@ fn resolution(from: DateTime<Utc>, to: DateTime<Utc>) -> &'static str {
     }
 }
 
+fn resolve_time_bounds(
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: bool,
+    default_days: i64,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let resolved_to = to.unwrap_or_else(Utc::now);
+    let resolved_from = if lifetime {
+        DateTime::<Utc>::from_timestamp(0, 0).unwrap_or(resolved_to - chrono::Duration::days(3650))
+    } else {
+        from.unwrap_or_else(|| Utc::now() - chrono::Duration::days(default_days))
+    };
+    (resolved_from, resolved_to)
+}
+
 async fn get_soc(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -91,10 +107,7 @@ async fn get_soc(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(7));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 7);
 
     let points = match resolution(from, to) {
         "1min" => sqlx::query_as!(TimeSeriesPoint,
@@ -122,10 +135,7 @@ async fn get_range(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
 
     let points = match resolution(from, to) {
         "1min" => sqlx::query_as::<_, TimeSeriesPoint>(
@@ -168,10 +178,7 @@ async fn get_capacity(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(365));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let points = sqlx::query_as!(TimeSeriesPoint,
         "SELECT bucket AS \"ts!\", battery_capacity_wh AS value FROM timeseries.telemetry_1day \
@@ -390,10 +397,7 @@ async fn get_mileage(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(730));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 730);
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
 
     let samples = sqlx::query_as::<_, BatteryMileageSampleRow>(
@@ -455,10 +459,7 @@ async fn get_phantom_drain(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let from = p
-        .from
-        .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
-    let to = p.to.unwrap_or_else(Utc::now);
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let periods = fetch_validated_idle_drain_periods_for_chart(&state.pool, vid, from, to).await?;
 
     let mut by_day = BTreeMap::<NaiveDate, (f64, f64)>::new();
@@ -655,6 +656,16 @@ mod tests {
         let from = chrono::Utc::now() - chrono::Duration::days(180);
         let to = chrono::Utc::now();
         assert_eq!(resolution(from, to), "1day");
+    }
+
+    #[test]
+    fn lifetime_time_bounds_use_epoch_instead_of_default_window() {
+        use super::resolve_time_bounds;
+        let to = chrono::Utc::now();
+        let (from, resolved_to) = resolve_time_bounds(None, Some(to), true, 90);
+
+        assert_eq!(resolved_to, to);
+        assert_eq!(from, chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap());
     }
 
     #[test]
