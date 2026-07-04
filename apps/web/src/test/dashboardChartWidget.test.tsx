@@ -8,10 +8,39 @@
  *   data is present, and shows the empty state when data is absent.
  */
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { vi, describe, it, expect } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
 import { getProjectedRangeMileageYRange } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
+
+const originalMatchMedia = window.matchMedia;
+
+function setMatchMedia(mobile = false) {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (_query: string) => ({
+      matches: mobile,
+      media: '(max-width: 639px)',
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
+beforeEach(() => {
+  setMatchMedia(false);
+});
+
+afterEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: originalMatchMedia,
+  });
+});
 
 // ── uPlot mock ────────────────────────────────────────────────────────────────
 vi.mock('uplot', () => {
@@ -55,6 +84,100 @@ describe('DashboardChartWidget - smoothing controls', () => {
     const slider = screen.getByRole('slider');
     expect(slider).toBeTruthy();
     expect(slider.getAttribute('value')).toBe('0.05');
+    expect(screen.queryByLabelText('Time minimum')).toBeNull();
+  });
+
+  it('uses a bottom-sheet layout on mobile viewports', () => {
+    setMatchMedia(true);
+    renderChart('soc-history');
+
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    const dialog = screen.getByRole('dialog', { name: /chart settings/i });
+    expect(dialog.className).toContain('inset-x-2');
+    expect(dialog.className).toContain('bottom-2');
+  });
+
+  it('shows an empty shared-settings state for unsupported chart families', () => {
+    renderChart('efficiency-mode');
+
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    expect(screen.getByText(/does not expose shared display controls yet/i)).toBeTruthy();
+  });
+
+  it('keeps manual axis changes local outside dashboard edit mode', () => {
+    renderChart('battery-capacity-mileage');
+
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    const axisCard = screen.getByText('Mileage').closest('div.rounded-lg');
+    expect(axisCard).toBeTruthy();
+    fireEvent.click(within(axisCard as HTMLElement).getByRole('button', { name: 'Manual' }));
+    fireEvent.change(screen.getByLabelText('Mileage minimum'), { target: { value: '1000' } });
+    fireEvent.change(screen.getByLabelText('Mileage maximum'), { target: { value: '9000' } });
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-x-range')).toBe('1000|9000');
+  });
+
+  it('persists per-chart manual ranges through the edit-mode widget seam', () => {
+    const updateWidgetOptions = vi.fn();
+    const editCtx = { ...CTX, updateWidgetOptions };
+
+    renderWidget(makeInstance('projected-range-mileage'), editCtx);
+
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    const axisCard = screen.getByText('Projected max range').closest('div.rounded-lg');
+    expect(axisCard).toBeTruthy();
+    fireEvent.click(within(axisCard as HTMLElement).getByRole('button', { name: 'Manual' }));
+    fireEvent.change(screen.getByLabelText('Projected max range minimum'), { target: { value: '240' } });
+    fireEvent.change(screen.getByLabelText('Projected max range maximum'), { target: { value: '360' } });
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('240|360');
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-projected-range-mileage',
+      expect.objectContaining({
+        chartSettings: {
+          'projected-range-mileage': expect.objectContaining({
+            axes: {
+              y: { mode: 'manual', min: 240, max: 360 },
+            },
+          }),
+        },
+      }),
+    );
+  });
+
+  it('keeps settings isolated when switching between charts in the same widget', () => {
+    const instance = {
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: undefined,
+        showPicker: true,
+      },
+    };
+
+    renderWidget(instance);
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    const axisCard = screen.getByText('Battery level').closest('div.rounded-lg');
+    expect(axisCard).toBeTruthy();
+    fireEvent.click(within(axisCard as HTMLElement).getByRole('button', { name: 'Manual' }));
+    fireEvent.change(screen.getByLabelText('Battery level minimum'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Battery level maximum'), { target: { value: '90' } });
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    fireEvent.click(screen.getByRole('option', { name: /projected range by mileage/i }));
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).not.toBe('10|90');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    fireEvent.click(screen.getByRole('option', { name: /battery level/i }));
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
   });
 });
 
@@ -164,71 +287,94 @@ vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
   return { ...actual };
 });
 
-vi.mock('@riviamigo/ui/charts', () => ({
-  CHART_COLORS: {
-    accent: '#f97316',
-    emerald: '#10b981',
-    grid: 'rgba(255,255,255,0.06)',
-    muted: '#94a3b8',
-  },
-  DailyChargeSessionsChart: ({
-    daily,
-    dailySessions,
-    emptyTitle,
-  }: {
-    daily: Array<{ day_local: string; total_energy_kwh: number }>;
-    dailySessions: Array<{ session_id: string; day_local: string }>;
-    emptyTitle: string;
-  }) =>
-    daily.length > 0 || dailySessions.length > 0 ? (
-      <div
-        data-testid="daily-charge-sessions-chart"
-        data-day-count={String(daily.length)}
-        data-session-count={String(dailySessions.length)}
-      />
-    ) : (
-      <div>{emptyTitle}</div>
-    ),
-  EfficiencyPillBarChart: ({
-    data,
-    emptyTitle,
-  }: {
-    data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null }>;
-    emptyTitle: string;
-  }) =>
-    data.length === 0 ? (
-      <div>{emptyTitle}</div>
-    ) : (
-      <div data-testid="efficiency-pill-chart">
-        {data.map((point) => (
-          <div
-            key={point.label}
-            data-testid="efficiency-pill-label"
-            data-distance={point.distance == null ? '' : String(point.distance)}
-            data-speed={point.speed == null ? '' : String(point.speed)}
-          >
-            {point.label}
-          </div>
-        ))}
-      </div>
-    ),
-  RichTimeSeriesChart: ({
-    points,
-    series,
-    emptyTitle,
-    smoothing,
-  }: {
-    points: Array<{ ts: string | number | Date }>;
-    series: Array<{ label: string }>;
-    emptyTitle: string;
-    smoothing?: number;
-  }) =>
-    points.length === 0 ? (
-      <div>{emptyTitle}</div>
-    ) : (
-      <div data-testid="rich-chart" data-smoothing={String(smoothing ?? 0)} data-series={series.map((item) => item.label).join('|')} />
-    ),
-}));
+vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@riviamigo/ui/charts')>();
+  return {
+    ...actual,
+    CHART_COLORS: {
+      accent: '#f97316',
+      emerald: '#10b981',
+      grid: 'rgba(255,255,255,0.06)',
+      muted: '#94a3b8',
+    },
+    DailyChargeSessionsChart: ({
+      daily,
+      dailySessions,
+      emptyTitle,
+    }: {
+      daily: Array<{ day_local: string; total_energy_kwh: number }>;
+      dailySessions: Array<{ session_id: string; day_local: string }>;
+      emptyTitle: string;
+    }) =>
+      daily.length > 0 || dailySessions.length > 0 ? (
+        <div
+          data-testid="daily-charge-sessions-chart"
+          data-day-count={String(daily.length)}
+          data-session-count={String(dailySessions.length)}
+        />
+      ) : (
+        <div>{emptyTitle}</div>
+      ),
+    EfficiencyPillBarChart: ({
+      data,
+      emptyTitle,
+    }: {
+      data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null }>;
+      emptyTitle: string;
+    }) =>
+      data.length === 0 ? (
+        <div>{emptyTitle}</div>
+      ) : (
+        <div data-testid="efficiency-pill-chart">
+          {data.map((point) => (
+            <div
+              key={point.label}
+              data-testid="efficiency-pill-label"
+              data-distance={point.distance == null ? '' : String(point.distance)}
+              data-speed={point.speed == null ? '' : String(point.speed)}
+            >
+              {point.label}
+            </div>
+          ))}
+        </div>
+      ),
+    RichTimeSeriesChart: ({
+      points,
+      series,
+      emptyTitle,
+      smoothing,
+      xRange,
+      yRange,
+      yRightRange,
+      yValueFormatter,
+      yUnit,
+    }: {
+      points: Array<{ ts: string | number | Date }>;
+      series: Array<{ label: string }>;
+      emptyTitle: string;
+      smoothing?: number;
+      xRange?: [number, number];
+      yRange?: [number, number];
+      yRightRange?: [number, number];
+      yValueFormatter?: (value: number | null | undefined, unit?: string) => string;
+      yUnit?: string;
+    }) =>
+      points.length === 0 ? (
+        <div>{emptyTitle}</div>
+      ) : (
+        <div
+          data-testid="rich-chart"
+          data-smoothing={String(smoothing ?? 0)}
+          data-series={series.map((item) => item.label).join('|')}
+          data-x-range={xRange ? xRange.join('|') : ''}
+          data-y-range={yRange ? yRange.join('|') : ''}
+          data-y-right-range={yRightRange ? yRightRange.join('|') : ''}
+          data-has-y-formatter={yValueFormatter ? 'true' : 'false'}
+          data-y-format-sample={yValueFormatter ? yValueFormatter(112.1, yUnit) : ''}
+        />
+      ),
+  };
+});
 
 // ── Subject ───────────────────────────────────────────────────────────────────
 // Import after mocks are registered.
@@ -247,9 +393,13 @@ function makeInstance(chartId: string, showPicker = false) {
   };
 }
 
+function renderWidget(instance: ReturnType<typeof makeInstance>, ctx = CTX) {
+  return render(<DashboardChartWidget instance={instance} ctx={ctx} />);
+}
+
 function renderChart(chartId: string) {
   const instance = makeInstance(chartId);
-  return render(<DashboardChartWidget instance={instance} ctx={CTX} />);
+  return renderWidget(instance);
 }
 
 // A chart has rendered (has data) when it doesn't show the empty-state div.
@@ -480,6 +630,38 @@ describe('DashboardChartWidget — battery_capacity_mileage', () => {
   it('renders chart when mileage data is present', () => {
     renderChart('battery-capacity-mileage');
     expectChartHasData('No battery capacity mileage data recorded yet');
+  });
+
+  it('uses decimal battery-capacity labels when whole numbers would collapse distinct values', () => {
+    mockBatteryMileage.mockReturnValueOnce({
+      data: [
+        { ts: '2024-01-01T00:00:00Z', odometer_mi: 14500, usable_kwh: 111.6, range_mi: 320 },
+        { ts: '2024-01-02T00:00:00Z', odometer_mi: 15000, usable_kwh: 111.8, range_mi: 321 },
+        { ts: '2024-01-03T00:00:00Z', odometer_mi: 15500, usable_kwh: 112.1, range_mi: 322 },
+      ],
+      isLoading: false,
+    });
+
+    renderChart('battery-capacity-mileage');
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-has-y-formatter')).toBe('true');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-format-sample')).toBe('112.1 kWh');
+  });
+
+  it('keeps whole-number battery-capacity labels when integer precision remains meaningful', () => {
+    mockBatteryMileage.mockReturnValueOnce({
+      data: [
+        { ts: '2024-01-01T00:00:00Z', odometer_mi: 14500, usable_kwh: 108, range_mi: 300 },
+        { ts: '2024-01-02T00:00:00Z', odometer_mi: 15000, usable_kwh: 112.1, range_mi: 315 },
+        { ts: '2024-01-03T00:00:00Z', odometer_mi: 15500, usable_kwh: 116, range_mi: 330 },
+      ],
+      isLoading: false,
+    });
+
+    renderChart('battery-capacity-mileage');
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-has-y-formatter')).toBe('true');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-format-sample')).toBe('112 kWh');
   });
 
   it('shows empty state when no mileage data', () => {

@@ -61,6 +61,14 @@ Common usage:
 - Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
 - Theme selection is a shared shell interaction, not a route-local toggle. Support `light`, `dark`, and `system`, and make the chooser responsive so desktop can anchor to the trigger while mobile renders a viewport-aware sheet or modal that fits on screen.
 
+## Responsive Control Surfaces
+
+- Shared control surfaces must be mobile-friendly by default. Validate the real interaction at small-screen breakpoints in the same change.
+- On desktop, compact settings surfaces should anchor to their trigger instead of covering unrelated content.
+- On mobile, the same shared surface should fall back to a bottom sheet or modal with safe-area padding, clear dismissal, and stacked full-width controls.
+- Compact controls still need touch-safe hit targets, readable labels, and enough spacing for numeric inputs, segmented toggles, and sliders.
+- Reusable settings panels should stay within shared seams such as `packages/ui`, dashboard widgets, or shared shell controls rather than route-local popovers.
+
 ## Shared Component Patterns
 
 ### Cards

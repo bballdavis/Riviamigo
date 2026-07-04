@@ -14,7 +14,14 @@ import {
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
-import { CHART_COLORS, DailyChargeSessionsChart, EfficiencyPillBarChart, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import {
+  CHART_COLORS,
+  DailyChargeSessionsChart,
+  EfficiencyPillBarChart,
+  formatChartNumber,
+  getAdaptiveDecimalPrecision,
+  RichTimeSeriesChart,
+} from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
@@ -121,6 +128,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
+  const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
     if (!options.chartIds.includes(chartId)) {
@@ -130,7 +138,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
 
   React.useEffect(() => {
     setDraftChartSettings(options.chartSettings);
-  }, [options.chartSettings]);
+  }, [chartSettingsSignature]);
 
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
   const activeChartDefinition = getChartDefinition(activeChartId);
@@ -1069,6 +1077,8 @@ function BatteryCapacityMileageChart({
   const rows = points
     .filter((point): point is { x: number; y: number; degradationPct: number | null } => point.x != null && point.y != null)
     .sort((a, b) => a.x - b.x);
+  const yValues = rows.map((point) => point.y);
+  const yPrecision = getBatteryCapacityMileagePrecision(yValues);
 
   const trendline = buildRegression(rows.map((point) => ({ x: point.x, y: point.y })));
 
@@ -1122,6 +1132,7 @@ function BatteryCapacityMileageChart({
       yRange={yRange ?? definition.yRange}
       mode="scatter"
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
+      yValueFormatter={(value, unit) => formatChartNumber(value, unit, yPrecision)}
       smoothing={smoothing}
     />
   );
@@ -1197,6 +1208,20 @@ export function getProjectedRangeMileageYRange(values: Array<number | null | und
   const upper = Math.max(min + step, Math.ceil(max / step) * step);
 
   return [min, upper] as [number, number];
+}
+
+function getBatteryCapacityMileagePrecision(values: number[]) {
+  if (!shouldUseBatteryCapacityMileageDecimals(values)) return 0;
+  return Math.max(1, getAdaptiveDecimalPrecision(values));
+}
+
+function shouldUseBatteryCapacityMileageDecimals(values: number[]) {
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (finiteValues.length < 2) return false;
+
+  const roundedWholeValues = new Set(finiteValues.map((value) => Math.round(value)));
+  const distinctValues = new Set(finiteValues.map((value) => value.toFixed(4)));
+  return roundedWholeValues.size < distinctValues.size;
 }
 
 function getEfficiencyUnit() {
