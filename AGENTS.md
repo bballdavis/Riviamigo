@@ -41,6 +41,7 @@ Use these entrypoints in this order:
 - Preserve icon family, spacing rhythm, empty/loading/error treatments, control ordering, and copy tone.
 - Do not add raw colors. Use design tokens only.
 - If a UI change alters a reusable pattern, update `docs/branding.md` in the same change.
+- New or changed shared UI/app surfaces must be mobile-friendly by default and validated at small-screen breakpoints in the same change.
 
 ### Backend and API discipline
 
@@ -55,6 +56,7 @@ Use these entrypoints in this order:
 - Backend: use focused `cargo test` when full workspace validation is noisy.
 - If you touch shared seams, ingestion, routing, or any other significant runtime path, run the relevant build check before handing off. In practice that means `pnpm build` for workspace-wide TypeScript/Vite changes and the relevant backend build/test command for Rust changes.
 - If a behavior change affects shared UX or repo workflow, add or update verification where practical.
+- For shared UI changes, include mobile breakpoint verification alongside desktop behavior instead of leaving responsive follow-up work for later.
 
 ## Documentation System
 

@@ -98,6 +98,14 @@ export function formatChartNumber(value: number | null | undefined, unit?: strin
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
+export function getExplicitScaleConfig(range?: [number, number], extra: Omit<uPlot.Scale, 'auto' | 'range'> = {}): uPlot.Scale {
+  return {
+    ...extra,
+    auto: !range,
+    ...(range ? { range: () => range } : {}),
+  };
+}
+
 function estimateYLabelWidth(labels: string[]): number {
   let maxLen = 4;
   for (const label of labels) {
@@ -406,27 +414,15 @@ export function RichTimeSeriesChart({
 
     const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
 
-    const yScaleConfig: uPlot.Scale = {
-      auto: !yRange,
-      ...(yRange
-        ? { range: () => yRange }
-        : isBarChart
-          ? { range: (_u: uPlot, dmin: number, dmax: number) => [Math.min(0, dmin), Math.max(0, dmax)] as [number, number] }
-          : {}),
-    };
+    const yScaleConfig: uPlot.Scale = yRange
+      ? getExplicitScaleConfig(yRange)
+      : isBarChart
+        ? { auto: true, range: (_u: uPlot, dmin: number, dmax: number) => [Math.min(0, dmin), Math.max(0, dmax)] as [number, number] }
+        : { auto: true };
 
-    const xScaleConfig: uPlot.Scale = {
-      time: xTime,
-      auto: !xRange,
-      ...(xRange ? { range: () => xRange } : {}),
-    };
+    const xScaleConfig = getExplicitScaleConfig(xRange, { time: xTime });
 
-    const rightYScaleConfig: uPlot.Scale | undefined = hasRightAxis
-      ? {
-          auto: !yRightRange,
-          ...(yRightRange ? { range: () => yRightRange } : {}),
-        }
-      : undefined;
+    const rightYScaleConfig: uPlot.Scale | undefined = hasRightAxis ? getExplicitScaleConfig(yRightRange) : undefined;
 
     const xAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
