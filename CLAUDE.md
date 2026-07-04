@@ -92,6 +92,7 @@ packages/
 - Prefer shared seams before local patches.
 - Use design tokens only; no raw colors.
 - If UI behavior changes a reusable pattern, update [`docs/branding.md`](./docs/branding.md).
+- New or changed shared UI/app surfaces must be mobile-friendly by default and checked at small-screen breakpoints in the same change.
 - If routes, env vars, auth flows, or operational behavior change, update the relevant canonical docs in the same change.
 - If a change touches shared seams, ingestion, routing, or other significant runtime behavior, run `pnpm build` before handing it off.
 - User-facing documentation belongs in `docs/wiki-drafts/`, not directly in the GitHub Wiki UI.
