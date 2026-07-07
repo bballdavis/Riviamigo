@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -312,7 +312,11 @@ async function startInfrastructure() {
 }
 
 async function migrationPresent(sentinelSql) {
-  const sql = `SELECT CASE WHEN ${sentinelSql} IS NULL THEN 'missing' ELSE 'present' END`;
+  if (!sentinelSql) {
+    return false;
+  }
+
+  const sql = `SET search_path TO riviamigo, timeseries, public; ${sentinelSql}`;
   const result = await capture('docker', [
     'compose',
     '-f',
@@ -331,7 +335,110 @@ async function migrationPresent(sentinelSql) {
   return result.code === 0 && result.stdout.trim() === 'present';
 }
 
-async function applyMigrationIfMissing(sentinelSql, migrationFile, migrationName) {
+function deriveMigrationSentinel(migrationSql, migrationName) {
+  if (!migrationSql) {
+    throw new Error(`Could not read migration sql for ${migrationName}`);
+  }
+
+  const sql = migrationSql
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/--.*(?=\r?\n|$)/g, '')
+    .replace(/\r/g, '')
+    .trim();
+
+  const patterns = [
+    {
+      name: 'create-table-if-not-exists',
+      re: /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_"][A-Za-z0-9_".]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN to_regclass('${value.replace(/'/g, "''")}') IS NOT NULL THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-table',
+      re: /CREATE\s+TABLE\s+([A-Za-z_"][A-Za-z0-9_".]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN to_regclass('${value.replace(/'/g, "''")}') IS NOT NULL THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-materialized-view',
+      re: /CREATE\s+MATERIALIZED\s+VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_"][A-Za-z0-9_".]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN to_regclass('${value.replace(/'/g, "''")}') IS NOT NULL THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-view',
+      re: /CREATE\s+VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_"][A-Za-z0-9_".]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN to_regclass('${value.replace(/'/g, "''")}') IS NOT NULL THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-type',
+      re: /CREATE\s+TYPE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_"][A-Za-z0-9_".]*)/i,
+      asSentinel: (value) => {
+        const parts = value.replace(/"/g, '').split('.');
+        const schema = parts.length === 2 ? parts[0] : 'public';
+        const typeName = parts[parts.length - 1];
+        return `SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_type pt JOIN pg_namespace pn ON pn.oid = pt.typnamespace WHERE pt.typname='${typeName.replace(/'/g, "''")}' AND pn.nspname='${schema.replace(/'/g, "''")}') THEN 'present' ELSE 'missing' END`;
+      },
+    },
+    {
+      name: 'create-schema',
+      re: /CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_"]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='${value.replace(/"/g, '').replace(/'/g, "''")}') THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-extension',
+      re: /CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_extension WHERE extname='${value.replace(/'/g, "''")}') THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-index',
+      re: /CREATE\s+(?:UNIQUE\s+)?(?:CONCURRENTLY\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_"][A-Za-z0-9_"]*)/i,
+      asSentinel: (value) => `SELECT CASE WHEN to_regclass('${value.replace(/"/g, '').replace(/'/g, "''")}') IS NOT NULL THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'create-hypertable',
+      re: /create_hypertable\(\s*'([^']+)'/i,
+      asSentinel: (value) => `SELECT CASE WHEN to_regclass('${value.replace(/'/g, "''")}') IS NOT NULL THEN 'present' ELSE 'missing' END`,
+    },
+    {
+      name: 'add-column',
+      re: /ALTER\s+TABLE\s+([A-Za-z_"][A-Za-z0-9_".]*)\s+ADD\s+(?:COLUMN\s+IF\s+NOT\s+EXISTS\s+|COLUMN\s+|(?=ADD\s+CONSTRAINT))([A-Za-z_"][A-Za-z0-9_]*)/i,
+      asSentinel: (match) => {
+        const table = match[1].replace(/"/g, '').split('.');
+        const schema = table.length === 2 ? table[0] : 'riviamigo';
+        const tableName = table[table.length - 1];
+        const columnName = match[2];
+        return `SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='${schema.replace(/'/g, "''")}' AND table_name='${tableName.replace(/'/g, "''")}' AND column_name='${columnName.replace(/'/g, "''")}') THEN 'present' ELSE 'missing' END`;
+      },
+    },
+    {
+      name: 'add-constraint',
+      re: /ALTER\s+TABLE\s+([A-Za-z_"][A-Za-z0-9_".]*)\s+ADD\s+CONSTRAINT\s+([A-Za-z_"][A-Za-z0-9_]*)/i,
+      asSentinel: (match) => {
+        const table = match[1].replace(/"/g, '').split('.');
+        const schema = table.length === 2 ? table[0] : 'riviamigo';
+        const tableName = table[table.length - 1];
+        const constraintName = match[2];
+        return `SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_schema='${schema.replace(/'/g, "''")}' AND table_name='${tableName.replace(/'/g, "''")}' AND constraint_name='${constraintName.replace(/'/g, "''")}') THEN 'present' ELSE 'missing' END`;
+      },
+    },
+  ];
+
+  for (const pattern of patterns) {
+    const match = sql.match(pattern.re);
+    if (match) {
+      if (pattern.name.includes('constraint') || pattern.name.includes('column')) {
+        return pattern.asSentinel(match);
+      }
+      return pattern.asSentinel(match[1]);
+    }
+  }
+
+  if (migrationName === '0019_dashboard_config_v2.sql') {
+    return "SELECT CASE WHEN EXISTS (SELECT 1 FROM riviamigo.dashboards WHERE (config::jsonb->>'schemaVersion') IS DISTINCT FROM '2') THEN 'missing' ELSE 'present' END";
+  }
+
+  return null;
+}
+
+async function applyMigrationIfMissing(sentinelSql, migrationFile, migrationName, migrationSql) {
   if (await migrationPresent(sentinelSql)) {
     log(`${migrationName} already applied`);
     return;
@@ -342,59 +449,36 @@ async function applyMigrationIfMissing(sentinelSql, migrationFile, migrationName
   }
 
   log(`Applying ${migrationName}...`);
-  const migrationSql = Buffer.concat([
+  const migrationContent = migrationSql
+    ? Buffer.from(migrationSql)
+    : readFileSync(migrationFile);
+  const migrationPayload = Buffer.concat([
     Buffer.from('SET search_path TO riviamigo, timeseries, public;\n'),
-    readFileSync(migrationFile),
+    migrationContent,
   ]);
   await runWithInput(
     'docker',
     ['compose', '-f', composeFile, 'exec', '-T', 'timescaledb', 'psql', '-U', 'riviamigo', '-d', 'riviamigo', '-v', 'ON_ERROR_STOP=1', '-f', '-'],
-    migrationSql,
+    migrationPayload,
   );
 }
 
 async function ensureSchema() {
   log('Ensuring database schema is initialized...');
-  await applyMigrationIfMissing(
-    "to_regclass('riviamigo.users')",
-    resolve(apiDir, 'migrations/0001_schema_init.sql'),
-    '0001_schema_init.sql',
-  );
-  await applyMigrationIfMissing(
-    "to_regclass('riviamigo.battery_capacity_snapshots')",
-    resolve(apiDir, 'migrations/0002_metrics_expansion.sql'),
-    '0002_metrics_expansion.sql',
-  );
-  await applyMigrationIfMissing(
-    "to_regclass('riviamigo.dashboards')",
-    resolve(apiDir, 'migrations/0003_dashboards.sql'),
-    '0003_dashboards.sql',
-  );
-  await applyMigrationIfMissing(
-    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='charge_sessions' AND column_name='network_vendor')",
-    resolve(apiDir, 'migrations/0024_charge_enrichment_schedules.sql'),
-    '0024_charge_enrichment_schedules.sql',
-  );
-  await applyMigrationIfMissing(
-    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='charge_sessions' AND column_name='source')",
-    resolve(apiDir, 'migrations/0025_backfill_status.sql'),
-    '0025_backfill_status.sql',
-  );
-  await applyMigrationIfMissing(
-    "to_regclass('riviamigo.security_events')",
-    resolve(apiDir, 'migrations/0027_security_events.sql'),
-    '0027_security_events.sql',
-  );
-  await applyMigrationIfMissing(
-    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='charge_sessions' AND column_name='rivian_charger_type')",
-    resolve(apiDir, 'migrations/0029_charge_enrichment_recovery.sql'),
-    '0029_charge_enrichment_recovery.sql',
-  );
-  await applyMigrationIfMissing(
-    "(SELECT column_name FROM information_schema.columns WHERE table_schema='riviamigo' AND table_name='vehicles' AND column_name='updated_at')",
-    resolve(apiDir, 'migrations/0030_vehicle_updated_at_for_enrichment.sql'),
-    '0030_vehicle_updated_at_for_enrichment.sql',
-  );
+  const migrationsDir = resolve(apiDir, 'migrations');
+  const migrationFiles = readdirSync(migrationsDir).filter((fileName) => /^\d{4}_.*\.sql$/.test(fileName)).sort();
+
+  for (const migrationName of migrationFiles) {
+    const migrationFile = resolve(migrationsDir, migrationName);
+    const migrationSql = readFileSync(migrationFile, 'utf8');
+    const sentinelSql = deriveMigrationSentinel(migrationSql, migrationName);
+    if (!sentinelSql) {
+      log(`${migrationName} has no reliable schema-sentinel; applying defensively.`);
+    }
+
+    await applyMigrationIfMissing(sentinelSql, migrationFile, migrationName, migrationSql);
+  }
+
   log('');
 }
 
