@@ -771,7 +771,9 @@ fn classify_status_field_availability(
     };
 
     let reason_code = match availability {
-        StatusFieldAvailabilityState::NeverSeen => Some(StatusFieldAvailabilityReasonCode::NeverSeen),
+        StatusFieldAvailabilityState::NeverSeen => {
+            Some(StatusFieldAvailabilityReasonCode::NeverSeen)
+        }
         StatusFieldAvailabilityState::Historical => {
             Some(reason_override.unwrap_or(StatusFieldAvailabilityReasonCode::MissingRecentPayload))
         }
@@ -2652,7 +2654,9 @@ async fn vehicle_status(
         .as_deref()
         .or(latest.ota_current_status.as_deref())
         .map(str::to_string);
-    let latest_event_at = latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at));
+    let latest_event_at = latest
+        .ts
+        .or_else(|| row.as_ref().and_then(|r| r.last_event_at));
     let normalized_range_miles = normalize_remaining_range_miles(
         latest.distance_to_empty_mi,
         latest.battery_level,
@@ -3322,7 +3326,10 @@ mod availability_tests {
         let availability = classify_status_field_availability(latest_event_at, None, None);
 
         assert!(!availability.ever_seen);
-        assert_eq!(availability.availability, StatusFieldAvailabilityState::NeverSeen);
+        assert_eq!(
+            availability.availability,
+            StatusFieldAvailabilityState::NeverSeen
+        );
         assert_eq!(
             availability.reason_code,
             Some(StatusFieldAvailabilityReasonCode::NeverSeen)
@@ -3333,12 +3340,14 @@ mod availability_tests {
     fn marks_field_as_historical_when_latest_event_is_newer() {
         let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
         let last_seen_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 0).unwrap());
-        let availability =
-            classify_status_field_availability(latest_event_at, last_seen_at, None);
+        let availability = classify_status_field_availability(latest_event_at, last_seen_at, None);
 
         assert!(availability.ever_seen);
         assert_eq!(availability.last_seen_at, last_seen_at);
-        assert_eq!(availability.availability, StatusFieldAvailabilityState::Historical);
+        assert_eq!(
+            availability.availability,
+            StatusFieldAvailabilityState::Historical
+        );
         assert_eq!(
             availability.reason_code,
             Some(StatusFieldAvailabilityReasonCode::MissingRecentPayload)
@@ -3351,7 +3360,10 @@ mod availability_tests {
         let availability =
             classify_status_field_availability(latest_event_at, latest_event_at, None);
 
-        assert_eq!(availability.availability, StatusFieldAvailabilityState::Current);
+        assert_eq!(
+            availability.availability,
+            StatusFieldAvailabilityState::Current
+        );
         assert_eq!(availability.reason_code, None);
     }
 
@@ -3369,7 +3381,10 @@ mod availability_tests {
             Some(StatusFieldAvailabilityReasonCode::InvalidSensor),
         );
 
-        assert_eq!(current.reason_code, Some(StatusFieldAvailabilityReasonCode::InvalidSensor));
+        assert_eq!(
+            current.reason_code,
+            Some(StatusFieldAvailabilityReasonCode::InvalidSensor)
+        );
         assert_eq!(
             historical.reason_code,
             Some(StatusFieldAvailabilityReasonCode::InvalidSensor)

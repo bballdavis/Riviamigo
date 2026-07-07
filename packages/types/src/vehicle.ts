@@ -83,10 +83,7 @@ export interface VehicleImage {
   metadata?: unknown;
 }
 
-export type VehicleStatusAvailabilityState =
-  | 'current'
-  | 'historical'
-  | 'never_seen';
+export type VehicleStatusAvailabilityState = 'current' | 'historical' | 'never_seen';
 
 export type VehicleStatusAvailabilityReason =
   | 'missing_recent_payload'
@@ -160,6 +157,10 @@ export interface VehicleStatus {
   side_bin_right_locked?: boolean | null;
   side_bin_left_closed?: boolean | null;
   side_bin_right_closed?: boolean | null;
+  window_fl_closed?: boolean | null;
+  window_fr_closed?: boolean | null;
+  window_rl_closed?: boolean | null;
+  window_rr_closed?: boolean | null;
   ota_current_version?: string | null;
   ota_available_version?: string | null;
   ota_status?: string | null;

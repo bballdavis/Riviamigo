@@ -19,11 +19,27 @@ const healthPageMocks = vi.hoisted(() => ({
   ],
   imagesByVehicleId: {
     'veh-1': {
-      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/three_quarter_light.png' }],
+      all: [
+        {
+          placement: 'side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/three_quarter_light.png',
+        },
+      ],
       side: { light: 'https://example.com/side.png', dark: null },
     },
     'demo-v1': {
-      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/demo-side.png' }],
+      all: [
+        {
+          placement: 'side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/demo-side.png',
+        },
+      ],
       side: { light: 'https://example.com/demo-side.png', dark: null },
     },
   } as Record<string, any>,
@@ -77,7 +93,11 @@ const healthDataBase: any = {
   ota_release_notes_url: 'https://example.com/release',
   software_history: [
     { version: '2026.10.2', installed_at: '2026-05-10T00:00:00Z', observed_until: null },
-    { version: '2026.10.2', installed_at: '2026-05-01T00:00:00Z', observed_until: '2026-05-09T00:00:00Z' },
+    {
+      version: '2026.10.2',
+      installed_at: '2026-05-01T00:00:00Z',
+      observed_until: '2026-05-09T00:00:00Z',
+    },
   ],
   thermal_events_30d: 123,
 };
@@ -378,11 +398,27 @@ describe('/health page cleanup', () => {
     healthPageMocks.auth.activeVehicleId = null;
     healthPageMocks.auth.setActiveVehicleId.mockReset();
     healthPageMocks.imagesByVehicleId['veh-1'] = {
-      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/three_quarter_light.png' }],
+      all: [
+        {
+          placement: 'side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/three_quarter_light.png',
+        },
+      ],
       side: { light: 'https://example.com/side.png', dark: null },
     };
     healthPageMocks.imagesByVehicleId['demo-v1'] = {
-      all: [{ placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/demo-side.png' }],
+      all: [
+        {
+          placement: 'side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/demo-side.png',
+        },
+      ],
       side: { light: 'https://example.com/demo-side.png', dark: null },
     };
     mockUseVehicleHealth.mockClear();
@@ -393,8 +429,21 @@ describe('/health page cleanup', () => {
   it('renders the hero three-quarter image and software release notes link with no fake update banner', () => {
     healthPageMocks.imagesByVehicleId['veh-1'] = {
       all: [
-        { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png' },
-        { placement: 'front_side', design: 'light', size: null, resolution: null, url: 'https://example.com/three-quarter.png', metadata: { angle: '3/4' } },
+        {
+          placement: 'side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/side.png',
+        },
+        {
+          placement: 'front_side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/three-quarter.png',
+          metadata: { angle: '3/4' },
+        },
       ],
       side: { light: 'https://example.com/side.png', dark: null },
     };
@@ -408,8 +457,22 @@ describe('/health page cleanup', () => {
   it('falls back to plain side art before front hero art when no three-quarter image exists', () => {
     healthPageMocks.imagesByVehicleId['veh-1'] = {
       all: [
-        { placement: 'side', design: 'light', size: null, resolution: null, url: 'https://example.com/side.png', metadata: { app_usage: ['health-hero-fallback'] } },
-        { placement: 'front', design: 'light', size: null, resolution: null, url: 'https://example.com/front.png', metadata: { app_usage: ['health-hero-fallback'] } },
+        {
+          placement: 'side',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/side.png',
+          metadata: { app_usage: ['health-hero-fallback'] },
+        },
+        {
+          placement: 'front',
+          design: 'light',
+          size: null,
+          resolution: null,
+          url: 'https://example.com/front.png',
+          metadata: { app_usage: ['health-hero-fallback'] },
+        },
       ],
       front: { light: 'https://example.com/front.png', dark: null },
       side: { light: 'https://example.com/side.png', dark: null },
@@ -436,7 +499,10 @@ describe('/health page cleanup', () => {
     render(<HealthContent />);
     expect(mockUseVehicleHealth).toHaveBeenLastCalledWith('demo-v1');
     expect(screen.getByRole('heading', { level: 2, name: 'Demo R1T' })).toBeInTheDocument();
-    expect(screen.getByAltText('Vehicle three-quarter view')).toHaveAttribute('src', 'https://example.com/demo-side.png');
+    expect(screen.getByAltText('Vehicle three-quarter view')).toHaveAttribute(
+      'src',
+      'https://example.com/demo-side.png'
+    );
   });
 
   it('renders a vehicle picker and routes selection changes through the session vehicle setter', () => {

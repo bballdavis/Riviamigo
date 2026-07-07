@@ -48,12 +48,7 @@ const DEFINITION_FIELDS: Record<string, string[]> = {
   wiper_fluid_warning: ['wiper_fluid_low'],
   alarm_status: ['alarm_active'],
   service_mode: ['service_mode'],
-  window_status: [
-    'window_fl_closed',
-    'window_fr_closed',
-    'window_rl_closed',
-    'window_rr_closed',
-  ],
+  window_status: ['window_fl_closed', 'window_fr_closed', 'window_rl_closed', 'window_rr_closed'],
 };
 
 export function getStatusDefinitionFields(definitionId: string): string[] {
@@ -62,7 +57,7 @@ export function getStatusDefinitionFields(definitionId: string): string[] {
 
 export function summarizeStatusAvailability(
   status: VehicleStatus | null | undefined,
-  fields: string[],
+  fields: string[]
 ): StatusAvailabilitySummary {
   const entries = fields
     .map((field) => status?.field_availability?.[field])
@@ -100,7 +95,7 @@ export function summarizeStatusAvailability(
 
 export function buildAvailabilityTooltip(
   label: string,
-  availability: StatusAvailabilitySummary,
+  availability: StatusAvailabilitySummary
 ): string | null {
   if (availability.reasonCode === 'invalid_sensor') {
     return `${label} is currently unavailable because Rivian marked the sensor as invalid.`;
@@ -115,7 +110,7 @@ export function buildAvailabilityTooltip(
 }
 
 export function formatAvailabilityLastUpdated(
-  availability: StatusAvailabilitySummary,
+  availability: StatusAvailabilitySummary
 ): string | null {
   if (availability.availability !== 'historical' || !availability.lastSeenAt) return null;
   return `Last updated ${formatDateTimeShort(availability.lastSeenAt)}`;
@@ -123,7 +118,7 @@ export function formatAvailabilityLastUpdated(
 
 export function presentVehicleStatusDefinition(
   definitionId: string,
-  status: VehicleStatus | null | undefined,
+  status: VehicleStatus | null | undefined
 ): PresentedVehicleStatusValue {
   const availability = summarizeStatusAvailability(status, getStatusDefinitionFields(definitionId));
   const tooltip = buildAvailabilityTooltip(getStatusLabel(definitionId), availability);
@@ -172,24 +167,22 @@ export function presentVehicleStatusDefinition(
     }
     case 'ota_available_version': {
       const value = status?.ota_available_version;
-      return value
-        ? presentResolvedStatus(value, 'info', availability, tooltip)
-        : unavailableBase;
+      return value ? presentResolvedStatus(value, 'info', availability, tooltip) : unavailableBase;
     }
     case 'charge_port_open':
-      return presentBoolLikeStatus(
-        status?.charge_port_open,
-        availability,
-        tooltip,
-        { active: 'Open', inactive: 'Closed', activeTone: 'warning', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.charge_port_open, availability, tooltip, {
+        active: 'Open',
+        inactive: 'Closed',
+        activeTone: 'warning',
+        inactiveTone: 'success',
+      });
     case 'charger_derate_active':
-      return presentBoolLikeStatus(
-        status?.charger_derate_active,
-        availability,
-        tooltip,
-        { active: 'Active', inactive: 'Off', activeTone: 'warning', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.charger_derate_active, availability, tooltip, {
+        active: 'Active',
+        inactive: 'Off',
+        activeTone: 'warning',
+        inactiveTone: 'success',
+      });
     case 'cabin_precon': {
       const value = status?.cabin_precon_status;
       if (!value) return unavailableBase;
@@ -199,31 +192,30 @@ export function presentVehicleStatusDefinition(
           inactive ? titleCase(value) : titleCase(value),
           inactive ? 'success' : 'info',
           availability,
-          tooltip,
+          tooltip
         ),
         secondaryText: status?.cabin_precon_type ? titleCase(status.cabin_precon_type) : null,
       };
     }
     case 'defrost_active':
-      return presentBoolLikeStatus(
-        status?.defrost_active,
-        availability,
-        tooltip,
-        { active: 'Active', inactive: 'Off', activeTone: 'info', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.defrost_active, availability, tooltip, {
+        active: 'Active',
+        inactive: 'Off',
+        activeTone: 'info',
+        inactiveTone: 'success',
+      });
     case 'pet_mode': {
-      const presented = presentBoolLikeStatus(
-        status?.pet_mode_active,
-        availability,
-        tooltip,
-        { active: 'Active', inactive: 'Off', activeTone: 'info', inactiveTone: 'success' },
-      );
+      const presented = presentBoolLikeStatus(status?.pet_mode_active, availability, tooltip, {
+        active: 'Active',
+        inactive: 'Off',
+        activeTone: 'info',
+        inactiveTone: 'success',
+      });
       if (presented.renderUnavailableChip) return presented;
       const tempOk = normalizeBoolLike(status?.pet_mode_temp_ok);
       return {
         ...presented,
-        secondaryText:
-          tempOk === null ? null : `Temp ${tempOk ? 'OK' : 'Check'}`,
+        secondaryText: tempOk === null ? null : `Temp ${tempOk ? 'OK' : 'Check'}`,
       };
     }
     case 'seat_fl_heat':
@@ -246,46 +238,48 @@ export function presentVehicleStatusDefinition(
       };
     }
     case 'gear_guard_locked': {
-      const presented = presentBoolLikeStatus(
-        status?.gear_guard_locked,
-        availability,
-        tooltip,
-        { active: 'Locked', inactive: 'Unlocked', activeTone: 'success', inactiveTone: 'warning' },
-      );
+      const presented = presentBoolLikeStatus(status?.gear_guard_locked, availability, tooltip, {
+        active: 'Locked',
+        inactive: 'Unlocked',
+        activeTone: 'success',
+        inactiveTone: 'warning',
+      });
       if (presented.renderUnavailableChip) return presented;
       return {
         ...presented,
-        secondaryText: status?.gear_guard_video_status ? titleCase(status.gear_guard_video_status) : null,
+        secondaryText: status?.gear_guard_video_status
+          ? titleCase(status.gear_guard_video_status)
+          : null,
       };
     }
     case 'brake_fluid_warning':
-      return presentBoolLikeStatus(
-        status?.brake_fluid_low,
-        availability,
-        tooltip,
-        { active: 'Warning', inactive: 'OK', activeTone: 'warning', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.brake_fluid_low, availability, tooltip, {
+        active: 'Warning',
+        inactive: 'OK',
+        activeTone: 'warning',
+        inactiveTone: 'success',
+      });
     case 'wiper_fluid_warning':
-      return presentBoolLikeStatus(
-        status?.wiper_fluid_low,
-        availability,
-        tooltip,
-        { active: 'Warning', inactive: 'OK', activeTone: 'warning', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.wiper_fluid_low, availability, tooltip, {
+        active: 'Warning',
+        inactive: 'OK',
+        activeTone: 'warning',
+        inactiveTone: 'success',
+      });
     case 'alarm_status':
-      return presentBoolLikeStatus(
-        status?.alarm_active,
-        availability,
-        tooltip,
-        { active: 'Triggered', inactive: 'Armed', activeTone: 'danger', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.alarm_active, availability, tooltip, {
+        active: 'Triggered',
+        inactive: 'Armed',
+        activeTone: 'danger',
+        inactiveTone: 'success',
+      });
     case 'service_mode':
-      return presentBoolLikeStatus(
-        status?.service_mode,
-        availability,
-        tooltip,
-        { active: 'In Service', inactive: 'OK', activeTone: 'warning', inactiveTone: 'success' },
-      );
+      return presentBoolLikeStatus(status?.service_mode, availability, tooltip, {
+        active: 'In Service',
+        inactive: 'OK',
+        activeTone: 'warning',
+        inactiveTone: 'success',
+      });
     case 'window_status': {
       const values = [
         status?.window_fl_closed,
@@ -297,18 +291,13 @@ export function presentVehicleStatusDefinition(
       const open = known.filter((value) => value === false).length;
       if (known.length === 0) return unavailableBase;
       if (open > 0) {
-        return presentResolvedStatus(
-          `${open} open`,
-          'warning',
-          availability,
-          tooltip,
-        );
+        return presentResolvedStatus(`${open} open`, 'warning', availability, tooltip);
       }
       return presentResolvedStatus(
         known.length === 4 ? 'Closed' : `${known.length}/4 closed`,
         known.length === 4 ? 'success' : 'info',
         availability,
-        tooltip,
+        tooltip
       );
     }
     default:
@@ -320,7 +309,7 @@ function presentResolvedStatus(
   label: string,
   variant: StatusTone,
   availability: StatusAvailabilitySummary,
-  tooltip: string | null,
+  tooltip: string | null
 ): PresentedVehicleStatusValue {
   return {
     label,
@@ -342,7 +331,7 @@ function presentBoolLikeStatus(
     inactive: string;
     activeTone: StatusTone;
     inactiveTone: StatusTone;
-  },
+  }
 ): PresentedVehicleStatusValue {
   const normalized = normalizeBoolLike(value);
   if (normalized === null) {
@@ -360,14 +349,14 @@ function presentBoolLikeStatus(
     normalized ? labels.active : labels.inactive,
     normalized ? labels.activeTone : labels.inactiveTone,
     availability,
-    tooltip,
+    tooltip
   );
 }
 
 function presentLevelStatus(
   value: number | null,
   availability: StatusAvailabilitySummary,
-  tooltip: string | null,
+  tooltip: string | null
 ): PresentedVehicleStatusValue {
   if (value === null) {
     return {
@@ -387,7 +376,7 @@ function presentLevelStatus(
 function presentClosedStatus(
   value: boolean | null | undefined,
   availability: StatusAvailabilitySummary,
-  tooltip: string | null,
+  tooltip: string | null
 ): PresentedVehicleStatusValue {
   const normalized = normalizeBoolLike(value);
   if (normalized === null) {
@@ -405,7 +394,7 @@ function presentClosedStatus(
     normalized ? 'Closed' : 'Open',
     normalized ? 'success' : 'warning',
     availability,
-    tooltip,
+    tooltip
   );
 }
 
@@ -414,10 +403,7 @@ function getStatusLabel(definitionId: string) {
   return titleCase(title);
 }
 
-function readStatusNumber(
-  status: VehicleStatus | null | undefined,
-  field: string,
-): number | null {
+function readStatusNumber(status: VehicleStatus | null | undefined, field: string): number | null {
   const value = status?.[field as keyof VehicleStatus];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -451,7 +437,5 @@ function formatDateTimeShort(value: string) {
 }
 
 function titleCase(value: string) {
-  return value
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

@@ -16,11 +16,11 @@ This document is the canonical visual system reference for Riviamigo. Update it 
 
 ## Identity
 
-| Item | Guidance |
-|---|---|
-| Name | Riviamigo |
-| Tagline | *Your Rivian, deeply understood.* |
-| Personality | Precise, premium, technical |
+| Item        | Guidance                                        |
+| ----------- | ----------------------------------------------- |
+| Name        | Riviamigo                                       |
+| Tagline     | _Your Rivian, deeply understood._               |
+| Personality | Precise, premium, technical                     |
 | Visual mood | More instrument cluster than generic SaaS admin |
 
 ## Tokens
@@ -83,6 +83,7 @@ Common usage:
 - Use `<EmptyState>` and `<Skeleton>` from shared primitives when they fit.
 - Error states should use the established inline treatment rather than plain text.
 - Loading and empty states must match the surrounding page tone and spacing.
+- Shared status sensors should not drift between `Needs data`, raw `undefined`, and placeholder dashes. Use the blue `Unavailable` chip for never-seen data, and prefer last-known values plus a small `Last updated ...` line when historical data exists.
 
 ### Page composition
 
