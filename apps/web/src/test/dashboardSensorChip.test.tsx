@@ -77,7 +77,11 @@ import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const defaultCtx = {
   vehicleId: 'vehicle-1',
-  timeframe: { kind: 'custom' as const, from: new Date('2026-05-01T00:00:00Z'), to: new Date('2026-05-07T00:00:00Z') },
+  timeframe: {
+    kind: 'custom' as const,
+    from: new Date('2026-05-01T00:00:00Z'),
+    to: new Date('2026-05-07T00:00:00Z'),
+  },
   from: '2026-05-01',
   to: '2026-05-07',
 };
@@ -87,7 +91,7 @@ function config(
   accentBorder = false,
   options: Record<string, unknown> = {},
   definitionId = 'total_miles',
-  title = 'Total Miles',
+  title = 'Total Miles'
 ): DashboardConfig {
   return {
     schemaVersion: 2,
@@ -140,12 +144,7 @@ describe('dashboard sensor chips', () => {
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
-    render(
-      <DashboardRenderer
-        config={config(true)}
-        ctx={defaultCtx}
-      />
-    );
+    render(<DashboardRenderer config={config(true)} ctx={defaultCtx} />);
 
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer).toHaveClass('absolute');
@@ -159,10 +158,7 @@ describe('dashboard sensor chips', () => {
 
   it('allows line sprite smoothing to be disabled', () => {
     render(
-      <DashboardRenderer
-        config={config(true, false, { curveSmoothing: 0 })}
-        ctx={defaultCtx}
-      />
+      <DashboardRenderer config={config(true, false, { curveSmoothing: 0 })} ctx={defaultCtx} />
     );
 
     const layer = screen.getByTestId('sensor-sprite-layer');
@@ -173,10 +169,7 @@ describe('dashboard sensor chips', () => {
 
   it('applies the configured curve color', () => {
     render(
-      <DashboardRenderer
-        config={config(true, false, { curveColor: 'sky' })}
-        ctx={defaultCtx}
-      />
+      <DashboardRenderer config={config(true, false, { curveColor: 'sky' })} ctx={defaultCtx} />
     );
 
     const path = screen.getByTestId('sensor-sprite-layer').querySelector('path');
@@ -184,12 +177,7 @@ describe('dashboard sensor chips', () => {
   });
 
   it('hides the sprite when disabled and applies the orange border option independently', () => {
-    render(
-      <DashboardRenderer
-        config={config(false, true)}
-        ctx={defaultCtx}
-      />
-    );
+    render(<DashboardRenderer config={config(false, true)} ctx={defaultCtx} />);
 
     expect(screen.queryByTestId('sensor-sprite-layer')).not.toBeInTheDocument();
     expect(screen.getByTestId('sensor-chip')).toHaveClass('border-accent/60');
@@ -198,12 +186,7 @@ describe('dashboard sensor chips', () => {
   it('shows an empty sprite state for sparse bounded range data instead of falling back to latest', () => {
     metricMocks.series = [];
 
-    render(
-      <DashboardRenderer
-        config={config(true)}
-        ctx={defaultCtx}
-      />
-    );
+    render(<DashboardRenderer config={config(true)} ctx={defaultCtx} />);
 
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer.querySelector('[data-sparkline-state="empty"]')).not.toBeNull();
@@ -234,12 +217,7 @@ describe('dashboard sensor chips', () => {
     metricMocks.value = { ...metricMocks.value, value: null };
     metricMocks.series = [];
 
-    render(
-      <DashboardRenderer
-        config={config(true)}
-        ctx={defaultCtx}
-      />
-    );
+    render(<DashboardRenderer config={config(true)} ctx={defaultCtx} />);
 
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer.querySelector('[data-sparkline-state="empty"]')).not.toBeNull();

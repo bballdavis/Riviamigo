@@ -10,13 +10,13 @@ The main goal is to keep future work inside the shared dashboard seams instead o
 
 Decide which layer owns the change.
 
-| Change | Put it here |
-|---|---|
-| New route path, URL params, route-local composition | `apps/web/src/routes` |
-| Shared page scaffolding, edit flow, common actions | `apps/web/src/components/dashboard` |
-| New dashboard widget or default config | `packages/dashboards/src` |
-| New API query hook or response normalization | `packages/hooks/src` |
-| Reusable chart, table, badge, primitive | `packages/ui/src` |
+| Change                                              | Put it here                         |
+| --------------------------------------------------- | ----------------------------------- |
+| New route path, URL params, route-local composition | `apps/web/src/routes`               |
+| Shared page scaffolding, edit flow, common actions  | `apps/web/src/components/dashboard` |
+| New dashboard widget or default config              | `packages/dashboards/src`           |
+| New API query hook or response normalization        | `packages/hooks/src`                |
+| Reusable chart, table, badge, primitive             | `packages/ui/src`                   |
 
 If the change crosses more than one row, start from the lowest reusable layer and move upward.
 
@@ -94,6 +94,13 @@ Use `componentType: "sensor"` for compact stat chips unless the card owns a genu
 - Direct page data through `dataSource`: `batteryHealth`, `chargingSummary`, or `vehicleStatus`.
 - Simple math through formulas such as `([home_kwh] / [total_energy_kwh]) * 100`.
 - Composite display pieces through paths, formulas, and templates such as `/[usable_new_kwh:kWh]` or `Home [home_kwh:kWh] / Away [away_kwh:kWh]`.
+
+For `vehicleStatus` chips, the definition also owns the semantic availability behavior.
+
+- `current` fields render the live semantic value.
+- `historical` fields render the last known semantic value plus a small `Last updated ...` line.
+- `never_seen` fields render the shared blue `Unavailable` chip with tooltip context when available.
+- Composite status chips such as windows or tonneau should treat any current subfield as current, otherwise fall back to historical if any constituent field has been seen before.
 
 For source-backed chips, define the canonical behavior in `packages/dashboards/src/widgets/sensor/sensorDefinitions.ts`. Keep default dashboard JSON minimal when a definition already owns the source, unit, formula, inline secondary, label suffix, icon, value color, and graph defaults. Use widget `options` only for per-instance overrides such as `chargingConnectionVisibility` or an accent border.
 
