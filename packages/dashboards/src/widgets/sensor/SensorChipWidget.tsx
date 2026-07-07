@@ -14,7 +14,7 @@ import {
   type ChartColorKey,
   type MiniSparklineType,
 } from '@riviamigo/ui/charts';
-import { Badge, Card } from '@riviamigo/ui/primitives';
+import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
 import {
   cn,
   formatCurrency,
@@ -26,6 +26,10 @@ import {
   formatPressure,
   formatTemp,
 } from '@riviamigo/ui/lib/utils';
+import {
+  presentVehicleStatusDefinition,
+  type StatusTone,
+} from '@riviamigo/ui/lib/vehicleStatus';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import { resolveIconId } from '../../editor/iconMigration';
@@ -159,10 +163,31 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         : (resolvedMetricLatest ?? null)
     )
     : resolveConfiguredValue(options, sourceValues);
+  const statusPresentation = options.dataSource === 'vehicleStatus'
+    ? presentVehicleStatusDefinition(instance.definitionId, status)
+    : null;
   const unit = options.dataSource === 'metric' ? value?.unit : options.unit;
-  const displayValue = isLoading ? '...' : formatMetricValue(resolvedValue, unit);
-  const inlineSecondary = isLoading ? '' : resolveInlineSecondary(options, sourceValues);
-  const secondary = isLoading ? '' : resolveTemplate(options.secondaryTemplate, sourceValues);
+  const displayValue = statusPresentation
+    ? statusPresentation.label
+    : isLoading
+      ? '...'
+      : formatMetricValue(resolvedValue, unit);
+  const inlineSecondary = statusPresentation
+    ? ''
+    : isLoading
+      ? ''
+      : resolveInlineSecondary(options, sourceValues);
+  const secondary = statusPresentation
+    ? statusPresentation.secondaryText ?? ''
+    : isLoading
+      ? ''
+      : resolveTemplate(options.secondaryTemplate, sourceValues);
+  const lastUpdatedLabel = statusPresentation?.lastUpdatedLabel ?? null;
+  const valueToneClass = statusPresentation
+    ? statusToneClass(statusPresentation.variant)
+    : options.valueColor === 'accent'
+      ? 'text-accent'
+      : 'text-fg';
 
   const isDailyDelta = options.chartType === 'daily_delta';
   const sparklineType: MiniSparklineType = isDailyDelta
@@ -232,26 +257,21 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         </div>
 
         <div className="mt-1.5 flex items-baseline gap-1">
-          <span
-            className={cn(
-              'font-mono font-semibold tabular-nums tracking-tight',
-              options.valueColor === 'accent' ? 'text-accent' : 'text-fg',
-              options.valueSize === 'sm'
-                ? 'text-xl'
-                : options.valueSize === 'lg'
-                  ? 'text-3xl'
-                  : 'text-2xl'
-            )}
-            style={{ textShadow: 'var(--rm-value-halo)' }}
-          >
-            {displayValue}
-          </span>
+          {renderStatusValue({
+            presentation: statusPresentation,
+            displayValue,
+            valueToneClass,
+            valueSize: options.valueSize,
+          })}
           {inlineSecondary ? (
             <span className="font-mono text-sm tabular-nums text-fg-tertiary">
               {inlineSecondary}
             </span>
           ) : null}
         </div>
+        {lastUpdatedLabel ? (
+          <p className="mt-0.5 truncate text-[11px] text-fg-tertiary">{lastUpdatedLabel}</p>
+        ) : null}
         {secondary ? (
           <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p>
         ) : null}
@@ -505,6 +525,54 @@ function formatMetricValue(value: number | null | undefined, unit: string | null
   if (unit === 'C') return formatTemp(value);
   if (!unit && Number.isInteger(value)) return value.toFixed(0);
   return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
+}
+
+function renderStatusValue({
+  presentation,
+  displayValue,
+  valueToneClass,
+  valueSize,
+}: {
+  presentation: ReturnType<typeof presentVehicleStatusDefinition> | null;
+  displayValue: string;
+  valueToneClass: string;
+  valueSize: Required<SensorChipOptions>['valueSize'];
+}) {
+  if (presentation?.renderUnavailableChip) {
+    const badge = (
+      <Badge variant="info" className="rounded-full font-semibold" data-testid="sensor-unavailable-chip">
+        {displayValue}
+      </Badge>
+    );
+    return presentation.tooltip ? <Tooltip content={presentation.tooltip}>{badge}</Tooltip> : badge;
+  }
+
+  const valueNode = (
+    <span
+      className={cn(
+        'font-mono font-semibold tabular-nums tracking-tight',
+        valueToneClass,
+        valueSize === 'sm'
+          ? 'text-xl'
+          : valueSize === 'lg'
+            ? 'text-3xl'
+            : 'text-2xl'
+      )}
+      style={{ textShadow: 'var(--rm-value-halo)' }}
+    >
+      {displayValue}
+    </span>
+  );
+
+  return presentation?.tooltip ? <Tooltip content={presentation.tooltip}>{valueNode}</Tooltip> : valueNode;
+}
+
+function statusToneClass(tone: StatusTone) {
+  if (tone === 'success') return 'text-status-positive';
+  if (tone === 'warning') return 'text-status-warning';
+  if (tone === 'danger') return 'text-status-danger';
+  if (tone === 'info') return 'text-status-info';
+  return 'text-fg';
 }
 
 function defaultCurveSmoothing(chartType: SensorChartType | 'none') {

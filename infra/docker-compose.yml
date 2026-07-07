@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: riviamigo
       POSTGRES_PASSWORD: devpassword
     ports:
-      - "5432:5432"
+      - "${DEV_POSTGRES_PORT:-5432}:5432"
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${DEV_REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -39,8 +39,8 @@ services:
     image: dxflrs/garage:v1.0.0
     command: ["/garage", "-c", "/config/garage.toml", "server"]
     ports:
-      - "3900:3900"   # S3 API
-      - "3903:3903"   # Admin API
+      - "${DEV_GARAGE_PORT:-3900}:3900"   # S3 API
+      - "${DEV_GARAGE_ADMIN_PORT:-3903}:3903"   # Admin API
     volumes:
       - ./garage.toml:/config/garage.toml:ro
       - garage_meta:/var/lib/garage/meta
@@ -61,15 +61,15 @@ services:
       context: ../apps/api
       dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - "${DEV_API_PORT:-3001}:3001"
     environment:
       DATABASE_URL: postgresql://riviamigo:devpassword@timescaledb:5432/riviamigo
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://garage:3900
       S3_ACCESS_KEY: GKdeadbeef0000000000000000000000
       S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
-      PORT: 3001
-      ALLOWED_ORIGINS: http://localhost:5173
+      PORT: ${DEV_API_PORT:-3001}
+      ALLOWED_ORIGINS: ${DEV_WEB_ORIGINS:-http://localhost:5173}
       COOKIE_INSECURE: "1"
       RUST_LOG: riviamigo_api=info,tower_http=info
       # JWT_SECRET, JWT_PUBLIC_KEY, AGE_ENCRYPTION_KEY are intentionally omitted.
