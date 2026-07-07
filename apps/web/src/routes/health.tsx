@@ -37,7 +37,15 @@ import {
   Tooltip,
   type BadgeProps,
 } from '@riviamigo/ui/primitives';
-import { formatPressure } from '@riviamigo/ui/lib/utils';
+import { formatTireLabel, getTireHealthTone } from '@riviamigo/ui/lib/vehicleTires';
+import {
+  buildAvailabilityTooltip,
+  formatAvailabilityLastUpdated,
+  presentVehicleStatusDefinition,
+  summarizeStatusAvailability,
+  type StatusAvailabilitySummary,
+  type StatusTone,
+} from '@riviamigo/ui/lib/vehicleStatus';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { NoVehicleState } from '../components/layout/NoVehicleState';
@@ -45,7 +53,13 @@ import { rootRoute } from './__root';
 
 type BadgeVariant = NonNullable<BadgeProps['variant']>;
 type HealthState = { label: string; variant: BadgeVariant };
-type DiagnosticState = { label: string; variant: BadgeVariant; isMissing?: boolean };
+type DiagnosticState = {
+  label: string;
+  variant: BadgeVariant;
+  isMissing?: boolean;
+  tooltip?: string | null;
+  lastUpdatedLabel?: string | null;
+};
 
 export const healthRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -95,14 +109,22 @@ function VehicleHealthContent() {
   const collector = getCollectorState(data?.runtime?.worker_health ?? null);
   const twelveVolt = getHealthState(data?.latest?.twelve_volt_health ?? null);
   const thermal = getThermalState(data?.latest?.hv_thermal_event ?? null, data?.thermal_events_30d ?? 0);
-  const closures = summarizeClosures(data?.closures ?? null, status?.closure_tailgate_closed ?? null);
-  const tireSummary = summarizeTires(data?.tires ?? null);
+  const closures = summarizeClosures(status, data?.closures ?? null);
+  const tireSummary = summarizeTires(status, data?.tires ?? null);
   const softwareHistory = dedupeSoftwareHistory(data?.software_history ?? []);
   const currentSoftwareEntry = softwareHistory.find((entry) => !entry.observed_until) ?? softwareHistory[0];
   const currentSoftwareVersion = data?.current_software_version ?? currentSoftwareEntry?.version ?? 'Unknown';
   const updateVersion = sanitizeUpdateVersion(data?.latest?.ota_available_version ?? null, currentSoftwareVersion);
   const heroImageUrl = selectHealthHeroImage(images);
-  const tailgateValue = data?.closures?.closure_tailgate_closed ?? status?.closure_tailgate_closed ?? null;
+  const closureStatusFallback = {
+    closure_frunk_closed: status?.closure_frunk_closed ?? data?.closures?.closure_frunk_closed ?? null,
+    closure_liftgate_closed: status?.closure_liftgate_closed ?? data?.closures?.closure_liftgate_closed ?? null,
+    closure_tailgate_closed: status?.closure_tailgate_closed ?? data?.closures?.closure_tailgate_closed ?? null,
+    door_front_left_closed: status?.door_front_left_closed ?? data?.closures?.door_front_left_closed ?? null,
+    door_front_right_closed: status?.door_front_right_closed ?? data?.closures?.door_front_right_closed ?? null,
+    door_rear_left_closed: status?.door_rear_left_closed ?? data?.closures?.door_rear_left_closed ?? null,
+    door_rear_right_closed: status?.door_rear_right_closed ?? data?.closures?.door_rear_right_closed ?? null,
+  };
 
   return (
     <AppLayout activeKey="health">
@@ -276,10 +298,10 @@ function VehicleHealthContent() {
                     <EmptyPanel text="No tire telemetry found yet." />
                   ) : (
                     <div className="grid grid-cols-2 gap-3">
-                      <TireGauge label="Front Left" value={data.tires.tire_fl_psi} status={data.tires.tire_fl_status} />
-                      <TireGauge label="Front Right" value={data.tires.tire_fr_psi} status={data.tires.tire_fr_status} />
-                      <TireGauge label="Rear Left" value={data.tires.tire_rl_psi} status={data.tires.tire_rl_status} />
-                      <TireGauge label="Rear Right" value={data.tires.tire_rr_psi} status={data.tires.tire_rr_status} />
+                      <TireGauge label="Front Left" value={status?.tire_fl_psi ?? data.tires.tire_fl_psi} status={status?.tire_fl_status ?? data.tires.tire_fl_status} valid={status?.tire_fl_valid ?? null} availability={status ? summarizeStatusAvailability(status, ['tire_fl_psi', 'tire_fl_status', 'tire_fl_valid']) : null} />
+                      <TireGauge label="Front Right" value={status?.tire_fr_psi ?? data.tires.tire_fr_psi} status={status?.tire_fr_status ?? data.tires.tire_fr_status} valid={status?.tire_fr_valid ?? null} availability={status ? summarizeStatusAvailability(status, ['tire_fr_psi', 'tire_fr_status', 'tire_fr_valid']) : null} />
+                      <TireGauge label="Rear Left" value={status?.tire_rl_psi ?? data.tires.tire_rl_psi} status={status?.tire_rl_status ?? data.tires.tire_rl_status} valid={status?.tire_rl_valid ?? null} availability={status ? summarizeStatusAvailability(status, ['tire_rl_psi', 'tire_rl_status', 'tire_rl_valid']) : null} />
+                      <TireGauge label="Rear Right" value={status?.tire_rr_psi ?? data.tires.tire_rr_psi} status={status?.tire_rr_status ?? data.tires.tire_rr_status} valid={status?.tire_rr_valid ?? null} availability={status ? summarizeStatusAvailability(status, ['tire_rr_psi', 'tire_rr_status', 'tire_rr_valid']) : null} />
                     </div>
                   )}
                 </CardContent>
@@ -299,13 +321,13 @@ function VehicleHealthContent() {
                     <EmptyPanel text="No door and gate telemetry found yet." />
                   ) : (
                     <div className="grid gap-2 sm:grid-cols-2">
-                      <ClosureRow label="Frunk" value={data.closures.closure_frunk_closed} />
-                      <ClosureRow label="Liftgate" value={data.closures.closure_liftgate_closed} />
-                      <ClosureRow label="Tailgate" value={tailgateValue} />
-                      <ClosureRow label="Front left door" value={data.closures.door_front_left_closed} />
-                      <ClosureRow label="Front right door" value={data.closures.door_front_right_closed} />
-                      <ClosureRow label="Rear left door" value={data.closures.door_rear_left_closed} />
-                      <ClosureRow label="Rear right door" value={data.closures.door_rear_right_closed} />
+                      <ClosureRow label="Frunk" value={closureStatusFallback.closure_frunk_closed} availability={status ? summarizeStatusAvailability(status, ['closure_frunk_closed']) : null} />
+                      <ClosureRow label="Liftgate" value={closureStatusFallback.closure_liftgate_closed} availability={status ? summarizeStatusAvailability(status, ['closure_liftgate_closed']) : null} />
+                      <ClosureRow label="Tailgate" value={closureStatusFallback.closure_tailgate_closed} availability={status ? summarizeStatusAvailability(status, ['closure_tailgate_closed']) : null} />
+                      <ClosureRow label="Front left door" value={closureStatusFallback.door_front_left_closed} availability={status ? summarizeStatusAvailability(status, ['door_front_left_closed']) : null} />
+                      <ClosureRow label="Front right door" value={closureStatusFallback.door_front_right_closed} availability={status ? summarizeStatusAvailability(status, ['door_front_right_closed']) : null} />
+                      <ClosureRow label="Rear left door" value={closureStatusFallback.door_rear_left_closed} availability={status ? summarizeStatusAvailability(status, ['door_rear_left_closed']) : null} />
+                      <ClosureRow label="Rear right door" value={closureStatusFallback.door_rear_right_closed} availability={status ? summarizeStatusAvailability(status, ['door_rear_right_closed']) : null} />
                     </div>
                   )}
                 </CardContent>
@@ -462,47 +484,114 @@ function HealthLine({ icon, label, value, detail }: { icon: React.ReactNode; lab
   );
 }
 
-function TireGauge({ label, value, status }: { label: string; value: number | null; status: string | null }) {
-  const state = getTireState(status);
+function TireGauge({
+  label,
+  value,
+  status,
+  valid,
+  availability,
+}: {
+  label: string;
+  value: number | null;
+  status: string | null;
+  valid: boolean | null;
+  availability: StatusAvailabilitySummary | null;
+}) {
+  const state = getTireState(status, valid, availability);
+  const displayValue = valid === false
+    ? 'Invalid Sensor'
+    : availability?.availability === 'never_seen' && value === null
+      ? 'Unavailable'
+      : formatTireLabel(value, status);
+  const tone = getTireHealthTone({ psi: value, status });
+  const valueClass = valid === false || availability?.availability === 'never_seen'
+    ? 'text-status-info'
+    : tone === 'danger'
+      ? 'text-status-danger'
+      : tone === 'warning'
+        ? 'text-status-warning'
+        : 'text-fg';
+  const badge = (
+    <Badge variant={state.variant} size="sm">
+      {state.label}
+    </Badge>
+  );
   return (
     <div className="rounded-xl border border-border bg-bg-elevated/55 p-4">
       <div className="flex items-start justify-between gap-2">
         <p className="text-xs font-semibold uppercase tracking-wider text-fg-tertiary">{label}</p>
-        <Badge variant={state.variant} size="sm">
-          {state.label}
-        </Badge>
+        {state.tooltip ? <Tooltip content={state.tooltip}>{badge}</Tooltip> : badge}
       </div>
       <div className="mt-5 flex items-end gap-2">
-        <p className="font-mono text-3xl font-semibold tabular-nums text-fg">{formatPressure(value)}</p>
+        <p className={`font-mono text-3xl font-semibold tabular-nums ${valueClass}`}>{displayValue}</p>
       </div>
+      {state.lastUpdatedLabel ? (
+        <p className="mt-1 text-[11px] text-fg-tertiary">{state.lastUpdatedLabel}</p>
+      ) : null}
     </div>
   );
 }
 
 function DiagnosticRow({ icon, label, state }: { icon: React.ReactNode; label: string; state: DiagnosticState }) {
+  const badge = (
+    <Badge variant={state.variant} size="sm">
+      {state.label}
+    </Badge>
+  );
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/55 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="text-fg-tertiary">{icon}</span>
-        <span className="truncate text-sm text-fg-secondary">{label}</span>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-fg-tertiary">{icon}</span>
+          <span className="truncate text-sm text-fg-secondary">{label}</span>
+        </div>
+        {state.lastUpdatedLabel ? (
+          <p className="mt-1 truncate text-[11px] text-fg-tertiary">{state.lastUpdatedLabel}</p>
+        ) : null}
       </div>
-      <Badge variant={state.variant} size="sm">
-        {state.label}
-      </Badge>
+      {state.tooltip ? <Tooltip content={state.tooltip}>{badge}</Tooltip> : badge}
     </div>
   );
 }
 
-function ClosureRow({ label, value }: { label: string; value: boolean | null }) {
-  const Icon = value === false ? DoorOpen : value === true ? CheckCircle2 : CircleAlert;
-  const variant = value === false ? 'warning' : value === true ? 'success' : 'default';
+function ClosureRow({
+  label,
+  value,
+  availability,
+}: {
+  label: string;
+  value: boolean | null;
+  availability: StatusAvailabilitySummary | null;
+}) {
+  const isUnavailable = availability?.availability === 'never_seen' && value === null;
+  const Icon = isUnavailable
+    ? CircleAlert
+    : value === false
+      ? DoorOpen
+      : value === true
+        ? CheckCircle2
+        : CircleAlert;
+  const variant = isUnavailable ? 'info' : value === false ? 'warning' : value === true ? 'success' : 'default';
+  const badge = <Badge variant={variant}>{isUnavailable ? 'Unavailable' : asOpenClosed(value)}</Badge>;
+  const tooltip = buildAvailabilityTooltip(label, availability ?? {
+    availability: 'never_seen',
+    reasonCode: 'never_seen',
+    lastSeenAt: null,
+    latestEventAt: null,
+    everSeen: false,
+  });
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/55 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <Icon className="h-4 w-4 shrink-0 text-fg-tertiary" />
-        <span className="truncate text-sm text-fg-secondary">{label}</span>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <Icon className="h-4 w-4 shrink-0 text-fg-tertiary" />
+          <span className="truncate text-sm text-fg-secondary">{label}</span>
+        </div>
+        {availability && formatAvailabilityLastUpdated(availability) ? (
+          <p className="mt-1 truncate text-[11px] text-fg-tertiary">{formatAvailabilityLastUpdated(availability)}</p>
+        ) : null}
       </div>
-      <Badge variant={variant}>{asOpenClosed(value)}</Badge>
+      {tooltip ? <Tooltip content={tooltip}>{badge}</Tooltip> : badge}
     </div>
   );
 }
@@ -521,31 +610,58 @@ function EmptyPanel({ text }: { text: string }) {
   return <div className="rounded-xl border border-dashed border-border bg-bg-elevated/40 px-4 py-8 text-center text-sm text-fg-tertiary">{text}</div>;
 }
 
-function summarizeTires(tires: VehicleHealthTires | null): HealthState & { detail: string } {
-  if (!tires) return { label: 'Unknown', detail: 'No snapshot', variant: 'default' };
-  const states = [tires.tire_fl_status, tires.tire_fr_status, tires.tire_rl_status, tires.tire_rr_status].filter(Boolean);
+function summarizeTires(
+  status: import('@riviamigo/types').VehicleStatus | null | undefined,
+  tires: VehicleHealthTires | null,
+): HealthState & { detail: string } {
+  const availability = status?.field_availability?.tire_pressure_status;
+  const states = [
+    status?.tire_fl_status ?? tires?.tire_fl_status,
+    status?.tire_fr_status ?? tires?.tire_fr_status,
+    status?.tire_rl_status ?? tires?.tire_rl_status,
+    status?.tire_rr_status ?? tires?.tire_rr_status,
+  ].filter(Boolean);
+  const invalidSensor = [
+    status?.tire_fl_valid,
+    status?.tire_fr_valid,
+    status?.tire_rl_valid,
+    status?.tire_rr_valid,
+  ].some((value) => value === false);
+  const values = [
+    status?.tire_fl_psi ?? tires?.tire_fl_psi,
+    status?.tire_fr_psi ?? tires?.tire_fr_psi,
+    status?.tire_rl_psi ?? tires?.tire_rl_psi,
+    status?.tire_rr_psi ?? tires?.tire_rr_psi,
+  ].filter((v): v is number => typeof v === 'number');
+
+  if (invalidSensor) return { label: 'Unavailable', detail: 'Invalid sensor', variant: 'info' };
+  if (availability?.availability === 'never_seen' && values.length === 0) {
+    return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
+  }
   const hasWarning = states.some((state) => /low|high|warn|critical|fault/i.test(state ?? ''));
-  const values = [tires.tire_fl_psi, tires.tire_fr_psi, tires.tire_rl_psi, tires.tire_rr_psi].filter((v): v is number => typeof v === 'number');
   if (hasWarning) return { label: 'Check', detail: 'Attention needed', variant: 'warning' };
   if (values.length === 4) return { label: 'Normal', detail: `${Math.round(Math.min(...values))}-${Math.round(Math.max(...values))} psi`, variant: 'success' };
-  return { label: 'Partial', detail: `${values.length}/4 wheels`, variant: 'info' };
+  if (values.length > 0) return { label: 'Partial', detail: `${values.length}/4 wheels`, variant: 'info' };
+  return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
 }
 
-function summarizeClosures(closures: VehicleHealthClosures | null, tailgateFallback: boolean | null) {
-  if (!closures) return { label: 'Unknown', variant: 'default' as const };
+function summarizeClosures(
+  status: import('@riviamigo/types').VehicleStatus | null | undefined,
+  closures: VehicleHealthClosures | null,
+) {
   const values = [
-    closures.closure_frunk_closed,
-    closures.closure_liftgate_closed,
-    closures.closure_tailgate_closed ?? tailgateFallback,
-    closures.door_front_left_closed,
-    closures.door_front_right_closed,
-    closures.door_rear_left_closed,
-    closures.door_rear_right_closed,
+    status?.closure_frunk_closed ?? closures?.closure_frunk_closed ?? null,
+    status?.closure_liftgate_closed ?? closures?.closure_liftgate_closed ?? null,
+    status?.closure_tailgate_closed ?? closures?.closure_tailgate_closed ?? null,
+    status?.door_front_left_closed ?? closures?.door_front_left_closed ?? null,
+    status?.door_front_right_closed ?? closures?.door_front_right_closed ?? null,
+    status?.door_rear_left_closed ?? closures?.door_rear_left_closed ?? null,
+    status?.door_rear_right_closed ?? closures?.door_rear_right_closed ?? null,
   ];
   const open = values.filter((value) => value === false).length;
   if (open > 0) return { label: `${open} open`, variant: 'warning' as const };
   const known = values.filter((value) => value !== null).length;
-  return known > 0 ? { label: 'Secured', variant: 'success' as const } : { label: 'Unknown', variant: 'default' as const };
+  return known > 0 ? { label: 'Secured', variant: 'success' as const } : { label: 'Unavailable', variant: 'info' as const };
 }
 
 function getCollectorState(value: string | null): HealthState {
@@ -570,78 +686,62 @@ function getThermalState(value: string | null, count: number): HealthState {
   return { label: 'Nominal', variant: 'success' };
 }
 
-function getTireState(status: string | null): HealthState {
-  if (!status) return { label: 'No status', variant: 'default' };
-  if (/normal|ok/i.test(status)) return { label: titleCase(status), variant: 'success' };
+function getTireState(
+  status: string | null,
+  valid: boolean | null,
+  availability: StatusAvailabilitySummary | null,
+): DiagnosticState {
+  if (valid === false) {
+    return {
+      label: 'Invalid Sensor',
+      variant: 'info',
+      tooltip: buildAvailabilityTooltip('Tire pressure', {
+        availability: availability?.availability ?? 'current',
+        reasonCode: 'invalid_sensor',
+        lastSeenAt: availability?.lastSeenAt ?? null,
+        latestEventAt: availability?.latestEventAt ?? null,
+        everSeen: availability?.everSeen ?? true,
+      }),
+      lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? {
+        availability: 'current',
+        reasonCode: 'invalid_sensor',
+        lastSeenAt: null,
+        latestEventAt: null,
+        everSeen: true,
+      }),
+    };
+  }
+  if (availability?.availability === 'never_seen' && !status) {
+    return {
+      label: 'Unavailable',
+      variant: 'info',
+      tooltip: buildAvailabilityTooltip('Tire pressure', availability),
+    };
+  }
+  if (!status) return { label: 'No status', variant: 'default', lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()) };
+  if (/normal|ok/i.test(status)) return { label: titleCase(status), variant: 'success', lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()) };
   if (/critical|fault/i.test(status)) return { label: titleCase(status), variant: 'danger' };
-  return { label: titleCase(status), variant: 'warning' };
+  return { label: titleCase(status), variant: 'warning', lastUpdatedLabel: formatAvailabilityLastUpdated(availability ?? nullSummary()) };
 }
 
 function summarizeDiagnostics(status: import('@riviamigo/types').VehicleStatus | null | undefined) {
-  const fromBool = (v: boolean | null | undefined, dangerWhenTrue: boolean): DiagnosticState => {
-    if (v === null || v === undefined) return { label: 'Needs data', variant: 'default', isMissing: true };
-    if (v === dangerWhenTrue) return { label: dangerWhenTrue ? 'Warning' : 'OK', variant: 'warning' };
-    return { label: dangerWhenTrue ? 'OK' : 'Active', variant: dangerWhenTrue ? 'success' : 'info' };
-  };
-  const fromStr = (v: boolean | string | null | undefined, activeWhen: (s: string) => boolean): DiagnosticState => {
-    if (v === null || v === undefined) return { label: 'Needs data', variant: 'default', isMissing: true };
-    if (typeof v === 'boolean') return v ? { label: 'Active', variant: 'info' } : { label: 'Off', variant: 'success' };
-    const s = String(v);
-    if (/^(off|none|inactive|closed|disabled)$/i.test(s)) return { label: titleCase(s), variant: 'success' };
-    if (activeWhen(s)) return { label: titleCase(s), variant: 'info' };
-    return { label: titleCase(s), variant: 'default' };
-  };
-
   const rows = [
-    { label: 'Brake Fluid', icon: <Droplets className="h-4 w-4" />, state: fromBool(status?.brake_fluid_low ?? null, true) },
-    { label: 'Wiper Fluid', icon: <Droplets className="h-4 w-4" />, state: fromBool(status?.wiper_fluid_low ?? null, true) },
-    {
-      label: 'Service Mode',
-      icon: <Wrench className="h-4 w-4" />,
-      state:
-        status?.service_mode === true
-          ? { label: 'In Service', variant: 'warning' as const }
-          : status?.service_mode === false
-            ? { label: 'OK', variant: 'success' as const }
-            : { label: 'Needs data', variant: 'default' as const, isMissing: true },
-    },
-    {
-      label: 'Alarm',
-      icon: <Bell className="h-4 w-4" />,
-      state:
-        status?.alarm_active === true
-          ? { label: 'Triggered', variant: 'danger' as const }
-          : status?.alarm_active === false
-            ? { label: 'Armed', variant: 'success' as const }
-            : { label: 'Needs data', variant: 'default' as const, isMissing: true },
-    },
-    {
-      label: 'Gear Guard',
-      icon: <Shield className="h-4 w-4" />,
-      state:
-        status?.gear_guard_locked === true
-          ? { label: 'Locked', variant: 'success' as const }
-          : status?.gear_guard_locked === false
-            ? { label: 'Unlocked', variant: 'warning' as const }
-            : { label: 'Needs data', variant: 'default' as const, isMissing: true },
-    },
-    { label: 'Charge Port', icon: <Plug className="h-4 w-4" />, state: fromStr(status?.charge_port_open ?? null, (s) => /open/i.test(s)) },
-    { label: 'Charger Derate', icon: <AlertTriangle className="h-4 w-4" />, state: fromStr(status?.charger_derate_active ?? null, (s) => /active|true|on/i.test(s)) },
-    { label: 'Defrost', icon: <Snowflake className="h-4 w-4" />, state: fromStr(status?.defrost_active ?? null, (s) => /active|true|on/i.test(s)) },
-    {
-      label: 'Cabin Precondition',
-      icon: <Activity className="h-4 w-4" />,
-      state: (() => {
-        const v = status?.cabin_precon_status;
-        if (!v) return { label: 'Needs data', variant: 'default' as const, isMissing: true };
-        return /off|none|inactive/i.test(v) ? { label: titleCase(v), variant: 'success' as const } : { label: titleCase(v), variant: 'info' as const };
-      })(),
-    },
+    { label: 'Brake Fluid', icon: <Droplets className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('brake_fluid_warning', status)) },
+    { label: 'Wiper Fluid', icon: <Droplets className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('wiper_fluid_warning', status)) },
+    { label: 'Service Mode', icon: <Wrench className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('service_mode', status)) },
+    { label: 'Alarm', icon: <Bell className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('alarm_status', status)) },
+    { label: 'Gear Guard', icon: <Shield className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('gear_guard_locked', status)) },
+    { label: 'Charge Port', icon: <Plug className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('charge_port_open', status)) },
+    { label: 'Charger Derate', icon: <AlertTriangle className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('charger_derate_active', status)) },
+    { label: 'Defrost', icon: <Snowflake className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('defrost_active', status)) },
+    { label: 'Cabin Precondition', icon: <Activity className="h-4 w-4" />, state: asDiagnosticState(presentVehicleStatusDefinition('cabin_precon', status)) },
   ];
 
   const knownRows = rows.filter((row) => !row.state.isMissing);
   const all = knownRows.length > 0 ? knownRows.map((row) => row.state) : rows.map((row) => row.state);
-  const overall: DiagnosticState = all.some((state) => state.variant === 'danger')
+  const overall: DiagnosticState = knownRows.length === 0
+    ? { label: 'Unavailable', variant: 'info' }
+    : all.some((state) => state.variant === 'danger')
     ? { label: 'Attention', variant: 'danger' }
     : all.some((state) => state.variant === 'warning')
       ? { label: 'Check', variant: 'warning' }
@@ -649,9 +749,39 @@ function summarizeDiagnostics(status: import('@riviamigo/types').VehicleStatus |
         ? { label: 'Active', variant: 'info' }
         : all.some((state) => state.variant === 'success')
           ? { label: 'All clear', variant: 'success' }
-          : { label: 'No data', variant: 'default' };
+          : { label: 'Unavailable', variant: 'info' };
 
   return { rows, overall };
+}
+
+function asDiagnosticState(
+  presented: ReturnType<typeof presentVehicleStatusDefinition>,
+): DiagnosticState {
+  return {
+    label: presented.renderUnavailableChip ? 'Unavailable' : presented.label,
+    variant: asBadgeVariant(presented.renderUnavailableChip ? 'info' : presented.variant),
+    isMissing: presented.renderUnavailableChip,
+    tooltip: presented.tooltip,
+    lastUpdatedLabel: presented.lastUpdatedLabel,
+  };
+}
+
+function asBadgeVariant(tone: StatusTone): BadgeVariant {
+  if (tone === 'danger') return 'danger';
+  if (tone === 'warning') return 'warning';
+  if (tone === 'success') return 'success';
+  if (tone === 'info') return 'info';
+  return 'default';
+}
+
+function nullSummary(): StatusAvailabilitySummary {
+  return {
+    availability: 'never_seen',
+    reasonCode: 'never_seen',
+    lastSeenAt: null,
+    latestEventAt: null,
+    everSeen: false,
+  };
 }
 
 function getFreshness(ts: string | null) {

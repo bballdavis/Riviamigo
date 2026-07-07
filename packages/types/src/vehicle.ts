@@ -83,6 +83,26 @@ export interface VehicleImage {
   metadata?: unknown;
 }
 
+export type VehicleStatusAvailabilityState =
+  | 'current'
+  | 'historical'
+  | 'never_seen';
+
+export type VehicleStatusAvailabilityReason =
+  | 'missing_recent_payload'
+  | 'never_seen'
+  | 'invalid_sensor';
+
+export interface VehicleStatusFieldAvailability {
+  ever_seen: boolean;
+  last_seen_at: string | null;
+  latest_event_at: string | null;
+  availability: VehicleStatusAvailabilityState;
+  reason_code: VehicleStatusAvailabilityReason | null;
+}
+
+export type VehicleStatusFieldAvailabilityMap = Record<string, VehicleStatusFieldAvailability>;
+
 export interface VehicleStatus {
   vehicle_id: string;
   battery_level: number | null;
@@ -185,4 +205,5 @@ export interface VehicleStatus {
   odometer_miles_ts?: string | null;
   telemetry_stale?: boolean;
   telemetry_stale_reason?: string | null;
+  field_availability?: VehicleStatusFieldAvailabilityMap | null;
 }

@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::{Path as StdPath, PathBuf},
     time::Duration,
 };
@@ -539,6 +539,90 @@ struct VehicleRuntimeStateRow {
     auth_reason_code: Option<String>,
 }
 
+#[derive(Debug, Default, sqlx::FromRow)]
+struct VehicleStatusFieldSeenRow {
+    tire_fl_psi_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_fr_psi_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_rl_psi_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_rr_psi_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_fl_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_fr_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_rl_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_rr_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_fl_valid_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_fr_valid_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_rl_valid_at: Option<chrono::DateTime<chrono::Utc>>,
+    tire_rr_valid_at: Option<chrono::DateTime<chrono::Utc>>,
+    hv_thermal_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    twelve_volt_health_at: Option<chrono::DateTime<chrono::Utc>>,
+    ota_current_version_at: Option<chrono::DateTime<chrono::Utc>>,
+    ota_available_version_at: Option<chrono::DateTime<chrono::Utc>>,
+    ota_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    ota_current_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    charge_port_open_at: Option<chrono::DateTime<chrono::Utc>>,
+    charger_derate_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    cabin_precon_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    cabin_precon_type_at: Option<chrono::DateTime<chrono::Utc>>,
+    pet_mode_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    pet_mode_temp_ok_at: Option<chrono::DateTime<chrono::Utc>>,
+    defrost_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    steering_wheel_heat_at: Option<chrono::DateTime<chrono::Utc>>,
+    seat_fl_heat_at: Option<chrono::DateTime<chrono::Utc>>,
+    seat_fr_heat_at: Option<chrono::DateTime<chrono::Utc>>,
+    seat_rl_heat_at: Option<chrono::DateTime<chrono::Utc>>,
+    seat_rr_heat_at: Option<chrono::DateTime<chrono::Utc>>,
+    seat_fl_vent_at: Option<chrono::DateTime<chrono::Utc>>,
+    seat_fr_vent_at: Option<chrono::DateTime<chrono::Utc>>,
+    tonneau_locked_at: Option<chrono::DateTime<chrono::Utc>>,
+    tonneau_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    side_bin_left_locked_at: Option<chrono::DateTime<chrono::Utc>>,
+    side_bin_right_locked_at: Option<chrono::DateTime<chrono::Utc>>,
+    side_bin_left_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    side_bin_right_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    window_fl_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    window_fr_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    window_rl_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    window_rr_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    gear_guard_locked_at: Option<chrono::DateTime<chrono::Utc>>,
+    gear_guard_video_status_at: Option<chrono::DateTime<chrono::Utc>>,
+    wiper_fluid_low_at: Option<chrono::DateTime<chrono::Utc>>,
+    brake_fluid_low_at: Option<chrono::DateTime<chrono::Utc>>,
+    alarm_active_at: Option<chrono::DateTime<chrono::Utc>>,
+    service_mode_at: Option<chrono::DateTime<chrono::Utc>>,
+    closure_frunk_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    closure_liftgate_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    closure_tailgate_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    door_front_left_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    door_front_right_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    door_rear_left_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    door_rear_right_closed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StatusFieldAvailabilityState {
+    Current,
+    Historical,
+    NeverSeen,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StatusFieldAvailabilityReasonCode {
+    MissingRecentPayload,
+    NeverSeen,
+    InvalidSensor,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct StatusFieldAvailability {
+    ever_seen: bool,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    availability: StatusFieldAvailabilityState,
+    reason_code: Option<StatusFieldAvailabilityReasonCode>,
+}
+
 /// Serializable response shape for `GET /v1/vehicles/:id/status`.
 /// Using a typed struct instead of `serde_json::json!` avoids the recursive
 /// macro expansion that exhausts the compiler's recursion limit as fields grow.
@@ -657,6 +741,7 @@ struct VehicleStatusResponse {
     service_mode: Option<bool>,
     telemetry_stale: bool,
     telemetry_stale_reason: Option<String>,
+    field_availability: BTreeMap<String, StatusFieldAvailability>,
 }
 
 const WS_RECEIVE_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(10);
@@ -670,6 +755,55 @@ fn timestamp_is_older_than(
     threshold: chrono::Duration,
 ) -> bool {
     ts.is_some_and(|value| now - value >= threshold)
+}
+
+fn classify_status_field_availability(
+    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    reason_override: Option<StatusFieldAvailabilityReasonCode>,
+) -> StatusFieldAvailability {
+    let availability = match (latest_event_at, last_seen_at) {
+        (_, None) => StatusFieldAvailabilityState::NeverSeen,
+        (Some(latest_event_at), Some(last_seen_at)) if last_seen_at < latest_event_at => {
+            StatusFieldAvailabilityState::Historical
+        }
+        _ => StatusFieldAvailabilityState::Current,
+    };
+
+    let reason_code = match availability {
+        StatusFieldAvailabilityState::NeverSeen => Some(StatusFieldAvailabilityReasonCode::NeverSeen),
+        StatusFieldAvailabilityState::Historical => {
+            Some(reason_override.unwrap_or(StatusFieldAvailabilityReasonCode::MissingRecentPayload))
+        }
+        StatusFieldAvailabilityState::Current => reason_override,
+    };
+
+    StatusFieldAvailability {
+        ever_seen: last_seen_at.is_some(),
+        last_seen_at,
+        latest_event_at,
+        availability,
+        reason_code,
+    }
+}
+
+fn max_seen_at(
+    values: impl IntoIterator<Item = Option<chrono::DateTime<chrono::Utc>>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    values.into_iter().flatten().max()
+}
+
+fn insert_field_availability(
+    availability: &mut BTreeMap<String, StatusFieldAvailability>,
+    field: &str,
+    latest_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    reason_override: Option<StatusFieldAvailabilityReasonCode>,
+) {
+    availability.insert(
+        field.to_string(),
+        classify_status_field_availability(latest_event_at, last_seen_at, reason_override),
+    );
 }
 
 fn derive_vehicle_status_freshness(
@@ -2374,6 +2508,72 @@ async fn vehicle_status(
         service_mode: None,
     });
 
+    let seen = sqlx::query_as::<_, VehicleStatusFieldSeenRow>(
+        r#"
+        SELECT
+          max(ts) FILTER (WHERE tire_fl_psi IS NOT NULL) AS tire_fl_psi_at,
+          max(ts) FILTER (WHERE tire_fr_psi IS NOT NULL) AS tire_fr_psi_at,
+          max(ts) FILTER (WHERE tire_rl_psi IS NOT NULL) AS tire_rl_psi_at,
+          max(ts) FILTER (WHERE tire_rr_psi IS NOT NULL) AS tire_rr_psi_at,
+          max(ts) FILTER (WHERE tire_fl_status IS NOT NULL) AS tire_fl_status_at,
+          max(ts) FILTER (WHERE tire_fr_status IS NOT NULL) AS tire_fr_status_at,
+          max(ts) FILTER (WHERE tire_rl_status IS NOT NULL) AS tire_rl_status_at,
+          max(ts) FILTER (WHERE tire_rr_status IS NOT NULL) AS tire_rr_status_at,
+          max(ts) FILTER (WHERE tire_fl_valid IS NOT NULL) AS tire_fl_valid_at,
+          max(ts) FILTER (WHERE tire_fr_valid IS NOT NULL) AS tire_fr_valid_at,
+          max(ts) FILTER (WHERE tire_rl_valid IS NOT NULL) AS tire_rl_valid_at,
+          max(ts) FILTER (WHERE tire_rr_valid IS NOT NULL) AS tire_rr_valid_at,
+          max(ts) FILTER (WHERE hv_thermal_event IS NOT NULL) AS hv_thermal_event_at,
+          max(ts) FILTER (WHERE twelve_volt_health IS NOT NULL) AS twelve_volt_health_at,
+          max(ts) FILTER (WHERE ota_current_version IS NOT NULL) AS ota_current_version_at,
+          max(ts) FILTER (WHERE ota_available_version IS NOT NULL) AS ota_available_version_at,
+          max(ts) FILTER (WHERE ota_status IS NOT NULL) AS ota_status_at,
+          max(ts) FILTER (WHERE ota_current_status IS NOT NULL) AS ota_current_status_at,
+          max(ts) FILTER (WHERE charge_port_open IS NOT NULL) AS charge_port_open_at,
+          max(ts) FILTER (WHERE charger_derate_active IS NOT NULL) AS charger_derate_active_at,
+          max(ts) FILTER (WHERE cabin_precon_status IS NOT NULL) AS cabin_precon_status_at,
+          max(ts) FILTER (WHERE cabin_precon_type IS NOT NULL) AS cabin_precon_type_at,
+          max(ts) FILTER (WHERE pet_mode_active IS NOT NULL) AS pet_mode_active_at,
+          max(ts) FILTER (WHERE pet_mode_temp_ok IS NOT NULL) AS pet_mode_temp_ok_at,
+          max(ts) FILTER (WHERE defrost_active IS NOT NULL) AS defrost_active_at,
+          max(ts) FILTER (WHERE steering_wheel_heat IS NOT NULL) AS steering_wheel_heat_at,
+          max(ts) FILTER (WHERE seat_fl_heat IS NOT NULL) AS seat_fl_heat_at,
+          max(ts) FILTER (WHERE seat_fr_heat IS NOT NULL) AS seat_fr_heat_at,
+          max(ts) FILTER (WHERE seat_rl_heat IS NOT NULL) AS seat_rl_heat_at,
+          max(ts) FILTER (WHERE seat_rr_heat IS NOT NULL) AS seat_rr_heat_at,
+          max(ts) FILTER (WHERE seat_fl_vent IS NOT NULL) AS seat_fl_vent_at,
+          max(ts) FILTER (WHERE seat_fr_vent IS NOT NULL) AS seat_fr_vent_at,
+          max(ts) FILTER (WHERE tonneau_locked IS NOT NULL) AS tonneau_locked_at,
+          max(ts) FILTER (WHERE tonneau_closed IS NOT NULL) AS tonneau_closed_at,
+          max(ts) FILTER (WHERE side_bin_left_locked IS NOT NULL) AS side_bin_left_locked_at,
+          max(ts) FILTER (WHERE side_bin_right_locked IS NOT NULL) AS side_bin_right_locked_at,
+          max(ts) FILTER (WHERE side_bin_left_closed IS NOT NULL) AS side_bin_left_closed_at,
+          max(ts) FILTER (WHERE side_bin_right_closed IS NOT NULL) AS side_bin_right_closed_at,
+          max(ts) FILTER (WHERE window_fl_closed IS NOT NULL) AS window_fl_closed_at,
+          max(ts) FILTER (WHERE window_fr_closed IS NOT NULL) AS window_fr_closed_at,
+          max(ts) FILTER (WHERE window_rl_closed IS NOT NULL) AS window_rl_closed_at,
+          max(ts) FILTER (WHERE window_rr_closed IS NOT NULL) AS window_rr_closed_at,
+          max(ts) FILTER (WHERE gear_guard_locked IS NOT NULL) AS gear_guard_locked_at,
+          max(ts) FILTER (WHERE gear_guard_video_status IS NOT NULL) AS gear_guard_video_status_at,
+          max(ts) FILTER (WHERE wiper_fluid_low IS NOT NULL) AS wiper_fluid_low_at,
+          max(ts) FILTER (WHERE brake_fluid_low IS NOT NULL) AS brake_fluid_low_at,
+          max(ts) FILTER (WHERE alarm_active IS NOT NULL) AS alarm_active_at,
+          max(ts) FILTER (WHERE service_mode IS NOT NULL) AS service_mode_at,
+          max(ts) FILTER (WHERE closure_frunk_closed IS NOT NULL) AS closure_frunk_closed_at,
+          max(ts) FILTER (WHERE closure_liftgate_closed IS NOT NULL) AS closure_liftgate_closed_at,
+          max(ts) FILTER (WHERE closure_tailgate_closed IS NOT NULL) AS closure_tailgate_closed_at,
+          max(ts) FILTER (WHERE door_front_left_closed IS NOT NULL) AS door_front_left_closed_at,
+          max(ts) FILTER (WHERE door_front_right_closed IS NOT NULL) AS door_front_right_closed_at,
+          max(ts) FILTER (WHERE door_rear_left_closed IS NOT NULL) AS door_rear_left_closed_at,
+          max(ts) FILTER (WHERE door_rear_right_closed IS NOT NULL) AS door_rear_right_closed_at
+        FROM timeseries.telemetry
+        WHERE vehicle_id = $1
+        "#,
+    )
+    .bind(vid)
+    .fetch_one(&state.pool)
+    .await?;
+
     let tire_values = [
         latest.tire_fl_psi,
         latest.tire_fr_psi,
@@ -2452,6 +2652,7 @@ async fn vehicle_status(
         .as_deref()
         .or(latest.ota_current_status.as_deref())
         .map(str::to_string);
+    let latest_event_at = latest.ts.or_else(|| row.as_ref().and_then(|r| r.last_event_at));
     let normalized_range_miles = normalize_remaining_range_miles(
         latest.distance_to_empty_mi,
         latest.battery_level,
@@ -2460,6 +2661,429 @@ async fn vehicle_status(
     let now = chrono::Utc::now();
     let (effective_worker_health, telemetry_stale, telemetry_stale_reason) =
         derive_vehicle_status_freshness(now, row.as_ref(), &latest);
+    let mut field_availability = BTreeMap::new();
+
+    insert_field_availability(
+        &mut field_availability,
+        "hv_thermal_event",
+        latest_event_at,
+        seen.hv_thermal_event_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "twelve_volt_health",
+        latest_event_at,
+        seen.twelve_volt_health_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "ota_current_version",
+        latest_event_at,
+        seen.ota_current_version_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "ota_available_version",
+        latest_event_at,
+        seen.ota_available_version_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "ota_status",
+        latest_event_at,
+        seen.ota_status_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "ota_current_status",
+        latest_event_at,
+        seen.ota_current_status_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "charge_port_open",
+        latest_event_at,
+        seen.charge_port_open_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "charger_derate_active",
+        latest_event_at,
+        seen.charger_derate_active_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "cabin_precon_status",
+        latest_event_at,
+        seen.cabin_precon_status_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "cabin_precon_type",
+        latest_event_at,
+        seen.cabin_precon_type_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "pet_mode_active",
+        latest_event_at,
+        seen.pet_mode_active_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "pet_mode_temp_ok",
+        latest_event_at,
+        seen.pet_mode_temp_ok_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "defrost_active",
+        latest_event_at,
+        seen.defrost_active_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "steering_wheel_heat",
+        latest_event_at,
+        seen.steering_wheel_heat_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "seat_fl_heat",
+        latest_event_at,
+        seen.seat_fl_heat_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "seat_fr_heat",
+        latest_event_at,
+        seen.seat_fr_heat_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "seat_rl_heat",
+        latest_event_at,
+        seen.seat_rl_heat_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "seat_rr_heat",
+        latest_event_at,
+        seen.seat_rr_heat_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "seat_fl_vent",
+        latest_event_at,
+        seen.seat_fl_vent_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "seat_fr_vent",
+        latest_event_at,
+        seen.seat_fr_vent_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tonneau_locked",
+        latest_event_at,
+        seen.tonneau_locked_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tonneau_closed",
+        latest_event_at,
+        seen.tonneau_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "side_bin_left_locked",
+        latest_event_at,
+        seen.side_bin_left_locked_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "side_bin_right_locked",
+        latest_event_at,
+        seen.side_bin_right_locked_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "side_bin_left_closed",
+        latest_event_at,
+        seen.side_bin_left_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "side_bin_right_closed",
+        latest_event_at,
+        seen.side_bin_right_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "window_fl_closed",
+        latest_event_at,
+        seen.window_fl_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "window_fr_closed",
+        latest_event_at,
+        seen.window_fr_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "window_rl_closed",
+        latest_event_at,
+        seen.window_rl_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "window_rr_closed",
+        latest_event_at,
+        seen.window_rr_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "gear_guard_locked",
+        latest_event_at,
+        seen.gear_guard_locked_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "gear_guard_video_status",
+        latest_event_at,
+        seen.gear_guard_video_status_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "wiper_fluid_low",
+        latest_event_at,
+        seen.wiper_fluid_low_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "brake_fluid_low",
+        latest_event_at,
+        seen.brake_fluid_low_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "alarm_active",
+        latest_event_at,
+        seen.alarm_active_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "service_mode",
+        latest_event_at,
+        seen.service_mode_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "closure_frunk_closed",
+        latest_event_at,
+        seen.closure_frunk_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "closure_liftgate_closed",
+        latest_event_at,
+        seen.closure_liftgate_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "closure_tailgate_closed",
+        latest_event_at,
+        seen.closure_tailgate_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "door_front_left_closed",
+        latest_event_at,
+        seen.door_front_left_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "door_front_right_closed",
+        latest_event_at,
+        seen.door_front_right_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "door_rear_left_closed",
+        latest_event_at,
+        seen.door_rear_left_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "door_rear_right_closed",
+        latest_event_at,
+        seen.door_rear_right_closed_at,
+        None,
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_fl_psi",
+        latest_event_at,
+        seen.tire_fl_psi_at,
+        (latest.tire_fl_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_fr_psi",
+        latest_event_at,
+        seen.tire_fr_psi_at,
+        (latest.tire_fr_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_rl_psi",
+        latest_event_at,
+        seen.tire_rl_psi_at,
+        (latest.tire_rl_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_rr_psi",
+        latest_event_at,
+        seen.tire_rr_psi_at,
+        (latest.tire_rr_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_fl_status",
+        latest_event_at,
+        seen.tire_fl_status_at,
+        (latest.tire_fl_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_fr_status",
+        latest_event_at,
+        seen.tire_fr_status_at,
+        (latest.tire_fr_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_rl_status",
+        latest_event_at,
+        seen.tire_rl_status_at,
+        (latest.tire_rl_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_rr_status",
+        latest_event_at,
+        seen.tire_rr_status_at,
+        (latest.tire_rr_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_fl_valid",
+        latest_event_at,
+        seen.tire_fl_valid_at,
+        (latest.tire_fl_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_fr_valid",
+        latest_event_at,
+        seen.tire_fr_valid_at,
+        (latest.tire_fr_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_rl_valid",
+        latest_event_at,
+        seen.tire_rl_valid_at,
+        (latest.tire_rl_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_rr_valid",
+        latest_event_at,
+        seen.tire_rr_valid_at,
+        (latest.tire_rr_valid == Some(false))
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
+    insert_field_availability(
+        &mut field_availability,
+        "tire_pressure_status",
+        latest_event_at,
+        max_seen_at([
+            seen.tire_fl_psi_at,
+            seen.tire_fr_psi_at,
+            seen.tire_rl_psi_at,
+            seen.tire_rr_psi_at,
+            seen.tire_fl_status_at,
+            seen.tire_fr_status_at,
+            seen.tire_rl_status_at,
+            seen.tire_rr_status_at,
+            seen.tire_fl_valid_at,
+            seen.tire_fr_valid_at,
+            seen.tire_rl_valid_at,
+            seen.tire_rr_valid_at,
+        ]),
+        tire_validity
+            .into_iter()
+            .flatten()
+            .any(|valid| !valid)
+            .then_some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+    );
 
     Ok(Json(VehicleStatusResponse {
         vehicle_id: vid,
@@ -2583,6 +3207,7 @@ async fn vehicle_status(
         service_mode: latest.service_mode,
         telemetry_stale,
         telemetry_stale_reason,
+        field_availability,
     }))
 }
 
@@ -2680,6 +3305,84 @@ mod freshness_tests {
         assert_eq!(worker_health.as_deref(), Some("connected"));
         assert!(!telemetry_stale);
         assert_eq!(reason, None);
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::{
+        classify_status_field_availability, max_seen_at, StatusFieldAvailabilityReasonCode,
+        StatusFieldAvailabilityState,
+    };
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn marks_missing_field_as_never_seen() {
+        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
+        let availability = classify_status_field_availability(latest_event_at, None, None);
+
+        assert!(!availability.ever_seen);
+        assert_eq!(availability.availability, StatusFieldAvailabilityState::NeverSeen);
+        assert_eq!(
+            availability.reason_code,
+            Some(StatusFieldAvailabilityReasonCode::NeverSeen)
+        );
+    }
+
+    #[test]
+    fn marks_field_as_historical_when_latest_event_is_newer() {
+        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
+        let last_seen_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 10, 30, 0).unwrap());
+        let availability =
+            classify_status_field_availability(latest_event_at, last_seen_at, None);
+
+        assert!(availability.ever_seen);
+        assert_eq!(availability.last_seen_at, last_seen_at);
+        assert_eq!(availability.availability, StatusFieldAvailabilityState::Historical);
+        assert_eq!(
+            availability.reason_code,
+            Some(StatusFieldAvailabilityReasonCode::MissingRecentPayload)
+        );
+    }
+
+    #[test]
+    fn keeps_latest_field_as_current() {
+        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
+        let availability =
+            classify_status_field_availability(latest_event_at, latest_event_at, None);
+
+        assert_eq!(availability.availability, StatusFieldAvailabilityState::Current);
+        assert_eq!(availability.reason_code, None);
+    }
+
+    #[test]
+    fn preserves_invalid_sensor_reason_for_current_and_historical_fields() {
+        let latest_event_at = Some(Utc.with_ymd_and_hms(2026, 7, 7, 12, 0, 0).unwrap());
+        let current = classify_status_field_availability(
+            latest_event_at,
+            latest_event_at,
+            Some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+        );
+        let historical = classify_status_field_availability(
+            latest_event_at,
+            Some(Utc.with_ymd_and_hms(2026, 7, 7, 11, 0, 0).unwrap()),
+            Some(StatusFieldAvailabilityReasonCode::InvalidSensor),
+        );
+
+        assert_eq!(current.reason_code, Some(StatusFieldAvailabilityReasonCode::InvalidSensor));
+        assert_eq!(
+            historical.reason_code,
+            Some(StatusFieldAvailabilityReasonCode::InvalidSensor)
+        );
+    }
+
+    #[test]
+    fn returns_latest_seen_timestamp() {
+        let a = Utc.with_ymd_and_hms(2026, 7, 7, 8, 0, 0).unwrap();
+        let b = Utc.with_ymd_and_hms(2026, 7, 7, 10, 0, 0).unwrap();
+        let c = Utc.with_ymd_and_hms(2026, 7, 7, 9, 0, 0).unwrap();
+
+        assert_eq!(max_seen_at([Some(a), Some(b), Some(c)]), Some(b));
     }
 }
 
