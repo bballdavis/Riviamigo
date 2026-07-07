@@ -51,6 +51,7 @@ const metricMocks = vi.hoisted(() => ({
     p90: number;
     total_miles: number;
   },
+  vehicleStatus: null as null | Record<string, unknown>,
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -66,7 +67,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useEfficiencySummary: () => ({ data: metricMocks.efficiencySummary, isLoading: false }),
     useBatteryHealth: () => ({ data: metricMocks.batteryHealth, isLoading: false }),
     useChargingSummary: () => ({ data: metricMocks.chargingSummary, isLoading: false }),
-    useCurrentVehicleStatus: () => ({ data: null, isLoading: false }),
+    useCurrentVehicleStatus: () => ({ data: metricMocks.vehicleStatus, isLoading: false }),
     useMetricCatalog: () => ({ data: [] }),
   };
 });
@@ -135,6 +136,7 @@ describe('dashboard sensor chips', () => {
     metricMocks.batteryHealth = null;
     metricMocks.chargingSummary = null;
     metricMocks.efficiencySummary = { avg: 200, p10: 180, p90: 220, total_miles: 120 };
+    metricMocks.vehicleStatus = null;
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
@@ -436,5 +438,109 @@ describe('dashboard sensor chips', () => {
 
     expect(screen.getByText('69%')).toBeInTheDocument();
     expect(screen.getByText('Home 180.0 kWh / Away 80.0 kWh')).toBeInTheDocument();
+  });
+
+  it('renders a shared unavailable chip for never-seen vehicle status fields', () => {
+    metricMocks.vehicleStatus = {
+      service_mode: null,
+      field_availability: {
+        service_mode: {
+          ever_seen: false,
+          last_seen_at: null,
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'never_seen',
+          reason_code: 'never_seen',
+        },
+      },
+    };
+
+    render(
+      <DashboardRenderer
+        config={config(false, false, {}, 'service_mode', 'Service Mode')}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByTestId('sensor-unavailable-chip')).toHaveTextContent('Unavailable');
+  });
+
+  it('shows historical vehicle status values with a last-updated line', () => {
+    metricMocks.vehicleStatus = {
+      gear_guard_locked: true,
+      field_availability: {
+        gear_guard_locked: {
+          ever_seen: true,
+          last_seen_at: '2026-05-05T12:15:00Z',
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'historical',
+          reason_code: 'missing_recent_payload',
+        },
+        gear_guard_video_status: {
+          ever_seen: false,
+          last_seen_at: null,
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'never_seen',
+          reason_code: 'never_seen',
+        },
+      },
+    };
+
+    render(
+      <DashboardRenderer
+        config={config(false, false, {}, 'gear_guard_locked', 'Gear Guard')}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByText('Locked')).toBeInTheDocument();
+    expect(screen.getByText(/Last updated/)).toBeInTheDocument();
+  });
+
+  it('renders composite window status when at least one field is current', () => {
+    metricMocks.vehicleStatus = {
+      window_fl_closed: true,
+      window_fr_closed: false,
+      window_rl_closed: true,
+      window_rr_closed: true,
+      field_availability: {
+        window_fl_closed: {
+          ever_seen: true,
+          last_seen_at: '2026-05-07T00:00:00Z',
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'current',
+          reason_code: null,
+        },
+        window_fr_closed: {
+          ever_seen: true,
+          last_seen_at: '2026-05-07T00:00:00Z',
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'current',
+          reason_code: null,
+        },
+        window_rl_closed: {
+          ever_seen: true,
+          last_seen_at: '2026-05-06T22:00:00Z',
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'historical',
+          reason_code: 'missing_recent_payload',
+        },
+        window_rr_closed: {
+          ever_seen: true,
+          last_seen_at: '2026-05-06T22:00:00Z',
+          latest_event_at: '2026-05-07T00:00:00Z',
+          availability: 'historical',
+          reason_code: 'missing_recent_payload',
+        },
+      },
+    };
+
+    render(
+      <DashboardRenderer
+        config={config(false, false, {}, 'window_status', 'Windows')}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByText('1 open')).toBeInTheDocument();
   });
 });

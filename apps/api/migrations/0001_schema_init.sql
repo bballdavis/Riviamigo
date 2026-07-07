@@ -1,5 +1,16 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
+    CREATE EXTENSION pgcrypto;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
+    CREATE EXTENSION timescaledb;
+  END IF;
+END $$;
 
 CREATE SCHEMA IF NOT EXISTS riviamigo;
 CREATE SCHEMA IF NOT EXISTS timeseries;
