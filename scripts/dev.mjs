@@ -10,14 +10,29 @@ const webDir = resolve(rootDir, 'apps/web');
 const composeFile = resolve(rootDir, 'infra/docker-compose.yml');
 const isWindows = process.platform === 'win32';
 
-const ports = {
-  api: 3001,
-  web: 5173,
+function parsePort(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
+}
+
+const requestedPorts = {
+  api: parsePort(process.env.DEV_API_PORT, 3001),
+  web: parsePort(process.env.DEV_WEB_PORT, 5173),
+  postgres: parsePort(process.env.DEV_POSTGRES_PORT, 5432),
+  redis: parsePort(process.env.DEV_REDIS_PORT, 6379),
+  garageApi: parsePort(process.env.DEV_GARAGE_PORT, 3900),
+  garageAdmin: parsePort(process.env.DEV_GARAGE_ADMIN_PORT, 3903),
 };
 
+let ports = { ...requestedPorts };
+
 const urls = {
-  apiHealth: `http://localhost:${ports.api}/health`,
-  web: `http://localhost:${ports.web}`,
+  get apiHealth() {
+    return `http://localhost:${ports.api}/health`;
+  },
+  get web() {
+    return `http://localhost:${ports.web}`;
+  },
 };
 
 const runOnce = process.argv.includes('--once');
@@ -158,9 +173,9 @@ function parsePids(output) {
 
 function apiEnv() {
   return {
-    DATABASE_URL: 'postgresql://riviamigo:devpassword@localhost:5432/riviamigo?options=-c%20search_path%3Driviamigo,timeseries,public',
-    REDIS_URL: 'redis://localhost:6379',
-    S3_ENDPOINT: 'http://localhost:3900',
+    DATABASE_URL: `postgresql://riviamigo:devpassword@localhost:${ports.postgres}/riviamigo?options=-c%20search_path%3Driviamigo,timeseries,public`,
+    REDIS_URL: `redis://localhost:${ports.redis}`,
+    S3_ENDPOINT: `http://localhost:${ports.garageApi}`,
     S3_ACCESS_KEY: 'GKdeadbeef0000000000000000000000',
     S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
     PORT: String(ports.api),
@@ -170,33 +185,6 @@ function apiEnv() {
     // session continuity and trigger repeated 401/WS reconnect churn.
     COOKIE_INSECURE: '1',
   };
-}
-
-async function killPid(pid) {
-  if (isWindows) {
-    await capture('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: false });
-    await capture('powershell.exe', ['-NoProfile', '-Command', `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`], {
-      shell: false,
-    });
-    return;
-  }
-
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {
-    return;
-  }
-  // Give the process up to 3 s to exit gracefully, then escalate to SIGKILL.
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0); // throws if the process is gone
-    } catch {
-      return; // process exited
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
 }
 
 function runWithInput(command, args, input, options = {}) {
@@ -221,27 +209,57 @@ function runWithInput(command, args, input, options = {}) {
   });
 }
 
-async function ensurePortFree(port, label) {
-  let pids = await getListeningPids(port);
-  if (pids.length === 0) {
-    return;
-  }
-
-  log(`Stopping stale ${label} process on port ${port}: ${pids.join(', ')}`);
-  for (const pid of pids) {
-    await killPid(pid);
-  }
-
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    pids = await getListeningPids(port);
+async function findAvailablePort(start, label, maxTries = 50) {
+  for (let attempt = 0; attempt < maxTries; attempt += 1) {
+    const candidate = start + attempt;
+    const pids = await getListeningPids(candidate);
     if (pids.length === 0) {
-      return;
+      if (attempt > 0) {
+        log(`[dev] ${label} port ${start} was busy, using ${candidate}`);
+      }
+      return candidate;
     }
-    await sleep(250);
+
+    log(`[dev] ${label} port ${candidate} is in use; trying ${candidate + 1}`);
   }
 
-  throw new Error(`Could not free port ${port} for ${label}; still owned by PID(s): ${pids.join(', ')}`);
+  throw new Error(`[dev] Could not find an available ${label} port after ${maxTries} attempts from ${start}.`);
+}
+
+async function allocateRuntimePorts() {
+  const [api, web, postgres, redis, garageApi, garageAdmin] = await Promise.all([
+    findAvailablePort(requestedPorts.api, 'API'),
+    findAvailablePort(requestedPorts.web, 'Web'),
+    findAvailablePort(requestedPorts.postgres, 'PostgreSQL'),
+    findAvailablePort(requestedPorts.redis, 'Redis'),
+    findAvailablePort(requestedPorts.garageApi, 'Garage API'),
+    findAvailablePort(requestedPorts.garageAdmin, 'Garage admin'),
+  ]);
+
+  ports = {
+    api,
+    web,
+    postgres,
+    redis,
+    garageApi,
+    garageAdmin,
+  };
+
+  process.env.DEV_API_PORT = String(api);
+  process.env.DEV_WEB_PORT = String(web);
+  process.env.DEV_POSTGRES_PORT = String(postgres);
+  process.env.DEV_REDIS_PORT = String(redis);
+  process.env.DEV_GARAGE_PORT = String(garageApi);
+  process.env.DEV_GARAGE_ADMIN_PORT = String(garageAdmin);
+  process.env.DEV_WEB_ORIGINS = webOrigins().join(',');
+  process.env.COMPOSE_PROJECT_NAME = `riviamigo-${web}`;
+}
+
+async function assertPortAvailable(port, label) {
+  const pids = await getListeningPids(port);
+  if (pids.length > 0) {
+    throw new Error(`${label} port ${port} became occupied before startup by PID(s): ${pids.join(', ')}`);
+  }
 }
 
 async function waitForHttp(url, child, label, timeoutMs = 30000) {
@@ -287,9 +305,9 @@ async function startInfrastructure() {
 
   log('');
   log('Infrastructure is running');
-  log('   TimescaleDB: postgresql://localhost:5432');
-  log('   Redis: redis://localhost:6379');
-  log('   S3 (Garage): http://localhost:3900');
+  log(`   TimescaleDB: postgresql://localhost:${ports.postgres}`);
+  log(`   Redis: redis://localhost:${ports.redis}`);
+  log(`   S3 (Garage): http://localhost:${ports.garageApi}`);
   log('');
 }
 
@@ -443,7 +461,7 @@ async function waitForViteUrl(child, timeoutMs = 30000) {
 }
 
 async function startApi() {
-  await ensurePortFree(ports.api, 'API');
+  await assertPortAvailable(ports.api, 'API');
 
   log('Building API...');
   await run('cargo', ['build'], { cwd: apiDir, env: apiEnv() });
@@ -452,7 +470,7 @@ async function startApi() {
 }
 
 async function launchApi() {
-  await ensurePortFree(ports.api, 'API');
+  await assertPortAvailable(ports.api, 'API');
 
   log('Starting API...');
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
@@ -499,6 +517,8 @@ async function startWeb() {
       // Route websocket traffic directly to the API in dev so refresh/reconnect
       // churn does not flow through Vite's ws proxy error path.
       VITE_WS_URL: process.env.VITE_WS_URL ?? `http://localhost:${ports.api}`,
+      VITE_API_URL: process.env.VITE_API_URL ?? `http://localhost:${ports.api}`,
+      VITE_RIVIAMIGO_API_BASE_URL: process.env.VITE_RIVIAMIGO_API_BASE_URL ?? `http://localhost:${ports.api}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: isWindows,
@@ -525,18 +545,16 @@ async function shutdown(code = 0) {
     }
   }
 
-  await Promise.all([ensurePortFree(ports.web, 'web').catch(() => {}), ensurePortFree(ports.api, 'API').catch(() => {})]);
   process.exit(code);
 }
 
 async function main() {
-  process.env.COMPOSE_PROJECT_NAME = 'riviamigo';
-
   log('Starting Riviamigo development stack...');
   log('');
 
   await requireTools();
   await installDependencies();
+  await allocateRuntimePorts();
   await startInfrastructure();
   await ensureSchema();
 
