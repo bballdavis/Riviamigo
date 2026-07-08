@@ -142,6 +142,7 @@ export function BatteryPhantomDrainPage({ navKey, slug, title }: DashboardPagePr
       navKey={navKey}
       slug={slug}
       title={title}
+      enableDashboardEditing={false}
       renderBeforeDashboard={(state) => <PhantomDrainContent state={state} />}
       renderDashboard={() => false}
     />
