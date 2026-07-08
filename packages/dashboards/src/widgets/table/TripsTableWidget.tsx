@@ -296,10 +296,11 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
           {selectedRouteIds.length === 1 ? (
             <button
               type="button"
-              className="w-full rounded-md border border-accent/50 bg-accent/20 px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/30"
+              className="group flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/15"
               onClick={() => navigate({ to: '/trips/$tripId', params: { tripId: selectedTripId! } })}
             >
-              Open this trip
+              Open trip
+              <PiArrowFatLinesRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
             </button>
           ) : (
             <>

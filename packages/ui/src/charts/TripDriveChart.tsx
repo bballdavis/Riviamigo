@@ -67,6 +67,11 @@ export function TripDriveChart({
     );
   }
 
+  const measuredData = React.useMemo(
+    () => data.filter((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null),
+    [data],
+  );
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
@@ -77,7 +82,8 @@ export function TripDriveChart({
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripDrivePoint>(
             state as Parameters<typeof getActiveElapsedSFromChartState>[0],
-            data,
+            measuredData,
+            activeElapsedS,
           );
           onActiveElapsedSChange?.(nextElapsed);
         }}
@@ -134,7 +140,8 @@ export function TripDriveChart({
           name="Power"
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
-          dot={false}
+          dot={{ r: 2.1, strokeWidth: 0, fill: CHART_COLORS.accent }}
+          activeDot={{ r: 4.2, fill: CHART_COLORS.accent, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
           yAxisId="power"
@@ -145,7 +152,8 @@ export function TripDriveChart({
           name="Regen"
           stroke={CHART_COLORS.sky}
           strokeWidth={1.6}
-          dot={false}
+          dot={{ r: 2.1, strokeWidth: 0, fill: CHART_COLORS.sky }}
+          activeDot={{ r: 4.2, fill: CHART_COLORS.sky, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
           yAxisId="power"
@@ -157,7 +165,8 @@ export function TripDriveChart({
           stroke={CHART_COLORS.warning}
           strokeWidth={1.4}
           strokeDasharray="4 4"
-          dot={false}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.warning }}
+          activeDot={{ r: 4, fill: CHART_COLORS.warning, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
           yAxisId="speed"

@@ -67,6 +67,11 @@ export function TripTemperatureChart({
     hvac_on: point.hvac_active ? 1 : 0,
   }));
 
+  const measuredData = React.useMemo(
+    () => data.filter((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null),
+    [data],
+  );
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
@@ -77,7 +82,8 @@ export function TripTemperatureChart({
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripTemperaturePoint>(
             state as Parameters<typeof getActiveElapsedSFromChartState>[0],
-            data,
+            measuredData,
+            activeElapsedS,
           );
           onActiveElapsedSChange?.(nextElapsed);
         }}
@@ -138,7 +144,8 @@ export function TripTemperatureChart({
           name="Outside Temp"
           stroke={CHART_COLORS.emerald}
           strokeWidth={1.8}
-          dot={false}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.emerald }}
+          activeDot={{ r: 3.8, fill: CHART_COLORS.emerald, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
         />
@@ -148,7 +155,8 @@ export function TripTemperatureChart({
           name="Cabin Temp"
           stroke={CHART_COLORS.orange}
           strokeWidth={1.8}
-          dot={false}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.orange }}
+          activeDot={{ r: 3.8, fill: CHART_COLORS.orange, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
         />
@@ -159,7 +167,8 @@ export function TripTemperatureChart({
           stroke={CHART_COLORS.yellow}
           strokeWidth={1.6}
           strokeDasharray="4 4"
-          dot={false}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.yellow }}
+          activeDot={{ r: 3.8, fill: CHART_COLORS.yellow, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
         />

@@ -66,6 +66,11 @@ export function TripTirePressureChart({
     );
   }
 
+  const measuredData = React.useMemo(
+    () => data.filter((point) => point.tire_fl_psi != null || point.tire_fr_psi != null || point.tire_rl_psi != null || point.tire_rr_psi != null),
+    [data],
+  );
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
@@ -76,7 +81,8 @@ export function TripTirePressureChart({
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripTirePressurePoint>(
             state as Parameters<typeof getActiveElapsedSFromChartState>[0],
-            data,
+            measuredData,
+            activeElapsedS,
           );
           onActiveElapsedSChange?.(nextElapsed);
         }}
@@ -120,10 +126,50 @@ export function TripTirePressureChart({
         {activeElapsedS != null ? (
           <ReferenceLine x={activeElapsedS} stroke={CHART_COLORS.muted} strokeDasharray="4 4" />
         ) : null}
-        <Line type="monotone" dataKey="tire_fl_psi" name="tire_fl_psi" stroke={CHART_COLORS.accent} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />
-        <Line type="monotone" dataKey="tire_fr_psi" name="tire_fr_psi" stroke={CHART_COLORS.sky} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />
-        <Line type="monotone" dataKey="tire_rl_psi" name="tire_rl_psi" stroke={CHART_COLORS.success} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />
-        <Line type="monotone" dataKey="tire_rr_psi" name="tire_rr_psi" stroke={CHART_COLORS.warning} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />
+        <Line
+          type="monotone"
+          dataKey="tire_fl_psi"
+          name="tire_fl_psi"
+          stroke={CHART_COLORS.accent}
+          strokeWidth={1.8}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.accent }}
+          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.accent }}
+          isAnimationActive={false}
+          connectNulls
+        />
+        <Line
+          type="monotone"
+          dataKey="tire_fr_psi"
+          name="tire_fr_psi"
+          stroke={CHART_COLORS.sky}
+          strokeWidth={1.8}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.sky }}
+          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.sky }}
+          isAnimationActive={false}
+          connectNulls
+        />
+        <Line
+          type="monotone"
+          dataKey="tire_rl_psi"
+          name="tire_rl_psi"
+          stroke={CHART_COLORS.success}
+          strokeWidth={1.8}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.success }}
+          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.success }}
+          isAnimationActive={false}
+          connectNulls
+        />
+        <Line
+          type="monotone"
+          dataKey="tire_rr_psi"
+          name="tire_rr_psi"
+          stroke={CHART_COLORS.warning}
+          strokeWidth={1.8}
+          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.warning }}
+          activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.warning }}
+          isAnimationActive={false}
+          connectNulls
+        />
       </ComposedChart>
     </ResponsiveContainer>
   );
