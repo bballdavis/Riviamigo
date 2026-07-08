@@ -158,7 +158,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     (point) => typeof point.value === 'number' && Number.isFinite(point.value)
   );
   const resolvedMetricLatest = hasFiniteSeriesPoint
-    ? deriveMetricValue('latest', null, series)
+    ? resolveLatestSeriesPoint(series)
     : allowLatestFallback
       ? (value?.value ?? null)
       : null;
@@ -506,6 +506,16 @@ function deriveSpriteData(
     return [{ ts: currentTs, value: currentValue }];
   }
   return [];
+}
+
+function resolveLatestSeriesPoint(series: Array<{ value: number | null | undefined }>) {
+  for (let index = series.length - 1; index >= 0; index -= 1) {
+    const value = series[index]?.value;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function deriveMetricValue(

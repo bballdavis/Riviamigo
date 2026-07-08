@@ -102,6 +102,8 @@ export function TripMapChart({
   const latestSelectedRouteIdsRef = React.useRef<string[]>([]);
   const latestActivePointRef = React.useRef<LatLng | null | undefined>(activePoint);
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
+  const activePointFrameRef = React.useRef<number | null>(null);
+  const lastActivePointRef = React.useRef<LatLng | null>(null);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -185,7 +187,7 @@ export function TripMapChart({
           onRouteClickRef,
           latestVisibleRouteSignatureRef.current,
         );
-        syncActivePoint(mapRef.current, latestActivePointRef.current);
+        syncActivePoint(mapRef.current, latestActivePointRef.current, lastActivePointRef);
         requestAnimationFrame(() => {
           mapRef.current?.resize();
         });
@@ -227,7 +229,7 @@ export function TripMapChart({
         onRouteClickRef,
         latestVisibleRouteSignatureRef.current,
       );
-      syncActivePoint(map, latestActivePointRef.current);
+      syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
     }
 
     map.setStyle(buildMapLibreStyle(mapStyle));
@@ -247,7 +249,22 @@ export function TripMapChart({
 
   React.useEffect(() => {
     if (!isLoadedRef.current || !mapRef.current) return;
-    syncActivePoint(mapRef.current, activePoint);
+    if (activePointFrameRef.current !== null) {
+      cancelAnimationFrame(activePointFrameRef.current);
+    }
+
+    activePointFrameRef.current = requestAnimationFrame(() => {
+      activePointFrameRef.current = null;
+      const map = mapRef.current;
+      if (!map) return;
+      syncActivePoint(map, activePoint, lastActivePointRef);
+    });
+
+    return () => {
+      if (activePointFrameRef.current !== null) {
+        cancelAnimationFrame(activePointFrameRef.current);
+      }
+    };
   }, [activePoint]);
 
   function syncRoutes(
@@ -372,12 +389,28 @@ export function TripMapChart({
   );
 }
 
-function syncActivePoint(map: MapApi, point: LatLng | null | undefined) {
+function syncActivePoint(
+  map: MapApi,
+  point: LatLng | null | undefined,
+  lastPointRef: React.MutableRefObject<LatLng | null>,
+) {
   if (!point) {
+    lastPointRef.current = null;
     if (map.getLayer(ACTIVE_POINT_LAYER_ID)) map.removeLayer(ACTIVE_POINT_LAYER_ID);
     if (map.getSource(ACTIVE_POINT_SOURCE_ID)) map.removeSource(ACTIVE_POINT_SOURCE_ID);
     return;
   }
+
+  const previousPoint = lastPointRef.current;
+  if (
+    previousPoint
+    && previousPoint.lat === point.lat
+    && previousPoint.lng === point.lng
+  ) {
+    return;
+  }
+
+  lastPointRef.current = point;
 
   const geojson = {
     type: 'Feature' as const,

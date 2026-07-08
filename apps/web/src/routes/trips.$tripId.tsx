@@ -47,19 +47,31 @@ export function TripDetailContent() {
   const { tripId } = useParams({ from: '/trips/$tripId' });
   const [activeElapsedS, setActiveElapsedS] = React.useState<number | null>(null);
   const pendingActiveElapsedSRef = React.useRef<number | null>(null);
+  const committedActiveElapsedSRef = React.useRef<number | null>(null);
   const hoverFrameRef = React.useRef<number | null>(null);
   const isDark = useDocumentTheme();
 
   const setActiveElapsedSThrottled = React.useCallback((value: number | null) => {
+    if (pendingActiveElapsedSRef.current === value) return;
+    if (hoverFrameRef.current === null && committedActiveElapsedSRef.current === value) return;
+
     pendingActiveElapsedSRef.current = value;
     if (hoverFrameRef.current !== null) return;
 
     hoverFrameRef.current = requestAnimationFrame(() => {
       hoverFrameRef.current = null;
       const nextValue = pendingActiveElapsedSRef.current;
-      setActiveElapsedS((previous) => (previous === nextValue ? previous : nextValue));
+      setActiveElapsedS((previous) => {
+        if (previous === nextValue) return previous;
+        committedActiveElapsedSRef.current = nextValue;
+        return nextValue;
+      });
     });
   }, []);
+
+  React.useEffect(() => {
+    committedActiveElapsedSRef.current = activeElapsedS;
+  }, [activeElapsedS]);
 
   React.useEffect(() => () => {
     if (hoverFrameRef.current !== null) {
@@ -510,17 +522,29 @@ function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramB
   return bins;
 }
 
-function getNearestTimelinePoint(timeline: TimelinePoint[], elapsedS: number | null) {
+function getNearestTimelinePointByElapsed(timeline: TimelinePoint[], elapsedS: number | null) {
   if (elapsedS == null || timeline.length === 0) return null;
-  let nearest: TimelinePoint | null = null;
-  let minDelta = Number.POSITIVE_INFINITY;
-  for (const point of timeline) {
-    const delta = Math.abs(point.elapsed_s - elapsedS);
-    if (delta < minDelta) {
-      minDelta = delta;
-      nearest = point;
+
+  let low = 0;
+  let high = timeline.length - 1;
+
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    const candidate = timeline[mid];
+    if (!candidate) return timeline[Math.max(low, high)] ?? null;
+
+    if (candidate.elapsed_s < elapsedS) {
+      low = mid + 1;
+    } else {
+      high = mid;
     }
   }
-  return nearest;
+
+  const right = timeline[low] ?? null;
+  if (!right) return null;
+  const left = timeline[Math.max(0, low - 1)] ?? right;
+  return Math.abs(right.elapsed_s - elapsedS) <= Math.abs(left.elapsed_s - elapsedS)
+    ? right
+    : left;
 }
 
