@@ -107,7 +107,7 @@ const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
 ];
 
 const CHARGING_NETWORK_BREAKDOWN_MIN_H = 1;
-const CHARGING_NETWORK_BREAKDOWN_MAX_H = 10;
+const CHARGING_NETWORK_BREAKDOWN_MAX_H = 20;
 
 function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConfig {
   // Build a set of widget IDs already in the saved config so user edits are preserved.

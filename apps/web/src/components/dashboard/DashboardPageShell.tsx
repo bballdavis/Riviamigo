@@ -1,13 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAuth, useVehicles } from '@riviamigo/hooks';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAuth, useMe, useVehicles } from '@riviamigo/hooks';
 import { PageLayout, DateRangePicker, Tooltip } from '@riviamigo/ui/primitives';
 import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
   DashboardRenderer,
+  findOwnedDashboardBySlug,
   getDefaultBySlug,
+  isSystemDefaultDashboard,
+  materializeSystemDashboardDraft,
+  materializeUserDashboardDraft,
+  useCreateDashboard,
   useDashboardBySlug,
+  useUpdateAdminDashboard,
+  useUpdateDashboard,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig, WidgetCtx } from '@riviamigo/dashboards';
+import { Edit2, Save, Trash2 } from 'lucide-react';
 import { PiSpeedometerFill, PiSpeedometerLight } from 'react-icons/pi';
 import { AppLayout } from '../layout/AppLayout';
 import { NoVehicleState } from '../layout/NoVehicleState';
@@ -53,7 +62,94 @@ export interface DashboardPageShellProps {
   renderActions?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderBeforeDashboard?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderDashboard?: (state: DashboardPageShellRenderState) => boolean;
+  enableDashboardEditing?: boolean | undefined;
   showEfficiencyDisplayToggle?: boolean;
+}
+
+export interface DashboardEditMutations {
+  updateDashboard: ReturnType<typeof useUpdateDashboard>;
+  updateAdminDashboard: ReturnType<typeof useUpdateAdminDashboard>;
+  createDashboard: ReturnType<typeof useCreateDashboard>;
+  qc: ReturnType<typeof useQueryClient>;
+  isAdmin: boolean;
+}
+
+export function canManageSystemDashboards(role: string | null | undefined) {
+  return role === 'admin' || role === 'super_user';
+}
+
+export function createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin }: DashboardEditMutations) {
+  return function renderDefaultDashboardEditActions({ isEditMode, isDirty, localConfig, savedConfig, exitEdit, setSaveError }: DashboardPageShellRenderState) {
+    if (!isEditMode) return undefined;
+    const isPending = updateDashboard.isPending || updateAdminDashboard.isPending || createDashboard.isPending;
+
+    async function handleSave() {
+      setSaveError(null);
+      if (!localConfig || !savedConfig) { exitEdit(); return; }
+      try {
+        const isSystemDefault = isSystemDefaultDashboard(savedConfig);
+
+        if (isSystemDefault && isAdmin) {
+          await updateAdminDashboard.mutateAsync(materializeSystemDashboardDraft(localConfig, savedConfig));
+        } else {
+          const ownedCopy = savedConfig?.ownerId != null
+            ? savedConfig
+            : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
+          if (ownedCopy) {
+            await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, ownedCopy));
+          } else {
+            try {
+              await createDashboard.mutateAsync(materializeUserDashboardDraft(localConfig));
+            } catch {
+              await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
+              const refreshedBySlug = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
+              const refreshedOwned =
+                refreshedBySlug?.ownerId != null
+                  ? refreshedBySlug
+                  : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
+              if (!refreshedOwned) throw new Error('Could not find owned dashboard after refetch');
+              await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, refreshedOwned));
+            }
+          }
+        }
+        exitEdit();
+      } catch (error) {
+        setSaveError(dashboardSaveErrorMessage(error));
+      }
+    }
+
+    return (
+      <>
+        <span className="text-[11px] font-medium text-fg-tertiary">{isDirty ? 'Unsaved' : 'Dashboard'}</span>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={isPending}
+          title="Save changes"
+          aria-label="Save dashboard changes"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-white transition-colors hover:bg-accent/90 disabled:opacity-40"
+        >
+          <Save className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={exitEdit}
+          title="Discard changes"
+          aria-label="Discard dashboard changes"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </>
+    );
+  };
+}
+
+function dashboardSaveErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return `Dashboard save failed: ${error.message}`;
+  }
+  return 'Dashboard save failed. Your unsaved edits are still open.';
 }
 
 export function DashboardPageShell(props: DashboardPageShellProps) {
@@ -70,11 +166,18 @@ function DashboardPageShellContent({
   renderActions,
   renderBeforeDashboard,
   renderDashboard,
+  enableDashboardEditing = true,
   showEfficiencyDisplayToggle = false,
 }: DashboardPageShellProps) {
   const { defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
   const { data: vehicles } = useVehicles();
+  const updateDashboard = useUpdateDashboard();
+  const updateAdminDashboard = useUpdateAdminDashboard();
+  const createDashboard = useCreateDashboard();
+  const qc = useQueryClient();
+  const me = useMe();
+  const isAdmin = canManageSystemDashboards(me.data?.role);
   const storedTimeframe = useMemo(() => loadDashboardTimeframe(), []);
   const [timeframe, setTimeframe] = useState<DashboardTimeframe>(
     () => storedTimeframe ?? DEFAULT_TIMEFRAME,
@@ -117,7 +220,7 @@ function DashboardPageShellContent({
 
   const updateWidgetLayout = useCallback((widgetId: string, nextHeight: number) => {
     const normalizedHeight = Number.isFinite(nextHeight)
-      ? Math.max(1, Math.min(10, Math.round(nextHeight)))
+      ? Math.max(1, Math.min(20, Math.round(nextHeight)))
       : null;
 
     if (normalizedHeight == null) return;
@@ -131,6 +234,7 @@ function DashboardPageShellContent({
       if (widgetIndex === -1) return current;
 
       const widget = widgets[widgetIndex];
+      if (!widget) return current;
       if (widget.layout.h === normalizedHeight) return current;
 
       const nextWidgets = [...widgets];
@@ -226,6 +330,11 @@ function DashboardPageShellContent({
     enterEdit,
     exitEdit,
   };
+  const shouldRenderDashboard = renderDashboard?.(shellState) ?? true;
+  const canEditDashboard = enableDashboardEditing
+    && shouldRenderDashboard
+    && Boolean(activeConfig)
+    && Boolean(effectiveVehicleId);
 
   const dateRangeAction = activeConfig?.controls?.dateRange && !currentEditMode ? (
     <DateRangePicker
@@ -281,14 +390,34 @@ function DashboardPageShellContent({
       </button>
     </Tooltip>
   ) : null;
-  const editActions = currentEditMode ? renderActions?.(shellState) : undefined;
+  const dashboardEditActions = currentEditMode && canEditDashboard
+    ? createDefaultDashboardEditActions({
+      updateDashboard,
+      updateAdminDashboard,
+      createDashboard,
+      qc,
+      isAdmin,
+    })(shellState)
+    : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
-  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
+  const enterEditAction = !currentEditMode && canEditDashboard ? (
+    <button
+      type="button"
+      onClick={enterEdit}
+      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-bg-surface px-3 text-sm font-medium text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+      title="Edit dashboard"
+    >
+      <Edit2 className="h-4 w-4" />
+      <span>Edit dashboard</span>
+    </button>
+  ) : null;
+  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions || enterEditAction ? (
     <div className="flex items-center gap-2">
       {vehicleAction}
       {efficiencyDisplayAction}
       {dateRangeAction}
       {pageExtraActions}
+      {enterEditAction}
     </div>
   ) : undefined;
 
@@ -314,13 +443,13 @@ function DashboardPageShellContent({
                 {saveError}
               </div>
             ) : null}
-            {(renderDashboard?.(shellState) ?? true) ? (
+            {shouldRenderDashboard ? (
               <DashboardRenderer
                 config={activeConfig}
                 ctx={ctx}
                 mode={currentEditMode ? 'edit' : 'view'}
                 onConfigChange={setLocalConfig}
-                editActions={editActions}
+                editActions={dashboardEditActions}
               />
             ) : null}
           </>

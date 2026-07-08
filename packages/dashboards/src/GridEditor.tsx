@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import GridLayout, { useContainerWidth } from 'react-grid-layout';
 import type { LayoutItem } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
@@ -9,6 +9,7 @@ import {
   createWidgetInstance,
   DASHBOARD_GRID_COLUMNS,
   DASHBOARD_ROW_HEIGHT,
+  dashboardKey,
 } from './dashboardModel';
 import { WidgetChrome } from './WidgetChrome';
 import type { DashboardConfig, WidgetInstance } from './schema';
@@ -57,6 +58,8 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
   const widgets = Array.isArray(config.widgets) ? config.widgets.map(sanitizeWidgetInstance) : [];
   const [editingId, setEditingId] = useState<string | null>(null);
   const { width, containerRef, mounted } = useContainerWidth();
+  const currentDashboardKey = dashboardKey(config, config.slug);
+  const previousDashboardKeyRef = useRef(currentDashboardKey);
 
   const commit = useCallback(
     (next: WidgetInstance[]) => {
@@ -102,10 +105,16 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
   const drawerMode: 'palette' | 'edit' = editingWidget ? 'edit' : 'palette';
 
   useEffect(() => {
+    if (previousDashboardKeyRef.current !== currentDashboardKey) {
+      previousDashboardKeyRef.current = currentDashboardKey;
+      setEditingId(null);
+      return;
+    }
+
     if (editingId && !widgets.some((widget) => widget.id === editingId)) {
       setEditingId(null);
     }
-  }, [editingId, widgets]);
+  }, [currentDashboardKey, editingId, widgets]);
 
   return (
     <>
@@ -137,10 +146,18 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         .rgl-editor .react-grid-item:focus-within .rgl-widget-overlay,
         .rgl-editor .react-grid-item.resizing .rgl-widget-overlay,
         .rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-overlay,
+        .rgl-editor .rgl-card:hover .rgl-widget-overlay,
+        .rgl-editor .rgl-card:focus-within .rgl-widget-overlay,
         .rgl-editor .rgl-card[data-editing="true"] .rgl-widget-overlay,
         .rgl-editor .react-grid-item:has(.rgl-card[data-editing="true"]) .rgl-widget-overlay {
           opacity: 1;
           pointer-events: auto;
+        }
+        @media (hover: none), (pointer: coarse) {
+          .rgl-editor .rgl-widget-overlay {
+            opacity: 1;
+            pointer-events: auto;
+          }
         }
         .rgl-editor .react-grid-item:has(.rgl-card[data-fixed-size="true"]) .react-resizable-handle {
           display: none;
