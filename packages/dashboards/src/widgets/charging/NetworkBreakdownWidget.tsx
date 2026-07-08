@@ -11,6 +11,7 @@ import React from 'react';
 import { Icon } from '@iconify/react';
 import { useChargingSummary } from '@riviamigo/hooks';
 import { formatKwh, formatCurrency, formatNumber } from '@riviamigo/ui/lib/utils';
+import { DASHBOARD_ROW_HEIGHT } from '../../dashboardModel';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 
@@ -37,6 +38,11 @@ function NetworkBar({ fraction, className }: { fraction: number; className?: str
   );
 }
 
+const MAX_VISIBLE_NETWORK_ROWS = 10;
+const MAX_CONTAINER_GRID_ROWS = 20;
+const NETWORK_ENTRY_SKELETON_ROWS = 3;
+const DASH_WIDGET_HEIGHT_TOLERANCE = 0.999;
+
 const NETWORK_ICON: Record<string, string> = {
   'home charging': 'lucide:home',
   'other ac': 'lucide:plug',
@@ -54,19 +60,45 @@ function networkIcon(vendor: string | null): string {
 
 function clampRows(rowCount: number) {
   if (!Number.isFinite(rowCount)) return 1;
-  return Math.max(1, Math.min(10, Math.round(rowCount)));
+  return Math.max(1, Math.min(MAX_CONTAINER_GRID_ROWS, Math.round(rowCount)));
 }
 
 function NetworkBreakdownWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data, isLoading } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
   const summary = data as ChargingSummaryWithBreakdown | undefined;
   const breakdown: NetworkBreakdownEntry[] = summary?.network_breakdown ?? [];
-  const visibleRowCount = breakdown.length > 0 ? clampRows(breakdown.length) : 3;
+  const rowsRef = React.useRef<HTMLDivElement>(null);
+  const contentSignature = React.useMemo(
+    () => breakdown.map((row) => `${row.network_vendor ?? ''}:${row.energy_kwh ?? 'x'}:${row.session_count}`).join('|'),
+    [breakdown],
+  );
 
   React.useEffect(() => {
     if (!ctx.updateWidgetLayout) return;
-    ctx.updateWidgetLayout(instance.id, visibleRowCount);
-  }, [ctx, instance.id, visibleRowCount]);
+
+    if (isLoading || breakdown.length === 0) {
+      ctx.updateWidgetLayout(instance.id, clampRows(NETWORK_ENTRY_SKELETON_ROWS));
+      return;
+    }
+
+    const rowsToMeasure = Math.min(breakdown.length, MAX_VISIBLE_NETWORK_ROWS);
+    const rows = rowsRef.current?.children ? Array.from(rowsRef.current.children) : [];
+    if (!rows.length) {
+      ctx.updateWidgetLayout(instance.id, clampRows(rowsToMeasure));
+      return;
+    }
+
+    const styles = window.getComputedStyle(rowsRef.current ?? document.body);
+    const gap = Number.parseFloat(styles.rowGap || styles.gap || '0');
+    const paddingY = Number.parseFloat(styles.paddingTop || '0') + Number.parseFloat(styles.paddingBottom || '0');
+    const measuredRows = rows
+      .slice(0, rowsToMeasure)
+      .reduce((sum, row) => sum + (row as HTMLElement).getBoundingClientRect().height, 0);
+    const targetPixels = Math.ceil(paddingY + measuredRows + Math.max(0, rowsToMeasure - 1) * gap);
+    const targetRows = Math.max(1, Math.ceil(targetPixels / DASHBOARD_ROW_HEIGHT - DASH_WIDGET_HEIGHT_TOLERANCE));
+
+    ctx.updateWidgetLayout(instance.id, clampRows(targetRows));
+  }, [ctx, instance.id, isLoading, contentSignature]);
 
   const totalEnergy = breakdown.reduce((sum, r) => sum + (r.energy_kwh ?? 0), 0);
 
@@ -93,7 +125,7 @@ function NetworkBreakdownWidget({ instance, ctx }: { instance: WidgetInstance; c
   }
 
   return (
-    <div className="flex h-full flex-col gap-2 overflow-auto p-1">
+    <div ref={rowsRef} className="flex h-full flex-col gap-2 overflow-auto p-1">
       {breakdown.map((row) => {
         const fraction = totalEnergy > 0 ? (row.energy_kwh ?? 0) / totalEnergy : 0;
         const name = row.network_vendor ?? 'Unknown';

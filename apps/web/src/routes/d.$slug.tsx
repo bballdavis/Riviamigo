@@ -1,21 +1,15 @@
 import React from 'react';
 import { createRoute, useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { rootRoute } from './__root';
 import {
-  useCreateDashboard,
-  useUpdateDashboard,
-  useUpdateAdminDashboard,
   useCloneDashboard,
   downloadDashboardYaml,
   importDashboardYaml,
 } from '@riviamigo/dashboards';
-import { useMe } from '@riviamigo/hooks';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
-import { Edit2, Lock, Copy, Download, Upload } from 'lucide-react';
+import { Copy, Download, Upload } from 'lucide-react';
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
-import { canManageSystemDashboards, createDefaultDashboardEditActions } from '../components/dashboard/DashboardPage';
 
 const searchSchema = z.object({ edit: z.string().optional() });
 
@@ -36,20 +30,7 @@ function UserDashboardPage() {
   const navigate = useNavigate();
 
   const isEditMode = search.edit === '1';
-  const updateDashboard = useUpdateDashboard();
-  const updateAdminDashboard = useUpdateAdminDashboard();
-  const createDashboard = useCreateDashboard();
   const cloneDashboard = useCloneDashboard();
-  const qc = useQueryClient();
-  const me = useMe();
-  const canManageDefaults = canManageSystemDashboards(me.data?.role);
-  const renderSaveActions = createDefaultDashboardEditActions({
-    updateDashboard,
-    updateAdminDashboard,
-    createDashboard,
-    qc,
-    isAdmin: canManageDefaults,
-  });
 
   return (
     <DashboardPageShell
@@ -64,8 +45,7 @@ function UserDashboardPage() {
         });
       }}
       renderActions={(state) => {
-        const { activeConfig, setLocalConfig, isEditMode: editing, enterEdit } = state;
-        const isLocked = activeConfig?.isLocked ?? false;
+        const { activeConfig, setLocalConfig } = state;
 
         async function handleClone() {
           if (!activeConfig) return;
@@ -87,36 +67,23 @@ function UserDashboardPage() {
           event.target.value = '';
         }
 
-        if (editing) {
-          return renderSaveActions(state);
-        }
-
         return (
           <>
-            {isLocked ? (
-              <>
-                <button
-                  onClick={() => {
-                    void handleClone();
-                  }}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-bg-elevated transition-colors"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  Customize
-                </button>
-                <Lock className="h-3.5 w-3.5 text-fg-tertiary" />
-              </>
-            ) : (
-              <button
-                onClick={enterEdit}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-bg-elevated transition-colors"
-              >
-                <Edit2 className="h-3.5 w-3.5" />
-                Edit
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                void handleClone();
+              }}
+              disabled={!activeConfig || cloneDashboard.isPending}
+              title="Duplicate dashboard"
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs transition-colors hover:bg-bg-elevated disabled:opacity-40"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              Duplicate
+            </button>
 
             <button
+              type="button"
               onClick={() => {
                 if (activeConfig) downloadDashboardYaml(activeConfig);
               }}

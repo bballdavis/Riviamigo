@@ -95,12 +95,23 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useVehicles: () => ({
       data: [{ id: 'vehicle-1', display_name: 'Truck', model: 'R1T' }],
     }),
+    useMe: () => ({ data: { role: 'user' } }),
   };
 });
 
 vi.mock('@riviamigo/dashboards', () => ({
   dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
     config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: () => undefined,
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
   DashboardRenderer: ({
     config,
     ctx,
@@ -129,6 +140,17 @@ vi.mock('@riviamigo/dashboards', () => ({
     data: dashboardQuery.data,
     isLoading: dashboardQuery.isLoading,
     isFetching: dashboardQuery.isFetching,
+  }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({
+    getQueryData: vi.fn(),
+    refetchQueries: vi.fn(),
+    invalidateQueries: vi.fn(),
   }),
 }));
 

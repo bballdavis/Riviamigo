@@ -148,6 +148,8 @@ Default dashboards and user dashboards should share the same basic behaviors:
 
 If you need to change one of those flows, change the shared shell or the shared action wiring. Do not add a second implementation for one route family.
 
+`DashboardPageShell` owns the page-level edit entry and the save/discard actions for grid-backed dashboards. Route wrappers may add adjacent utilities such as import, export, or duplicate, but they should not provide their own edit-mode toggle or save controls.
+
 Dashboard configs are sanitized at the dashboard package boundary before render, import, and save. Sanitization clamps grid positions, enforces fixed-size widgets, and keeps restored/imported JSON from violating current editor capabilities.
 
 Use the dashboard model helpers for shared editing behavior:

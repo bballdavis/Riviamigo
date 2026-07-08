@@ -44,6 +44,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
       setActiveVehicleId: vi.fn(),
     }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }] }),
+    useMe: () => ({ data: { role: 'user' } }),
     usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'vehicle-1', periods: [period] }, isLoading: false }),
   };
 });
@@ -51,6 +52,16 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 vi.mock('@riviamigo/dashboards', () => ({
   dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
     config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: () => undefined,
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
   SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
     <div data-testid="sensor-chip-summary">
       <div>{title}</div>
@@ -83,6 +94,17 @@ vi.mock('@riviamigo/dashboards', () => ({
       widgets: [],
     },
     isLoading: false,
+  }),
+  useUpdateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({
+    getQueryData: vi.fn(),
+    refetchQueries: vi.fn(),
+    invalidateQueries: vi.fn(),
   }),
 }));
 

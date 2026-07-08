@@ -1,26 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { useMe } from '@riviamigo/hooks';
-import {
-  useCreateDashboard,
-  useUpdateDashboard,
-  useUpdateAdminDashboard,
-  findOwnedDashboardBySlug,
-  isSystemDefaultDashboard,
-  materializeSystemDashboardDraft,
-  materializeUserDashboardDraft,
-} from '@riviamigo/dashboards';
-import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { Tooltip } from '@riviamigo/ui/primitives';
-import { Battery, Car, CheckCircle2, CircleAlert, Gauge, MapPin, Save, Thermometer, Trash2, TriangleAlert, Edit2, Cpu } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, MapPin, Thermometer, TriangleAlert } from 'lucide-react';
 import { BsLockFill, BsUnlockFill } from 'react-icons/bs';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { DashboardPageShell } from './DashboardPageShell';
-import type { DashboardPageShellRenderState } from './DashboardPageShell';
+
+export { canManageSystemDashboards, createDefaultDashboardEditActions } from './DashboardPageShell';
+export type { DashboardEditMutations, DashboardPageShellRenderState } from './DashboardPageShell';
 
 export interface DashboardPageProps {
   /** Sidebar nav key (e.g. "dashboard", "battery"). */
@@ -34,120 +24,14 @@ export interface DashboardPageProps {
 }
 
 export function DashboardPage({ navKey, slug, title, showEfficiencyDisplayToggle = false }: DashboardPageProps) {
-  const updateDashboard = useUpdateDashboard();
-  const updateAdminDashboard = useUpdateAdminDashboard();
-  const createDashboard = useCreateDashboard();
-  const qc = useQueryClient();
-  const me = useMe();
-  const isAdmin = canManageSystemDashboards(me.data?.role);
-
   return (
     <DashboardPageShell
       navKey={navKey}
       slug={slug}
       title={title}
-      renderTitleAction={renderDefaultDashboardTitleAction}
-      renderActions={createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin })}
       showEfficiencyDisplayToggle={showEfficiencyDisplayToggle}
     />
   );
-}
-
-export interface DashboardEditMutations {
-  updateDashboard: ReturnType<typeof useUpdateDashboard>;
-  updateAdminDashboard: ReturnType<typeof useUpdateAdminDashboard>;
-  createDashboard: ReturnType<typeof useCreateDashboard>;
-  qc: ReturnType<typeof useQueryClient>;
-  isAdmin: boolean;
-}
-
-export function canManageSystemDashboards(role: string | null | undefined) {
-  return role === 'admin' || role === 'super_user';
-}
-
-export function createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin }: DashboardEditMutations) {
-  return function renderDefaultDashboardEditActions({ isEditMode, isDirty, localConfig, savedConfig, exitEdit, setSaveError }: DashboardPageShellRenderState) {
-    if (!isEditMode) return undefined;
-    const isPending = updateDashboard.isPending || updateAdminDashboard.isPending || createDashboard.isPending;
-
-    async function handleSave() {
-      setSaveError(null);
-      if (!localConfig || !savedConfig) { exitEdit(); return; }
-      try {
-        const isSystemDefault = isSystemDefaultDashboard(savedConfig);
-
-        if (isSystemDefault && isAdmin) {
-          await updateAdminDashboard.mutateAsync(materializeSystemDashboardDraft(localConfig, savedConfig));
-        } else {
-          const ownedCopy = savedConfig?.ownerId != null
-            ? savedConfig
-            : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
-          if (ownedCopy) {
-            await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, ownedCopy));
-          } else {
-            try {
-              await createDashboard.mutateAsync(materializeUserDashboardDraft(localConfig));
-            } catch {
-              // POST failed — stale cache likely hid an existing owned copy.
-              // Refetch by-slug then fall back to the list cache.
-              await qc.refetchQueries({ queryKey: ['dashboards', 'slug', localConfig.slug] });
-              const refreshedBySlug = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', localConfig.slug]);
-              const refreshedOwned =
-                refreshedBySlug?.ownerId != null
-                  ? refreshedBySlug
-                  : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
-              if (!refreshedOwned) throw new Error('Could not find owned dashboard after refetch');
-              await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, refreshedOwned));
-            }
-          }
-        }
-        exitEdit();
-      } catch (error) {
-        setSaveError(dashboardSaveErrorMessage(error));
-        // stay in edit mode
-      }
-    }
-
-    return (
-      <>
-        <span className="text-[11px] font-medium text-fg-tertiary">{isDirty ? 'Unsaved' : 'Dashboard'}</span>
-        <button
-          onClick={handleSave}
-          disabled={isPending}
-          title="Save changes"
-          className="p-2 rounded-lg bg-accent text-white disabled:opacity-40 hover:bg-accent/90 transition-colors"
-        >
-          <Save className="h-4 w-4" />
-        </button>
-        <button
-          onClick={exitEdit}
-          title="Discard changes"
-          className="p-2 rounded-lg border border-border hover:bg-bg-elevated transition-colors text-fg-tertiary hover:text-fg"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </>
-    );
-  };
-}
-
-function dashboardSaveErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return `Dashboard save failed: ${error.message}`;
-  }
-  return 'Dashboard save failed. Your unsaved edits are still open.';
-}
-
-export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: DashboardPageShellRenderState) {
-  return !isEditMode ? (
-    <button
-      onClick={enterEdit}
-      className="p-1 rounded-md text-fg-tertiary hover:text-fg hover:bg-bg-elevated transition-colors"
-      title="Edit dashboard"
-    >
-      <Edit2 className="h-4 w-4" />
-    </button>
-  ) : undefined;
 }
 
 export function CurrentVehicleStatePanel({

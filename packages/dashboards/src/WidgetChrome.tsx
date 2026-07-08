@@ -52,6 +52,9 @@ export const WidgetChrome = React.forwardRef<HTMLDivElement, WidgetChromeProps>(
       {...frameProps}
       ref={ref}
       data-widget-frame="edit"
+      data-widget-id={instance.id}
+      data-widget-type={instance.componentType}
+      data-widget-definition={instance.definitionId}
       data-editing={isEditing ? 'true' : 'false'}
       data-fixed-size={fixedSize ? 'true' : 'false'}
       className={[
