@@ -15,6 +15,12 @@ const metricMocks = vi.hoisted(() => ({
     { ts: '2026-05-02T00:00:00Z', value: 18 },
     { ts: '2026-05-03T00:00:00Z', value: 14 },
   ] as Array<{ ts: string; value: number | null }>,
+  metricSeriesCalls: [] as Array<{
+    vehicleId: string | null;
+    metric: string | null;
+    from: string | null;
+    to: string | null;
+  }>,
   batteryHealth: null as null | {
     usable_now_kwh: number | null;
     usable_new_kwh: number | null;
@@ -61,9 +67,15 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useMetricValue: () => ({
       data: metricMocks.value,
     }),
-    useMetricSeries: () => ({
-      data: metricMocks.series,
-    }),
+    useMetricSeries: (
+      vehicleId: string | null,
+      metric: string | null,
+      from: string | null,
+      to: string | null
+    ) => {
+      metricMocks.metricSeriesCalls.push({ vehicleId, metric, from, to });
+      return { data: metricMocks.series };
+    },
     useEfficiencySummary: () => ({ data: metricMocks.efficiencySummary, isLoading: false }),
     useBatteryHealth: () => ({ data: metricMocks.batteryHealth, isLoading: false }),
     useChargingSummary: () => ({ data: metricMocks.chargingSummary, isLoading: false }),
@@ -141,6 +153,7 @@ describe('dashboard sensor chips', () => {
     metricMocks.chargingSummary = null;
     metricMocks.efficiencySummary = { avg: 200, p10: 180, p90: 220, total_miles: 120 };
     metricMocks.vehicleStatus = null;
+    metricMocks.metricSeriesCalls = [];
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
@@ -247,6 +260,99 @@ describe('dashboard sensor chips', () => {
 
     expect(screen.getByText('5.0 mi/kWh')).toBeInTheDocument();
     expect(screen.queryByText('1.0 mi/kWh')).not.toBeInTheDocument();
+  });
+
+  it('uses latest finite avg gross efficiency bucket within the bounded timeframe', () => {
+    metricMocks.value = {
+      metric: 'avg_gross_efficiency',
+      value: 777,
+      unit: null,
+      label: 'Avg Gross Efficiency',
+      ts: '2026-05-07T00:00:00Z',
+    };
+    metricMocks.series = [
+      { ts: '2026-05-01T00:00:00Z', value: 8 },
+      { ts: '2026-05-02T00:00:00Z', value: null },
+      { ts: '2026-05-03T00:00:00Z', value: 13 },
+      { ts: '2026-05-04T00:00:00Z', value: null },
+      { ts: '2026-05-05T00:00:00Z', value: 31 },
+    ];
+
+    render(
+      <DashboardRenderer
+        config={config(true, false, {}, 'avg_gross_efficiency', 'Avg Gross Efficiency')}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByText('31')).toBeInTheDocument();
+    expect(screen.queryByText('777')).not.toBeInTheDocument();
+  });
+
+  it('uses latest finite outside temperature bucket within the bounded timeframe', () => {
+    metricMocks.value = {
+      metric: 'avg_outside_temp_c',
+      value: 999,
+      unit: null,
+      label: 'Avg Outside Temp',
+      ts: '2026-05-07T00:00:00Z',
+    };
+    metricMocks.series = [
+      { ts: '2026-05-01T00:00:00Z', value: 55 },
+      { ts: '2026-05-02T00:00:00Z', value: 48 },
+      { ts: '2026-05-03T00:00:00Z', value: null },
+      { ts: '2026-05-04T00:00:00Z', value: 62 },
+      { ts: '2026-05-05T00:00:00Z', value: null },
+    ];
+
+    render(
+      <DashboardRenderer
+        config={config(true, false, {}, 'avg_outside_temp_c', 'Avg Outside Temp')}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByText('62')).toBeInTheDocument();
+    expect(screen.queryByText('999')).not.toBeInTheDocument();
+  });
+
+  it('passes bounded timeframe bounds into metric series for latest-mode sensor chips', () => {
+    metricMocks.value = {
+      metric: 'avg_outside_temp_c',
+      value: 999,
+      unit: null,
+      label: 'Avg Outside Temp',
+      ts: '2026-05-07T00:00:00Z',
+    };
+    metricMocks.series = [
+      { ts: '2026-05-01T00:00:00Z', value: null },
+      { ts: '2026-05-02T00:00:00Z', value: 57 },
+      { ts: '2026-05-03T00:00:00Z', value: 63 },
+    ];
+
+    render(
+      <DashboardRenderer
+        config={config(true, false, {}, 'avg_outside_temp_c', 'Avg Outside Temp')}
+        ctx={{
+          ...defaultCtx,
+          from: '2026-04-22',
+          to: '2026-04-23',
+          timeframe: {
+            kind: 'custom',
+            from: new Date('2026-04-22T00:00:00Z'),
+            to: new Date('2026-04-23T00:00:00Z'),
+          },
+        }}
+      />
+    );
+
+    const call = metricMocks.metricSeriesCalls.at(-1);
+    expect(call).toEqual({
+      vehicleId: 'vehicle-1',
+      metric: 'avg_outside_temp_c',
+      from: '2026-04-22',
+      to: '2026-04-23',
+    });
   });
 
   it('renders composite sensor language without changing the compact chip visual', () => {
