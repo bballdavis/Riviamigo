@@ -46,7 +46,27 @@ export function TripDetailContent() {
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
   const [activeElapsedS, setActiveElapsedS] = React.useState<number | null>(null);
+  const pendingActiveElapsedSRef = React.useRef<number | null>(null);
+  const hoverFrameRef = React.useRef<number | null>(null);
   const isDark = useDocumentTheme();
+
+  const setActiveElapsedSThrottled = React.useCallback((value: number | null) => {
+    pendingActiveElapsedSRef.current = value;
+    if (hoverFrameRef.current !== null) return;
+
+    hoverFrameRef.current = requestAnimationFrame(() => {
+      hoverFrameRef.current = null;
+      const nextValue = pendingActiveElapsedSRef.current;
+      setActiveElapsedS((previous) => (previous === nextValue ? previous : nextValue));
+    });
+  }, []);
+
+  React.useEffect(() => () => {
+    if (hoverFrameRef.current !== null) {
+      cancelAnimationFrame(hoverFrameRef.current);
+      hoverFrameRef.current = null;
+    }
+  }, []);
 
   const { data: trip } = useTrip(tripId, defaultVehicleId);
   const { data: track, isLoading: trackLoading } = useTripTrack(tripId, defaultVehicleId);
@@ -109,7 +129,7 @@ export function TripDetailContent() {
   }, [timeline]);
 
   const activeTimelinePoint = React.useMemo(
-    () => getNearestTimelinePoint(timeline, activeElapsedS),
+    () => getNearestTimelinePointByElapsed(timeline, activeElapsedS),
     [timeline, activeElapsedS],
   );
 
@@ -199,7 +219,7 @@ export function TripDetailContent() {
                     data={timeline}
                     loading={chartLoading}
                     activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedS}
+                    onActiveElapsedSChange={setActiveElapsedSThrottled}
                   />
                 </div>
 
@@ -215,7 +235,6 @@ export function TripDetailContent() {
                     bins={speedBins}
                     loading={seriesLoading}
                     activeBinLabel={activeSpeedBinLabel}
-                    onActiveElapsedSChange={setActiveElapsedS}
                   />
                 </div>
 
@@ -232,7 +251,7 @@ export function TripDetailContent() {
                     data={timeline}
                     loading={seriesLoading}
                     activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedS}
+                    onActiveElapsedSChange={setActiveElapsedSThrottled}
                   />
                 </div>
               </div>
@@ -247,7 +266,7 @@ export function TripDetailContent() {
                     data={timeline}
                     loading={trackLoading}
                     activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedS}
+                    onActiveElapsedSChange={setActiveElapsedSThrottled}
                   />
                 </div>
 
@@ -264,7 +283,7 @@ export function TripDetailContent() {
                     data={timeline}
                     loading={seriesLoading}
                     activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedS}
+                    onActiveElapsedSChange={setActiveElapsedSThrottled}
                   />
                 </div>
               </div>
