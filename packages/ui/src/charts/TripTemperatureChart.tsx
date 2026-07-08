@@ -14,6 +14,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatTemp } from '../lib/utils';
+import { getActiveElapsedSFromChartState } from './TripChartSync';
 
 export interface TripTemperaturePoint {
   elapsed_s: number;
@@ -30,10 +31,6 @@ export interface TripTemperatureChartProps {
   activeElapsedS?: number | null;
   onActiveElapsedSChange?: (value: number | null) => void;
 }
-
-type ActivePayloadState<T> = {
-  activePayload?: Array<{ payload?: T }>;
-};
 
 function formatElapsed(seconds: number) {
   const min = Math.floor(seconds / 60);
@@ -74,10 +71,15 @@ export function TripTemperatureChart({
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
         data={chartData}
+        syncId="trip-timeline-sync"
+        syncMethod="value"
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
-          const payload = (state as ActivePayloadState<TripTemperaturePoint> | undefined)?.activePayload?.[0]?.payload;
-          onActiveElapsedSChange?.(payload?.elapsed_s ?? null);
+          const nextElapsed = getActiveElapsedSFromChartState<TripTemperaturePoint>(
+            state as Parameters<typeof getActiveElapsedSFromChartState>[0],
+            data,
+          );
+          onActiveElapsedSChange?.(nextElapsed);
         }}
         onMouseLeave={() => onActiveElapsedSChange?.(null)}
       >

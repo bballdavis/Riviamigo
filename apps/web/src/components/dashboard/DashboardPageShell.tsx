@@ -32,6 +32,8 @@ export interface DashboardPageShellRenderState {
   ctx: WidgetCtx;
   timeframe: DashboardTimeframe;
   range: DateRange | null;
+  chargeSessionDayLocal?: string | null;
+  setChargeSessionDayLocal?: (dayLocal: string | null) => void;
   setTimeframe: React.Dispatch<React.SetStateAction<DashboardTimeframe>>;
   enterEdit: () => void;
   exitEdit: () => void;
@@ -74,6 +76,7 @@ function DashboardPageShellContent({
   const [timeframe, setTimeframe] = useState<DashboardTimeframe>(
     () => storedTimeframe ?? DEFAULT_TIMEFRAME,
   );
+  const [chargeSessionDayLocal, setChargeSessionDayLocal] = useState<string | null>(null);
   const [efficiencyDisplay, setEfficiencyDisplayState] = useState<EfficiencyDisplay>(() => getEfficiencyDisplay());
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
   const range = useMemo(() => getTimeframeRange(timeframe), [timeframe]);
@@ -89,11 +92,11 @@ function DashboardPageShellContent({
   const [localConfig, setLocalConfig] = useState<DashboardConfig | null>(null);
   const currentEditMode = controlledEditMode ?? internalEditMode;
   const activeConfig = localConfig ?? savedConfig;
-  const ctx = useMemo<WidgetCtx>(
-    () => ({ vehicleId: effectiveVehicleId, timeframe, from, to }),
-    [effectiveVehicleId, timeframe, from, to],
-  );
   const previousEditModeRef = useRef(currentEditMode);
+
+  const setChargeSessionDayFilter = React.useCallback((next: string | null) => {
+    setChargeSessionDayLocal(next);
+  }, []);
 
   function setEditMode(next: boolean) {
     if (onEditModeChange) {
@@ -125,6 +128,22 @@ function DashboardPageShellContent({
       window.removeEventListener('storage', handleUnits);
     };
   }, []);
+
+  useEffect(() => {
+    setChargeSessionDayLocal(null);
+  }, [effectiveVehicleId, timeframe]);
+
+  const ctx = useMemo<WidgetCtx>(
+    () => ({
+      vehicleId: effectiveVehicleId,
+      timeframe,
+      from,
+      to,
+      chargeSessionDayLocal,
+      setChargeSessionDayLocal: setChargeSessionDayFilter,
+    }),
+    [effectiveVehicleId, timeframe, from, to, chargeSessionDayLocal, setChargeSessionDayFilter],
+  );
 
   useEffect(() => {
     const wasEditMode = previousEditModeRef.current;
@@ -170,6 +189,8 @@ function DashboardPageShellContent({
     ctx,
     timeframe,
     range,
+    chargeSessionDayLocal,
+    setChargeSessionDayLocal: setChargeSessionDayFilter,
     setTimeframe,
     enterEdit,
     exitEdit,

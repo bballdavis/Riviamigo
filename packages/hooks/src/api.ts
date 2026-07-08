@@ -766,7 +766,16 @@ class ApiClient {
 
   // ── Charging ──────────────────────────────────────────────────────────────
 
-  async listChargeSessions(vehicleId: string, from: string | null, to: string | null, page = 1, perPage = 25, search = '', lifetime = false) {
+  async listChargeSessions(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    page = 1,
+    perPage = 25,
+    search = '',
+    lifetime = false,
+    sessionDayLocal: string | null = null,
+  ) {
     const offset = (page - 1) * perPage;
     const trimmedSearch = search.trim();
     const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
@@ -777,6 +786,7 @@ class ApiClient {
       limit: perPage,
       offset,
       ...(trimmedSearch ? { search: trimmedSearch } : {}),
+      ...(sessionDayLocal ? { session_day_local: sessionDayLocal } : {}),
     });
     const normalized = normalizePaginated(response, page, perPage);
     return {

@@ -6,14 +6,14 @@
 import React from 'react';
 
 export const PageLayout = ({ children, title, titleAction, subtitle, actions }: {
-  children: React.ReactNode; title: string; titleAction?: React.ReactNode; subtitle?: string; actions?: React.ReactNode;
+  children: React.ReactNode; title: string; titleAction?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode;
 }) => (
   <div data-testid="page-layout">
     <div>
       {titleAction}
       <h1>{title}</h1>
     </div>
-    {subtitle && <p>{subtitle}</p>}
+    {subtitle && <div>{subtitle}</div>}
     {actions}
     {children}
   </div>
@@ -37,7 +37,7 @@ export const StatCard = ({ label, value, unit, detail }: {
 export const StatCardSkeleton = () => <div data-testid="stat-skeleton" />;
 
 export const ChartSection = ({ children, title, subtitle }: {
-  children: React.ReactNode; title: string; subtitle?: string; actions?: React.ReactNode;
+  children: React.ReactNode; title: string; subtitle\?: React.ReactNode; actions?: React.ReactNode;
 }) => (
   <div data-testid={`chart-${title.toLowerCase().replace(/\s+/g, '-')}`}>
     <span>{title}</span>
@@ -53,7 +53,7 @@ export const MetricTabs = ({
   active: string;
   onChange: (k: string) => void;
   title?: string;
-  subtitle?: string;
+  subtitle\?: React.ReactNode;
   children: React.ReactNode;
   dropdownThreshold?: number;
   actions?: React.ReactNode;
@@ -181,3 +181,4 @@ export const Input = ({ label, placeholder, type, value, onChange, required }: {
 
 export const Skeleton = ({ className }: { className?: string }) => <div className={className} />;
 export const ChartSkeleton = ({ className }: { className?: string }) => <div className={className} />;
+

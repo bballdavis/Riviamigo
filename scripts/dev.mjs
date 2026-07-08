@@ -25,6 +25,7 @@ const requestedPorts = {
 };
 
 let ports = { ...requestedPorts };
+const composeProjectName = process.env.DEV_COMPOSE_PROJECT_NAME || process.env.COMPOSE_PROJECT_NAME || 'riviamigo';
 
 const urls = {
   get apiHealth() {
@@ -180,6 +181,7 @@ function apiEnv() {
     S3_SECRET_KEY: 'deadbeef0000000000000000000000000000000000000000000000000000cafe',
     PORT: String(ports.api),
     ALLOWED_ORIGINS: webOrigins().join(','),
+    RIVIAMIGO_SKIP_SQLX_MIGRATIONS: '1',
     // Dev stack is served over http://localhost (and often LAN IPs), so
     // refresh cookies must not be marked Secure or browser reload will drop
     // session continuity and trigger repeated 401/WS reconnect churn.
@@ -252,7 +254,7 @@ async function allocateRuntimePorts() {
   process.env.DEV_GARAGE_PORT = String(garageApi);
   process.env.DEV_GARAGE_ADMIN_PORT = String(garageAdmin);
   process.env.DEV_WEB_ORIGINS = webOrigins().join(',');
-  process.env.COMPOSE_PROJECT_NAME = `riviamigo-${web}`;
+  process.env.COMPOSE_PROJECT_NAME = composeProjectName;
 }
 
 async function assertPortAvailable(port, label) {
@@ -285,7 +287,7 @@ async function waitForHttp(url, child, label, timeoutMs = 30000) {
 }
 
 async function startInfrastructure() {
-  log('Starting infrastructure (TimescaleDB, Redis, Garage)...');
+  log(`Starting infrastructure (TimescaleDB, Redis, Garage) for ${composeProjectName}...`);
   await run('docker', ['compose', '-f', composeFile, 'up', '-d', 'timescaledb', 'redis', 'garage']);
 
   const deadline = Date.now() + 60000;

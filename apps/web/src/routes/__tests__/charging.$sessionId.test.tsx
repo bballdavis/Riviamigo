@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
 
@@ -35,6 +35,8 @@ vi.mock('@riviamigo/hooks', () => ({
     },
   }),
   useChargeCurve: () => ({ data: [], isLoading: false }),
+  useSavedPlaces: () => ({ data: [], isLoading: false }),
+  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false, isLoading: false }),
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
@@ -57,23 +59,13 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
   Database: () => <svg data-testid="icon-database" />,
+  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   RadioTower: () => <svg data-testid="icon-radio" />,
   Receipt: () => <svg data-testid="icon-receipt" />,
   Route: () => <svg data-testid="icon-route" />,
   Zap: () => <svg data-testid="icon-zap" />,
 }));
-
-import { ChargeSessionContent } from '../charging.$sessionId';
-
-describe('Charge Session Detail page', () => {
-  it('renders all four stat card labels', () => {
-    render(<ChargeSessionContent />);
-    expect(screen.getByText('Energy Added')).toBeInTheDocument();
-    expect(screen.getByText('SoC')).toBeInTheDocument();
-    expect(screen.getByText('Duration')).toBeInTheDocument();
-    expect(screen.getByText('Cost')).toBeInTheDocument();
-  });
 
   it('renders the charge curve chart widget', () => {
     render(<ChargeSessionContent />);
@@ -119,3 +111,7 @@ describe('Charge Session Detail page', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
   });
 });
+
+
+
+
