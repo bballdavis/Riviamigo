@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import '../../../../packages/dashboards/src/widgets/sensor/SensorChipWidget';
 import '../../../../packages/dashboards/src/widgets/table/TripStatWidget';
+import { DashboardGrid } from '../../../../packages/dashboards/src/DashboardGrid';
 import GridEditor from '../../../../packages/dashboards/src/GridEditor';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
@@ -58,6 +59,14 @@ function getEditorStyles() {
 }
 
 describe('GridEditor overlays', () => {
+  it('keeps edit-only overlays out of the view grid chrome', () => {
+    render(<DashboardGrid widgets={BASE_CONFIG.widgets} ctx={BASE_CTX} />);
+
+    expect(screen.getByTestId('widget-host-22222222-2222-2222-2222-222222222222')).toBeInTheDocument();
+    expect(screen.queryByTestId('widget-overlay-left-22222222-2222-2222-2222-222222222222')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit widget settings' })).toBeNull();
+  });
+
   it('renders shared edit chrome for resizable and fixed widgets, while only resizable widgets have usable resize handles', () => {
     render(
       <GridEditor
@@ -84,10 +93,13 @@ describe('GridEditor overlays', () => {
 
     const resizableCard = screen.getByTestId('widget-host-22222222-2222-2222-2222-222222222222').closest('[data-fixed-size="false"]');
     const fixedCard = screen.getByTestId('widget-host-33333333-3333-3333-3333-333333333333').closest('[data-fixed-size="true"]');
+    const resizableGridItem = screen.getByTestId('widget-host-22222222-2222-2222-2222-222222222222').closest('.react-grid-item');
     const fixedGridItem = screen.getByTestId('widget-host-33333333-3333-3333-3333-333333333333').closest('.react-grid-item');
 
-    expect(resizableCard?.querySelector('.react-resizable-handle')).not.toBeNull();
-    expect(fixedCard?.querySelector('.react-resizable-handle')).not.toBeNull();
+    expect(resizableCard).not.toBeNull();
+    expect(fixedCard).not.toBeNull();
+    expect(resizableGridItem?.querySelector('.react-resizable-handle')).not.toBeNull();
+    expect(fixedGridItem?.querySelector('.react-resizable-handle')).not.toBeNull();
     expect(fixedGridItem?.className).toContain('react-resizable-hide');
     expect(getEditorStyles()).toContain('.rgl-editor .react-grid-item:has(.rgl-card[data-fixed-size="true"]) .react-resizable-handle');
   });

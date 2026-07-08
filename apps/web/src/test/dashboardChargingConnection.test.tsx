@@ -49,6 +49,15 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useMetricValue: () => ({ data: null }),
     useMetricSeries: () => ({ data: [] }),
     useBatteryHealth: () => ({ data: null, isLoading: false }),
+    useEfficiencySummary: () => ({
+      data: {
+        avg: null,
+        p10: null,
+        p90: null,
+        total_miles: 0,
+      },
+      isLoading: false,
+    }),
     useChargingSummary: () => ({
       data: {
         session_count: 6,

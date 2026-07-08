@@ -20,7 +20,7 @@ export const chargingDetailRoute = createRoute({
   component: ChargeSessionContent,
 });
 
-function ChargeSessionContent() {
+export function ChargeSessionContent() {
   return <AuthGuard><ChargeSessionContentInner /></AuthGuard>;
 }
 
@@ -204,7 +204,7 @@ function SessionLocationChip({
     [places],
   );
   const hasLocation = !!currentLocationName?.trim();
-  const chipLabel = hasLocation ? currentLocationName : 'Add location';
+  const chipLabel = currentLocationName?.trim() || 'Add location';
 
   const handleSelect = (placeId: string | null, placeName: string | null) => {
     onChange(placeId, placeName);

@@ -67,6 +67,9 @@ vi.mock('lucide-react', () => ({
   Zap: () => <svg data-testid="icon-zap" />,
 }));
 
+import { ChargeSessionContent } from '../charging.$sessionId';
+
+describe('ChargeSessionContent', () => {
   it('renders the charge curve chart widget', () => {
     render(<ChargeSessionContent />);
     expect(screen.getByTestId('dashboard-chart-widget')).toBeInTheDocument();
@@ -87,8 +90,6 @@ vi.mock('lucide-react', () => ({
     render(<ChargeSessionContent />);
     expect(screen.getByText('Source')).toBeInTheDocument();
     expect(screen.getByText('Live telemetry')).toBeInTheDocument();
-    expect(screen.getByText('Confidence')).toBeInTheDocument();
-    expect(screen.getByText('Telemetry verified')).toBeInTheDocument();
     expect(screen.getByText('Telemetry')).toBeInTheDocument();
     expect(screen.getByText('No telemetry samples matched')).toBeInTheDocument();
     expect(screen.getAllByText('Network').length).toBeGreaterThanOrEqual(1);

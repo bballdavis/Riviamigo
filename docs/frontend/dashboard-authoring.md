@@ -150,11 +150,29 @@ If you need to change one of those flows, change the shared shell or the shared 
 
 Dashboard configs are sanitized at the dashboard package boundary before render, import, and save. Sanitization clamps grid positions, enforces fixed-size widgets, and keeps restored/imported JSON from violating current editor capabilities.
 
+Use the dashboard model helpers for shared editing behavior:
+
+- `dashboardKey` scopes drafts to the active dashboard identity.
+- `materializeUserDashboardDraft` saves a user-owned copy without leaking system-default metadata.
+- `materializeSystemDashboardDraft` preserves system-default identity for admin/super-user edits.
+- `applyWidgetLayout` is the shared layout patch path for drag and resize changes.
+- `resolveDashboardViewWidgets` owns view-only visibility transforms such as plugged/unplugged charging widgets.
+
 In edit mode, widget chrome is split by purpose:
 
 - hover or selected state reveals move and edit affordances on the widget itself
 - resize handles appear only for resizable widgets
 - destructive removal lives in the right-side widget editor and requires confirmation
+
+`WidgetChrome` owns the shared frame and edit overlay. Do not add per-widget or per-route hover edit buttons. `GridEditor` should only decide selection, layout, palette, and drawer state, then delegate frame rendering to `WidgetChrome`.
+
+Dashboard layout persistence remains explicit-save:
+
+- Dragging, resizing, adding, deleting, and configuring widgets update the shell's local draft.
+- Save writes the whole sanitized dashboard config through the dashboard mutation hooks.
+- Cancel discards the local draft and returns to the last saved config.
+- Successful mutations update the dashboard list and by-slug caches immediately, then invalidate for server truth.
+- Failed saves keep edit mode open and surface an in-page error so the user's draft is not lost.
 
 Use Settings > Dashboards for durable dashboard management:
 

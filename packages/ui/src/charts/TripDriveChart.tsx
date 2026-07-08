@@ -12,7 +12,7 @@ import {
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
-import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
 import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripDrivePoint {
@@ -103,7 +103,7 @@ export function TripDriveChart({
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripDrivePoint>(
-            state as Parameters<typeof getActiveElapsedSFromChartState>[0],
+            state as TripChartMouseState<TripDrivePoint>,
             measuredData,
             activeElapsedS,
           );

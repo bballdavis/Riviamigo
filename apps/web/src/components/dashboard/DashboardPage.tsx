@@ -5,6 +5,10 @@ import {
   useCreateDashboard,
   useUpdateDashboard,
   useUpdateAdminDashboard,
+  findOwnedDashboardBySlug,
+  isSystemDefaultDashboard,
+  materializeSystemDashboardDraft,
+  materializeUserDashboardDraft,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
@@ -25,9 +29,11 @@ export interface DashboardPageProps {
   slug: string;
   /** Override the page title shown in PageLayout. */
   title?: string | undefined;
+  /** Show the page-level efficiency unit toggle next to the date range picker. */
+  showEfficiencyDisplayToggle?: boolean | undefined;
 }
 
-export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
+export function DashboardPage({ navKey, slug, title, showEfficiencyDisplayToggle = false }: DashboardPageProps) {
   const updateDashboard = useUpdateDashboard();
   const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
@@ -42,6 +48,7 @@ export function DashboardPage({ navKey, slug, title }: DashboardPageProps) {
       title={title}
       renderTitleAction={renderDefaultDashboardTitleAction}
       renderActions={createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin })}
+      showEfficiencyDisplayToggle={showEfficiencyDisplayToggle}
     />
   );
 }
@@ -58,51 +65,28 @@ export function canManageSystemDashboards(role: string | null | undefined) {
   return role === 'admin' || role === 'super_user';
 }
 
-function findOwnedDashboardBySlug(
-  dashboards: DashboardConfig[] | undefined,
-  slug: string,
-): DashboardConfig | undefined {
-  return dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null);
-}
-
 export function createDefaultDashboardEditActions({ updateDashboard, updateAdminDashboard, createDashboard, qc, isAdmin }: DashboardEditMutations) {
-  return function renderDefaultDashboardEditActions({ isEditMode, localConfig, savedConfig, exitEdit }: DashboardPageShellRenderState) {
+  return function renderDefaultDashboardEditActions({ isEditMode, isDirty, localConfig, savedConfig, exitEdit, setSaveError }: DashboardPageShellRenderState) {
     if (!isEditMode) return undefined;
     const isPending = updateDashboard.isPending || updateAdminDashboard.isPending || createDashboard.isPending;
 
     async function handleSave() {
+      setSaveError(null);
       if (!localConfig || !savedConfig) { exitEdit(); return; }
       try {
-        const isSystemDefault = savedConfig.isDefault && !savedConfig.ownerId;
+        const isSystemDefault = isSystemDefaultDashboard(savedConfig);
 
         if (isSystemDefault && isAdmin) {
-          await updateAdminDashboard.mutateAsync({
-            ...localConfig,
-            id: savedConfig.id,
-            ownerId: savedConfig.ownerId,
-            isDefault: true,
-            isLocked: savedConfig.isLocked,
-          });
+          await updateAdminDashboard.mutateAsync(materializeSystemDashboardDraft(localConfig, savedConfig));
         } else {
           const ownedCopy = savedConfig?.ownerId != null
             ? savedConfig
             : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug) ?? null;
           if (ownedCopy) {
-            await updateDashboard.mutateAsync({
-              ...localConfig,
-              id: ownedCopy.id,
-              ownerId: ownedCopy.ownerId,
-              isDefault: false,
-              isLocked: false,
-            });
+            await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, ownedCopy));
           } else {
             try {
-              await createDashboard.mutateAsync({
-                ...localConfig,
-                isDefault: false,
-                isLocked: false,
-                ownerId: null,
-              });
+              await createDashboard.mutateAsync(materializeUserDashboardDraft(localConfig));
             } catch {
               // POST failed — stale cache likely hid an existing owned copy.
               // Refetch by-slug then fall back to the list cache.
@@ -113,25 +97,20 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
                   ? refreshedBySlug
                   : findOwnedDashboardBySlug(qc.getQueryData<DashboardConfig[]>(['dashboards']), localConfig.slug);
               if (!refreshedOwned) throw new Error('Could not find owned dashboard after refetch');
-              await updateDashboard.mutateAsync({
-                ...localConfig,
-                id: refreshedOwned.id,
-                ownerId: refreshedOwned.ownerId,
-                isDefault: false,
-                isLocked: false,
-              });
+              await updateDashboard.mutateAsync(materializeUserDashboardDraft(localConfig, refreshedOwned));
             }
           }
         }
         exitEdit();
-      } catch {
+      } catch (error) {
+        setSaveError(dashboardSaveErrorMessage(error));
         // stay in edit mode
       }
     }
 
     return (
       <>
-        <span className="text-[11px] font-medium text-fg-tertiary">Dashboard</span>
+        <span className="text-[11px] font-medium text-fg-tertiary">{isDirty ? 'Unsaved' : 'Dashboard'}</span>
         <button
           onClick={handleSave}
           disabled={isPending}
@@ -150,6 +129,13 @@ export function createDefaultDashboardEditActions({ updateDashboard, updateAdmin
       </>
     );
   };
+}
+
+function dashboardSaveErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return `Dashboard save failed: ${error.message}`;
+  }
+  return 'Dashboard save failed. Your unsaved edits are still open.';
 }
 
 export function renderDefaultDashboardTitleAction({ isEditMode, enterEdit }: DashboardPageShellRenderState) {
