@@ -100,6 +100,11 @@ function formatSessionCount(count: number) {
   return `${count} session${count === 1 ? '' : 's'}`;
 }
 
+function nextAxisMax(value: number) {
+  if (value <= 0) return 1;
+  return Math.ceil(value / 100) * 100;
+}
+
 export function DailyChargeSessionsChart({
   daily,
   dailySessions,
@@ -229,6 +234,9 @@ export function DailyChargeSessionsChart({
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = chartHeight - margin.top - margin.bottom;
   const maxEnergy = Math.max(1, ...days.map((day) => day.totalEnergyKwh));
+  const axisMaxEnergy = nextAxisMax(maxEnergy);
+  const topPaddingPx = 8;
+  const renderHeight = Math.max(1, innerHeight - topPaddingPx);
   const slotWidth = innerWidth / Math.max(days.length, 1);
   const barWidth = Math.min(78, slotWidth * 0.66);
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
@@ -310,7 +318,7 @@ export function DailyChargeSessionsChart({
         <defs>
           {days.map((day, dayIndex) => {
             const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-            const barHeight = (day.totalEnergyKwh / maxEnergy) * innerHeight;
+            const barHeight = (day.totalEnergyKwh / axisMaxEnergy) * renderHeight;
             if (barHeight <= 0) return null;
             const y = margin.top + innerHeight - barHeight;
             const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
@@ -324,7 +332,7 @@ export function DailyChargeSessionsChart({
 
         {yTicks.map((fraction) => {
           const y = margin.top + innerHeight - fraction * innerHeight;
-          const value = maxEnergy * fraction;
+          const value = axisMaxEnergy * fraction;
           return (
             <g key={`grid-${fraction}`}>
               <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke={CHART_COLORS.grid} strokeWidth={1} />
@@ -345,11 +353,11 @@ export function DailyChargeSessionsChart({
 
         {days.map((day, dayIndex) => {
           const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-          const barHeight = (day.totalEnergyKwh / maxEnergy) * innerHeight;
+          const barHeight = (day.totalEnergyKwh / axisMaxEnergy) * renderHeight;
           const clippedBarHeight = Math.max(0, barHeight);
           const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
           const isActive = hoverState?.dayLocal === day.day_local;
-          const totalLabelY = margin.top + innerHeight - (day.totalEnergyKwh / maxEnergy) * innerHeight - 8;
+          const totalLabelY = margin.top + innerHeight - (day.totalEnergyKwh / axisMaxEnergy) * renderHeight - 8;
           const sessionCount = day.groups.reduce((sum, group) => sum + group.sessionCount, 0);
           const isSelected = isDaySelected(day.day_local);
 
@@ -380,14 +388,14 @@ export function DailyChargeSessionsChart({
                 <g clipPath={`url(#${clipId})`} opacity={isActive || isSelected ? 1 : 0.92}>
                 {day.groups.map((group, groupIndex) => {
                   const segmentHeight = day.totalEnergyKwh > 0
-                    ? (group.energyKwh / maxEnergy) * innerHeight
+                    ? (group.energyKwh / axisMaxEnergy) * renderHeight
                     : 0;
                   if (segmentHeight <= 0) return null;
 
                   const y = margin.top + innerHeight - clippedBarHeight
                     + day.groups
                       .slice(0, groupIndex)
-                      .reduce((sum, candidate) => sum + (day.totalEnergyKwh > 0 ? (candidate.energyKwh / maxEnergy) * innerHeight : 0), 0);
+                      .reduce((sum, candidate) => sum + (day.totalEnergyKwh > 0 ? (candidate.energyKwh / axisMaxEnergy) * renderHeight : 0), 0);
 
                   return (
                     <rect

@@ -32,10 +32,6 @@ function blendColor(fromHex: string, toHex: string, ratio: number) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-type ActivePayloadState<T> = {
-  activePayload?: Array<{ payload?: T }>;
-};
-
 export interface SpeedHistogramBin {
   label: string;
   min: number;
@@ -49,7 +45,6 @@ export interface SpeedHistogramChartProps {
   loading?: boolean;
   height?: number;
   activeBinLabel?: string | null;
-  onActiveElapsedSChange?: (value: number | null) => void;
 }
 
 export function SpeedHistogramChart({
@@ -57,7 +52,6 @@ export function SpeedHistogramChart({
   loading = false,
   height = 280,
   activeBinLabel = null,
-  onActiveElapsedSChange,
 }: SpeedHistogramChartProps) {
   if (loading) {
     return (
@@ -84,11 +78,6 @@ export function SpeedHistogramChart({
       <BarChart
         data={bins}
         margin={CHART_MARGINS.withYAxis}
-        onMouseMove={(state) => {
-          const payload = (state as ActivePayloadState<SpeedHistogramBin> | undefined)?.activePayload?.[0]?.payload;
-          onActiveElapsedSChange?.(payload?.sample_elapsed_s ?? null);
-        }}
-        onMouseLeave={() => onActiveElapsedSChange?.(null)}
       >
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
         <XAxis

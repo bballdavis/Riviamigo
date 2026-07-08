@@ -14,6 +14,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatPressure } from '../lib/utils';
 import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripTirePressurePoint {
   elapsed_s: number;
@@ -68,6 +69,34 @@ export function TripTirePressureChart({
 
   const measuredData = React.useMemo(
     () => data.filter((point) => point.tire_fl_psi != null || point.tire_fr_psi != null || point.tire_rl_psi != null || point.tire_rr_psi != null),
+    [data],
+  );
+  const flDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.tire_fl_psi != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.accent },
+    ),
+    [data],
+  );
+  const frDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.tire_fr_psi != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.sky },
+    ),
+    [data],
+  );
+  const rlDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.tire_rl_psi != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.success },
+    ),
+    [data],
+  );
+  const rrDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.tire_rr_psi != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.warning },
+    ),
     [data],
   );
 
@@ -132,7 +161,7 @@ export function TripTirePressureChart({
           name="tire_fl_psi"
           stroke={CHART_COLORS.accent}
           strokeWidth={1.8}
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.accent }}
+          dot={flDot}
           activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.accent }}
           isAnimationActive={false}
           connectNulls
@@ -143,7 +172,7 @@ export function TripTirePressureChart({
           name="tire_fr_psi"
           stroke={CHART_COLORS.sky}
           strokeWidth={1.8}
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.sky }}
+          dot={frDot}
           activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.sky }}
           isAnimationActive={false}
           connectNulls
@@ -154,7 +183,7 @@ export function TripTirePressureChart({
           name="tire_rl_psi"
           stroke={CHART_COLORS.success}
           strokeWidth={1.8}
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.success }}
+          dot={rlDot}
           activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.success }}
           isAnimationActive={false}
           connectNulls
@@ -165,7 +194,7 @@ export function TripTirePressureChart({
           name="tire_rr_psi"
           stroke={CHART_COLORS.warning}
           strokeWidth={1.8}
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.warning }}
+          dot={rrDot}
           activeDot={{ r: 3.8, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: CHART_COLORS.warning }}
           isAnimationActive={false}
           connectNulls

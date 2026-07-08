@@ -15,6 +15,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatTemp } from '../lib/utils';
 import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { createSampleDotRenderer, getTripTemperatureDomain, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripTemperaturePoint {
   elapsed_s: number;
@@ -71,6 +72,31 @@ export function TripTemperatureChart({
     () => data.filter((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null),
     [data],
   );
+  const temperatureDomain = React.useMemo(
+    () => getTripTemperatureDomain(data.flatMap((point) => [point.outside_temp_c, point.cabin_temp_c, point.driver_temp_c])),
+    [data],
+  );
+  const outsideTempDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.outside_temp_c != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.emerald },
+    ),
+    [data],
+  );
+  const cabinTempDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.cabin_temp_c != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.orange },
+    ),
+    [data],
+  );
+  const driverSetpointDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.driver_temp_c != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.yellow },
+    ),
+    [data],
+  );
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -102,6 +128,7 @@ export function TripTemperatureChart({
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
+          domain={temperatureDomain ?? ['auto', 'auto']}
           tickFormatter={(value: number) => formatTemp(value)}
           width={34}
         />
@@ -144,7 +171,7 @@ export function TripTemperatureChart({
           name="Outside Temp"
           stroke={CHART_COLORS.emerald}
           strokeWidth={1.8}
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.emerald }}
+          dot={outsideTempDot}
           activeDot={{ r: 3.8, fill: CHART_COLORS.emerald, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -155,7 +182,7 @@ export function TripTemperatureChart({
           name="Cabin Temp"
           stroke={CHART_COLORS.orange}
           strokeWidth={1.8}
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.orange }}
+          dot={cabinTempDot}
           activeDot={{ r: 3.8, fill: CHART_COLORS.orange, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -167,7 +194,7 @@ export function TripTemperatureChart({
           stroke={CHART_COLORS.yellow}
           strokeWidth={1.6}
           strokeDasharray="4 4"
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.yellow }}
+          dot={driverSetpointDot}
           activeDot={{ r: 3.8, fill: CHART_COLORS.yellow, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls

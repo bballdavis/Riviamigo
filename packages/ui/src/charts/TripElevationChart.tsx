@@ -13,6 +13,7 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { colors } from '../tokens/colors';
 import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripElevationPoint {
   elapsed_s: number;
@@ -57,6 +58,13 @@ export function TripElevationChart({
 
   const measuredData = React.useMemo(
     () => data.filter((point) => point.altitude_m != null),
+    [data],
+  );
+  const elevationDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.altitude_m != null),
+      { r: 2, strokeWidth: 0, fill: colors.dataViz.teal },
+    ),
     [data],
   );
 
@@ -129,7 +137,7 @@ export function TripElevationChart({
           stroke={colors.dataViz.teal}
           strokeWidth={1.8}
           fill="url(#tripElevationGradient)"
-          dot={{ r: 2, strokeWidth: 0, fill: colors.dataViz.teal }}
+          dot={elevationDot}
           activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: colors.dataViz.teal }}
           isAnimationActive={false}
           connectNulls

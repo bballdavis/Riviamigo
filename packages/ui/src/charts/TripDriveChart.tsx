@@ -13,6 +13,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripDrivePoint {
   elapsed_s: number;
@@ -69,6 +70,27 @@ export function TripDriveChart({
 
   const measuredData = React.useMemo(
     () => data.filter((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null),
+    [data],
+  );
+  const powerDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.power_kw != null),
+      { r: 2.1, strokeWidth: 0, fill: CHART_COLORS.accent },
+    ),
+    [data],
+  );
+  const regenDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.regen_kw != null),
+      { r: 2.1, strokeWidth: 0, fill: CHART_COLORS.sky },
+    ),
+    [data],
+  );
+  const speedDot = React.useMemo(
+    () => createSampleDotRenderer(
+      getVisibleSampleElapsedSet(data, (point) => point.speed_mph != null),
+      { r: 2, strokeWidth: 0, fill: CHART_COLORS.warning },
+    ),
     [data],
   );
 
@@ -140,7 +162,7 @@ export function TripDriveChart({
           name="Power"
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
-          dot={{ r: 2.1, strokeWidth: 0, fill: CHART_COLORS.accent }}
+          dot={powerDot}
           activeDot={{ r: 4.2, fill: CHART_COLORS.accent, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -152,7 +174,7 @@ export function TripDriveChart({
           name="Regen"
           stroke={CHART_COLORS.sky}
           strokeWidth={1.6}
-          dot={{ r: 2.1, strokeWidth: 0, fill: CHART_COLORS.sky }}
+          dot={regenDot}
           activeDot={{ r: 4.2, fill: CHART_COLORS.sky, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
@@ -165,7 +187,7 @@ export function TripDriveChart({
           stroke={CHART_COLORS.warning}
           strokeWidth={1.4}
           strokeDasharray="4 4"
-          dot={{ r: 2, strokeWidth: 0, fill: CHART_COLORS.warning }}
+          dot={speedDot}
           activeDot={{ r: 4, fill: CHART_COLORS.warning, stroke: 'var(--rm-bg)', strokeWidth: 2 }}
           isAnimationActive={false}
           connectNulls
