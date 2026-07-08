@@ -32,6 +32,10 @@ function blendColor(fromHex: string, toHex: string, ratio: number) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+type ActivePayloadState<T> = {
+  activePayload?: Array<{ payload?: T }>;
+};
+
 export interface SpeedHistogramBin {
   label: string;
   min: number;
@@ -39,10 +43,6 @@ export interface SpeedHistogramBin {
   count: number;
   sample_elapsed_s: number | null;
 }
-
-type ActivePayloadState<T> = {
-  activePayload?: Array<{ payload?: T }>;
-};
 
 export interface SpeedHistogramChartProps {
   bins: SpeedHistogramBin[];
@@ -120,11 +120,11 @@ export function SpeedHistogramChart({
             const intensity = (bin.count - minCount) / countRange;
             const fill = blendColor(CHART_COLORS.success, CHART_COLORS.accent, intensity);
             return (
-            <Cell
-              key={bin.label}
-              fill={fill}
-              fillOpacity={bin.label === activeBinLabel ? 0.98 : 0.82}
-            />
+              <Cell
+                key={bin.label}
+                fill={fill}
+                fillOpacity={bin.label === activeBinLabel ? 0.98 : 0.82}
+              />
             );
           })}
         </Bar>

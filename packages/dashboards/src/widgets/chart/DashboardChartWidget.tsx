@@ -418,6 +418,8 @@ export function DashboardChartRenderer({
           dailySessions={dailyChargeSessions}
           loading={chargingChartSeriesLoading}
           height={height}
+          selectedDayLocal={ctx.chargeSessionDayLocal ?? null}
+          onDayClick={ctx.setChargeSessionDayLocal}
         />
       );
     case 'charging_weekly_energy':
@@ -558,6 +560,8 @@ function ChargingSessionsChart({
   dailySessions,
   loading,
   height,
+  selectedDayLocal,
+  onDayClick,
 }: {
   definition: DashboardChartDefinition;
   daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number; session_count: number }>;
@@ -572,6 +576,8 @@ function ChargingSessionsChart({
   }>;
   loading: boolean;
   height: number;
+  selectedDayLocal?: string | null;
+  onDayClick?: (dayLocal: string | null) => void;
 }) {
   return (
     <DailyChargeSessionsChart
@@ -580,6 +586,8 @@ function ChargingSessionsChart({
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
+      selectedDayLocal={selectedDayLocal}
+      onDayClick={onDayClick}
     />
   );
 }

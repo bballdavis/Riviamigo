@@ -9,6 +9,8 @@ export interface WidgetCtx {
   timeframe?: DashboardTimeframe;
   from: string | null;
   to: string | null;
+  chargeSessionDayLocal?: string | null;
+  setChargeSessionDayLocal?: (dayLocal: string | null) => void;
   chargeSessionId?: string | null;
   chargeSessionEnergyKwh?: number | null;
   updateWidgetOptions?: (widgetId: string, patch: Record<string, unknown>) => void;

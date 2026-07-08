@@ -136,6 +136,22 @@ WHERE u.id = pd.user_id;
 
 DO $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM riviamigo.users) THEN
+    RAISE NOTICE 'No users exist yet; requiring a super_user will be enforced after first user registration.';
+    RETURN;
+  END IF;
+
+  UPDATE riviamigo.users
+  SET role = 'super_user'
+  WHERE id = (
+    SELECT id
+    FROM riviamigo.users
+    WHERE COALESCE(is_disabled, FALSE) = FALSE
+    ORDER BY created_at ASC, id ASC
+    LIMIT 1
+  )
+  AND role NOT IN ('super_user', 'admin');
+
   IF NOT EXISTS (SELECT 1 FROM riviamigo.users WHERE role = 'super_user') THEN
     RAISE EXCEPTION 'at least one super_user is required after migration 0047';
   END IF;

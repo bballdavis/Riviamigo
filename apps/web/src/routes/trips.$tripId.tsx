@@ -2,11 +2,13 @@ import React from 'react';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import {
-  useAuth, useTrip, useTripTrack, useTripDetailSeries,
+  useAuth, useTrip, useTripTrack, useTripDetailSeries, useDocumentTheme, useTripPowerProfile,
 } from '@riviamigo/hooks';
 import {
-  PageLayout, StatCardGrid, StatCard,
+  PageLayout,
 } from '@riviamigo/ui/primitives';
+import { SensorChipSummary } from '@riviamigo/dashboards';
+import type { TripDetailSeriesPoint, TripPowerPoint, TrackPoint } from '@riviamigo/types';
 import {
   TripMapChart,
   TripDriveChart as DriveChart,
@@ -44,11 +46,15 @@ export function TripDetailContent() {
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
   const [activeElapsedS, setActiveElapsedS] = React.useState<number | null>(null);
+  const isDark = useDocumentTheme();
 
   const { data: trip } = useTrip(tripId, defaultVehicleId);
   const { data: track, isLoading: trackLoading } = useTripTrack(tripId, defaultVehicleId);
   const { data: series, isLoading: seriesLoading } = useTripDetailSeries(tripId, defaultVehicleId);
+  const { data: powerProfile, isLoading: powerProfileLoading } = useTripPowerProfile(tripId, defaultVehicleId);
   const hasVehicle = !!defaultVehicleId;
+  const chartLoading = seriesLoading || powerProfileLoading;
+  const mapStyle = isDark ? 'dark' : 'light';
 
   const title = trip
     ? format(parseISO(trip.started_at), 'MMMM d, yyyy · h:mm a')
@@ -75,8 +81,8 @@ export function TripDetailContent() {
   }, [trip, durationMin]);
 
   const timeline = React.useMemo(
-    () => buildTimeline(trip?.started_at, series ?? [], track ?? []),
-    [trip?.started_at, series, track],
+    () => buildTimeline(trip?.started_at, series ?? [], powerProfile ?? [], track ?? []),
+    [trip?.started_at, series, powerProfile, track],
   );
 
   const speedBins = React.useMemo(() => buildSpeedHistogram(timeline), [timeline]);
@@ -146,15 +152,16 @@ export function TripDetailContent() {
           />
         ) : (
           <>
-            <StatCardGrid>
-              <StatCard label="Distance Driven" value={trip ? formatMiles(trip.distance_mi) : '—'} accent />
-              <StatCard
-                label={`Avg. Effic. (${getEfficiencyUnitLabel()})`}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <SensorChipSummary title="Distance Driven" value={trip ? formatMiles(trip.distance_mi) : '—'} icon="lucide:map-pin" />
+              <SensorChipSummary
+                title={`Avg. Effic. (${getEfficiencyUnitLabel()})`}
                 value={trip?.efficiency_wh_mi != null ? formatEfficiencyValue(trip.efficiency_wh_mi) : '—'}
+                icon="lucide:gauge"
               />
-              <StatCard label="Avg. Speed" value={avgSpeed != null ? formatMph(avgSpeed) : '—'} />
-              <StatCard label="Duration" value={durationMin !== undefined ? formatDuration(durationMin) : '—'} />
-            </StatCardGrid>
+              <SensorChipSummary title="Avg. Speed" value={avgSpeed != null ? formatMph(avgSpeed) : '—'} icon="lucide:car" />
+              <SensorChipSummary title="Duration" value={durationMin !== undefined ? formatDuration(durationMin) : '—'} icon="lucide:clock-3" />
+            </div>
 
             <section className="space-y-4">
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -174,6 +181,7 @@ export function TripDetailContent() {
                       track={(track ?? []).map((p) => ({ lat: p.lat, lng: p.lng }))}
                       activePoint={activeMapPoint}
                       height={360}
+                      mapStyle={mapStyle}
                     />
                   )}
                 </div>
@@ -189,7 +197,7 @@ export function TripDetailContent() {
                   </div>
                   <DriveChart
                     data={timeline}
-                    loading={seriesLoading}
+                    loading={chartLoading}
                     activeElapsedS={activeElapsedS}
                     onActiveElapsedSChange={setActiveElapsedS}
                   />
@@ -304,28 +312,15 @@ function formatElapsed(seconds: number) {
 
 function buildTimeline(
   tripStartIso: string | undefined,
-  series: Array<{
-    ts: string;
-    speed_mph: number | null;
-    power_kw: number | null;
-    regen_power_kw: number | null;
-    battery_level: number | null;
-    outside_temp_c: number | null;
-    cabin_temp_c: number | null;
-    driver_temp_c: number | null;
-    hvac_active: boolean | null;
-    tire_fl_psi: number | null;
-    tire_fr_psi: number | null;
-    tire_rl_psi: number | null;
-    tire_rr_psi: number | null;
-  }>,
-  track: Array<{ ts: string; lat: number; lng: number; altitude_m: number | null }>,
+  series: TripDetailSeriesPoint[],
+  powerProfile: TripPowerPoint[],
+  track: TrackPoint[],
 ): TimelinePoint[] {
   if (!tripStartIso) return [];
   const tripStartMs = parseISO(tripStartIso).getTime();
   if (!Number.isFinite(tripStartMs)) return [];
 
-  const seriesByElapsed = new Map<number, {
+  const pointByElapsed = new Map<number, {
     speed_mph: number | null;
     power_kw: number | null;
     regen_kw: number | null;
@@ -339,11 +334,13 @@ function buildTimeline(
     tire_rl_psi: number | null;
     tire_rr_psi: number | null;
   }>();
+
   for (const point of series) {
     const tsMs = parseISO(point.ts).getTime();
     if (!Number.isFinite(tsMs)) continue;
     const elapsed = Math.round((tsMs - tripStartMs) / 1000);
-    seriesByElapsed.set(elapsed, {
+    if (elapsed < 0) continue;
+    pointByElapsed.set(elapsed, {
       speed_mph: point.speed_mph,
       power_kw: point.power_kw,
       regen_kw: point.regen_power_kw != null ? -Math.abs(point.regen_power_kw) : null,
@@ -359,6 +356,43 @@ function buildTimeline(
     });
   }
 
+  for (const point of powerProfile) {
+    const tsMs = parseISO(point.ts).getTime();
+    if (!Number.isFinite(tsMs)) continue;
+    const elapsed = Math.round((tsMs - tripStartMs) / 1000);
+    if (elapsed < 0) continue;
+
+    const existing = pointByElapsed.get(elapsed) ?? {
+      speed_mph: null,
+      power_kw: null,
+      regen_kw: null,
+      battery_level: null,
+      outside_temp_c: null,
+      cabin_temp_c: null,
+      driver_temp_c: null,
+      hvac_active: null,
+      tire_fl_psi: null,
+      tire_fr_psi: null,
+      tire_rl_psi: null,
+      tire_rr_psi: null,
+    };
+
+    pointByElapsed.set(elapsed, {
+      speed_mph: existing.speed_mph ?? point.speed_mph,
+      power_kw: existing.power_kw ?? point.power_kw,
+      regen_kw: existing.regen_kw ?? (point.regen_power_kw != null ? -Math.abs(point.regen_power_kw) : null),
+      battery_level: existing.battery_level ?? point.battery_level,
+      outside_temp_c: existing.outside_temp_c,
+      cabin_temp_c: existing.cabin_temp_c,
+      driver_temp_c: existing.driver_temp_c,
+      hvac_active: existing.hvac_active,
+      tire_fl_psi: existing.tire_fl_psi,
+      tire_fr_psi: existing.tire_fr_psi,
+      tire_rl_psi: existing.tire_rl_psi,
+      tire_rr_psi: existing.tire_rr_psi,
+    });
+  }
+
   const trackRows = track
     .map((point) => ({
       tsMs: typeof point.ts === 'string' ? parseISO(point.ts).getTime() : Number.NaN,
@@ -369,31 +403,35 @@ function buildTimeline(
     .filter((point) => Number.isFinite(point.tsMs))
     .sort((a, b) => a.tsMs - b.tsMs);
 
-  const elapsedKeys = new Set<number>();
-  for (const key of seriesByElapsed.keys()) elapsedKeys.add(key);
+  const timelineRows = new Set<number>();
+  for (const key of pointByElapsed.keys()) timelineRows.add(key);
+  for (const point of trackRows) {
+    const elapsed = Math.round((point.tsMs - tripStartMs) / 1000);
+    if (elapsed >= 0) timelineRows.add(elapsed);
+  }
 
-  return [...elapsedKeys]
+  return [...timelineRows]
     .filter((elapsed) => elapsed >= 0)
     .sort((a, b) => a - b)
     .map((elapsed) => {
       const targetTs = tripStartMs + elapsed * 1000;
       const trackPoint = findNearestTrackPoint(trackRows, targetTs);
-      const seriesPoint = seriesByElapsed.get(elapsed);
+      const point = pointByElapsed.get(elapsed);
       return {
         elapsed_s: elapsed,
         ts: new Date(targetTs).toISOString(),
-        speed_mph: seriesPoint?.speed_mph ?? null,
-        power_kw: seriesPoint?.power_kw ?? null,
-        regen_kw: seriesPoint?.regen_kw ?? null,
-        battery_level: seriesPoint?.battery_level ?? null,
-        outside_temp_c: seriesPoint?.outside_temp_c ?? null,
-        cabin_temp_c: seriesPoint?.cabin_temp_c ?? null,
-        driver_temp_c: seriesPoint?.driver_temp_c ?? null,
-        hvac_active: seriesPoint?.hvac_active ?? null,
-        tire_fl_psi: seriesPoint?.tire_fl_psi ?? null,
-        tire_fr_psi: seriesPoint?.tire_fr_psi ?? null,
-        tire_rl_psi: seriesPoint?.tire_rl_psi ?? null,
-        tire_rr_psi: seriesPoint?.tire_rr_psi ?? null,
+        speed_mph: point?.speed_mph ?? null,
+        power_kw: point?.power_kw ?? null,
+        regen_kw: point?.regen_kw ?? null,
+        battery_level: point?.battery_level ?? null,
+        outside_temp_c: point?.outside_temp_c ?? null,
+        cabin_temp_c: point?.cabin_temp_c ?? null,
+        driver_temp_c: point?.driver_temp_c ?? null,
+        hvac_active: point?.hvac_active ?? null,
+        tire_fl_psi: point?.tire_fl_psi ?? null,
+        tire_fr_psi: point?.tire_fr_psi ?? null,
+        tire_rl_psi: point?.tire_rl_psi ?? null,
+        tire_rr_psi: point?.tire_rr_psi ?? null,
         altitude_m: trackPoint?.altitude_m ?? null,
         lat: trackPoint?.lat ?? null,
         lng: trackPoint?.lng ?? null,

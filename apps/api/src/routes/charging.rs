@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    routing::get,
+    routing::{get, patch},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, Utc};
@@ -12,6 +12,7 @@ use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    services::cost::recompute_charge_session_cost,
 };
 
 pub fn router() -> Router<AppState> {
@@ -24,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/charging/sessions/:id", get(get_session))
         .route("/charging/:id/curve", get(get_session_curve))
         .route("/charging/:id", get(get_session))
+        .route("/charging/:id", patch(update_session_location))
         .route("/charging/curve-analysis", get(get_curve_analysis))
         .route(
             "/vehicles/:vehicle_id/charging-sessions",
@@ -36,6 +38,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/vehicles/:vehicle_id/charging-sessions/:id",
             get(get_session_path),
+        )
+        .route(
+            "/vehicles/:vehicle_id/charging-sessions/:id",
+            patch(update_session_location_path),
         )
         .route("/vehicles/:vehicle_id/costs", get(get_summary_path))
 }
@@ -50,11 +56,25 @@ struct SessionListParams {
     offset: Option<i64>,
     page: Option<i64>,
     per_page: Option<i64>,
+    session_day_local: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct VehicleParam {
     vehicle_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct SessionLocationUpdate {
+    place_id: Option<Uuid>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PlaceLookupRow {
+    address_id: Option<Uuid>,
+    is_home: bool,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -352,6 +372,99 @@ async fn get_session_curve(
     get_session_curve_response(&state, auth.user_id, vid, id).await
 }
 
+async fn update_session_location(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(p): Query<VehicleParam>,
+    Json(payload): Json<SessionLocationUpdate>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let vehicle_id = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id).await?;
+    get_session_response(&state, auth.user_id, vehicle_id, id).await
+}
+
+async fn update_session_location_path(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
+    Json(payload): Json<SessionLocationUpdate>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id).await?;
+    get_session_response(&state, auth.user_id, vehicle_id, id).await
+}
+
+async fn update_charge_session_location(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    vehicle_id: Uuid,
+    session_id: Uuid,
+    place_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    require_vehicle_owned(pool, user_id, vehicle_id).await?;
+
+    let updated_session_id = if let Some(place_id) = place_id {
+        let place = sqlx::query_as::<_, PlaceLookupRow>(
+            "SELECT address_id, is_home, latitude, longitude
+               FROM riviamigo.geofences
+              WHERE id=$1 AND user_id=$2",
+        )
+        .bind(place_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+        sqlx::query_scalar::<_, Uuid>(
+            "UPDATE riviamigo.charge_sessions
+               SET geofence_id=$1,
+                   address_id=$2,
+                   is_home=$3,
+                   location_lat=$4,
+                   location_lng=$5
+             WHERE id=$6 AND vehicle_id=$7
+             RETURNING id",
+        )
+        .bind(place_id)
+        .bind(place.address_id)
+        .bind(place.is_home)
+        .bind(place.latitude)
+        .bind(place.longitude)
+        .bind(session_id)
+        .bind(vehicle_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            "UPDATE riviamigo.charge_sessions
+               SET geofence_id=NULL,
+                   address_id=NULL,
+                   is_home=NULL,
+                   location_lat=NULL,
+                   location_lng=NULL
+             WHERE id=$1 AND vehicle_id=$2
+             RETURNING id",
+        )
+        .bind(session_id)
+        .bind(vehicle_id)
+        .fetch_optional(pool)
+        .await?
+    };
+
+    match updated_session_id {
+        Some(_) => {
+            let recomputed = recompute_charge_session_cost(pool, session_id).await?;
+            if recomputed.is_none() {
+                return Err(AppError::NotFound);
+            }
+            Ok(())
+        },
+        None => Err(AppError::NotFound),
+    }
+}
+
 async fn list_sessions_path(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -555,23 +668,30 @@ async fn list_sessions_response(
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
             LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+              AND ($7 IS NULL OR TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') = $7) \
             ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5"
     )
-    .bind(vehicle_id)
-    .bind(from)
-    .bind(to)
-    .bind(limit)
-    .bind(offset)
-    .bind(user_id)
-    .fetch_all(&mut *tx)
-    .await?;
+        .bind(vehicle_id)
+        .bind(from)
+        .bind(to)
+        .bind(limit)
+        .bind(offset)
+        .bind(user_id)
+        .bind(p.session_day_local.clone())
+        .fetch_all(&mut *tx)
+        .await?;
 
     let total: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3"
+        "SELECT COUNT(*) FROM riviamigo.charge_sessions cs \
+         LEFT JOIN riviamigo.user_preferences up ON up.user_id = $4 \
+         WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
+           AND ($5 IS NULL OR TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') = $5)"
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
+    .bind(user_id)
+    .bind(p.session_day_local)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -1714,3 +1834,6 @@ async fn load_curve_analysis_samples(
         cap_kw,
     ))
 }
+
+
+

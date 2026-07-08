@@ -29,6 +29,7 @@ vi.mock('@riviamigo/ui/charts', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+  useDocumentTheme: () => false,
   useTrip: () => ({
     data: {
       id: 'trip-1',
@@ -60,6 +61,16 @@ vi.mock('@riviamigo/hooks', () => ({
       tire_fr_psi: 47,
       tire_rl_psi: 49,
       tire_rr_psi: 49,
+    }],
+    isLoading: false,
+  }),
+  useTripPowerProfile: () => ({
+    data: [{
+      ts: '2024-01-01T12:00:40Z',
+      power_kw: 36,
+      regen_power_kw: 0,
+      speed_mph: 45,
+      battery_level: 80,
     }],
     isLoading: false,
   }),

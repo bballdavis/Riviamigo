@@ -12,11 +12,13 @@ import {
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { getActiveElapsedSFromChartState } from './TripChartSync';
 
 export interface TripDrivePoint {
   elapsed_s: number;
   power_kw: number | null;
   regen_kw: number | null;
+  speed_mph: number | null;
 }
 
 export interface TripDriveChartProps {
@@ -26,10 +28,6 @@ export interface TripDriveChartProps {
   activeElapsedS?: number | null;
   onActiveElapsedSChange?: (value: number | null) => void;
 }
-
-type ActivePayloadState<T> = {
-  activePayload?: Array<{ payload?: T }>;
-};
 
 function formatElapsed(seconds: number) {
   const min = Math.floor(seconds / 60);
@@ -60,7 +58,7 @@ export function TripDriveChart({
     );
   }
 
-  const hasAnyData = data.some((point) => point.power_kw != null || point.regen_kw != null);
+  const hasAnyData = data.some((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null);
   if (!hasAnyData) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
@@ -73,10 +71,15 @@ export function TripDriveChart({
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart
         data={data}
+        syncId="trip-timeline-sync"
+        syncMethod="value"
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
-          const payload = (state as ActivePayloadState<TripDrivePoint> | undefined)?.activePayload?.[0]?.payload;
-          onActiveElapsedSChange?.(payload?.elapsed_s ?? null);
+          const nextElapsed = getActiveElapsedSFromChartState<TripDrivePoint>(
+            state as Parameters<typeof getActiveElapsedSFromChartState>[0],
+            data,
+          );
+          onActiveElapsedSChange?.(nextElapsed);
         }}
         onMouseLeave={() => onActiveElapsedSChange?.(null)}
       >
@@ -90,11 +93,21 @@ export function TripDriveChart({
           minTickGap={45}
         />
         <YAxis
+          yAxisId="power"
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
           tickFormatter={(value: number) => `${Math.round(value)}`}
           width={34}
+        />
+        <YAxis
+          yAxisId="speed"
+          orientation="right"
+          tick={TICK_STYLE}
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(value: number) => `${Math.round(value)} mph`}
+          width={36}
         />
         <Tooltip
           content={<ChartTooltip
@@ -102,6 +115,7 @@ export function TripDriveChart({
             formatter={(value, name) => {
               if (name === 'power_kw') return [`${Number(value).toFixed(1)} kW`, 'Power'];
               if (name === 'regen_kw') return [`${Number(value).toFixed(1)} kW`, 'Regen'];
+              if (name === 'speed_mph') return [`${Math.round(Number(value))} mph`, 'Speed'];
               return [String(value), String(name)];
             }}
           />}
@@ -113,9 +127,7 @@ export function TripDriveChart({
           wrapperStyle={{ fontSize: 11, color: CHART_COLORS.muted, paddingTop: 8 }}
           iconType="line"
         />
-        {activeElapsedS != null ? (
-          <ReferenceLine x={activeElapsedS} stroke={CHART_COLORS.muted} strokeDasharray="4 4" />
-        ) : null}
+        {activeElapsedS != null ? <ReferenceLine x={activeElapsedS} stroke={CHART_COLORS.muted} strokeDasharray="4 4" /> : null}
         <Line
           type="monotone"
           dataKey="power_kw"
@@ -125,6 +137,7 @@ export function TripDriveChart({
           dot={false}
           isAnimationActive={false}
           connectNulls
+          yAxisId="power"
         />
         <Line
           type="monotone"
@@ -135,6 +148,19 @@ export function TripDriveChart({
           dot={false}
           isAnimationActive={false}
           connectNulls
+          yAxisId="power"
+        />
+        <Line
+          type="monotone"
+          dataKey="speed_mph"
+          name="Speed"
+          stroke={CHART_COLORS.warning}
+          strokeWidth={1.4}
+          strokeDasharray="4 4"
+          dot={false}
+          isAnimationActive={false}
+          connectNulls
+          yAxisId="speed"
         />
       </ComposedChart>
     </ResponsiveContainer>
