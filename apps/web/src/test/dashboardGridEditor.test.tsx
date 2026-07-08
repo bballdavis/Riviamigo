@@ -106,6 +106,7 @@ describe('GridEditor overlays', () => {
     expect(styles).toContain('.rgl-editor .react-grid-item:focus-within .rgl-widget-overlay');
     expect(styles).toContain('.rgl-editor .react-grid-item.resizing .rgl-widget-overlay');
     expect(styles).toContain('.rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-overlay');
+    expect(styles).toContain('.rgl-editor .rgl-card[data-editing="true"] .rgl-widget-overlay');
     expect(styles).toContain('.rgl-editor .react-grid-item:has(.rgl-card[data-editing="true"]) .rgl-widget-overlay');
   });
 

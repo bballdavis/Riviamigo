@@ -86,13 +86,18 @@ function DashboardPageShellContent({
   const hasVehicleChoices = availableVehicles.length > 1;
   const effectiveVehicleId = activeVehicleId ?? defaultVehicleId;
   const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
+  const apiConfigForSlug = apiConfig?.slug === slug ? apiConfig : undefined;
   const localDefault = getDefaultBySlug(slug);
-  const savedConfig: DashboardConfig | undefined = apiConfig ?? localDefault;
+  const savedConfig: DashboardConfig | undefined = apiConfigForSlug ?? localDefault;
+  const dashboardIsLoading = isLoading || Boolean(apiConfig && !apiConfigForSlug);
 
-  const [localConfig, setLocalConfig] = useState<DashboardConfig | null>(null);
   const currentEditMode = controlledEditMode ?? internalEditMode;
+  const [localConfig, setLocalConfig] = useState<DashboardConfig | null>(() =>
+    currentEditMode ? savedConfig ?? null : null,
+  );
   const activeConfig = localConfig ?? savedConfig;
   const previousEditModeRef = useRef(currentEditMode);
+  const previousDashboardKeyRef = useRef(dashboardKey(savedConfig, slug));
 
   const setChargeSessionDayFilter = React.useCallback((next: string | null) => {
     setChargeSessionDayLocal(next);
@@ -147,17 +152,20 @@ function DashboardPageShellContent({
 
   useEffect(() => {
     const wasEditMode = previousEditModeRef.current;
+    const currentDashboardKey = dashboardKey(savedConfig, slug);
+    const dashboardChanged = currentDashboardKey !== previousDashboardKeyRef.current;
 
-    if (currentEditMode && !wasEditMode) {
+    if (currentEditMode && (!wasEditMode || dashboardChanged)) {
       setLocalConfig(savedConfig ?? null);
     }
 
-    if (!currentEditMode && wasEditMode) {
+    if (!currentEditMode && (wasEditMode || dashboardChanged)) {
       setLocalConfig(null);
     }
 
     previousEditModeRef.current = currentEditMode;
-  }, [currentEditMode, savedConfig]);
+    previousDashboardKeyRef.current = currentDashboardKey;
+  }, [currentEditMode, savedConfig, slug]);
 
   useEffect(() => {
     saveDashboardTimeframe(timeframe);
@@ -184,7 +192,7 @@ function DashboardPageShellContent({
     localConfig,
     setLocalConfig,
     isEditMode: currentEditMode,
-    isLoading,
+    isLoading: dashboardIsLoading,
     vehicleId: effectiveVehicleId,
     ctx,
     timeframe,
@@ -270,7 +278,7 @@ function DashboardPageShellContent({
       >
         {!effectiveVehicleId ? (
           <NoVehicleState />
-        ) : isLoading && !activeConfig ? (
+        ) : dashboardIsLoading && !activeConfig ? (
           <div className="text-xs text-fg-tertiary p-4">Loading...</div>
         ) : activeConfig ? (
           <>
@@ -289,4 +297,8 @@ function DashboardPageShellContent({
       </PageLayout>
     </AppLayout>
   );
+}
+
+function dashboardKey(config: DashboardConfig | undefined, fallbackSlug: string) {
+  return config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`;
 }
