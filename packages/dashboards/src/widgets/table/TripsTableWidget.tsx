@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
@@ -114,6 +114,7 @@ import {
 
 const ROWS_PER_PAGE_OPTIONS = [15, 25, 50, 100] as const;
 const TRACK_BATCH_SIZE = 15;
+const MAP_TRIPS_PAGE_SIZE = 200;
 
 function logTripsMapDebug(message: string, payload: Record<string, unknown>) {
   if (!import.meta.env.DEV && !import.meta.env.MODE?.startsWith('test')) return;
@@ -121,15 +122,48 @@ function logTripsMapDebug(message: string, payload: Record<string, unknown>) {
 }
 
 export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+  const navigate = useNavigate();
   const { selectedIds } = useTripSelection();
-  const { page, pageSize, search } = useTripTableState();
+  const { search } = useTripTableState();
   const isDark = useDocumentTheme();
   const mapStyle: MapStyleMode = isDark ? 'dark' : 'light';
   const [mapStyleOverride, setMapStyleOverride] = React.useState<MapStyleMode | null>(null);
   const effectiveMapStyle: MapStyleMode = mapStyleOverride ?? mapStyle;
   const deferredSearch = React.useDeferredValue(search);
-  const { data } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim());
-  const trips = (data?.items ?? []) as TripRow[];
+  const searchTrimmed = deferredSearch.trim();
+  const lifetime = !ctx.from && !ctx.to;
+  const mapTrips = useInfiniteQuery({
+    queryKey: ['trips', 'list', 'v2', ctx.vehicleId, ctx.from, ctx.to, searchTrimmed, lifetime, 'all'],
+    queryFn: ({ pageParam = 1 }) => api.listTrips(
+      ctx.vehicleId!,
+      ctx.from,
+      ctx.to,
+      pageParam,
+      MAP_TRIPS_PAGE_SIZE,
+      searchTrimmed,
+      lifetime,
+    ),
+    enabled: !!ctx.vehicleId,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.length * lastPage.per_page;
+      return loaded < lastPage.total ? allPages.length + 1 : undefined;
+    },
+  });
+
+  React.useEffect(() => {
+    if (mapTrips.hasNextPage && !mapTrips.isFetchingNextPage) {
+      void mapTrips.fetchNextPage();
+    }
+  }, [mapTrips.hasNextPage, mapTrips.isFetchingNextPage, mapTrips.fetchNextPage]);
+
+  const trips = React.useMemo(
+    () => (mapTrips.data?.pages.flatMap((page) => page.items) ?? []) as TripRow[],
+    [mapTrips.data],
+  );
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
   const [enabledUpTo, setEnabledUpTo] = React.useState(0);
   const tripIdsKey = React.useMemo(() => trips.map((trip) => trip.id).join(','), [trips]);
@@ -148,8 +182,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       queryKey: ['trips', 'track', trip.id, ctx.vehicleId],
       queryFn: () => api.getTripTrack(trip.id, ctx.vehicleId!),
       enabled: !!ctx.vehicleId && (index < enabledUpTo || selectedIds.includes(trip.id)),
-      // Keep the map aligned to the current table page, but stage route loads
-      // in small waves so larger pages do not create a limiter burst.
+      // Stage route loads in small waves so larger ranges do not create a burst.
       staleTime: Infinity,
       gcTime: 24 * 60 * 60 * 1000,
       refetchOnWindowFocus: false,
@@ -206,16 +239,17 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       initialBatchSettled,
       routeCount: routes.length,
       enabledUpTo,
-      page,
-      pageSize,
+      pageCount: mapTrips.data?.pages.length,
+      totalTrips: mapTrips.data?.pages.at(-1)?.total,
+      totalPages: mapTrips.data?.pages.at(-1)?.total != null && mapTrips.data?.pages.at(-1)?.per_page
+        ? Math.ceil(mapTrips.data.pages.at(-1)!.total / mapTrips.data.pages.at(-1)!.per_page)
+        : undefined,
     });
   }, [
     currentWindowSize,
     enabledUpTo,
     initialBatchSettled,
     initialBatchTarget,
-    page,
-    pageSize,
     routes.length,
     settledInWindow,
     trackQueries,
@@ -226,6 +260,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
     () => selectedIds.filter((id) => routes.some((route) => route.id === id)),
     [selectedIds, routes],
   );
+  const selectedTripId = selectedRouteIds[0];
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -258,12 +293,24 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
 
       {selectedRouteIds.length > 0 ? (
         <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-fg-secondary">
-          <span>{selectedRouteIds.length} route{selectedRouteIds.length === 1 ? '' : 's'} selected.</span>
-          <button className="font-medium text-accent hover:underline" onClick={clearTripSelection}>Show all</button>
+          {selectedRouteIds.length === 1 ? (
+            <button
+              type="button"
+              className="w-full rounded-md border border-accent/50 bg-accent/20 px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/30"
+              onClick={() => navigate({ to: '/trips/$tripId', params: { tripId: selectedTripId! } })}
+            >
+              Open this trip
+            </button>
+          ) : (
+            <>
+              <span>{selectedRouteIds.length} routes selected.</span>
+              <button className="font-medium text-accent hover:underline" onClick={clearTripSelection}>Show all</button>
+            </>
+          )}
         </div>
       ) : trips.length === 0 ? (
         <div className="shrink-0 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-tertiary">
-          Loading trips from the table...
+          Loading trips for this timeframe...
         </div>
       ) : !initialBatchSettled ? (
         <div className="shrink-0 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-tertiary">

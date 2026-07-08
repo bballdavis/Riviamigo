@@ -125,14 +125,22 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
   const deferredSearch = React.useDeferredValue(search);
   const normalizedSearch = deferredSearch.trim();
   const isMobile = useIsMobile();
-  const { data, isLoading } = useChargeSessions(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, normalizedSearch);
+  const { data, isLoading } = useChargeSessions(
+    ctx.vehicleId,
+    ctx.from,
+    ctx.to,
+    page,
+    pageSize,
+    normalizedSearch,
+    ctx.chargeSessionDayLocal ?? null,
+  );
   const sessions = (data?.items ?? []) as unknown as ChargeSessionRow[];
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
   const totalSessions = data?.total ?? 0;
 
   React.useEffect(() => {
     setPage(1);
-  }, [ctx.from, ctx.to, ctx.vehicleId, normalizedSearch, pageSize]);
+  }, [ctx.from, ctx.to, ctx.vehicleId, normalizedSearch, pageSize, ctx.chargeSessionDayLocal]);
 
   function handleRowClick(row: Row<ChargeSessionRow>) {
     navigate({ to: '/charging/$sessionId', params: { sessionId: row.original.id } });

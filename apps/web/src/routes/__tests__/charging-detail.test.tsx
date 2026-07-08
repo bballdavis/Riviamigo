@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
@@ -29,6 +29,8 @@ vi.mock('@riviamigo/dashboards', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+  useSavedPlaces: () => ({ data: [], isLoading: false }),
+  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false, isLoading: false }),
   useChargeSession: () => ({
     data: {
       id: 'session-1',
@@ -68,21 +70,13 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
   Database: () => <svg data-testid="icon-database" />,
+  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   RadioTower: () => <svg data-testid="icon-radio" />,
   Receipt: () => <svg data-testid="icon-receipt" />,
   Route: () => <svg data-testid="icon-route" />,
   Zap: () => <svg data-testid="icon-zap" />,
 }));
-
-import { ChargeSessionContent } from '../charging.$sessionId';
-
-describe('Charge session detail page', () => {
-  beforeEach(() => {
-    mockSession.cost_usd = 8.75;
-    mockSession.source = 'telemetry+rivian_api';
-    mockSession.telemetry_sample_count = 12;
-  });
 
   it('renders session details and the charge curve chart', () => {
     render(<ChargeSessionContent />);
@@ -133,3 +127,8 @@ describe('Charge session detail page', () => {
     expect(screen.queryByText('Rivian API backfill')).not.toBeInTheDocument();
   });
 });
+
+
+
+
+

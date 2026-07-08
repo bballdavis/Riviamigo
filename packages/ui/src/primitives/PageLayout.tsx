@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
 
-// ── Page shell ─────────────────────────────────────────────────────────────
+// ── Page shell ──────────────────────────────────────────────────────────────────
 
 export interface PageLayoutProps {
   title: string;
@@ -9,7 +9,7 @@ export interface PageLayoutProps {
   titleAction?: React.ReactNode | undefined;
   /** Position of titleAction relative to the title. */
   titleActionPosition?: 'left' | 'right' | undefined;
-  subtitle?: string | undefined;
+  subtitle?: React.ReactNode;
   actions?: React.ReactNode | undefined;
   children: React.ReactNode;
   className?: string | undefined;
@@ -25,7 +25,11 @@ export function PageLayout({ title, titleAction, titleActionPosition = 'right', 
             <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
             {titleActionPosition !== 'left' && titleAction}
           </div>
-          {subtitle && <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>}
+          {subtitle ? (
+            typeof subtitle === 'string'
+              ? <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>
+              : <div className="mt-0.5">{subtitle}</div>
+          ) : null}
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
       </div>
@@ -34,7 +38,7 @@ export function PageLayout({ title, titleAction, titleActionPosition = 'right', 
   );
 }
 
-// ── Stat card grid ──────────────────────────────────────────────────────────
+// ── Stat card grid ────────────────────────────────────────────────────────────────
 
 export function StatCardGrid({
   children,
@@ -50,11 +54,11 @@ export function StatCardGrid({
   );
 }
 
-// ── Chart section ───────────────────────────────────────────────────────────
+// ── Chart section ───────────────────────────────────────────────────────────────
 
 export interface ChartSectionProps {
   title: string;
-  subtitle?: string | undefined;
+  subtitle?: string;
   actions?: React.ReactNode | undefined;
   children: React.ReactNode;
   className?: string | undefined;
@@ -74,3 +78,4 @@ export function ChartSection({ title, subtitle, actions, children, className }: 
     </div>
   );
 }
+
