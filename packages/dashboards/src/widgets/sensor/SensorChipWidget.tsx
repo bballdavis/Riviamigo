@@ -255,7 +255,11 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
                 ) : null}
               </p>
               {timeframeScope === 'lifetime' ? (
-                <Badge size="sm" variant="default" className="shrink-0 rounded-full font-semibold">
+                <Badge
+                  size="sm"
+                  variant="default"
+                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold"
+                >
                   Lifetime
                 </Badge>
               ) : null}

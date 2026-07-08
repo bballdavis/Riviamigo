@@ -55,6 +55,11 @@ export function TripElevationChart({
     altitude_ft: point.altitude_m != null ? point.altitude_m * M_TO_FT : null,
   }));
 
+  const measuredData = React.useMemo(
+    () => data.filter((point) => point.altitude_m != null),
+    [data],
+  );
+
   const hasAnyData = chartData.some((point) => point.altitude_ft != null);
   if (!hasAnyData) {
     return (
@@ -74,7 +79,8 @@ export function TripElevationChart({
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripElevationPoint>(
             state as Parameters<typeof getActiveElapsedSFromChartState>[0],
-            data,
+            measuredData,
+            activeElapsedS,
           );
           onActiveElapsedSChange?.(nextElapsed);
         }}
@@ -123,8 +129,8 @@ export function TripElevationChart({
           stroke={colors.dataViz.teal}
           strokeWidth={1.8}
           fill="url(#tripElevationGradient)"
-          dot={false}
-          activeDot={{ r: 3, strokeWidth: 0, fill: colors.dataViz.teal }}
+          dot={{ r: 2, strokeWidth: 0, fill: colors.dataViz.teal }}
+          activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--rm-bg)', fill: colors.dataViz.teal }}
           isAnimationActive={false}
           connectNulls
         />
