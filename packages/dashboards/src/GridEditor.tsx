@@ -156,6 +156,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         .rgl-editor .react-grid-item:focus-within .rgl-widget-overlay,
         .rgl-editor .react-grid-item.resizing .rgl-widget-overlay,
         .rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-overlay,
+        .rgl-editor .rgl-card[data-editing="true"] .rgl-widget-overlay,
         .rgl-editor .react-grid-item:has(.rgl-card[data-editing="true"]) .rgl-widget-overlay {
           opacity: 1;
           pointer-events: auto;

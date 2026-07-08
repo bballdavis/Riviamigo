@@ -77,6 +77,12 @@ const dashboardConfigs = vi.hoisted(() => ({
   },
 }));
 
+const dashboardQuery = vi.hoisted(() => ({
+  data: undefined as unknown,
+  isLoading: false,
+  isFetching: false,
+}));
+
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
   return {
@@ -117,7 +123,11 @@ vi.mock('@riviamigo/dashboards', () => ({
     </div>
   ),
   getDefaultBySlug: (slug: keyof typeof dashboardConfigs) => dashboardConfigs[slug],
-  useDashboardBySlug: () => ({ data: undefined, isLoading: false }),
+  useDashboardBySlug: () => ({
+    data: dashboardQuery.data,
+    isLoading: dashboardQuery.isLoading,
+    isFetching: dashboardQuery.isFetching,
+  }),
 }));
 
 vi.mock('@riviamigo/ui/primitives', () => ({
@@ -166,6 +176,9 @@ import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
 describe('DashboardPageShell timeframe sync', () => {
   beforeEach(() => {
     sessionStorage.clear();
+    dashboardQuery.data = undefined;
+    dashboardQuery.isLoading = false;
+    dashboardQuery.isFetching = false;
   });
 
   it.each([
@@ -218,4 +231,31 @@ describe('DashboardPageShell timeframe sync', () => {
       expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
     },
   );
+
+  it('keeps edit drafts scoped when switching dashboard slugs', () => {
+    const { rerender } = render(
+      <DashboardPageShell navKey="battery" slug="battery" title="Battery" isEditMode />,
+    );
+
+    expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
+    expect(screen.getByText('Battery chart')).toBeInTheDocument();
+
+    rerender(
+      <DashboardPageShell navKey="charging" slug="charging" title="Charging" isEditMode />,
+    );
+
+    expect(screen.getByTestId('dashboard-renderer')).toHaveAttribute('data-mode', 'edit');
+    expect(screen.queryByText('Battery chart')).not.toBeInTheDocument();
+    expect(screen.getByText('Charging chart')).toBeInTheDocument();
+  });
+
+  it('ignores stale by-slug placeholder data from a different dashboard slug', () => {
+    dashboardQuery.data = dashboardConfigs.battery;
+    dashboardQuery.isFetching = true;
+
+    render(<DashboardPageShell navKey="charging" slug="charging" title="Charging" />);
+
+    expect(screen.queryByText('Battery chart')).not.toBeInTheDocument();
+    expect(screen.getByText('Charging chart')).toBeInTheDocument();
+  });
 });
