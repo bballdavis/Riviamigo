@@ -32,6 +32,17 @@ vi.mock('@riviamigo/hooks', () => ({
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
+  findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
+    dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null),
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),

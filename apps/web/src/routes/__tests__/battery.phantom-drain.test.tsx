@@ -49,6 +49,8 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
   SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
     <div data-testid="sensor-chip-summary">
       <div>{title}</div>
@@ -97,9 +99,14 @@ vi.mock('../../components/layout/NoVehicleState', () => ({
 }));
 
 vi.mock('../../lib/dates', () => ({
+  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
   DEFAULT_PRESET: '30d',
   presetToRange: () => ({ from: new Date('2026-05-01T00:00:00Z'), to: new Date('2026-05-31T23:59:59Z') }),
   rangeToIso: () => ({ from: '2026-05-01T00:00:00Z', to: '2026-05-31T23:59:59Z' }),
+  getTimeframeRange: () => ({ from: new Date('2026-05-01T00:00:00Z'), to: new Date('2026-05-31T23:59:59Z') }),
+  timeframeToQuery: () => ({ from: '2026-05-01T00:00:00Z', to: '2026-05-31T23:59:59Z' }),
+  loadDashboardTimeframe: () => undefined,
+  saveDashboardTimeframe: vi.fn(),
 }));
 
 import { BatteryPhantomDrainPage } from '../../components/dashboard/BatteryPhantomDrainPage';

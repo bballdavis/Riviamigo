@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth, useVehicles } from '@riviamigo/hooks';
 import { PageLayout, DateRangePicker, Tooltip } from '@riviamigo/ui/primitives';
 import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
@@ -20,6 +20,7 @@ import {
   type DateRange,
   type DashboardTimeframe,
 } from '../../lib/dates';
+import { useDashboardEditDraft } from './useDashboardEditDraft';
 
 export interface DashboardPageShellRenderState {
   activeConfig: DashboardConfig | undefined;
@@ -27,7 +28,10 @@ export interface DashboardPageShellRenderState {
   localConfig: DashboardConfig | null;
   setLocalConfig: React.Dispatch<React.SetStateAction<DashboardConfig | null>>;
   isEditMode: boolean;
+  isDirty: boolean;
   isLoading: boolean;
+  saveError: string | null;
+  setSaveError: React.Dispatch<React.SetStateAction<string | null>>;
   vehicleId: string | null;
   ctx: WidgetCtx;
   timeframe: DashboardTimeframe;
@@ -71,7 +75,6 @@ function DashboardPageShellContent({
   const { defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
   const { data: vehicles } = useVehicles();
-  const [internalEditMode, setInternalEditMode] = useState(false);
   const storedTimeframe = useMemo(() => loadDashboardTimeframe(), []);
   const [timeframe, setTimeframe] = useState<DashboardTimeframe>(
     () => storedTimeframe ?? DEFAULT_TIMEFRAME,
@@ -91,35 +94,60 @@ function DashboardPageShellContent({
   const savedConfig: DashboardConfig | undefined = apiConfigForSlug ?? localDefault;
   const dashboardIsLoading = isLoading || Boolean(apiConfig && !apiConfigForSlug);
 
-  const currentEditMode = controlledEditMode ?? internalEditMode;
-  const [localConfig, setLocalConfig] = useState<DashboardConfig | null>(() =>
-    currentEditMode ? savedConfig ?? null : null,
-  );
-  const activeConfig = localConfig ?? savedConfig;
-  const previousEditModeRef = useRef(currentEditMode);
-  const previousDashboardKeyRef = useRef(dashboardKey(savedConfig, slug));
+  const {
+    activeConfig,
+    localConfig,
+    setLocalConfig,
+    isEditMode: currentEditMode,
+    isDirty,
+    saveError,
+    setSaveError,
+    enterEdit,
+    exitEdit,
+  } = useDashboardEditDraft({
+    savedConfig,
+    slug,
+    controlledEditMode,
+    onEditModeChange,
+  });
 
   const setChargeSessionDayFilter = React.useCallback((next: string | null) => {
     setChargeSessionDayLocal(next);
   }, []);
 
-  function setEditMode(next: boolean) {
-    if (onEditModeChange) {
-      onEditModeChange(next);
-      return;
-    }
-    setInternalEditMode(next);
-  }
+  const updateWidgetLayout = useCallback((widgetId: string, nextHeight: number) => {
+    const normalizedHeight = Number.isFinite(nextHeight)
+      ? Math.max(1, Math.min(10, Math.round(nextHeight)))
+      : null;
 
-  function enterEdit() {
-    setLocalConfig(savedConfig ?? null);
-    setEditMode(true);
-  }
+    if (normalizedHeight == null) return;
 
-  function exitEdit() {
-    setLocalConfig(null);
-    setEditMode(false);
-  }
+    setLocalConfig((current) => {
+      const currentConfig = current ?? savedConfig;
+      if (!currentConfig) return current;
+
+      const widgets = currentConfig.widgets;
+      const widgetIndex = widgets.findIndex((widget) => widget.id === widgetId);
+      if (widgetIndex === -1) return current;
+
+      const widget = widgets[widgetIndex];
+      if (widget.layout.h === normalizedHeight) return current;
+
+      const nextWidgets = [...widgets];
+      nextWidgets[widgetIndex] = {
+        ...widget,
+        layout: {
+          ...widget.layout,
+          h: normalizedHeight,
+        },
+      };
+
+      return {
+        ...currentConfig,
+        widgets: nextWidgets,
+      };
+    });
+  }, [setLocalConfig, savedConfig]);
 
   useEffect(() => {
     const handleUnits = () => {
@@ -146,26 +174,18 @@ function DashboardPageShellContent({
       to,
       chargeSessionDayLocal,
       setChargeSessionDayLocal: setChargeSessionDayFilter,
+      updateWidgetLayout,
     }),
-    [effectiveVehicleId, timeframe, from, to, chargeSessionDayLocal, setChargeSessionDayFilter],
+    [
+      effectiveVehicleId,
+      timeframe,
+      from,
+      to,
+      chargeSessionDayLocal,
+      setChargeSessionDayFilter,
+      updateWidgetLayout,
+    ],
   );
-
-  useEffect(() => {
-    const wasEditMode = previousEditModeRef.current;
-    const currentDashboardKey = dashboardKey(savedConfig, slug);
-    const dashboardChanged = currentDashboardKey !== previousDashboardKeyRef.current;
-
-    if (currentEditMode && (!wasEditMode || dashboardChanged)) {
-      setLocalConfig(savedConfig ?? null);
-    }
-
-    if (!currentEditMode && (wasEditMode || dashboardChanged)) {
-      setLocalConfig(null);
-    }
-
-    previousEditModeRef.current = currentEditMode;
-    previousDashboardKeyRef.current = currentDashboardKey;
-  }, [currentEditMode, savedConfig, slug]);
 
   useEffect(() => {
     saveDashboardTimeframe(timeframe);
@@ -192,7 +212,10 @@ function DashboardPageShellContent({
     localConfig,
     setLocalConfig,
     isEditMode: currentEditMode,
+    isDirty,
     isLoading: dashboardIsLoading,
+    saveError,
+    setSaveError,
     vehicleId: effectiveVehicleId,
     ctx,
     timeframe,
@@ -283,6 +306,14 @@ function DashboardPageShellContent({
         ) : activeConfig ? (
           <>
             {renderBeforeDashboard?.(shellState)}
+            {currentEditMode && saveError ? (
+              <div
+                role="alert"
+                className="mb-3 rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-xs text-status-danger"
+              >
+                {saveError}
+              </div>
+            ) : null}
             {(renderDashboard?.(shellState) ?? true) ? (
               <DashboardRenderer
                 config={activeConfig}
@@ -297,8 +328,4 @@ function DashboardPageShellContent({
       </PageLayout>
     </AppLayout>
   );
-}
-
-function dashboardKey(config: DashboardConfig | undefined, fallbackSlug: string) {
-  return config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`;
 }

@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useAuthReady, api } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
 import { sanitizeDashboardConfig } from './layout';
@@ -43,7 +43,9 @@ export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
     widgets: Array.isArray(config.widgets) ? config.widgets : [],
   });
 
-  const normalized = parsed.slug === 'charging' ? normalizeChargingConnectionSwap(parsed) : parsed;
+  const normalized = parsed.slug === 'charging'
+    ? normalizeChargingDashboardWidgetHeights(normalizeChargingConnectionSwap(parsed))
+    : parsed;
   return sanitizeDashboardConfig(normalized);
 }
 
@@ -101,8 +103,11 @@ const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
     showPicker: true,
   }, { x: 0, y: 6, w: 12, h: 11 }),
   customWidget('d4000004-0000-0000-0000-000000000012', 'charging.sessions.table', 'Charging Sessions', {}, { x: 0, y: 17, w: 12, h: 12 }),
-  customWidget('d4000004-0000-0000-0000-000000000016', 'charging.network_breakdown', 'Network Breakdown', {}, { x: 0, y: 29, w: 12, h: 4 }),
+  customWidget('d4000004-0000-0000-0000-000000000016', 'charging.network_breakdown', 'Network Breakdown', {}, { x: 0, y: 29, w: 12, h: 2 }),
 ];
+
+const CHARGING_NETWORK_BREAKDOWN_MIN_H = 1;
+const CHARGING_NETWORK_BREAKDOWN_MAX_H = 10;
 
 function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConfig {
   // Build a set of widget IDs already in the saved config so user edits are preserved.
@@ -121,6 +126,34 @@ function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConf
   });
 
   return { ...config, widgets: [...missingDefaults, ...userWidgets] };
+}
+
+function normalizeChargingDashboardWidgetHeights(config: DashboardConfig): DashboardConfig {
+  return {
+    ...config,
+    widgets: config.widgets.map((widget) => {
+      if (
+        widget.componentType !== 'custom' ||
+        widget.definitionId !== 'charging.network_breakdown'
+      ) return widget;
+
+      const nextHeight = clampBreakdownHeight(widget.layout.h);
+      if (nextHeight === widget.layout.h) return widget;
+
+      return {
+        ...widget,
+        layout: {
+          ...widget.layout,
+          h: nextHeight,
+        },
+      };
+    }),
+  };
+}
+
+function clampBreakdownHeight(height: number): number {
+  if (!Number.isFinite(height)) return CHARGING_NETWORK_BREAKDOWN_MAX_H;
+  return Math.max(CHARGING_NETWORK_BREAKDOWN_MIN_H, Math.min(CHARGING_NETWORK_BREAKDOWN_MAX_H, Math.round(height)));
 }
 
 function sensorWidget(
@@ -171,6 +204,35 @@ function dashboardMutationBody(config: DashboardConfig) {
   };
 }
 
+function writeDashboardCache(qc: QueryClient, dashboard: DashboardConfig) {
+  qc.setQueryData<DashboardConfig>(['dashboards', 'slug', dashboard.slug], (current) => {
+    if (current?.ownerId && !dashboard.ownerId) return current;
+    return dashboard;
+  });
+  qc.setQueryData<DashboardConfig[]>(['dashboards'], (current) => {
+    if (!current) return current;
+    const next = current.filter((entry) => (
+      entry.id !== dashboard.id &&
+      !(entry.slug === dashboard.slug && entry.ownerId === dashboard.ownerId)
+    ));
+    next.push(dashboard);
+    return sortDashboardList(next);
+  });
+}
+
+function removeDashboardFromCache(qc: QueryClient, id: string) {
+  qc.setQueryData<DashboardConfig[]>(['dashboards'], (current) =>
+    current ? current.filter((entry) => entry.id !== id) : current
+  );
+}
+
+function sortDashboardList(dashboards: DashboardConfig[]) {
+  return dashboards.sort((a, b) => {
+    if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 export function useDashboards() {
   const authReady = useAuthReady();
   return useQuery<DashboardConfig[]>({
@@ -206,7 +268,8 @@ export function useCreateDashboard() {
     mutationFn: (config: DashboardConfig) =>
       api.apiFetch<unknown>('POST', BASE, dashboardMutationBody(config))
         .then(normalizeDashboardConfig),
-    onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
+    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => {
+      writeDashboardCache(qc, data);
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
     },
@@ -219,7 +282,8 @@ export function useUpdateDashboard() {
     mutationFn: (config: DashboardConfig) =>
       api.apiFetch<unknown>('PUT', `${BASE}/${config.id}`, dashboardMutationBody(config))
         .then(normalizeDashboardConfig),
-    onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
+    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => {
+      writeDashboardCache(qc, data);
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
     },
@@ -237,7 +301,8 @@ export function useUpdateAdminDashboard() {
         config: sanitized,
       }).then(normalizeDashboardConfig);
     },
-    onSuccess: (_data: DashboardConfig, variables: DashboardConfig) => {
+    onSuccess: (data: DashboardConfig, variables: DashboardConfig) => {
+      writeDashboardCache(qc, data);
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', variables.slug] });
     },
@@ -251,6 +316,7 @@ export function useSetAdminDashboardLock() {
       api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/lock`, { locked })
         .then(normalizeDashboardConfig),
     onSuccess: (data) => {
+      writeDashboardCache(qc, data);
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
     },
@@ -264,6 +330,7 @@ export function useRestoreAdminDashboardDefault() {
       api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/restore-default`)
         .then(normalizeDashboardConfig),
     onSuccess: (data) => {
+      writeDashboardCache(qc, data);
       qc.invalidateQueries({ queryKey: ['dashboards'] });
       qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
     },
@@ -274,7 +341,10 @@ export function useDeleteDashboard() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.apiFetch<void>('DELETE', `${BASE}/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboards'] }),
+    onSuccess: (_data, id) => {
+      removeDashboardFromCache(qc, id);
+      qc.invalidateQueries({ queryKey: ['dashboards'] });
+    },
   });
 }
 
@@ -283,6 +353,10 @@ export function useCloneDashboard() {
   return useMutation({
     mutationFn: (id: string) =>
       api.apiFetch<unknown>('POST', `${BASE}/${id}/clone`).then(normalizeDashboardConfig),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboards'] }),
+    onSuccess: (data) => {
+      writeDashboardCache(qc, data);
+      qc.invalidateQueries({ queryKey: ['dashboards'] });
+      qc.invalidateQueries({ queryKey: ['dashboards', 'slug', data.slug] });
+    },
   });
 }

@@ -2,7 +2,7 @@ type ChartPayloadLike = {
   elapsed_s?: number | null;
 };
 
-type RechartsMouseState<T> = {
+export type TripChartMouseState<T> = {
   activePayload?: Array<{ payload?: T }>;
   activeLabel?: string | number | null;
   activeTooltipIndex?: number | null;
@@ -54,7 +54,7 @@ function floorToMeasuredSample(
  * hover point when no resolvable sample is present.
  */
 export function getActiveElapsedSFromChartState<T extends object>(
-  state: RechartsMouseState<T> | null | undefined,
+  state: TripChartMouseState<T> | null | undefined,
   fallbackData?: readonly HasElapsed[],
   previousElapsed?: number | null,
 ) {

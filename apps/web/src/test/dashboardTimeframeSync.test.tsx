@@ -99,6 +99,8 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
   DashboardRenderer: ({
     config,
     ctx,

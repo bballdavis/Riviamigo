@@ -20,6 +20,9 @@ This document defines the approved layering for dashboard work and the package b
 - Built-in dashboard wrapper: `apps/web/src/components/dashboard/DashboardPage.tsx`
 - User dashboard route: `apps/web/src/routes/d.$slug.tsx`
 - Dashboard renderer: `packages/dashboards/src/DashboardRenderer.tsx`
+- View grid: `packages/dashboards/src/DashboardGrid.tsx`
+- Shared widget chrome: `packages/dashboards/src/WidgetChrome.tsx`
+- Dashboard model helpers: `packages/dashboards/src/dashboardModel.ts`
 - Widget registry: `packages/dashboards/src/registry.tsx`
 - Dashboard defaults and persistence helpers: `packages/dashboards/src/api.ts`, `packages/dashboards/src/defaults/`
 
@@ -43,9 +46,10 @@ Route files should not directly recreate dashboard scaffolding that already exis
 - app layout and page layout
 - dashboard config fetch with fallback to bundled defaults
 - date range state
-- edit/view mode state
-- local working config state
+- edit/view mode state through `useDashboardEditDraft`
+- dashboard-scoped local working config state
 - rendering of common actions around the dashboard
+- visible save-error feedback while edits remain open
 
 If a new dashboard page needs standard dashboard behavior, start here instead of creating a second scaffold.
 
@@ -70,7 +74,10 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 
 - schema and validation
 - widget registry
-- grid renderer
+- dashboard model helpers for identity, ownership, layout patches, and view-only widget visibility
+- view grid renderer
+- edit grid renderer
+- shared widget chrome and edit overlay
 - dashboard CRUD helpers
 - YAML import and export
 - bundled default dashboard configs
@@ -148,7 +155,11 @@ apps/web/src/routes/
 packages/dashboards/src/
   schema.ts                   # config schema
   registry.tsx                # widget definitions
-  DashboardRenderer.tsx       # grid rendering only
+  dashboardModel.ts           # identity, ownership, layout, and visibility helpers
+  DashboardRenderer.tsx       # mode orchestration between view and edit grids
+  DashboardGrid.tsx           # view-mode CSS grid
+  GridEditor.tsx              # edit-mode React Grid Layout canvas
+  WidgetChrome.tsx            # shared widget frame and edit overlay
   widgets/                    # widget modules
   defaults/                   # bundled defaults
   api.ts                      # dashboard CRUD helpers
@@ -170,6 +181,8 @@ packages/ui/src/
 - keep dashboard routes declarative
 - put shared edit/view/dashboard state in the shell
 - keep renderer layout-only
+- keep widget hover/edit chrome in `WidgetChrome`
+- keep layout mutation rules in `dashboardModel.ts`
 - compose page extras explicitly
 - reuse `packages/ui` before creating page-local visuals
 - reuse `packages/hooks` before embedding fetch logic in route wrappers

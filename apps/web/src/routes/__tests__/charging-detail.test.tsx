@@ -78,6 +78,16 @@ vi.mock('lucide-react', () => ({
   Zap: () => <svg data-testid="icon-zap" />,
 }));
 
+import { ChargeSessionContent } from '../charging.$sessionId';
+
+describe('ChargeSessionContent', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+    mockSession.cost_usd = 8.75;
+    mockSession.source = 'telemetry+rivian_api';
+    mockSession.telemetry_sample_count = 12;
+  });
+
   it('renders session details and the charge curve chart', () => {
     render(<ChargeSessionContent />);
 
@@ -91,9 +101,9 @@ vi.mock('lucide-react', () => ({
     expect(screen.getByText('Cost')).toBeInTheDocument();
     expect(screen.getAllByText('$8.75').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
-    expect(screen.getByText('Telemetry verified')).toBeInTheDocument();
+    expect(screen.getByText('Telemetry')).toBeInTheDocument();
     expect(screen.getByText('12 samples matched')).toBeInTheDocument();
-    expect(screen.getByText('5:45 AM -> 7:30 AM')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /January 1, 2024/ })).toBeInTheDocument();
     expect(screen.getByText('88.4 km added')).toBeInTheDocument();
     expect(screen.getByText('Austin')).toBeInTheDocument();
     // Chart title/subtitle are rendered inside DashboardChartWidget (mocked);

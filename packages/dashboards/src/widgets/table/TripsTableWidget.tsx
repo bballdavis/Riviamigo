@@ -134,7 +134,8 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const lifetime = !ctx.from && !ctx.to;
   const mapTrips = useInfiniteQuery({
     queryKey: ['trips', 'list', 'v2', ctx.vehicleId, ctx.from, ctx.to, searchTrimmed, lifetime, 'all'],
-    queryFn: ({ pageParam = 1 }) => api.listTrips(
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => api.listTrips(
       ctx.vehicleId!,
       ctx.from,
       ctx.to,

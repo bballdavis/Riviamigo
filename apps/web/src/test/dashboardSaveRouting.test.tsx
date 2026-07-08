@@ -51,7 +51,10 @@ function makeShellState(overrides: Partial<DashboardPageShellRenderState>): Dash
     localConfig: null,
     setLocalConfig: vi.fn(),
     isEditMode: true,
+    isDirty: false,
     isLoading: false,
+    saveError: null,
+    setSaveError: vi.fn(),
     vehicleId: null,
     ctx: {
       vehicleId: null,
@@ -235,14 +238,16 @@ describe('createDefaultDashboardEditActions — save routing', () => {
     qcMock.getQueryData.mockReturnValue(undefined); // nothing found after refetch
 
     const exitEdit = vi.fn();
+    const setSaveError = vi.fn();
     setup(
-      makeShellState({ savedConfig: systemDefault, localConfig: systemDefault, exitEdit }),
+      makeShellState({ savedConfig: systemDefault, localConfig: systemDefault, exitEdit, setSaveError }),
       { updateMock, createMock, qcMock },
     );
 
     await userEvent.click(screen.getByTitle('Save changes'));
 
     expect(exitEdit).not.toHaveBeenCalled();
+    expect(setSaveError).toHaveBeenLastCalledWith(expect.stringContaining('Dashboard save failed'));
   });
 
   it('exits edit mode without any API call when localConfig is null', async () => {

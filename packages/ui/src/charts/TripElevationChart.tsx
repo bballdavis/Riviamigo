@@ -12,7 +12,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { colors } from '../tokens/colors';
-import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
 import { createSampleDotRenderer, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripElevationPoint {
@@ -86,7 +86,7 @@ export function TripElevationChart({
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripElevationPoint>(
-            state as Parameters<typeof getActiveElapsedSFromChartState>[0],
+            state as TripChartMouseState<TripElevationPoint>,
             measuredData,
             activeElapsedS,
           );
