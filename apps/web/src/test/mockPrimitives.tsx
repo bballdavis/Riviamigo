@@ -37,7 +37,7 @@ export const StatCard = ({ label, value, unit, detail }: {
 export const StatCardSkeleton = () => <div data-testid="stat-skeleton" />;
 
 export const ChartSection = ({ children, title, subtitle }: {
-  children: React.ReactNode; title: string; subtitle\?: React.ReactNode; actions?: React.ReactNode;
+  children: React.ReactNode; title: string; subtitle?: React.ReactNode; actions?: React.ReactNode;
 }) => (
   <div data-testid={`chart-${title.toLowerCase().replace(/\s+/g, '-')}`}>
     <span>{title}</span>
@@ -53,7 +53,7 @@ export const MetricTabs = ({
   active: string;
   onChange: (k: string) => void;
   title?: string;
-  subtitle\?: React.ReactNode;
+  subtitle?: React.ReactNode;
   children: React.ReactNode;
   dropdownThreshold?: number;
   actions?: React.ReactNode;

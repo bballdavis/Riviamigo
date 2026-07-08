@@ -14,6 +14,7 @@ export interface WidgetCtx {
   chargeSessionId?: string | null;
   chargeSessionEnergyKwh?: number | null;
   updateWidgetOptions?: (widgetId: string, patch: Record<string, unknown>) => void;
+  updateWidgetLayout?: (widgetId: string, nextHeight: number) => void;
 }
 
 export interface WidgetEditorMeta {

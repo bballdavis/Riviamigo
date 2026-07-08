@@ -419,7 +419,7 @@ export function DashboardChartRenderer({
           loading={chargingChartSeriesLoading}
           height={height}
           selectedDayLocal={ctx.chargeSessionDayLocal ?? null}
-          onDayClick={ctx.setChargeSessionDayLocal}
+          {...(ctx.setChargeSessionDayLocal ? { onDayClick: ctx.setChargeSessionDayLocal } : {})}
         />
       );
     case 'charging_weekly_energy':
@@ -586,8 +586,8 @@ function ChargingSessionsChart({
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      selectedDayLocal={selectedDayLocal}
-      onDayClick={onDayClick}
+      {...(selectedDayLocal !== undefined ? { selectedDayLocal } : {})}
+      {...(onDayClick ? { onDayClick } : {})}
     />
   );
 }

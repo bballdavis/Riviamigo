@@ -58,13 +58,18 @@ vi.mock('@riviamigo/ui/tables', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: null, accessToken: null }),
+  useMe: () => ({ data: { role: 'user' } }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [] }),
+  useDocumentTheme: () => false,
   useChargeSession: () => ({ data: undefined, isLoading: false }),
   useChargeCurve: () => ({ data: undefined, isLoading: false }),
+  useSavedPlaces: () => ({ data: [], isLoading: false, isFetching: false, isError: false }),
+  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false }),
   useTrip: () => ({ data: undefined, isLoading: false }),
   useTripTrack: () => ({ data: undefined, isLoading: false }),
   useTripDetailSeries: () => ({ data: undefined, isLoading: false }),
+  useTripPowerProfile: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({
@@ -85,8 +90,13 @@ vi.mock('../../components/layout/NoVehicleState', () => ({
 }));
 
 vi.mock('../../lib/dates', () => ({
+  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
   presetToRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  getTimeframeRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
+  timeframeToQuery: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  loadDashboardTimeframe: () => undefined,
+  saveDashboardTimeframe: vi.fn(),
   DEFAULT_PRESET: '30d',
 }));
 
@@ -103,6 +113,19 @@ const emptyConfig = {
 };
 
 vi.mock('@riviamigo/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
+    dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null),
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: emptyConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),

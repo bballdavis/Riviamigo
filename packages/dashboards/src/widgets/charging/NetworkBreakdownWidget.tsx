@@ -52,10 +52,21 @@ function networkIcon(vendor: string | null): string {
   return NETWORK_ICON[vendor.toLowerCase()] ?? 'lucide:building';
 }
 
-function NetworkBreakdownWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+function clampRows(rowCount: number) {
+  if (!Number.isFinite(rowCount)) return 1;
+  return Math.max(1, Math.min(10, Math.round(rowCount)));
+}
+
+function NetworkBreakdownWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const { data, isLoading } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
   const summary = data as ChargingSummaryWithBreakdown | undefined;
   const breakdown: NetworkBreakdownEntry[] = summary?.network_breakdown ?? [];
+  const visibleRowCount = breakdown.length > 0 ? clampRows(breakdown.length) : 3;
+
+  React.useEffect(() => {
+    if (!ctx.updateWidgetLayout) return;
+    ctx.updateWidgetLayout(instance.id, visibleRowCount);
+  }, [ctx, instance.id, visibleRowCount]);
 
   const totalEnergy = breakdown.reduce((sum, r) => sum + (r.energy_kwh ?? 0), 0);
 
@@ -129,8 +140,8 @@ registerWidget({
   componentType: 'custom',
   definitionId: 'charging.network_breakdown',
   title: 'Network Breakdown',
-  defaultSize: { w: 4, h: 8 },
-  minSize: { w: 3, h: 4 },
+  defaultSize: { w: 4, h: 2 },
+  minSize: { w: 3, h: 1 },
   defaultOptions: {},
   component: NetworkBreakdownWidget,
 });

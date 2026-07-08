@@ -138,6 +138,16 @@ async fn create(
     validate_slug(&body.slug)?;
 
     let id = Uuid::new_v4();
+    let config = dashboard_config_with_metadata(
+        body.config,
+        id,
+        Some(auth.user_id),
+        &body.slug,
+        &body.name,
+        body.description.as_deref(),
+        false,
+        false,
+    );
     let row = sqlx::query_as::<_, Dashboard>(
         r#"
         INSERT INTO dashboards (id, owner_id, slug, name, description, is_default, is_locked, config)
@@ -157,7 +167,7 @@ async fn create(
     .bind(body.slug)
     .bind(body.name)
     .bind(body.description)
-    .bind(body.config)
+    .bind(config)
     .fetch_one(&state.pool)
     .await?;
 
@@ -173,6 +183,23 @@ async fn update(
 ) -> Result<Json<Dashboard>, AppError> {
     let existing = get_dashboard(&state, id).await?;
     check_write_access(&existing, auth.user_id, false)?;
+    let next_name = body.name.as_deref().unwrap_or(&existing.name);
+    let next_description = body
+        .description
+        .as_deref()
+        .or(existing.description.as_deref());
+    let next_config = body.config.map(|config| {
+        dashboard_config_with_metadata(
+            config,
+            existing.id,
+            existing.owner_id,
+            &existing.slug,
+            next_name,
+            next_description,
+            existing.is_default,
+            existing.is_locked,
+        )
+    });
 
     let row = sqlx::query_as::<_, Dashboard>(
         r#"
@@ -187,7 +214,7 @@ async fn update(
     )
     .bind(body.name)
     .bind(body.description)
-    .bind(body.config)
+    .bind(next_config)
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
@@ -223,6 +250,17 @@ async fn clone_dashboard(
 
     let new_id = Uuid::new_v4();
     let new_slug = format!("{}-copy", source.slug);
+    let new_name = format!("{} (copy)", source.name);
+    let config = dashboard_config_with_metadata(
+        source.config.clone(),
+        new_id,
+        Some(auth.user_id),
+        &new_slug,
+        &new_name,
+        source.description.as_deref(),
+        false,
+        false,
+    );
 
     let row = sqlx::query_as::<_, Dashboard>(
         r#"
@@ -234,9 +272,9 @@ async fn clone_dashboard(
     .bind(new_id)
     .bind(auth.user_id)
     .bind(new_slug)
-    .bind(format!("{} (copy)", source.name))
+    .bind(new_name)
     .bind(source.description)
-    .bind(source.config)
+    .bind(config)
     .fetch_one(&state.pool)
     .await
     .map_err(|e: sqlx::Error| {
@@ -260,6 +298,24 @@ async fn admin_update(
     Json(body): Json<UpdateDashboard>,
 ) -> Result<Json<Dashboard>, AppError> {
     require_admin(&state, auth.user_id).await?;
+    let existing = get_dashboard(&state, id).await?;
+    let next_name = body.name.as_deref().unwrap_or(&existing.name);
+    let next_description = body
+        .description
+        .as_deref()
+        .or(existing.description.as_deref());
+    let next_config = body.config.map(|config| {
+        dashboard_config_with_metadata(
+            config,
+            existing.id,
+            existing.owner_id,
+            &existing.slug,
+            next_name,
+            next_description,
+            existing.is_default,
+            existing.is_locked,
+        )
+    });
 
     let row = sqlx::query_as::<_, Dashboard>(
         r#"
@@ -274,7 +330,7 @@ async fn admin_update(
     )
     .bind(body.name)
     .bind(body.description)
-    .bind(body.config)
+    .bind(next_config)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
@@ -331,6 +387,16 @@ async fn admin_restore_default(
         .as_str()
         .unwrap_or(&existing.name)
         .to_string();
+    let config = dashboard_config_with_metadata(
+        config,
+        existing.id,
+        existing.owner_id,
+        &existing.slug,
+        &name,
+        existing.description.as_deref(),
+        true,
+        true,
+    );
 
     let row = sqlx::query_as::<_, Dashboard>(
         r#"
@@ -417,6 +483,40 @@ fn validate_slug(slug: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+fn dashboard_config_with_metadata(
+    mut config: Value,
+    id: Uuid,
+    owner_id: Option<Uuid>,
+    slug: &str,
+    name: &str,
+    description: Option<&str>,
+    is_default: bool,
+    is_locked: bool,
+) -> Value {
+    if let Value::Object(ref mut object) = config {
+        object.insert("id".into(), Value::String(id.to_string()));
+        object.insert("slug".into(), Value::String(slug.to_string()));
+        object.insert("name".into(), Value::String(name.to_string()));
+        match description {
+            Some(description) => {
+                object.insert("description".into(), Value::String(description.to_string()));
+            }
+            None => {
+                object.remove("description");
+            }
+        }
+        object.insert("isDefault".into(), Value::Bool(is_default));
+        object.insert("isLocked".into(), Value::Bool(is_locked));
+        object.insert(
+            "ownerId".into(),
+            owner_id
+                .map(|id| Value::String(id.to_string()))
+                .unwrap_or(Value::Null),
+        );
+    }
+    config
+}
+
 fn bundled_default_config(id: Uuid) -> Option<Value> {
     let id_str = id.to_string();
     let json_str = match id_str.as_str() {
@@ -464,6 +564,7 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         let config: Value = serde_json::from_str(json_str)?;
         let name = config["name"].as_str().unwrap_or("Dashboard").to_string();
         let slug = config["slug"].as_str().unwrap_or("dashboard").to_string();
+        let config = dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
 
         sqlx::query(
             r#"
@@ -511,6 +612,43 @@ mod tests {
         assert!(config["widgets"]
             .as_array()
             .is_some_and(|widgets| !widgets.is_empty()));
+    }
+
+    #[test]
+    fn dashboard_config_metadata_matches_owning_row() {
+        let id: Uuid = "11111111-1111-1111-1111-111111111111".parse().unwrap();
+        let owner_id: Uuid = "22222222-2222-2222-2222-222222222222".parse().unwrap();
+        let config = serde_json::json!({
+            "schemaVersion": 2,
+            "id": "00000000-0000-0000-0000-000000000001",
+            "slug": "dashboard",
+            "name": "Overview",
+            "description": "old",
+            "isDefault": true,
+            "isLocked": true,
+            "ownerId": null,
+            "controls": { "dateRange": true },
+            "widgets": []
+        });
+
+        let normalized = dashboard_config_with_metadata(
+            config,
+            id,
+            Some(owner_id),
+            "dashboard-copy",
+            "Dashboard Copy",
+            None,
+            false,
+            false,
+        );
+
+        assert_eq!(normalized["id"], id.to_string());
+        assert_eq!(normalized["ownerId"], owner_id.to_string());
+        assert_eq!(normalized["slug"], "dashboard-copy");
+        assert_eq!(normalized["name"], "Dashboard Copy");
+        assert_eq!(normalized["isDefault"], false);
+        assert_eq!(normalized["isLocked"], false);
+        assert!(normalized.get("description").is_none());
     }
 
     // ── integration tests (require DATABASE_URL) ─────────────────────────────

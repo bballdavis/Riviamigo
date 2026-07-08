@@ -23,8 +23,13 @@ vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: 
 vi.mock('../../components/layout/NoVehicleState', () => ({ NoVehicleState: () => <div>no vehicle</div> }));
 
 vi.mock('../../lib/dates', () => ({
+  DEFAULT_TIMEFRAME: { kind: 'preset', preset: '30d' },
   presetToRange: () => ({ from: new Date(), to: new Date() }),
   rangeToIso: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  getTimeframeRange: () => ({ from: new Date('2024-01-01'), to: new Date('2024-01-31') }),
+  timeframeToQuery: () => ({ from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z' }),
+  loadDashboardTimeframe: () => undefined,
+  saveDashboardTimeframe: vi.fn(),
   DEFAULT_PRESET: '30d',
 }));
 
@@ -41,6 +46,19 @@ const mockConfig = {
 };
 
 vi.mock('@riviamigo/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
+    dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null),
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),

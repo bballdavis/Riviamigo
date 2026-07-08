@@ -14,7 +14,7 @@ import {
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatTemp } from '../lib/utils';
-import { getActiveElapsedSFromChartState } from './TripChartSync';
+import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
 import { createSampleDotRenderer, getTripTemperatureDomain, getVisibleSampleElapsedSet } from './TripChartRendering';
 
 export interface TripTemperaturePoint {
@@ -107,7 +107,7 @@ export function TripTemperatureChart({
         margin={CHART_MARGINS.withYAxis}
         onMouseMove={(state) => {
           const nextElapsed = getActiveElapsedSFromChartState<TripTemperaturePoint>(
-            state as Parameters<typeof getActiveElapsedSFromChartState>[0],
+            state as TripChartMouseState<TripTemperaturePoint>,
             measuredData,
             activeElapsedS,
           );

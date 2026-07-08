@@ -72,6 +72,19 @@ const mockConfig = {
 };
 
 vi.mock('@riviamigo/dashboards', () => ({
+  dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
+    config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
+  findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
+    dashboards?.find((dashboard) => dashboard.slug === slug && dashboard.ownerId != null),
+  isSystemDefaultDashboard: (config: { isDefault: boolean; ownerId: string | null }) =>
+    config.isDefault && !config.ownerId,
+  materializeSystemDashboardDraft: (draft: object, saved: object) => ({ ...draft, ...saved }),
+  materializeUserDashboardDraft: (draft: object, owned?: object | null) => ({
+    ...draft,
+    ...(owned ?? {}),
+    isDefault: false,
+    isLocked: false,
+  }),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
