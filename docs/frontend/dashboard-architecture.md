@@ -121,6 +121,16 @@ Use hooks for:
 
 Do not put route orchestration into generic widgets. If a page needs multiple coordinated requests, create a page-specific hook or adapter and keep the widget inputs simple.
 
+### High-density data rules
+
+Pages that render many trips or long telemetry histories must keep the browser work bounded:
+
+- Fetch one page-level aggregate for a map or coordinated detail view instead of one request per route or metric.
+- Persist compact route previews with the trip record; generate a preview from linked telemetry only when a legacy row is missing one.
+- Return long detail histories as adaptive columnar samples with a server-enforced point budget. Keep raw compatibility endpoints for integrations, but do not compose them in the page.
+- Use canvas-backed charts for dense series. Shared uPlot charts may use a `cursorSyncKey` so synchronized cursors stay inside the chart layer instead of re-rendering the page on every pointer movement.
+- Mark dense query keys as non-persistent and keep a byte budget on the remaining local query cache.
+
 ### 7. Reusable UI Layer
 
 `packages/ui` owns reusable primitives, charts, and tables.

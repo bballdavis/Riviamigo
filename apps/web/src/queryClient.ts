@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-query';
 
 const QUERY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_PERSISTED_CACHE_BYTES = 1_500_000;
 const QUERY_CACHE_SAVE_DELAY_MS = 750;
 const PERSISTED_QUERY_ROOTS = new Set([
   'vehicles',
@@ -94,9 +95,11 @@ function installQueryCachePersistence(client: QueryClient) {
   if (typeof window === 'undefined') return;
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let idleHandle: number | undefined;
 
   const save = () => {
     saveTimer = undefined;
+    idleHandle = undefined;
     // Determine the current user id from the auth store without creating a
     // circular dependency — read directly from localStorage.
     let userId: string | null = null;
@@ -108,10 +111,12 @@ function installQueryCachePersistence(client: QueryClient) {
 
     try {
       const state = dehydrate(client, { shouldDehydrateQuery });
-      window.localStorage.setItem(
-        cacheKey(userId),
-        JSON.stringify({ timestamp: Date.now(), userId, state } satisfies PersistedQueryCache),
-      );
+      const serialized = JSON.stringify({ timestamp: Date.now(), userId, state } satisfies PersistedQueryCache);
+      if (new TextEncoder().encode(serialized).byteLength > MAX_PERSISTED_CACHE_BYTES) {
+        window.localStorage.removeItem(cacheKey(userId));
+        return;
+      }
+      window.localStorage.setItem(cacheKey(userId), serialized);
     } catch {
       // localStorage can be unavailable or full; in-memory cache is still useful.
     }
@@ -119,14 +124,29 @@ function installQueryCachePersistence(client: QueryClient) {
 
   client.getQueryCache().subscribe(() => {
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(save, QUERY_CACHE_SAVE_DELAY_MS);
+    if (idleHandle !== undefined && 'cancelIdleCallback' in window) {
+      (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(idleHandle);
+      idleHandle = undefined;
+    }
+    saveTimer = setTimeout(() => {
+      const requestIdleCallback = (window as Window & {
+        requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      }).requestIdleCallback;
+      if (requestIdleCallback) {
+        idleHandle = requestIdleCallback(save, { timeout: 2_000 });
+      } else {
+        save();
+      }
+    }, QUERY_CACHE_SAVE_DELAY_MS);
   });
 
   window.addEventListener('beforeunload', save);
 }
 
 function shouldDehydrateQuery(query: Query) {
-  return query.state.status === 'success' && isPersistedQueryKey(query.queryKey);
+  return query.state.status === 'success'
+    && isPersistedQueryKey(query.queryKey)
+    && (query.meta as { persist?: unknown } | undefined)?.persist !== false;
 }
 
 function isPersistedQueryKey(queryKey: QueryKey) {

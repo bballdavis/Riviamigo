@@ -23,7 +23,6 @@
         "chartId": "projected-range-mileage",
         "chartIds": [
           "soc-history",
-          "range-history",
           "charge-level",
           "charging-sessions-energy",
           "charging-weekly-energy",

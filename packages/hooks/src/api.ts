@@ -4,7 +4,7 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripDetailSeriesPoint, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
+  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripDetailSeriesPoint, TripMapResponse, TripDetailResponse, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, ChargingChartSeries, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   CreateDemoVehicleBody, CreateDemoVehicleResult,
@@ -697,9 +697,27 @@ class ApiClient {
     } satisfies PaginatedResponse<Trip>;
   }
 
+  async getTripMap(vehicleId: string, from: string | null, to: string | null, search = '', lifetime = false) {
+    return this.request<TripMapResponse>('GET', '/v1/trips/map', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+      ...(search.trim() ? { search: search.trim() } : {}),
+    });
+  }
+
   async getTrip(tripId: string, vehicleId: string) {
     const trip = await this.request<unknown>('GET', `/v1/trips/${tripId}`, undefined, { vehicle_id: vehicleId });
     return normalizeTrip(trip);
+  }
+
+  async getTripDetailData(tripId: string, vehicleId: string) {
+    const response = await this.request<TripDetailResponse>('GET', `/v1/trips/${tripId}/detail`, undefined, {
+      vehicle_id: vehicleId,
+    });
+    return {
+      ...response,
+      trip: normalizeTrip(response.trip),
+    } satisfies TripDetailResponse;
   }
 
   async getTripTrack(tripId: string, vehicleId: string) {
