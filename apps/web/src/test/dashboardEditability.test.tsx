@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardConfig } from '@riviamigo/dashboards';
@@ -13,40 +13,6 @@ const dashboardMocks = vi.hoisted(() => ({
   updateAdminDashboard: vi.fn(),
   cloneDashboard: vi.fn(),
 }));
-
-const dashboardConfigs = vi.hoisted(() => {
-  function makeConfig(slug: string, widgetId: string): DashboardConfig {
-    return {
-      schemaVersion: 2,
-      id: `${slug}-default`,
-      slug,
-      name: slug,
-      isDefault: true,
-      isLocked: true,
-      ownerId: null,
-      controls: { dateRange: true },
-      widgets: [
-        {
-          id: widgetId,
-          componentType: 'sensor',
-          definitionId: 'total_miles',
-          title: `${slug} miles`,
-          layout: { x: 0, y: 0, w: 3, h: 2 },
-          options: {},
-        },
-      ],
-    };
-  }
-
-  return {
-    dashboard: makeConfig('dashboard', 'dashboard-widget'),
-    battery: makeConfig('battery', 'battery-widget'),
-    charging: makeConfig('charging', 'charging-widget'),
-    efficiency: makeConfig('efficiency', 'efficiency-widget'),
-    trips: makeConfig('trips', 'trips-widget'),
-    'custom-dashboard': makeConfig('custom-dashboard', 'custom-widget'),
-  };
-});
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -96,11 +62,36 @@ vi.mock('../../../../packages/dashboards/src/WidgetHost', () => ({
 
 vi.mock('@riviamigo/dashboards', async () => {
   const actual = await vi.importActual<typeof import('@riviamigo/dashboards')>('@riviamigo/dashboards');
+  const overview = actual.getDefaultBySlug('dashboard');
+  const customDashboard: DashboardConfig = {
+    ...overview!,
+    id: 'custom-dashboard-id',
+    slug: 'custom-dashboard',
+    name: 'Custom Dashboard',
+    isDefault: false,
+    isLocked: false,
+    ownerId: 'user-1',
+    widgets: [
+      {
+        id: 'custom-widget',
+        componentType: 'sensor',
+        definitionId: 'total_miles',
+        title: 'Custom miles',
+        layout: { x: 0, y: 0, w: 3, h: 2 },
+        options: {},
+      },
+    ],
+  };
+
+  function configForSlug(slug: string) {
+    return slug === 'custom-dashboard' ? customDashboard : actual.getDefaultBySlug(slug);
+  }
+
   return {
     ...actual,
-    getDefaultBySlug: (slug: keyof typeof dashboardConfigs) => dashboardConfigs[slug],
-    useDashboardBySlug: (slug: keyof typeof dashboardConfigs) => ({
-      data: dashboardConfigs[slug],
+    getDefaultBySlug: configForSlug,
+    useDashboardBySlug: (slug: string) => ({
+      data: configForSlug(slug),
       isLoading: false,
     }),
     useUpdateDashboard: () => ({ mutateAsync: dashboardMocks.updateDashboard, isPending: false }),
@@ -150,19 +141,25 @@ import { userDashboardRoute } from '../routes/d.$slug';
 
 const RouteComponent = userDashboardRoute.options.component as React.ComponentType;
 
-async function expectEditableDashboard(widgetId: string) {
+async function expectEditableDashboard(widgetId: string, widgetCount: number) {
   expect(screen.queryByTestId(`widget-overlay-right-${widgetId}`)).toBeNull();
 
   await userEvent.click(screen.getByRole('button', { name: 'Edit dashboard' }));
 
-  const editButton = await screen.findByRole('button', { name: 'Edit widget settings' });
+  const editOverlay = await screen.findByTestId(`widget-overlay-right-${widgetId}`);
+  const editButton = within(editOverlay).getByRole('button', { name: 'Edit widget settings' });
   const host = screen.getByTestId(`widget-host-${widgetId}`);
   const gridItem = host.closest('.react-grid-item');
+  const editFrames = document.querySelectorAll('[data-widget-frame="edit"]');
 
+  expect(editFrames).toHaveLength(widgetCount);
+  expect(screen.getAllByRole('button', { name: 'Edit widget settings' })).toHaveLength(widgetCount);
   expect(host.closest('[data-widget-frame="edit"]')).toHaveAttribute('data-widget-id', widgetId);
+  expect(host.closest('[data-widget-frame="edit"]')).toHaveAttribute('data-widget-resizable', 'true');
+  expect(editOverlay).toHaveAttribute('data-widget-edit-control', 'true');
   expect(gridItem?.querySelector('.react-resizable-handle')).not.toBeNull();
 
-  fireEvent.click(editButton);
+  await userEvent.click(editButton);
 
   expect(await screen.findByText('Editing')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Remove component' })).toBeInTheDocument();
@@ -173,24 +170,24 @@ describe('dashboard editability', () => {
     document.body.innerHTML = '';
     document.body.className = '';
     dashboardMocks.navigate.mockReset();
-    dashboardMocks.updateDashboard.mockResolvedValue(dashboardConfigs.battery);
-    dashboardMocks.createDashboard.mockResolvedValue(dashboardConfigs.battery);
-    dashboardMocks.updateAdminDashboard.mockResolvedValue(dashboardConfigs.battery);
-    dashboardMocks.cloneDashboard.mockResolvedValue(dashboardConfigs['custom-dashboard']);
+    dashboardMocks.updateDashboard.mockResolvedValue({});
+    dashboardMocks.createDashboard.mockResolvedValue({});
+    dashboardMocks.updateAdminDashboard.mockResolvedValue({});
+    dashboardMocks.cloneDashboard.mockResolvedValue({ slug: 'custom-dashboard' });
     dashboardMocks.routeSlug = 'custom-dashboard';
     dashboardMocks.routeSearch = {};
   });
 
   it.each([
-    ['dashboard', 'dashboard-widget'],
-    ['battery', 'battery-widget'],
-    ['charging', 'charging-widget'],
-    ['efficiency', 'efficiency-widget'],
-    ['trips', 'trips-widget'],
-  ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId) => {
+    ['dashboard', 'd1000001-0000-0000-0000-000000000002', 6],
+    ['battery', 'd2000002-0000-0000-0000-000000000001', 9],
+    ['charging', 'd4000004-0000-0000-0000-000000000001', 14],
+    ['efficiency', 'd3000003-0000-0000-0000-000000000001', 5],
+    ['trips', 'd5000005-0000-0000-0000-000000000005', 6],
+  ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId, widgetCount) => {
     render(<DashboardPageShell navKey={slug} slug={slug} title={slug} />);
 
-    await expectEditableDashboard(widgetId);
+    await expectEditableDashboard(widgetId, widgetCount);
   });
 
   it('opens the same edit overlay path for /d/$slug custom dashboards', async () => {

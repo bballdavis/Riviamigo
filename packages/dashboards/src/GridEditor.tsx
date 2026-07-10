@@ -44,6 +44,7 @@ function layoutItemForWidget(widget: WidgetInstance): LayoutItem {
     minH: minSize.h,
     isDraggable: editor.movable,
     isResizable: editor.resizable,
+    resizeHandles: editor.resizable ? ['se'] : [],
   };
 
   if (maxSize) {
@@ -126,41 +127,45 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
           opacity: 0.18;
         }
         .rgl-editor .react-resizable-handle {
-          z-index: 42;
-          opacity: 0;
-          pointer-events: none;
+          z-index: 60;
+          opacity: 0.62;
+          pointer-events: auto;
           background-image: none;
-          transition: opacity 120ms ease;
+          transition: opacity 120ms ease, border-color 120ms ease;
         }
         .rgl-editor .react-grid-item:hover .react-resizable-handle,
+        .rgl-editor .react-grid-item:focus-within .react-resizable-handle,
         .rgl-editor .react-grid-item.resizing .react-resizable-handle,
         .rgl-editor .react-grid-item.react-draggable-dragging .react-resizable-handle {
           opacity: 1;
+        }
+        .rgl-editor .rgl-widget-control {
+          z-index: 70;
+          opacity: 0.72;
           pointer-events: auto;
+          transition: opacity 120ms ease;
         }
-        .rgl-editor .rgl-widget-overlay {
-          opacity: 0;
-          pointer-events: none;
-        }
-        .rgl-editor .react-grid-item:hover .rgl-widget-overlay,
-        .rgl-editor .react-grid-item:focus-within .rgl-widget-overlay,
-        .rgl-editor .react-grid-item.resizing .rgl-widget-overlay,
-        .rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-overlay,
-        .rgl-editor .rgl-card:hover .rgl-widget-overlay,
-        .rgl-editor .rgl-card:focus-within .rgl-widget-overlay,
-        .rgl-editor .rgl-card[data-editing="true"] .rgl-widget-overlay,
-        .rgl-editor .react-grid-item:has(.rgl-card[data-editing="true"]) .rgl-widget-overlay {
+        .rgl-editor .react-grid-item:hover .rgl-widget-control,
+        .rgl-editor .react-grid-item:focus-within .rgl-widget-control,
+        .rgl-editor .react-grid-item.resizing .rgl-widget-control,
+        .rgl-editor .react-grid-item.react-draggable-dragging .rgl-widget-control,
+        .rgl-editor .rgl-card[data-editing="true"] .rgl-widget-control {
           opacity: 1;
-          pointer-events: auto;
         }
         @media (hover: none), (pointer: coarse) {
-          .rgl-editor .rgl-widget-overlay {
+          .rgl-editor .rgl-widget-control,
+          .rgl-editor .react-resizable-handle {
             opacity: 1;
-            pointer-events: auto;
+          }
+          .rgl-editor .rgl-action {
+            height: 2.25rem;
+            width: 2.25rem;
           }
         }
-        .rgl-editor .react-grid-item:has(.rgl-card[data-fixed-size="true"]) .react-resizable-handle {
+        .rgl-editor .react-grid-item.react-resizable-hide .react-resizable-handle,
+        .rgl-editor .rgl-card[data-widget-resizable="false"] .react-resizable-handle {
           display: none;
+          pointer-events: none;
         }
         .rgl-editor .react-resizable-handle-se {
           right: 0;
@@ -183,8 +188,8 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
           border-bottom: 2px solid var(--rm-accent);
         }
         .rgl-editor .rgl-action {
-          height: 1.75rem;
-          width: 1.75rem;
+          height: 2rem;
+          width: 2rem;
           display: inline-flex;
           align-items: center;
           justify-content: center;
