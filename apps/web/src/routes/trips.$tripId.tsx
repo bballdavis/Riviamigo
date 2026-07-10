@@ -114,7 +114,10 @@ export function TripDetailContent() {
     [samples],
   );
 
-  const speedBins = React.useMemo(() => buildSpeedHistogram(timeline), [timeline]);
+  const speedBins = React.useMemo(
+    () => buildSpeedHistogram(timeline, detailData?.sample_interval_seconds ?? 10),
+    [detailData?.sample_interval_seconds, timeline],
+  );
   const chartPoints = React.useMemo(
     () => timeline.map((point) => ({ ts: point.elapsed_s })),
     [timeline],
@@ -268,6 +271,7 @@ export function TripDetailContent() {
                     yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
                     cursorSyncKey={`trip-${tripId}`}
                     onCursorIndexChange={setActiveIndexThrottled}
+                    connectGaps
                     emptyTitle="No drive profile data for this trip."
                   />
                 </div>
@@ -278,7 +282,7 @@ export function TripDetailContent() {
                 <div className="rounded-xl border border-border bg-bg-surface p-4">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-fg">Speed Histogram</h3>
-                    <p className="text-xs text-fg-tertiary">Distribution across speed bands</p>
+                    <p className="text-xs text-fg-tertiary">Approximate time across speed bands</p>
                   </div>
                   <SpeedHistogram
                     bins={speedBins}
@@ -308,6 +312,7 @@ export function TripDetailContent() {
                     yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
                     cursorSyncKey={`trip-${tripId}`}
                     onCursorIndexChange={setActiveIndexThrottled}
+                    connectGaps
                     emptyTitle="No temperature data for this trip."
                   />
                 </div>
@@ -331,6 +336,7 @@ export function TripDetailContent() {
                     yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
                     cursorSyncKey={`trip-${tripId}`}
                     onCursorIndexChange={setActiveIndexThrottled}
+                    connectGaps
                     emptyTitle="No elevation profile data for this trip."
                   />
                 </div>
@@ -356,6 +362,7 @@ export function TripDetailContent() {
                     yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
                     cursorSyncKey={`trip-${tripId}`}
                     onCursorIndexChange={setActiveIndexThrottled}
+                    connectGaps
                     emptyTitle="No tire pressure data for this trip."
                   />
                 </div>
@@ -393,6 +400,7 @@ interface HistogramBin {
   min: number;
   max: number;
   count: number;
+  duration_seconds: number;
   sample_elapsed_s: number | null;
 }
 
@@ -430,7 +438,7 @@ function buildTimeline(
   }));
 }
 
-function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramBin[] {
+function buildSpeedHistogram(timeline: TimelinePoint[], sampleIntervalSeconds = 10, binSize = 5): HistogramBin[] {
   const speedRows = timeline.filter((point) => point.speed_mph != null && point.speed_mph >= 0);
   if (speedRows.length === 0) return [];
 
@@ -444,6 +452,7 @@ function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramB
       min,
       max: min + binSize,
       count: 0,
+      duration_seconds: 0,
       sample_elapsed_s: null,
     });
   }
@@ -454,6 +463,7 @@ function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramB
     const bin = bins[index];
     if (!bin) continue;
     bin.count += 1;
+    bin.duration_seconds += sampleIntervalSeconds;
     if (bin.sample_elapsed_s == null) {
       bin.sample_elapsed_s = row.elapsed_s;
     }

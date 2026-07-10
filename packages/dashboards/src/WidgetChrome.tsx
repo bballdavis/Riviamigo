@@ -46,6 +46,7 @@ export const WidgetChrome = React.forwardRef<HTMLDivElement, WidgetChromeProps>(
 
   const movable = editor?.movable ?? true;
   const fixedSize = editor?.fixedSize ?? false;
+  const resizable = !fixedSize && (editor?.resizable ?? true);
 
   return (
     <div
@@ -57,6 +58,8 @@ export const WidgetChrome = React.forwardRef<HTMLDivElement, WidgetChromeProps>(
       data-widget-definition={instance.definitionId}
       data-editing={isEditing ? 'true' : 'false'}
       data-fixed-size={fixedSize ? 'true' : 'false'}
+      data-widget-movable={movable ? 'true' : 'false'}
+      data-widget-resizable={resizable ? 'true' : 'false'}
       className={[
         className,
         'rgl-card relative overflow-hidden rounded-lg border bg-bg transition-all',
@@ -74,6 +77,7 @@ export const WidgetChrome = React.forwardRef<HTMLDivElement, WidgetChromeProps>(
         instance={instance}
         movable={movable}
         fixedSize={fixedSize}
+        resizable={resizable}
         isEditing={isEditing}
         {...(onToggleEdit ? { onToggleEdit } : {})}
       />
@@ -91,45 +95,52 @@ function DashboardEditOverlay({
   instance,
   movable,
   fixedSize,
+  resizable,
   isEditing,
   onToggleEdit,
 }: {
   instance: WidgetInstance;
   movable: boolean;
   fixedSize: boolean;
+  resizable: boolean;
   isEditing: boolean;
   onToggleEdit?: () => void;
 }) {
   return (
     <>
-      <div
-        data-testid={`widget-overlay-left-${instance.id}`}
-        className="rgl-widget-overlay absolute left-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150"
-      >
-        {movable ? (
-          <button
-            type="button"
-            className="drag-handle rgl-action cursor-grab rounded-md active:cursor-grabbing"
-            title="Drag to move"
-            aria-label="Drag to move"
-          >
-            <GripVertical className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
-        {fixedSize ? (
-          <span
-            className="rgl-action rounded-md"
-            title="Fixed-size widget"
-            aria-label="Fixed-size widget"
-          >
-            <Lock className="h-3.5 w-3.5" />
-          </span>
-        ) : null}
-      </div>
+      {movable || fixedSize ? (
+        <div
+          data-testid={`widget-overlay-left-${instance.id}`}
+          data-widget-move-control="true"
+          className="rgl-widget-control absolute left-2 top-2 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur"
+        >
+          {movable ? (
+            <button
+              type="button"
+              className="drag-handle rgl-action cursor-grab rounded-md active:cursor-grabbing"
+              title="Drag to move"
+              aria-label="Drag to move"
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {fixedSize ? (
+            <span
+              className="rgl-action rounded-md"
+              title="Fixed-size widget"
+              aria-label="Fixed-size widget"
+            >
+              <Lock className="h-3.5 w-3.5" />
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         data-testid={`widget-overlay-right-${instance.id}`}
-        className="rgl-widget-overlay absolute right-2 top-2 z-40 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur transition-opacity duration-150"
+        data-widget-edit-control="true"
+        data-widget-resizable={resizable ? 'true' : 'false'}
+        className="rgl-widget-control absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur"
       >
         <button
           type="button"

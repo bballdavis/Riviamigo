@@ -129,6 +129,8 @@ Pages that render many trips or long telemetry histories must keep the browser w
 - Persist compact route previews with the trip record; generate a preview from linked telemetry only when a legacy row is missing one.
 - Return long detail histories as adaptive columnar samples with a server-enforced point budget. Keep raw compatibility endpoints for integrations, but do not compose them in the page.
 - Use canvas-backed charts for dense series. Shared uPlot charts may use a `cursorSyncKey` so synchronized cursors stay inside the chart layer instead of re-rendering the page on every pointer movement.
+- For intentionally sparse telemetry detail series, opt into `connectGaps`: line/area paths span null samples while tooltips carry the last finite reading until the next valid sample. Keep the opt-in local to views where that interpolation is semantically safe.
+- When an adaptive sample count is presented as a distribution, convert it with the server-reported sample interval and label the result as approximate time rather than raw sample count.
 - Mark dense query keys as non-persistent and keep a byte budget on the remaining local query cache.
 
 ### 7. Reusable UI Layer

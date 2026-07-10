@@ -38,15 +38,32 @@ export function EditorDrawer({
           margin-left: 0;
           margin-right: 0;
         }
+        .rgl-editor-drawer {
+          top: 0;
+          right: 0;
+          bottom: 0;
+        }
         @media (max-width: 768px) {
           html:has(body.rgl-drawer-open) { scrollbar-gutter: unset; }
           body.rgl-drawer-open { overflow-x: unset; }
-          body.rgl-drawer-open .rm-app-main { padding-right: 0; }
+          body.rgl-drawer-open .rm-app-main {
+            padding-right: 0;
+            padding-bottom: min(42vh, 22rem);
+          }
+          .rgl-editor-drawer {
+            top: auto;
+            left: 0;
+            width: 100%;
+            max-width: none;
+            height: min(42vh, 22rem);
+            border-top: 1px solid var(--rm-border-default);
+            border-left: 0;
+          }
         }
       `}</style>
       <aside
-        className="fixed z-50 flex w-96 max-w-[calc(100vw-1rem)] flex-col border-l border-border shadow-2xl"
-        style={{ backgroundColor: 'var(--rm-bg-page)', top: 0, right: 0, bottom: 0 }}
+        className="rgl-editor-drawer fixed z-50 flex w-96 max-w-[calc(100vw-1rem)] flex-col border-l border-border shadow-2xl"
+        style={{ backgroundColor: 'var(--rm-bg-page)' }}
         role="complementary"
         aria-label="Dashboard editor"
         onWheel={(event) => event.stopPropagation()}

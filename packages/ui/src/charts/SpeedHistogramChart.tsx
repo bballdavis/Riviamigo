@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { formatDuration } from '../lib/utils';
 
 function hexToRgb(hex: string) {
   const normalized = hex.replace('#', '').trim();
@@ -37,6 +38,7 @@ export interface SpeedHistogramBin {
   min: number;
   max: number;
   count: number;
+  duration_seconds: number;
   sample_elapsed_s: number | null;
 }
 
@@ -69,9 +71,9 @@ export function SpeedHistogramChart({
     );
   }
 
-  const maxCount = Math.max(...bins.map((bin) => bin.count));
-  const minCount = Math.min(...bins.map((bin) => bin.count));
-  const countRange = Math.max(1, maxCount - minCount);
+  const maxDuration = Math.max(...bins.map((bin) => bin.duration_seconds));
+  const minDuration = Math.min(...bins.map((bin) => bin.duration_seconds));
+  const durationRange = Math.max(1, maxDuration - minDuration);
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -95,18 +97,19 @@ export function SpeedHistogramChart({
           tickLine={false}
           axisLine={false}
           allowDecimals={false}
-          width={34}
+          width={52}
+          tickFormatter={(value) => formatHistogramDuration(Number(value))}
         />
         <Tooltip
           content={<ChartTooltip
-            formatter={(value) => [String(value), 'Samples']}
+            formatter={(value) => [formatHistogramDuration(Number(value)), 'Time']}
             labelFormatter={(value) => `${String(value)} mph`}
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
-        <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+        <Bar dataKey="duration_seconds" radius={[4, 4, 0, 0]}>
           {bins.map((bin) => {
-            const intensity = (bin.count - minCount) / countRange;
+            const intensity = (bin.duration_seconds - minDuration) / durationRange;
             const fill = blendColor(CHART_COLORS.success, CHART_COLORS.accent, intensity);
             return (
               <Cell
@@ -120,4 +123,10 @@ export function SpeedHistogramChart({
       </BarChart>
     </ResponsiveContainer>
   );
+}
+
+function formatHistogramDuration(seconds: number) {
+  if (!Number.isFinite(seconds)) return '-';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  return formatDuration(seconds / 60);
 }
