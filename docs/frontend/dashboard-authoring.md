@@ -162,11 +162,14 @@ Use the dashboard model helpers for shared editing behavior:
 
 In edit mode, widget chrome is split by purpose:
 
-- hover or selected state reveals move and edit affordances on the widget itself
-- resize handles appear only for resizable widgets
+- move and edit affordances remain visibly present on every widget, with hover, focus, drag, and selected states increasing their emphasis
+- resize handles remain subtly visible only for resizable widgets and increase emphasis during interaction
+- fixed-size widgets show a lock indicator instead of a resize handle while keeping their move and edit controls
 - destructive removal lives in the right-side widget editor and requires confirmation
 
 `WidgetChrome` owns the shared frame and edit overlay. Do not add per-widget or per-route hover edit buttons. `GridEditor` should only decide selection, layout, palette, and drawer state, then delegate frame rendering to `WidgetChrome`.
+
+The editor drawer is a full-height right panel on desktop. At mobile breakpoints it becomes a bounded bottom panel and reserves matching page space so the grid remains scrollable and widget controls cannot be covered by the editor surface.
 
 Dashboard layout persistence remains explicit-save:
 

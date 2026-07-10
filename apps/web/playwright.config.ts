@@ -1,16 +1,19 @@
 import { defineConfig } from '@playwright/test';
 
+const port = Number(process.env.E2E_PORT ?? 5199);
+const baseURL = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: './tests/e2e',
   reporter: process.env.CI ? [['github'], ['html', { outputFolder: 'playwright-report', open: 'never' }]] : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL,
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'pnpm --dir ../.. run dev:stack',
-    url: 'http://127.0.0.1:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 180000,
+    command: `pnpm exec vite --host 127.0.0.1 --port ${port} --strictPort`,
+    url: baseURL,
+    reuseExistingServer: false,
+    timeout: 120000,
   },
 });

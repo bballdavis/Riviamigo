@@ -48,6 +48,8 @@ export interface RichTimeSeriesChartProps {
   cursorSyncKey?: string | undefined;
   /** Receives the aligned sample index without forcing the chart to re-render. */
   onCursorIndexChange?: ((index: number | null) => void) | undefined;
+  /** Connect line/area paths across null samples and carry the last value in tooltips. */
+  connectGaps?: boolean | undefined;
 }
 
 function toSeconds(value: string | number | Date) {
@@ -106,6 +108,17 @@ export function formatChartNumber(value: number | null | undefined, unit?: strin
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
+/** Carry the most recent finite reading across missing samples for tooltip display. */
+export function carryForwardTooltipValues(values: Array<number | null | undefined>) {
+  let lastValue: number | null = null;
+  return values.map((value) => {
+    if (value != null && Number.isFinite(value)) {
+      lastValue = value;
+    }
+    return lastValue;
+  });
+}
+
 export function getExplicitScaleConfig(range?: [number, number], extra: Omit<uPlot.Scale, 'auto' | 'range'> = {}): uPlot.Scale {
   return {
     ...extra,
@@ -144,6 +157,7 @@ function createVariableSplinePathBuilder(smoothingAmount: number): uPlot.Series.
         for (let index = idx0; index <= idx1; index += 1) {
           const yValue = dataY[index];
           if (yValue == null) {
+            if (series.spanGaps) continue;
             if (currentSegment.length > 0) {
               segments.push(currentSegment);
               currentSegment = [];
@@ -318,6 +332,7 @@ export function RichTimeSeriesChart({
   xSplits,
   cursorSyncKey,
   onCursorIndexChange,
+  connectGaps = false,
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
@@ -333,6 +348,7 @@ export function RichTimeSeriesChart({
   const xValueFormatterRef = React.useRef(xValueFormatter);
   const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
   const onCursorIndexChangeRef = React.useRef(onCursorIndexChange);
+  const tooltipValuesRef = React.useRef<Array<Array<number | null>>>([]);
   const yPrecisionRef = React.useRef(0);
   const yRightPrecisionRef = React.useRef(0);
   const alignedDataRef = React.useRef<AlignedData>([[], []]);
@@ -354,6 +370,15 @@ export function RichTimeSeriesChart({
     return [x, ...seriesData] as AlignedData;
   }, [points, series, xTime, smoothingAmount, mode]);
   alignedDataRef.current = alignedData;
+  const tooltipValues = React.useMemo<Array<Array<number | null>>>(
+    () => alignedData.slice(1).map((values) => (
+      connectGaps
+        ? carryForwardTooltipValues(values as Array<number | null | undefined>)
+        : Array.from(values as Array<number | null | undefined>, (value) => value ?? null)
+    )),
+    [alignedData, connectGaps],
+  );
+  tooltipValuesRef.current = tooltipValues;
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
   const legendSeries = series.filter((item) => !item.tooltipOnly);
@@ -366,10 +391,10 @@ export function RichTimeSeriesChart({
       `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
-      `${cursorSyncKey ?? ''}|` +
+      `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -411,6 +436,7 @@ export function RichTimeSeriesChart({
           },
         };
         if (seriesMode === 'area') next.fill = `${color}22`;
+        if (connectGaps && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
         if (seriesMode === 'bar') {
           const barCount = xValues.length;
           const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : 80;
@@ -570,7 +596,7 @@ export function RichTimeSeriesChart({
             const rows = currentSeries
               .map((item, seriesIndex) => {
                 if (hiddenKeys.has(item.key)) return null;
-                const value = data[seriesIndex + 1]?.[idx] as number | null | undefined;
+                const value = tooltipValuesRef.current[seriesIndex]?.[idx] ?? null;
                 if (item.tooltipFormatter) {
                   return `${item.label}: ${item.tooltipFormatter(value)}`;
                 }
