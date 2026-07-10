@@ -20,6 +20,28 @@ export function useTrips(vehicleId: string | null, from: string | null, to: stri
   });
 }
 
+export function useTripMapRoutes(
+  vehicleId: string | null,
+  from: string | null,
+  to: string | null,
+  search = '',
+) {
+  const normalizedSearch = search.trim();
+  const authReady = useAuthReady();
+  const lifetime = !from && !to;
+  return useQuery({
+    queryKey: ['trips', 'map', 'v1', vehicleId, from, to, lifetime, normalizedSearch],
+    queryFn: () => api.getTripMap(vehicleId!, from, to, normalizedSearch, lifetime),
+    enabled: authReady && !!vehicleId,
+    staleTime: 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    meta: { persist: false },
+  });
+}
+
 export function useTrip(tripId: string | null, vehicleId: string | null) {
   const authReady = useAuthReady();
   return useQuery({
@@ -34,6 +56,22 @@ export function useTrip(tripId: string | null, vehicleId: string | null) {
   });
 }
 
+export function useTripDetailData(tripId: string | null, vehicleId: string | null) {
+  const authReady = useAuthReady();
+  return useQuery({
+    queryKey: ['trips', 'detail-data', 'v1', tripId, vehicleId],
+    queryFn: () => api.getTripDetailData(tripId!, vehicleId!),
+    enabled: authReady && !!tripId && !!vehicleId,
+    staleTime: Infinity,
+    gcTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    placeholderData: (previous) => previous,
+    meta: { persist: false },
+  });
+}
+
 export function useTripTrack(tripId: string | null, vehicleId: string | null) {
   const authReady = useAuthReady();
   return useQuery({
@@ -45,6 +83,7 @@ export function useTripTrack(tripId: string | null, vehicleId: string | null) {
     refetchOnReconnect: false,
     refetchOnMount: false,
     placeholderData: (previous) => previous,
+    meta: { persist: false },
   });
 }
 
@@ -59,6 +98,7 @@ export function useSpeedProfile(tripId: string | null, vehicleId: string | null)
     refetchOnReconnect: false,
     refetchOnMount: false,
     placeholderData: (previous) => previous,
+    meta: { persist: false },
   });
 }
 
@@ -73,6 +113,7 @@ export function useElevationProfile(tripId: string | null, vehicleId: string | n
     refetchOnReconnect: false,
     refetchOnMount: false,
     placeholderData: (previous) => previous,
+    meta: { persist: false },
   });
 }
 
@@ -87,6 +128,7 @@ export function useTripPowerProfile(tripId: string | null, vehicleId: string | n
     refetchOnReconnect: false,
     refetchOnMount: false,
     placeholderData: (previous) => previous,
+    meta: { persist: false },
   });
 }
 
@@ -101,5 +143,6 @@ export function useTripDetailSeries(tripId: string | null, vehicleId: string | n
     refetchOnReconnect: false,
     refetchOnMount: false,
     placeholderData: (previous) => previous,
+    meta: { persist: false },
   });
 }

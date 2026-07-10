@@ -400,24 +400,23 @@ function DashboardPageShellContent({
     })(shellState)
     : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
-  const enterEditAction = !currentEditMode && canEditDashboard ? (
+  const defaultTitleAction = !currentEditMode && canEditDashboard ? (
     <button
       type="button"
       onClick={enterEdit}
-      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-bg-surface px-3 text-sm font-medium text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-fg-tertiary/80 transition-colors hover:text-fg hover:bg-bg-elevated"
       title="Edit dashboard"
+      aria-label="Edit dashboard"
     >
       <Edit2 className="h-4 w-4" />
-      <span>Edit dashboard</span>
     </button>
   ) : null;
-  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions || enterEditAction ? (
+  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
     <div className="flex items-center gap-2">
       {vehicleAction}
       {efficiencyDisplayAction}
       {dateRangeAction}
       {pageExtraActions}
-      {enterEditAction}
     </div>
   ) : undefined;
 
@@ -425,7 +424,7 @@ function DashboardPageShellContent({
     <AppLayout activeKey={navKey}>
       <PageLayout
         title={title ?? activeConfig?.name ?? slug}
-        titleAction={renderTitleAction?.(shellState)}
+        titleAction={renderTitleAction?.(shellState) ?? defaultTitleAction}
         actions={pageActions}
       >
         {!effectiveVehicleId ? (

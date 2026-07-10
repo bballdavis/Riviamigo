@@ -26,6 +26,7 @@ use crate::{
         cost::recompute_charge_session_cost,
         geofences::match_geofence,
         trip_enrichment::{lookup_trip_outside_temp_c, resolve_trip_location, MatchedLocation},
+        trip_routes::build_route_preview,
     },
 };
 
@@ -2272,6 +2273,13 @@ async fn persist_trip(
         _ => MatchedLocation::none(),
     };
 
+    let route_points = trip
+        .points
+        .iter()
+        .map(|point| (point.lat, point.lng))
+        .collect::<Vec<_>>();
+    let route_preview = serde_json::to_value(build_route_preview(&route_points))?;
+
     sqlx::query(
         r#"INSERT INTO riviamigo.trips
            (id, vehicle_id, started_at, ended_at,
@@ -2286,8 +2294,9 @@ async fn persist_trip(
             range_start_mi, range_end_mi,
             power_max_kw, power_min_kw,
             elevation_gain_m, elevation_loss_m,
-            inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)"#,
+            inside_temp_avg_c, outside_temp_c, regen_wh, energy_wh, energy_strategy,
+            route_preview, route_preview_version)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,1)"#,
     )
         .bind(trip.trip_id)
         .bind(trip.vehicle_id)
@@ -2323,9 +2332,10 @@ async fn persist_trip(
         .bind(outside_temp_c)
         .bind(trip.regen_wh)
         .bind(energy_wh)
-    .bind(energy_strategy.as_deref())
-    .execute(pool)
-    .await?;
+        .bind(energy_strategy.as_deref())
+        .bind(route_preview)
+        .execute(pool)
+        .await?;
 
     if let Some(user_id) = owner_id {
         sqlx::query(

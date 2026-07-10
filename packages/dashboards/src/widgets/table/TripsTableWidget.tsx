@@ -1,10 +1,10 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useTrips, useDocumentTheme } from '@riviamigo/hooks';
+import { api, useTrips, useTripMapRoutes, useDocumentTheme } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { Badge } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
@@ -113,13 +113,6 @@ import {
 } from './tripTableStateStore';
 
 const ROWS_PER_PAGE_OPTIONS = [15, 25, 50, 100] as const;
-const TRACK_BATCH_SIZE = 15;
-const MAP_TRIPS_PAGE_SIZE = 200;
-
-function logTripsMapDebug(message: string, payload: Record<string, unknown>) {
-  if (!import.meta.env.DEV && !import.meta.env.MODE?.startsWith('test')) return;
-  console.debug(`[TripsMapWidget] ${message}`, payload);
-}
 
 export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const navigate = useNavigate();
@@ -130,136 +123,25 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const [mapStyleOverride, setMapStyleOverride] = React.useState<MapStyleMode | null>(null);
   const effectiveMapStyle: MapStyleMode = mapStyleOverride ?? mapStyle;
   const deferredSearch = React.useDeferredValue(search);
-  const searchTrimmed = deferredSearch.trim();
-  const lifetime = !ctx.from && !ctx.to;
-  const mapTrips = useInfiniteQuery({
-    queryKey: ['trips', 'list', 'v2', ctx.vehicleId, ctx.from, ctx.to, searchTrimmed, lifetime, 'all'],
-    initialPageParam: 1,
-    queryFn: ({ pageParam }) => api.listTrips(
-      ctx.vehicleId!,
-      ctx.from,
-      ctx.to,
-      pageParam,
-      MAP_TRIPS_PAGE_SIZE,
-      searchTrimmed,
-      lifetime,
-    ),
-    enabled: !!ctx.vehicleId,
-    staleTime: 60 * 1000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: false,
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.length * lastPage.per_page;
-      return loaded < lastPage.total ? allPages.length + 1 : undefined;
-    },
-  });
-
-  React.useEffect(() => {
-    if (mapTrips.hasNextPage && !mapTrips.isFetchingNextPage) {
-      void mapTrips.fetchNextPage();
-    }
-  }, [mapTrips.hasNextPage, mapTrips.isFetchingNextPage, mapTrips.fetchNextPage]);
-
-  const trips = React.useMemo(
-    () => (mapTrips.data?.pages.flatMap((page) => page.items) ?? []) as TripRow[],
-    [mapTrips.data],
+  const mapQuery = useTripMapRoutes(ctx.vehicleId, ctx.from, ctx.to, deferredSearch);
+  const routes = React.useMemo(
+    () => (mapQuery.data?.routes ?? []).map((route) => ({
+      id: route.trip_id,
+      track: route.coordinates.map(([lng, lat]) => ({ lat, lng })),
+    }) satisfies TripMapRoute),
+    [mapQuery.data],
   );
+  const routeIds = React.useMemo(() => new Set(routes.map((route) => route.id)), [routes]);
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
-  const [enabledUpTo, setEnabledUpTo] = React.useState(0);
-  const tripIdsKey = React.useMemo(() => trips.map((trip) => trip.id).join(','), [trips]);
 
   React.useEffect(() => {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
     resetTripTableState(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
   }, [ctx.vehicleId, ctx.from, ctx.to]);
 
-  React.useEffect(() => {
-    setEnabledUpTo(Math.min(TRACK_BATCH_SIZE, trips.length));
-  }, [tripIdsKey]);
-
-  const trackQueries = useQueries({
-    queries: trips.map((trip, index) => ({
-      queryKey: ['trips', 'track', trip.id, ctx.vehicleId],
-      queryFn: () => api.getTripTrack(trip.id, ctx.vehicleId!),
-      enabled: !!ctx.vehicleId && (index < enabledUpTo || selectedIds.includes(trip.id)),
-      // Stage route loads in small waves so larger ranges do not create a burst.
-      staleTime: Infinity,
-      gcTime: 24 * 60 * 60 * 1000,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      refetchOnMount: false,
-    })),
-  });
-
-  const currentWindowSize = Math.min(enabledUpTo, trips.length);
-  const settledInWindow = trackQueries
-    .slice(0, currentWindowSize)
-    .filter((query) => query.isSuccess || query.isError).length;
-  const initialBatchTarget = Math.min(TRACK_BATCH_SIZE, trips.length);
-  const initialBatchSettled = initialBatchTarget === 0
-    ? false
-    : trackQueries
-        .slice(0, initialBatchTarget)
-        .filter((query) => query.isSuccess || query.isError).length >= initialBatchTarget;
-
-  React.useEffect(() => {
-    if (
-      currentWindowSize > 0 &&
-      settledInWindow >= currentWindowSize &&
-      enabledUpTo < trips.length
-    ) {
-      setEnabledUpTo((prev) => Math.min(prev + TRACK_BATCH_SIZE, trips.length));
-    }
-  }, [currentWindowSize, enabledUpTo, settledInWindow, trips.length]);
-
-  const trackDataVersion = trackQueries.map((query) => query.dataUpdatedAt).join(',');
-
-  const routes = React.useMemo(() => (
-    trips
-      .map((trip, index) => {
-        const points = trackQueries[index]?.data ?? [];
-        return {
-          id: trip.id,
-          track: points
-            .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
-            .map((point) => ({ lat: point.lat, lng: point.lng })),
-        } satisfies TripMapRoute;
-      })
-      .filter((route) => route.track.length > 1)
-  ), [trackDataVersion, trips]);
-  const progressiveLoading = initialBatchSettled && enabledUpTo < trips.length;
-
-  React.useEffect(() => {
-    logTripsMapDebug('render_state', {
-      visibleTrips: trips.length,
-      enabledTrackQueries: trackQueries.filter((query) => query.fetchStatus !== 'idle' || query.isSuccess || query.isError).length,
-      settledInWindow,
-      currentWindowSize,
-      initialBatchTarget,
-      initialBatchSettled,
-      routeCount: routes.length,
-      enabledUpTo,
-      pageCount: mapTrips.data?.pages.length,
-      totalTrips: mapTrips.data?.pages.at(-1)?.total,
-      totalPages: mapTrips.data?.pages.at(-1)?.total != null && mapTrips.data?.pages.at(-1)?.per_page
-        ? Math.ceil(mapTrips.data.pages.at(-1)!.total / mapTrips.data.pages.at(-1)!.per_page)
-        : undefined,
-    });
-  }, [
-    currentWindowSize,
-    enabledUpTo,
-    initialBatchSettled,
-    initialBatchTarget,
-    routes.length,
-    settledInWindow,
-    trackQueries,
-    trips.length,
-  ]);
-
   const selectedRouteIds = React.useMemo(
-    () => selectedIds.filter((id) => routes.some((route) => route.id === id)),
-    [selectedIds, routes],
+    () => selectedIds.filter((id) => routeIds.has(id)),
+    [selectedIds, routeIds],
   );
   const selectedTripId = selectedRouteIds[0];
 
@@ -267,7 +149,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div ref={ref} className="relative min-h-0 flex-1">
         <div className="relative overflow-hidden rounded-lg border border-border bg-bg-surface" style={{ height }}>
-          {initialBatchSettled ? (
+          {!mapQuery.isLoading && !mapQuery.isError ? (
             <TripMapChart
               track={[]}
               routes={routes}
@@ -310,17 +192,19 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
             </>
           )}
         </div>
-      ) : trips.length === 0 ? (
-        <div className="shrink-0 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-tertiary">
-          Loading trips for this timeframe...
+      ) : mapQuery.isError ? (
+        <div className="shrink-0 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-fg-secondary">
+          Unable to load route map data.
         </div>
-      ) : !initialBatchSettled ? (
+      ) : routes.length === 0 ? (
         <div className="shrink-0 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-tertiary">
-          Loading initial route batch...
+          {mapQuery.data?.total_trips
+            ? 'No GPS route points in this timeframe.'
+            : 'No trips in this timeframe.'}
         </div>
-      ) : progressiveLoading ? (
+      ) : mapQuery.data?.missing_route_count ? (
         <div className="shrink-0 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-tertiary">
-          Loading additional routes...
+          {mapQuery.data.missing_route_count} trip{mapQuery.data.missing_route_count === 1 ? '' : 's'} have no GPS route.
         </div>
       ) : null}
     </div>

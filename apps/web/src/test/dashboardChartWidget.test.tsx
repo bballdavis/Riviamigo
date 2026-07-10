@@ -163,11 +163,13 @@ describe('DashboardChartWidget - smoothing controls', () => {
     renderWidget(instance);
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
-    const axisCard = screen.getByText('Battery level').closest('div.rounded-lg');
+    const axisCard = within(screen.getByRole('dialog', { name: 'Chart settings' }))
+      .getByText('State of Charge', { selector: 'p' })
+      .closest('div.rounded-lg');
     expect(axisCard).toBeTruthy();
     fireEvent.click(within(axisCard as HTMLElement).getByRole('button', { name: 'Manual' }));
-    fireEvent.change(screen.getByLabelText('Battery level minimum'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('Battery level maximum'), { target: { value: '90' } });
+    fireEvent.change(screen.getByLabelText('State of Charge minimum'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('State of Charge maximum'), { target: { value: '90' } });
 
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
 
@@ -176,7 +178,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).not.toBe('10|90');
 
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
-    fireEvent.click(screen.getByRole('option', { name: /battery level/i }));
+    fireEvent.click(screen.getByRole('option', { name: /state of charge/i }));
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
   });
 });
@@ -255,8 +257,36 @@ const mockEfficiencyVsTemp = vi.fn<() => { data: MockEfficiencyVsTempPoint[]; is
   data: [{ temp_c_low: 15, temp_c_high: 20, avg_efficiency_wh_mi: 300, trip_count: 3 }],
   isLoading: false,
 }));
-const mockPhantomDrain = vi.fn(() => ({
-  data: [{ day: '2024-01-01', total_soc_lost: 2.1, avg_drain_rate: 0.1, hours_parked: 20 }],
+const mockPhantomDrainPeriods = vi.fn(() => ({
+  data: {
+    vehicle_id: 'vehicle-1',
+    periods: [{
+      period_start: '2024-01-01T20:00:00Z',
+      period_end: '2024-01-02T08:00:00Z',
+      duration_hours: 12,
+      sleep_share_pct: 0.9,
+      state_coverage_pct: 0.95,
+      soc_start: 80,
+      soc_end: 77.6,
+      soc_lost_pct: 2.4,
+      drain_pct_per_hour: 0.2,
+      range_start_mi: 260,
+      range_end_mi: 252,
+      range_lost_mi: 8,
+      range_lost_per_hour_mi: 0.67,
+      energy_drained_kwh: 3,
+      avg_power_w: 250,
+      has_reduced_range: false,
+      validation_status: 'validated' as const,
+      validation_reason: null,
+      sample_count: 12,
+      start_sample_at: '2024-01-01T20:00:00Z',
+      end_sample_at: '2024-01-02T08:00:00Z',
+      movement_detected: false,
+      overlaps_trip: false,
+      overlaps_charge: false,
+    }],
+  },
   isLoading: false,
 }));
 const mockDegradation = vi.fn(() => ({
@@ -277,7 +307,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useEfficiencyTrend: () => mockEfficiencyTrend(),
   useEfficiencyByMode: () => mockEfficiencyByMode(),
   useEfficiencyVsTemp: () => mockEfficiencyVsTemp(),
-  usePhantomDrain: () => mockPhantomDrain(),
+  usePhantomDrainPeriods: () => mockPhantomDrainPeriods(),
   useDegradation: () => mockDegradation(),
   useBatteryMileage: () => mockBatteryMileage(),
 }));
@@ -350,7 +380,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       yUnit,
     }: {
       points: Array<{ ts: string | number | Date }>;
-      series: Array<{ label: string }>;
+      series: Array<{ label: string; tooltipOnly?: boolean }>;
       emptyTitle: string;
       smoothing?: number;
       xRange?: [number, number];
@@ -366,6 +396,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
           data-testid="rich-chart"
           data-smoothing={String(smoothing ?? 0)}
           data-series={series.map((item) => item.label).join('|')}
+          data-tooltip-only-series={series.filter((item) => item.tooltipOnly).map((item) => item.label).join('|')}
           data-x-range={xRange ? xRange.join('|') : ''}
           data-y-range={yRange ? yRange.join('|') : ''}
           data-y-right-range={yRightRange ? yRightRange.join('|') : ''}
@@ -378,7 +409,11 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
 
 // ── Subject ───────────────────────────────────────────────────────────────────
 // Import after mocks are registered.
-import { DashboardChartWidget, DashboardChartRenderer } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
+import {
+  buildPhantomDrainDailySeries,
+  DashboardChartWidget,
+  DashboardChartRenderer,
+} from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
 const CTX = { vehicleId: 'vehicle-1', from: '2024-01-01T00:00:00Z', to: '2024-01-31T23:59:59Z', chargeSessionId: 'session-1' };
 
@@ -414,26 +449,23 @@ function expectChartEmpty(emptyTitle: string) {
 describe('DashboardChartWidget — soc_history', () => {
   it('renders chart when soc data is present', () => {
     renderChart('soc-history');
-    expectChartHasData('No battery level history for this period');
+    expectChartHasData('No state of charge history for this period');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('State of Charge|Active Range');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-only-series')).toBe('Active Range');
   });
 
   it('shows empty state when no soc data', () => {
     mockSoc.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('soc-history');
-    expectChartEmpty('No battery level history for this period');
+    expectChartEmpty('No state of charge history for this period');
   });
 });
 
-describe('DashboardChartWidget — range_history', () => {
-  it('renders chart when range data is present', () => {
+describe('DashboardChartWidget — legacy range_history', () => {
+  it('resolves saved range history selections to the combined SoC chart', () => {
     renderChart('range-history');
-    expectChartHasData('No range history for this period');
-  });
-
-  it('shows empty state when no range data', () => {
-    mockRange.mockReturnValueOnce({ data: [], isLoading: false });
-    renderChart('range-history');
-    expectChartEmpty('No range history for this period');
+    expectChartHasData('No state of charge history for this period');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('State of Charge|Active Range');
   });
 });
 
@@ -604,12 +636,26 @@ describe('DashboardChartWidget — phantom_drain', () => {
   it('renders chart when drain data is present', () => {
     renderChart('phantom-drain');
     expectChartHasData('No phantom drain data for this period');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('Drain Rate|SoC Lost|Parked|Periods');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-only-series')).toBe('SoC Lost|Parked|Periods');
   });
 
   it('shows empty state when no drain data', () => {
-    mockPhantomDrain.mockReturnValueOnce({ data: [], isLoading: false });
+    mockPhantomDrainPeriods.mockReturnValueOnce({ data: { vehicle_id: 'vehicle-1', periods: [] }, isLoading: false });
     renderChart('phantom-drain');
     expectChartEmpty('No phantom drain data for this period');
+  });
+});
+
+describe('buildPhantomDrainDailySeries', () => {
+  it('splits a parked period across local days and preserves its duration-weighted drain rate', () => {
+    const period = mockPhantomDrainPeriods().data.periods[0]!;
+    const points = buildPhantomDrainDailySeries([period]);
+
+    expect(points.length).toBeGreaterThan(1);
+    expect(points.reduce((sum, point) => sum + point.parkedHours, 0)).toBeCloseTo(12);
+    expect(points.reduce((sum, point) => sum + point.socLost, 0)).toBeCloseTo(2.4);
+    points.forEach((point) => expect(point.drainRate).toBeCloseTo(0.2));
   });
 });
 

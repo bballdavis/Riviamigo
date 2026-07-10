@@ -148,6 +148,47 @@ export interface TripDetailSeriesPoint {
   tire_rr_psi: number | null;
 }
 
+export type TripRouteCoordinate = [lng: number, lat: number];
+
+export interface TripMapRoute {
+  trip_id: string;
+  coordinates: TripRouteCoordinate[];
+}
+
+export interface TripMapResponse {
+  vehicle_id: string;
+  from: string;
+  to: string;
+  total_trips: number;
+  missing_route_count: number;
+  routes: TripMapRoute[];
+}
+
+export interface TripDetailSamples {
+  elapsed_s: number[];
+  lat: Array<number | null>;
+  lng: Array<number | null>;
+  altitude_m: Array<number | null>;
+  speed_mph: Array<number | null>;
+  power_kw: Array<number | null>;
+  regen_power_kw: Array<number | null>;
+  battery_level: Array<number | null>;
+  outside_temp_c: Array<number | null>;
+  cabin_temp_c: Array<number | null>;
+  driver_temp_c: Array<number | null>;
+  hvac_active: Array<boolean | null>;
+  tire_fl_psi: Array<number | null>;
+  tire_fr_psi: Array<number | null>;
+  tire_rl_psi: Array<number | null>;
+  tire_rr_psi: Array<number | null>;
+}
+
+export interface TripDetailResponse {
+  trip: Trip;
+  sample_interval_seconds: number;
+  samples: TripDetailSamples;
+}
+
 export interface ChargeSession {
   id: string;
   vehicle_id: string;

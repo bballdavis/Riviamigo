@@ -20,18 +20,19 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/ui/charts', () => ({
   TripMapChart: () => <div data-testid="trip-map-chart" />,
-  TripDriveChart: () => <div data-testid="trip-drive-chart" />,
+  RichTimeSeriesChart: () => <div data-testid="trip-drive-chart" />,
+  CHART_COLORS: {
+    accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff',
+  },
   SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
-  TripTemperatureChart: () => <div data-testid="trip-temperature-chart" />,
-  TripElevationChart: () => <div data-testid="trip-elevation-chart" />,
-  TripTirePressureChart: () => <div data-testid="trip-tire-pressure-chart" />,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
   useDocumentTheme: () => false,
-  useTrip: () => ({
+  useTripDetailData: () => ({
     data: {
+      trip: {
       id: 'trip-1',
       vehicle_id: 'vehicle-1',
       started_at: '2024-01-01T12:00:00Z',
@@ -44,35 +45,13 @@ vi.mock('@riviamigo/hooks', () => ({
       soc_start: 80,
       soc_end: 68,
       duration_seconds: 3600,
+      },
+      sample_interval_seconds: 30,
+      samples: {
+        elapsed_s: [30], lat: [1], lng: [2], altitude_m: [10], speed_mph: [45], power_kw: [42], regen_power_kw: [0], battery_level: [80],
+        outside_temp_c: [12], cabin_temp_c: [20], driver_temp_c: [20], hvac_active: [true], tire_fl_psi: [48], tire_fr_psi: [47], tire_rl_psi: [49], tire_rr_psi: [49],
+      },
     },
-  }),
-  useTripTrack: () => ({ data: [{ lat: 1, lng: 2 }], isLoading: false }),
-  useTripDetailSeries: () => ({
-    data: [{
-      ts: '2024-01-01T12:00:30Z',
-      speed_mph: 45,
-      power_kw: 42,
-      regen_power_kw: 0,
-      battery_level: 80,
-      outside_temp_c: 12,
-      cabin_temp_c: 20,
-      hvac_active: true,
-      tire_fl_psi: 48,
-      tire_fr_psi: 47,
-      tire_rl_psi: 49,
-      tire_rr_psi: 49,
-    }],
-    isLoading: false,
-  }),
-  useTripPowerProfile: () => ({
-    data: [{
-      ts: '2024-01-01T12:00:40Z',
-      power_kw: 36,
-      regen_power_kw: 0,
-      speed_mph: 45,
-      battery_level: 80,
-    }],
-    isLoading: false,
   }),
 }));
 
@@ -84,6 +63,8 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatMph: (v: number) => `${v.toFixed(1)} mph`,
   formatEfficiencyValue: (v: number) => `${v}`,
   getEfficiencyUnitLabel: () => 'Wh/mi',
+  getUnitPreferences: () => ({ temperature_unit: 'celsius', pressure_unit: 'psi' }),
+  cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' '),
 }));
 
 import { TripDetailContent } from '../trips.$tripId';

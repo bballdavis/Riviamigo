@@ -70,6 +70,21 @@ Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
 
 If these return empty arrays while `/v1/vehicles/{id}/status` reports online, inspect the ingestion logs and Timescale rows next.
 
+## Read high-density trip data
+
+Trip map and detail views use bounded payloads so the browser does not need to request every raw telemetry point:
+
+```powershell
+Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
+  -Uri "$baseUrl/v1/trips/map?vehicle_id=$vehicleId&from=$from&to=$to"
+
+$tripId = "LOCAL_TRIP_UUID"
+Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
+  -Uri "$baseUrl/v1/trips/$tripId/detail?vehicle_id=$vehicleId"
+```
+
+`/v1/trips/map` returns one simplified route preview per matching trip. `/v1/trips/{id}/detail` returns one adaptive, columnar sample set containing the route points and chart metrics. The existing trip, track, series, speed, elevation, and power endpoints remain available for compatibility.
+
 ## Run the live endpoint contract test
 
 The opt-in Vitest contract test uses `VITE_RIVIAMIGO_DEV_API_KEY` and exercises the same endpoints the dashboard needs.

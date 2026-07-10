@@ -4,7 +4,6 @@ export type DashboardChartPage = 'overview' | 'battery' | 'charging' | 'efficien
 
 export type DashboardChartSource =
   | 'soc_history'
-  | 'range_history'
   | 'charging_sessions_energy'
   | 'charging_weekly_energy'
   | 'charge_session_curve'
@@ -79,15 +78,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       return {
         smoothing: true,
         axes: {
-          y: axisCapability('Battery level', definition.yUnit),
-        },
-        xDomainSource: 'dashboard-timeframe',
-      };
-    case 'range_history':
-      return {
-        smoothing: true,
-        axes: {
-          y: axisCapability('Range', definition.yUnit),
+          y: axisCapability('State of Charge', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };
@@ -127,9 +118,9 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'phantom_drain':
       return {
-        smoothing: true,
+        smoothing: false,
         axes: {
-          y: axisCapability('Battery drain', definition.yUnit),
+          y: axisCapability('Drain rate', definition.yUnit),
         },
         xDomainSource: 'dashboard-timeframe',
       };

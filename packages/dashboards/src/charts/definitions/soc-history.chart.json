@@ -1,7 +1,7 @@
 {
   "id": "soc-history",
-  "title": "Battery Level",
-  "description": "State of charge over time.",
+  "title": "State of Charge",
+  "description": "State of charge over time. Hover to see active range.",
   "pages": ["overview", "battery"],
   "source": "soc_history",
   "mode": "area",
@@ -10,5 +10,5 @@
   "stepInterpolation": true,
   "defaultSize": { "w": 6, "h": 4 },
   "minSize": { "w": 4, "h": 3 },
-  "emptyTitle": "No battery level history for this period"
+  "emptyTitle": "No state of charge history for this period"
 }

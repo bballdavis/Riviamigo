@@ -2,20 +2,18 @@ import React from 'react';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import {
-  useAuth, useTrip, useTripTrack, useTripDetailSeries, useDocumentTheme, useTripPowerProfile,
+  useAuth, useTripDetailData, useDocumentTheme,
 } from '@riviamigo/hooks';
 import {
   PageLayout,
 } from '@riviamigo/ui/primitives';
 import { SensorChipSummary } from '@riviamigo/dashboards';
-import type { TripDetailSeriesPoint, TripPowerPoint, TrackPoint } from '@riviamigo/types';
+import type { TripDetailSamples } from '@riviamigo/types';
 import {
   TripMapChart,
-  TripDriveChart as DriveChart,
+  RichTimeSeriesChart,
+  CHART_COLORS,
   SpeedHistogramChart as SpeedHistogram,
-  TripTemperatureChart as TemperatureChart,
-  TripElevationChart as ElevationChart,
-  TripTirePressureChart as TirePressureChart,
 } from '@riviamigo/ui/charts';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
@@ -26,6 +24,7 @@ import {
   formatEfficiencyValue,
   formatMph,
   getEfficiencyUnitLabel,
+  getUnitPreferences,
 } from '@riviamigo/ui/lib/utils';
 import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@riviamigo/ui/lib/tripPresentation';
 import { format, parseISO } from 'date-fns';
@@ -45,47 +44,37 @@ export function TripDetailContent() {
   const { defaultVehicleId } = useAuth();
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
-  const [activeElapsedS, setActiveElapsedS] = React.useState<number | null>(null);
-  const pendingActiveElapsedSRef = React.useRef<number | null>(null);
-  const committedActiveElapsedSRef = React.useRef<number | null>(null);
-  const hoverFrameRef = React.useRef<number | null>(null);
+  const [activeIndex, setActiveIndex] = React.useState<number | null>(null);
+  const pendingActiveIndexRef = React.useRef<number | null>(null);
+  const activeIndexFrameRef = React.useRef<number | null>(null);
   const isDark = useDocumentTheme();
 
-  const setActiveElapsedSThrottled = React.useCallback((value: number | null) => {
-    if (pendingActiveElapsedSRef.current === value) return;
-    if (hoverFrameRef.current === null && committedActiveElapsedSRef.current === value) return;
+  const setActiveIndexThrottled = React.useCallback((value: number | null) => {
+    if (pendingActiveIndexRef.current === value) return;
+    pendingActiveIndexRef.current = value;
+    if (activeIndexFrameRef.current !== null) return;
 
-    pendingActiveElapsedSRef.current = value;
-    if (hoverFrameRef.current !== null) return;
-
-    hoverFrameRef.current = requestAnimationFrame(() => {
-      hoverFrameRef.current = null;
-      const nextValue = pendingActiveElapsedSRef.current;
-      setActiveElapsedS((previous) => {
-        if (previous === nextValue) return previous;
-        committedActiveElapsedSRef.current = nextValue;
-        return nextValue;
-      });
+    activeIndexFrameRef.current = requestAnimationFrame(() => {
+      activeIndexFrameRef.current = null;
+      setActiveIndex((previous) => previous === pendingActiveIndexRef.current
+        ? previous
+        : pendingActiveIndexRef.current);
     });
   }, []);
 
-  React.useEffect(() => {
-    committedActiveElapsedSRef.current = activeElapsedS;
-  }, [activeElapsedS]);
-
   React.useEffect(() => () => {
-    if (hoverFrameRef.current !== null) {
-      cancelAnimationFrame(hoverFrameRef.current);
-      hoverFrameRef.current = null;
+    if (activeIndexFrameRef.current !== null) {
+      cancelAnimationFrame(activeIndexFrameRef.current);
+      activeIndexFrameRef.current = null;
     }
   }, []);
 
-  const { data: trip } = useTrip(tripId, defaultVehicleId);
-  const { data: track, isLoading: trackLoading } = useTripTrack(tripId, defaultVehicleId);
-  const { data: series, isLoading: seriesLoading } = useTripDetailSeries(tripId, defaultVehicleId);
-  const { data: powerProfile, isLoading: powerProfileLoading } = useTripPowerProfile(tripId, defaultVehicleId);
+  const { data: detailData, isLoading: detailLoading } = useTripDetailData(tripId, defaultVehicleId);
+  const trip = detailData?.trip;
+  const samples = detailData?.samples;
   const hasVehicle = !!defaultVehicleId;
-  const chartLoading = seriesLoading || powerProfileLoading;
+  const chartLoading = detailLoading;
+  const trackLoading = detailLoading;
   const mapStyle = isDark ? 'dark' : 'light';
 
   const title = trip
@@ -113,11 +102,50 @@ export function TripDetailContent() {
   }, [trip, durationMin]);
 
   const timeline = React.useMemo(
-    () => buildTimeline(trip?.started_at, series ?? [], powerProfile ?? [], track ?? []),
-    [trip?.started_at, series, powerProfile, track],
+    () => buildTimeline(trip?.started_at, samples),
+    [trip?.started_at, samples],
+  );
+
+  const mapTrack = React.useMemo(
+    () => (samples?.lat ?? []).flatMap((lat, index) => {
+      const lng = samples?.lng[index] ?? null;
+      return lat != null && lng != null ? [{ lat, lng }] : [];
+    }),
+    [samples],
   );
 
   const speedBins = React.useMemo(() => buildSpeedHistogram(timeline), [timeline]);
+  const chartPoints = React.useMemo(
+    () => timeline.map((point) => ({ ts: point.elapsed_s })),
+    [timeline],
+  );
+  const unitPreferences = getUnitPreferences();
+  const temperatureFactor = unitPreferences.temperature_unit === 'fahrenheit' ? 9 / 5 : 1;
+  const temperatureOffset = unitPreferences.temperature_unit === 'fahrenheit' ? 32 : 0;
+  const pressureFactor = unitPreferences.pressure_unit === 'kpa' ? 6.89476 : 1;
+  const temperatureUnitLabel = unitPreferences.temperature_unit === 'fahrenheit' ? '°F' : '°C';
+  const pressureUnitLabel = unitPreferences.pressure_unit === 'kpa' ? 'kPa' : 'psi';
+  const chartSeries = React.useMemo(() => ({
+    drive: [
+      { key: 'power', label: 'Power', color: CHART_COLORS.accent, values: timeline.map((point) => point.power_kw) },
+      { key: 'regen', label: 'Regen', color: CHART_COLORS.success, values: timeline.map((point) => point.regen_kw) },
+      { key: 'speed', label: 'Speed', color: CHART_COLORS.sky, yScale: 'y2' as const, values: timeline.map((point) => point.speed_mph) },
+    ],
+    temperature: [
+      { key: 'outside', label: 'Outside', color: CHART_COLORS.sky, values: timeline.map((point) => point.outside_temp_c == null ? null : point.outside_temp_c * temperatureFactor + temperatureOffset) },
+      { key: 'cabin', label: 'Cabin', color: CHART_COLORS.emerald, values: timeline.map((point) => point.cabin_temp_c == null ? null : point.cabin_temp_c * temperatureFactor + temperatureOffset) },
+      { key: 'driver', label: 'Driver setpoint', color: CHART_COLORS.warning, values: timeline.map((point) => point.driver_temp_c == null ? null : point.driver_temp_c * temperatureFactor + temperatureOffset) },
+    ],
+    elevation: [
+      { key: 'elevation', label: 'Elevation', color: CHART_COLORS.teal, values: timeline.map((point) => point.altitude_m == null ? null : point.altitude_m * 3.28084) },
+    ],
+    tires: [
+      { key: 'tire_fl', label: 'Front Left', color: CHART_COLORS.accent, values: timeline.map((point) => point.tire_fl_psi == null ? null : point.tire_fl_psi * pressureFactor) },
+      { key: 'tire_fr', label: 'Front Right', color: CHART_COLORS.sky, values: timeline.map((point) => point.tire_fr_psi == null ? null : point.tire_fr_psi * pressureFactor) },
+      { key: 'tire_rl', label: 'Rear Left', color: CHART_COLORS.success, values: timeline.map((point) => point.tire_rl_psi == null ? null : point.tire_rl_psi * pressureFactor) },
+      { key: 'tire_rr', label: 'Rear Right', color: CHART_COLORS.warning, values: timeline.map((point) => point.tire_rr_psi == null ? null : point.tire_rr_psi * pressureFactor) },
+    ],
+  }), [pressureFactor, temperatureFactor, temperatureOffset, timeline]);
 
   const metricCoverage = React.useMemo(() => {
     let powerSamples = 0;
@@ -141,8 +169,8 @@ export function TripDetailContent() {
   }, [timeline]);
 
   const activeTimelinePoint = React.useMemo(
-    () => getNearestTimelinePointByElapsed(timeline, activeElapsedS),
-    [timeline, activeElapsedS],
+    () => (activeIndex == null ? null : timeline[activeIndex] ?? null),
+    [timeline, activeIndex],
   );
 
   const activeMapPoint = React.useMemo(
@@ -210,7 +238,7 @@ export function TripDetailContent() {
                     </div>
                   ) : (
                     <TripMapChart
-                      track={(track ?? []).map((p) => ({ lat: p.lat, lng: p.lng }))}
+                      track={mapTrack}
                       activePoint={activeMapPoint}
                       height={360}
                       mapStyle={mapStyle}
@@ -227,11 +255,20 @@ export function TripDetailContent() {
                         : 'No power samples in trip telemetry'}
                     </p>
                   </div>
-                  <DriveChart
-                    data={timeline}
+                  <RichTimeSeriesChart
+                    points={chartPoints}
+                    series={chartSeries.drive}
                     loading={chartLoading}
-                    activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedSThrottled}
+                    height={280}
+                    xTime={false}
+                    xUnit="s"
+                    xValueFormatter={(value) => formatElapsed(value)}
+                    yUnit="kW"
+                    yRightUnit="mph"
+                    yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
+                    cursorSyncKey={`trip-${tripId}`}
+                    onCursorIndexChange={setActiveIndexThrottled}
+                    emptyTitle="No drive profile data for this trip."
                   />
                 </div>
 
@@ -245,7 +282,7 @@ export function TripDetailContent() {
                   </div>
                   <SpeedHistogram
                     bins={speedBins}
-                    loading={seriesLoading}
+                    loading={chartLoading}
                     activeBinLabel={activeSpeedBinLabel}
                   />
                 </div>
@@ -259,11 +296,19 @@ export function TripDetailContent() {
                         : 'No temperature samples in trip telemetry'}
                     </p>
                   </div>
-                  <TemperatureChart
-                    data={timeline}
-                    loading={seriesLoading}
-                    activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedSThrottled}
+                  <RichTimeSeriesChart
+                    points={chartPoints}
+                    series={chartSeries.temperature}
+                    loading={chartLoading}
+                    height={280}
+                    xTime={false}
+                    xUnit="s"
+                    xValueFormatter={(value) => formatElapsed(value)}
+                    yUnit={temperatureUnitLabel}
+                    yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
+                    cursorSyncKey={`trip-${tripId}`}
+                    onCursorIndexChange={setActiveIndexThrottled}
+                    emptyTitle="No temperature data for this trip."
                   />
                 </div>
               </div>
@@ -274,11 +319,19 @@ export function TripDetailContent() {
                     <h3 className="text-sm font-semibold text-fg">Elevation Profile</h3>
                     <p className="text-xs text-fg-tertiary">TeslaMate-style terrain profile across the drive</p>
                   </div>
-                  <ElevationChart
-                    data={timeline}
-                    loading={trackLoading}
-                    activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedSThrottled}
+                  <RichTimeSeriesChart
+                    points={chartPoints}
+                    series={chartSeries.elevation}
+                    loading={chartLoading}
+                    height={240}
+                    xTime={false}
+                    xUnit="s"
+                    xValueFormatter={(value) => formatElapsed(value)}
+                    yUnit="ft"
+                    yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
+                    cursorSyncKey={`trip-${tripId}`}
+                    onCursorIndexChange={setActiveIndexThrottled}
+                    emptyTitle="No elevation profile data for this trip."
                   />
                 </div>
 
@@ -291,11 +344,19 @@ export function TripDetailContent() {
                         : 'No tire pressure samples in trip telemetry'}
                     </p>
                   </div>
-                  <TirePressureChart
-                    data={timeline}
-                    loading={seriesLoading}
-                    activeElapsedS={activeElapsedS}
-                    onActiveElapsedSChange={setActiveElapsedSThrottled}
+                  <RichTimeSeriesChart
+                    points={chartPoints}
+                    series={chartSeries.tires}
+                    loading={chartLoading}
+                    height={240}
+                    xTime={false}
+                    xUnit="s"
+                    xValueFormatter={(value) => formatElapsed(value)}
+                    yUnit={pressureUnitLabel}
+                    yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
+                    cursorSyncKey={`trip-${tripId}`}
+                    onCursorIndexChange={setActiveIndexThrottled}
+                    emptyTitle="No tire pressure data for this trip."
                   />
                 </div>
               </div>
@@ -343,151 +404,30 @@ function formatElapsed(seconds: number) {
 
 function buildTimeline(
   tripStartIso: string | undefined,
-  series: TripDetailSeriesPoint[],
-  powerProfile: TripPowerPoint[],
-  track: TrackPoint[],
+  samples: TripDetailSamples | undefined,
 ): TimelinePoint[] {
-  if (!tripStartIso) return [];
+  if (!tripStartIso || !samples) return [];
   const tripStartMs = parseISO(tripStartIso).getTime();
   if (!Number.isFinite(tripStartMs)) return [];
-
-  const pointByElapsed = new Map<number, {
-    speed_mph: number | null;
-    power_kw: number | null;
-    regen_kw: number | null;
-    battery_level: number | null;
-    outside_temp_c: number | null;
-    cabin_temp_c: number | null;
-    driver_temp_c: number | null;
-    hvac_active: boolean | null;
-    tire_fl_psi: number | null;
-    tire_fr_psi: number | null;
-    tire_rl_psi: number | null;
-    tire_rr_psi: number | null;
-  }>();
-
-  for (const point of series) {
-    const tsMs = parseISO(point.ts).getTime();
-    if (!Number.isFinite(tsMs)) continue;
-    const elapsed = Math.round((tsMs - tripStartMs) / 1000);
-    if (elapsed < 0) continue;
-    pointByElapsed.set(elapsed, {
-      speed_mph: point.speed_mph,
-      power_kw: point.power_kw,
-      regen_kw: point.regen_power_kw != null ? -Math.abs(point.regen_power_kw) : null,
-      battery_level: point.battery_level,
-      outside_temp_c: point.outside_temp_c,
-      cabin_temp_c: point.cabin_temp_c,
-      driver_temp_c: point.driver_temp_c,
-      hvac_active: point.hvac_active,
-      tire_fl_psi: point.tire_fl_psi,
-      tire_fr_psi: point.tire_fr_psi,
-      tire_rl_psi: point.tire_rl_psi,
-      tire_rr_psi: point.tire_rr_psi,
-    });
-  }
-
-  for (const point of powerProfile) {
-    const tsMs = parseISO(point.ts).getTime();
-    if (!Number.isFinite(tsMs)) continue;
-    const elapsed = Math.round((tsMs - tripStartMs) / 1000);
-    if (elapsed < 0) continue;
-
-    const existing = pointByElapsed.get(elapsed) ?? {
-      speed_mph: null,
-      power_kw: null,
-      regen_kw: null,
-      battery_level: null,
-      outside_temp_c: null,
-      cabin_temp_c: null,
-      driver_temp_c: null,
-      hvac_active: null,
-      tire_fl_psi: null,
-      tire_fr_psi: null,
-      tire_rl_psi: null,
-      tire_rr_psi: null,
-    };
-
-    pointByElapsed.set(elapsed, {
-      speed_mph: existing.speed_mph ?? point.speed_mph,
-      power_kw: existing.power_kw ?? point.power_kw,
-      regen_kw: existing.regen_kw ?? (point.regen_power_kw != null ? -Math.abs(point.regen_power_kw) : null),
-      battery_level: existing.battery_level ?? point.battery_level,
-      outside_temp_c: existing.outside_temp_c,
-      cabin_temp_c: existing.cabin_temp_c,
-      driver_temp_c: existing.driver_temp_c,
-      hvac_active: existing.hvac_active,
-      tire_fl_psi: existing.tire_fl_psi,
-      tire_fr_psi: existing.tire_fr_psi,
-      tire_rl_psi: existing.tire_rl_psi,
-      tire_rr_psi: existing.tire_rr_psi,
-    });
-  }
-
-  const trackRows = track
-    .map((point) => ({
-      tsMs: typeof point.ts === 'string' ? parseISO(point.ts).getTime() : Number.NaN,
-      lat: point.lat,
-      lng: point.lng,
-      altitude_m: point.altitude_m,
-    }))
-    .filter((point) => Number.isFinite(point.tsMs))
-    .sort((a, b) => a.tsMs - b.tsMs);
-
-  const timelineRows = new Set<number>();
-  for (const key of pointByElapsed.keys()) timelineRows.add(key);
-  for (const point of trackRows) {
-    const elapsed = Math.round((point.tsMs - tripStartMs) / 1000);
-    if (elapsed >= 0) timelineRows.add(elapsed);
-  }
-
-  return [...timelineRows]
-    .filter((elapsed) => elapsed >= 0)
-    .sort((a, b) => a - b)
-    .map((elapsed) => {
-      const targetTs = tripStartMs + elapsed * 1000;
-      const trackPoint = findNearestTrackPoint(trackRows, targetTs);
-      const point = pointByElapsed.get(elapsed);
-      return {
-        elapsed_s: elapsed,
-        ts: new Date(targetTs).toISOString(),
-        speed_mph: point?.speed_mph ?? null,
-        power_kw: point?.power_kw ?? null,
-        regen_kw: point?.regen_kw ?? null,
-        battery_level: point?.battery_level ?? null,
-        outside_temp_c: point?.outside_temp_c ?? null,
-        cabin_temp_c: point?.cabin_temp_c ?? null,
-        driver_temp_c: point?.driver_temp_c ?? null,
-        hvac_active: point?.hvac_active ?? null,
-        tire_fl_psi: point?.tire_fl_psi ?? null,
-        tire_fr_psi: point?.tire_fr_psi ?? null,
-        tire_rl_psi: point?.tire_rl_psi ?? null,
-        tire_rr_psi: point?.tire_rr_psi ?? null,
-        altitude_m: trackPoint?.altitude_m ?? null,
-        lat: trackPoint?.lat ?? null,
-        lng: trackPoint?.lng ?? null,
-      };
-    });
-}
-
-function findNearestTrackPoint(
-  rows: Array<{ tsMs: number; lat: number; lng: number; altitude_m: number | null }>,
-  targetTsMs: number,
-) {
-  if (rows.length === 0) return null;
-  let lo = 0;
-  let hi = rows.length - 1;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const midRow = rows[mid];
-    if (!midRow) break;
-    if (midRow.tsMs < targetTsMs) lo = mid + 1;
-    else hi = mid;
-  }
-  const right = rows[lo] ?? rows[rows.length - 1];
-  const left = rows[Math.max(0, lo - 1)] ?? right;
-  if (!right || !left) return null;
-  return Math.abs(right.tsMs - targetTsMs) < Math.abs(left.tsMs - targetTsMs) ? right : left;
+  return samples.elapsed_s.map((elapsed, index) => ({
+    elapsed_s: elapsed,
+    ts: new Date(tripStartMs + elapsed * 1000).toISOString(),
+    speed_mph: samples.speed_mph[index] ?? null,
+    power_kw: samples.power_kw[index] ?? null,
+    regen_kw: samples.regen_power_kw[index] != null ? -Math.abs(samples.regen_power_kw[index]!) : null,
+    battery_level: samples.battery_level[index] ?? null,
+    outside_temp_c: samples.outside_temp_c[index] ?? null,
+    cabin_temp_c: samples.cabin_temp_c[index] ?? null,
+    driver_temp_c: samples.driver_temp_c[index] ?? null,
+    hvac_active: samples.hvac_active[index] ?? null,
+    tire_fl_psi: samples.tire_fl_psi[index] ?? null,
+    tire_fr_psi: samples.tire_fr_psi[index] ?? null,
+    tire_rl_psi: samples.tire_rl_psi[index] ?? null,
+    tire_rr_psi: samples.tire_rr_psi[index] ?? null,
+    altitude_m: samples.altitude_m[index] ?? null,
+    lat: samples.lat[index] ?? null,
+    lng: samples.lng[index] ?? null,
+  }));
 }
 
 function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramBin[] {
@@ -522,29 +462,4 @@ function buildSpeedHistogram(timeline: TimelinePoint[], binSize = 5): HistogramB
   return bins;
 }
 
-function getNearestTimelinePointByElapsed(timeline: TimelinePoint[], elapsedS: number | null) {
-  if (elapsedS == null || timeline.length === 0) return null;
-
-  let low = 0;
-  let high = timeline.length - 1;
-
-  while (low < high) {
-    const mid = (low + high) >> 1;
-    const candidate = timeline[mid];
-    if (!candidate) return timeline[Math.max(low, high)] ?? null;
-
-    if (candidate.elapsed_s < elapsedS) {
-      low = mid + 1;
-    } else {
-      high = mid;
-    }
-  }
-
-  const right = timeline[low] ?? null;
-  if (!right) return null;
-  const left = timeline[Math.max(0, low - 1)] ?? right;
-  return Math.abs(right.elapsed_s - elapsedS) <= Math.abs(left.elapsed_s - elapsedS)
-    ? right
-    : left;
-}
 

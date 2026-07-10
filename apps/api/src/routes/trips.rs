@@ -13,17 +13,20 @@ use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
+    services::trip_routes::build_route_preview,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/trips", get(list_trips))
         .route("/trips/:id", get(get_trip))
+        .route("/trips/:id/detail", get(get_trip_detail))
         .route("/trips/:id/track", get(get_track))
         .route("/trips/:id/speed", get(get_speed_profile))
         .route("/trips/:id/elevation", get(get_elevation_profile))
         .route("/trips/:id/power", get(get_power_profile))
         .route("/trips/:id/series", get(get_trip_series))
+        .route("/trips/map", get(get_trip_map))
         .route(
             "/vehicles/:vehicle_id/drives/:id/power",
             get(get_power_profile_path),
@@ -100,6 +103,15 @@ struct TripRow {
     outside_temp_c: Option<f64>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TripMapRow {
+    id: Uuid,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    route_preview: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize, Serialize, sqlx::FromRow)]
 struct TrackPoint {
     ts: DateTime<Utc>,
@@ -152,6 +164,76 @@ struct TripSeriesRow {
     tire_fr_psi: Option<f64>,
     tire_rl_psi: Option<f64>,
     tire_rr_psi: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct TripDetailSamples {
+    elapsed_s: Vec<i32>,
+    lat: Vec<Option<f64>>,
+    lng: Vec<Option<f64>>,
+    altitude_m: Vec<Option<f64>>,
+    speed_mph: Vec<Option<f64>>,
+    power_kw: Vec<Option<f64>>,
+    regen_power_kw: Vec<Option<f64>>,
+    battery_level: Vec<Option<f64>>,
+    outside_temp_c: Vec<Option<f64>>,
+    cabin_temp_c: Vec<Option<f64>>,
+    driver_temp_c: Vec<Option<f64>>,
+    hvac_active: Vec<Option<bool>>,
+    tire_fl_psi: Vec<Option<f64>>,
+    tire_fr_psi: Vec<Option<f64>>,
+    tire_rl_psi: Vec<Option<f64>>,
+    tire_rr_psi: Vec<Option<f64>>,
+}
+
+#[derive(Debug, Serialize)]
+struct TripDetailResponse {
+    trip: TripRow,
+    sample_interval_seconds: i32,
+    samples: TripDetailSamples,
+}
+
+#[derive(Debug, Serialize)]
+struct TripMapRoute {
+    trip_id: Uuid,
+    coordinates: Vec<[f64; 2]>,
+}
+
+#[derive(Debug, Serialize)]
+struct TripMapResponse {
+    vehicle_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    total_trips: usize,
+    missing_route_count: usize,
+    routes: Vec<TripMapRoute>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct DetailSampleRow {
+    elapsed_s: i32,
+    lat: Option<f64>,
+    lng: Option<f64>,
+    altitude_m: Option<f64>,
+    speed_mph: Option<f64>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+    battery_level: Option<f64>,
+    outside_temp_c: Option<f64>,
+    cabin_temp_c: Option<f64>,
+    driver_temp_c: Option<f64>,
+    hvac_active: Option<bool>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct RouteTelemetryRow {
+    trip_id: Uuid,
+    lat: f64,
+    lng: f64,
 }
 
 async fn list_trips(
@@ -286,6 +368,295 @@ async fn get_trip(
     .ok_or(AppError::NotFound)?;
 
     Ok(Json(row))
+}
+
+async fn get_trip_map(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(p): Query<TripListParams>,
+) -> Result<Json<TripMapResponse>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
+    let search = p
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
+
+    let rows = sqlx::query_as::<_, TripMapRow>(
+        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview
+           FROM riviamigo.trips t
+           LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5
+           LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id)
+           LEFT JOIN riviamigo.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id)
+           LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id)
+           LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id)
+           WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
+             AND ($4::text IS NULL OR
+                  COALESCE(sg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
+                  COALESCE(eg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
+                  COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
+                  COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
+                  COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
+                  COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
+           ORDER BY t.started_at DESC"#,
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .bind(search.as_deref())
+    .bind(auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut route_by_id = std::collections::HashMap::<Uuid, Vec<[f64; 2]>>::new();
+    let mut missing = Vec::new();
+    for row in &rows {
+        match row
+            .route_preview
+            .as_ref()
+            .and_then(|value| serde_json::from_value::<Vec<[f64; 2]>>(value.clone()).ok())
+            .filter(|points| points.len() > 1)
+        {
+            Some(points) => {
+                route_by_id.insert(row.id, points);
+            }
+            None => missing.push(row.id),
+        }
+    }
+
+    if !missing.is_empty() {
+        let missing_ids = missing
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        let linked = sqlx::query_as::<_, RouteTelemetryRow>(
+            r#"SELECT trip_id, latitude AS lat, longitude AS lng
+               FROM timeseries.telemetry
+               WHERE trip_id = ANY($1)
+                 AND latitude IS NOT NULL AND longitude IS NOT NULL
+                 AND NOT (latitude = 0 AND longitude = 0)
+               ORDER BY trip_id, ts"#,
+        )
+        .bind(&missing)
+        .fetch_all(&state.pool)
+        .await?;
+
+        let mut points_by_id = std::collections::HashMap::<Uuid, Vec<(f64, f64)>>::new();
+        for point in linked {
+            points_by_id
+                .entry(point.trip_id)
+                .or_default()
+                .push((point.lat, point.lng));
+        }
+
+        for row in rows.iter().filter(|row| missing_ids.contains(&row.id)) {
+            let mut points = points_by_id.remove(&row.id).unwrap_or_default();
+            if points.len() < 2 {
+                let fallback = sqlx::query_as::<_, (f64, f64)>(
+                    r#"SELECT latitude, longitude
+                       FROM timeseries.telemetry
+                       WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3
+                         AND latitude IS NOT NULL AND longitude IS NOT NULL
+                         AND NOT (latitude = 0 AND longitude = 0)
+                       ORDER BY ts LIMIT 5000"#,
+                )
+                .bind(row.vehicle_id)
+                .bind(row.started_at)
+                .bind(row.ended_at)
+                .fetch_all(&state.pool)
+                .await?;
+                points = fallback;
+            }
+
+            let preview = build_route_preview(&points);
+            if preview.len() > 1 {
+                route_by_id.insert(row.id, preview.clone());
+                let preview_json = serde_json::to_value(&preview)
+                    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+                sqlx::query(
+                    "UPDATE riviamigo.trips SET route_preview=$2, route_preview_version=1 WHERE id=$1",
+                )
+                .bind(row.id)
+                .bind(preview_json)
+                .execute(&state.pool)
+                .await?;
+            }
+        }
+    }
+
+    let routes = rows
+        .iter()
+        .filter_map(|row| {
+            route_by_id.remove(&row.id).map(|coordinates| TripMapRoute {
+                trip_id: row.id,
+                coordinates,
+            })
+        })
+        .collect::<Vec<_>>();
+    let missing_route_count = rows.len().saturating_sub(routes.len());
+
+    debug!(
+        vehicle_id = %vid,
+        total_trips = rows.len(),
+        route_count = routes.len(),
+        missing_route_count,
+        "trips.map_data"
+    );
+
+    Ok(Json(TripMapResponse {
+        vehicle_id: vid,
+        from,
+        to,
+        total_trips: rows.len(),
+        missing_route_count,
+        routes,
+    }))
+}
+
+async fn get_trip_detail(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(p): Query<VehicleParam>,
+) -> Result<Json<TripDetailResponse>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    let trip = sqlx::query_as::<_, TripRow>(
+        "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
+                t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
+                t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
+                COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
+                COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
+                sa.display_name AS start_address, ea.display_name AS end_address, \
+                t.outside_temp_c AS outside_temp_c \
+         FROM riviamigo.trips t \
+         LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
+         LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
+         LEFT JOIN riviamigo.geofences eg ON eg.id = COALESCE(tua.end_geofence_id, t.end_geofence_id) \
+         LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
+         LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
+         WHERE t.id=$1 AND t.vehicle_id=$2",
+    )
+    .bind(id)
+    .bind(vid)
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let duration_seconds = trip
+        .duration_seconds
+        .unwrap_or_else(|| (trip.ended_at - trip.started_at).num_seconds().max(0) as i32);
+    let sample_interval_seconds = detail_bucket_seconds(duration_seconds);
+    let cache_key = format!("trips:detail:v1:{vid}:{id}:{sample_interval_seconds}");
+    let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
+    if let Some(conn) = redis_conn.as_mut() {
+        let cached: Option<String> = conn.get(&cache_key).await.ok();
+        if let Some(payload) = cached {
+            if let Ok(samples) = serde_json::from_str::<TripDetailSamples>(&payload) {
+                debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.detail_cache");
+                return Ok(Json(TripDetailResponse {
+                    trip,
+                    sample_interval_seconds,
+                    samples,
+                }));
+            }
+        }
+    }
+
+    let rows = sqlx::query_as::<_, DetailSampleRow>(
+        r#"SELECT EXTRACT(EPOCH FROM (time_bucket(make_interval(secs => $5), ts) - $3))::int AS elapsed_s,
+                  last(latitude, ts) FILTER (WHERE latitude IS NOT NULL AND latitude <> 0) AS lat,
+                  last(longitude, ts) FILTER (WHERE longitude IS NOT NULL AND longitude <> 0) AS lng,
+                  last(altitude_m, ts) AS altitude_m,
+                  avg(speed_mph) AS speed_mph,
+                  avg(power_kw) AS power_kw,
+                  avg(regen_power_kw) AS regen_power_kw,
+                  avg(battery_level) AS battery_level,
+                  avg(outside_temp_c) AS outside_temp_c,
+                  avg(cabin_temp_c) AS cabin_temp_c,
+                  avg(driver_temp_c) AS driver_temp_c,
+                  bool_or(hvac_active) AS hvac_active,
+                  avg(tire_fl_psi) AS tire_fl_psi,
+                  avg(tire_fr_psi) AS tire_fr_psi,
+                  avg(tire_rl_psi) AS tire_rl_psi,
+                  avg(tire_rr_psi) AS tire_rr_psi
+           FROM timeseries.telemetry
+           WHERE vehicle_id=$1 AND ts>=$3 AND ts<=$4
+             AND (trip_id=$2 OR trip_id IS NULL)
+           GROUP BY 1
+           ORDER BY 1
+           LIMIT 2000"#,
+    )
+    .bind(vid)
+    .bind(id)
+    .bind(trip.started_at)
+    .bind(trip.ended_at)
+    .bind(sample_interval_seconds)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut samples = TripDetailSamples::default();
+    for row in rows {
+        samples.elapsed_s.push(row.elapsed_s);
+        samples.lat.push(row.lat);
+        samples.lng.push(row.lng);
+        samples.altitude_m.push(row.altitude_m);
+        samples.speed_mph.push(row.speed_mph);
+        samples.power_kw.push(row.power_kw);
+        samples.regen_power_kw.push(row.regen_power_kw);
+        samples.battery_level.push(row.battery_level);
+        samples.outside_temp_c.push(row.outside_temp_c);
+        samples.cabin_temp_c.push(row.cabin_temp_c);
+        samples.driver_temp_c.push(row.driver_temp_c);
+        samples.hvac_active.push(row.hvac_active);
+        samples.tire_fl_psi.push(row.tire_fl_psi);
+        samples.tire_fr_psi.push(row.tire_fr_psi);
+        samples.tire_rl_psi.push(row.tire_rl_psi);
+        samples.tire_rr_psi.push(row.tire_rr_psi);
+    }
+
+    if let Some(conn) = redis_conn.as_mut() {
+        if let Ok(payload) = serde_json::to_string(&samples) {
+            let _: Result<(), redis::RedisError> =
+                conn.set_ex(&cache_key, payload, 24 * 60 * 60).await;
+        }
+    }
+
+    debug!(
+        trip_id = %id,
+        vehicle_id = %vid,
+        cache_hit = false,
+        sample_interval_seconds,
+        point_count = samples.elapsed_s.len(),
+        "trips.detail_data"
+    );
+
+    Ok(Json(TripDetailResponse {
+        trip,
+        sample_interval_seconds,
+        samples,
+    }))
+}
+
+fn detail_bucket_seconds(duration_seconds: i32) -> i32 {
+    let target = (duration_seconds.max(1) as f64 / 1_500.0).ceil().max(1.0);
+    let exponent = target.log10().floor() as i32;
+    let base = 10_f64.powi(exponent);
+    [1.0, 2.0, 5.0, 10.0]
+        .into_iter()
+        .map(|step| step * base)
+        .find(|step| *step >= target)
+        .unwrap_or(10.0 * base)
+        .round() as i32
 }
 
 async fn get_track(
@@ -667,9 +1038,27 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
+    async fn trip_map_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(
+            get_status(app, "/v1/trips/map").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
     async fn trip_detail_requires_auth() {
         let app = make_app().await;
         let status = get_status(app, &format!("/v1/trips/{}", uuid::Uuid::new_v4())).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn trip_detail_data_requires_auth() {
+        let app = make_app().await;
+        let status = get_status(app, &format!("/v1/trips/{}/detail", uuid::Uuid::new_v4())).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 

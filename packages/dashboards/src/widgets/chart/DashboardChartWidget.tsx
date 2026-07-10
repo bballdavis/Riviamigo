@@ -10,7 +10,7 @@ import {
   useEfficiencyByMode,
   useEfficiencyTrend,
   useEfficiencyVsTemp,
-  usePhantomDrain,
+  usePhantomDrainPeriods,
   useRangeHistory,
   useSocHistory,
 } from '@riviamigo/hooks';
@@ -27,6 +27,7 @@ import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import {
   formatMiles,
+  formatPercent,
   formatTemp,
   getEfficiencyDisplay,
   getUnitSystem,
@@ -34,7 +35,7 @@ import {
   whPerMileToMiPerKwh,
   whPerMileToWhPerKm,
 } from '@riviamigo/ui/lib/utils';
-import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@riviamigo/types';
+import type { ChargeCurveAnalysisPoint, ChargeCurvePoint, PhantomDrainPeriod } from '@riviamigo/types';
 import {
   getChartDefinition,
   getChartDefinitions,
@@ -84,18 +85,30 @@ interface ResolvedDashboardChartOptions {
   headerSubtitle?: string;
 }
 
+const LEGACY_CHART_ID_ALIASES: Record<string, string> = {
+  'range-history': 'soc-history',
+};
+
+function normalizeChartId(chartId: string) {
+  return LEGACY_CHART_ID_ALIASES[chartId] ?? chartId;
+}
+
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
   const options = (instance.options ?? {}) as DashboardChartOptions;
   const page = isDashboardChartPage(options.page) ? options.page : undefined;
   const pageDefinitions = getChartDefinitions(page);
   const validIds = new Set(pageDefinitions.map((definition) => definition.id));
   const chartIds = Array.isArray(options.chartIds)
-    ? options.chartIds.filter((id): id is string => typeof id === 'string' && validIds.has(id))
+    ? [...new Set(options.chartIds
+      .filter((id): id is string => typeof id === 'string')
+      .map(normalizeChartId)
+      .filter((id) => validIds.has(id)))]
     : [];
   const fallbackIds = chartIds.length > 0 ? chartIds : pageDefinitions.map((definition) => definition.id);
   const fallbackChartId = fallbackIds[0] ?? getChartDefinitions()[0]?.id ?? 'soc-history';
-  const chartId = typeof options.chartId === 'string' && validIds.has(options.chartId)
-    ? options.chartId
+  const configuredChartId = typeof options.chartId === 'string' ? normalizeChartId(options.chartId) : undefined;
+  const chartId = configuredChartId && validIds.has(configuredChartId)
+    ? configuredChartId
     : fallbackChartId;
 
   return {
@@ -348,11 +361,11 @@ export function DashboardChartRenderer({
   smoothing?: number;
   settings?: DashboardChartDisplaySettings;
 }) {
-  const definition = getChartDefinition(chartId);
+  const definition = getChartDefinition(normalizeChartId(chartId));
   const source = definition?.source;
   const needsSoc = source === 'soc_history';
   const { data: soc = [], isLoading: socLoading } = useSocHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: range = [], isLoading: rangeLoading } = useRangeHistory(source === 'range_history' ? ctx.vehicleId : null, ctx.from, ctx.to);
+  const { data: range = [], isLoading: rangeLoading } = useRangeHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: chargingChartSeries, isLoading: chargingChartSeriesLoading } = useChargingChartSeries(
     source === 'charging_weekly_energy' || source === 'charging_sessions_energy' ? ctx.vehicleId : null,
     ctx.from,
@@ -370,7 +383,13 @@ export function DashboardChartRenderer({
   const { data: trend = [], isLoading: trendLoading } = useEfficiencyTrend(source === 'efficiency_trend' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: efficiencyByMode = [], isLoading: efficiencyByModeLoading } = useEfficiencyByMode(source === 'efficiency_mode' ? ctx.vehicleId : null, ctx.from, ctx.to);
   const { data: efficiencyByTemp = [], isLoading: efficiencyByTempLoading } = useEfficiencyVsTemp(source === 'efficiency_temperature' ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: phantom = [], isLoading: phantomLoading } = usePhantomDrain(source === 'phantom_drain' ? ctx.vehicleId : null, ctx.from, ctx.to);
+  const { data: phantomPeriods, isLoading: phantomLoading } = usePhantomDrainPeriods(
+    source === 'phantom_drain' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
+    500,
+    6,
+  );
   const { data: degradation = [], isLoading: degradationLoading } = useDegradation(
     source === 'battery_degradation' ? ctx.vehicleId : null,
     ctx.from,
@@ -392,6 +411,7 @@ export function DashboardChartRenderer({
 
   const dailyChargeSeries = chargingChartSeries?.daily ?? [];
   const dailyChargeSessions = chargingChartSeries?.daily_sessions ?? [];
+  const phantomDrainDaily = buildPhantomDrainDailySeries(phantomPeriods?.periods ?? []);
   const mileagePoints = mileage.map((point) => ({
     ts: point.ts,
     x: point.odometer_mi,
@@ -407,9 +427,15 @@ export function DashboardChartRenderer({
 
   switch (definition.source) {
     case 'soc_history':
-      return renderSocHistoryChart(definition, height, socLoading, soc.map((point) => ({ ts: point.ts, value: point.value })), rendererSmoothing, yRange);
-    case 'range_history':
-      return renderSingleChart(definition, height, rangeLoading, range.map((point) => ({ ts: point.ts, value: point.value })), rendererSmoothing, yRange);
+      return renderSocHistoryChart(
+        definition,
+        height,
+        socLoading || rangeLoading,
+        soc.map((point) => ({ ts: point.ts, value: point.value })),
+        range.map((point) => ({ ts: point.ts, value: point.value })),
+        rendererSmoothing,
+        yRange,
+      );
     case 'charging_sessions_energy':
       return (
         <ChargingSessionsChart
@@ -464,7 +490,7 @@ export function DashboardChartRenderer({
     case 'efficiency_mode':
       return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
     case 'phantom_drain':
-      return renderSingleChart(definition, height, phantomLoading, phantom.map((point) => ({ ts: point.day, value: point.total_soc_lost })), rendererSmoothing, yRange);
+      return renderPhantomDrainChart(definition, height, phantomLoading, phantomDrainDaily, yRange);
     case 'battery_degradation':
       return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), rendererSmoothing, yRange);
     case 'battery_capacity_mileage':
@@ -498,24 +524,29 @@ function renderSocHistoryChart(
   definition: DashboardChartDefinition,
   height: number,
   loading: boolean,
-  data: Array<{ ts: string; value: number | null }>,
+  soc: Array<{ ts: string; value: number | null }>,
+  range: Array<{ ts: string; value: number | null }>,
   smoothing = 0,
   manualYRange?: [number, number],
 ) {
-  const values = data.map((point) => point.value).filter((value): value is number => value != null && Number.isFinite(value));
-  const average = values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  const rangeByTimestamp = new Map(range.map((point) => [point.ts, point.value]));
 
   return (
     <RichTimeSeriesChart
-      points={data.map((point) => ({ ts: point.ts }))}
+      points={soc.map((point) => ({ ts: point.ts }))}
       series={[
-        { key: definition.id, label: definition.title, values: data.map((point) => point.value), mode: definition.mode ?? 'line' },
         {
-          key: `${definition.id}-avg`,
-          label: 'Period Avg',
-          values: data.map(() => average),
-          color: CHART_COLORS.emerald,
-          mode: 'line',
+          key: definition.id,
+          label: definition.title,
+          values: soc.map((point) => point.value),
+          mode: definition.mode ?? 'line',
+        },
+        {
+          key: `${definition.id}-active-range`,
+          label: 'Active Range',
+          values: soc.map((point) => rangeByTimestamp.get(point.ts) ?? null),
+          tooltipOnly: true,
+          tooltipFormatter: formatMiles,
         },
       ]}
       loading={loading}
@@ -588,6 +619,118 @@ function ChargingSessionsChart({
       height={height}
       {...(selectedDayLocal !== undefined ? { selectedDayLocal } : {})}
       {...(onDayClick ? { onDayClick } : {})}
+    />
+  );
+}
+
+interface PhantomDrainDailyPoint {
+  ts: string;
+  drainRate: number;
+  socLost: number;
+  parkedHours: number;
+  periodCount: number;
+}
+
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+export function buildPhantomDrainDailySeries(periods: PhantomDrainPeriod[]): PhantomDrainDailyPoint[] {
+  const byDay = new Map<string, PhantomDrainDailyPoint>();
+
+  for (const period of periods) {
+    if (period.validation_status !== 'validated') continue;
+    const start = period.period_start ? new Date(period.period_start) : null;
+    const end = period.period_end ? new Date(period.period_end) : null;
+    const socLost = period.soc_lost_pct;
+    if (!start || !end || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || !isFiniteNumber(socLost) || end <= start) {
+      continue;
+    }
+
+    const totalMilliseconds = end.getTime() - start.getTime();
+    let cursor = new Date(start);
+    while (cursor < end) {
+      const nextDay = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+      const segmentEnd = nextDay < end ? nextDay : end;
+      const segmentMilliseconds = segmentEnd.getTime() - cursor.getTime();
+      if (segmentMilliseconds <= 0) break;
+
+      const dayStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
+      const key = dayStart.toISOString();
+      const segmentHours = segmentMilliseconds / (60 * 60 * 1000);
+      const segmentLoss = socLost * (segmentMilliseconds / totalMilliseconds);
+      const current = byDay.get(key) ?? {
+        ts: key,
+        drainRate: 0,
+        socLost: 0,
+        parkedHours: 0,
+        periodCount: 0,
+      };
+
+      current.socLost += segmentLoss;
+      current.parkedHours += segmentHours;
+      current.periodCount += 1;
+      byDay.set(key, current);
+      cursor = segmentEnd;
+    }
+  }
+
+  return [...byDay.values()]
+    .map((point) => ({
+      ...point,
+      drainRate: point.parkedHours > 0 ? point.socLost / point.parkedHours : 0,
+    }))
+    .filter((point) => Number.isFinite(point.drainRate))
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
+function renderPhantomDrainChart(
+  definition: DashboardChartDefinition,
+  height: number,
+  loading: boolean,
+  data: PhantomDrainDailyPoint[],
+  manualYRange?: [number, number],
+) {
+  return (
+    <RichTimeSeriesChart
+      points={data.map((point) => ({ ts: point.ts }))}
+      series={[
+        {
+          key: definition.id,
+          label: 'Drain Rate',
+          values: data.map((point) => point.drainRate),
+          mode: 'bar',
+          tooltipFormatter: (value) => value == null ? '-' : `${formatPercent(value, 2)} / h`,
+        },
+        {
+          key: `${definition.id}-loss`,
+          label: 'SoC Lost',
+          values: data.map((point) => point.socLost),
+          tooltipOnly: true,
+          tooltipFormatter: (value) => value == null ? '-' : formatPercent(value, 2),
+        },
+        {
+          key: `${definition.id}-hours`,
+          label: 'Parked',
+          values: data.map((point) => point.parkedHours),
+          tooltipOnly: true,
+          tooltipFormatter: (value) => value == null ? '-' : `${value.toFixed(1)} h`,
+        },
+        {
+          key: `${definition.id}-periods`,
+          label: 'Periods',
+          values: data.map((point) => point.periodCount),
+          tooltipOnly: true,
+          tooltipFormatter: (value) => value == null ? '-' : String(Math.round(value)),
+        },
+      ]}
+      loading={loading}
+      emptyTitle={definition.emptyTitle}
+      height={height}
+      yUnit={definition.yUnit}
+      yRange={manualYRange ?? definition.yRange}
+      mode="bar"
+      smoothing={0}
     />
   );
 }
@@ -1263,12 +1406,22 @@ function normalizeCurveSmoothing(value: unknown) {
 function normalizeChartSettingsMap(value: unknown): Record<string, DashboardChartDisplaySettings> {
   if (!value || typeof value !== 'object') return {};
 
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).flatMap(([chartId, chartSettings]) => {
-      const normalized = normalizeChartDisplaySettings(chartSettings);
-      return normalized ? [[chartId, normalized] as const] : [];
-    }),
-  );
+  const entries = Object.entries(value as Record<string, unknown>);
+  const result: Record<string, DashboardChartDisplaySettings> = {};
+  for (const [chartId, chartSettings] of entries) {
+    const normalized = normalizeChartDisplaySettings(chartSettings);
+    if (normalized && chartId === normalizeChartId(chartId)) {
+      result[chartId] = normalized;
+    }
+  }
+  for (const [chartId, chartSettings] of entries) {
+    const normalized = normalizeChartDisplaySettings(chartSettings);
+    const normalizedChartId = normalizeChartId(chartId);
+    if (normalized && !(normalizedChartId in result)) {
+      result[normalizedChartId] = normalized;
+    }
+  }
+  return result;
 }
 
 function normalizeChartDisplaySettings(value: unknown): DashboardChartDisplaySettings | null {
