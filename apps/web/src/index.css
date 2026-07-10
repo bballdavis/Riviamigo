@@ -3,6 +3,7 @@
 
 /* Scan the shared UI package — outside auto-detection root */
 @source "../../../packages/ui/src/**/*.{ts,tsx}";
+@source "../../../packages/dashboards/src/**/*.{ts,tsx}";
 
 /*
  * Bridge design tokens to Tailwind v4's color/font/shadow scales.

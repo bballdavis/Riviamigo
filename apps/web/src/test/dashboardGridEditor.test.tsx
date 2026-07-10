@@ -118,6 +118,13 @@ describe('GridEditor overlays', () => {
 
     const styles = getEditorStyles();
     expect(styles).toContain('.rgl-editor .rgl-widget-control');
+    expect(styles).toContain('position: absolute');
+    expect(styles).toContain('top: 0.5rem');
+    expect(styles).toContain('z-index: 200');
+    expect(styles).toContain('.rgl-editor [data-widget-move-control="true"]');
+    expect(styles).toContain('left: 0.5rem');
+    expect(styles).toContain('.rgl-editor [data-widget-edit-control="true"]');
+    expect(styles).toContain('right: 0.5rem');
     expect(styles).toContain('opacity: 0.72');
     expect(styles).toContain('pointer-events: auto');
     expect(styles).not.toMatch(/\.rgl-widget-control\s*\{[^}]*opacity:\s*0;/s);

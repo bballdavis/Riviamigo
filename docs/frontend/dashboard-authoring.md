@@ -169,6 +169,8 @@ In edit mode, widget chrome is split by purpose:
 
 `WidgetChrome` owns the shared frame and edit overlay. Do not add per-widget or per-route hover edit buttons. `GridEditor` should only decide selection, layout, palette, and drawer state, then delegate frame rendering to `WidgetChrome`.
 
+The editor owns the overlay's placement, stacking, and pointer behavior through its package CSS. The web app must explicitly scan `packages/dashboards/src` from its Tailwind CSS entrypoint; do not make widget editing depend only on utility discovery from a consuming route or a long-running dev-server cache.
+
 The editor drawer is a full-height right panel on desktop. At mobile breakpoints it becomes a bounded bottom panel and reserves matching page space so the grid remains scrollable and widget controls cannot be covered by the editor surface.
 
 Dashboard layout persistence remains explicit-save:
