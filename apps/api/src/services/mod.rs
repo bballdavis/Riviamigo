@@ -6,4 +6,5 @@ pub mod cost;
 pub mod geofences;
 pub mod nominatim;
 pub mod trip_enrichment;
+pub mod trip_routes;
 pub mod weather;

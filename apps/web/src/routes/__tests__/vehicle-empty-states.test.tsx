@@ -42,6 +42,8 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 
 vi.mock('@riviamigo/ui/charts', () => ({
   TripMapChart: () => <div data-testid="trip-map-chart" />,
+  RichTimeSeriesChart: () => <div data-testid="rich-time-series-chart" />,
+  CHART_COLORS: { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },
   TripDriveChart: () => <div data-testid="trip-drive-chart" />,
   SpeedHistogramChart: () => <div data-testid="speed-histogram-chart" />,
   TripTemperatureChart: () => <div data-testid="trip-temperature-chart" />,
@@ -67,6 +69,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useSavedPlaces: () => ({ data: [], isLoading: false, isFetching: false, isError: false }),
   useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false }),
   useTrip: () => ({ data: undefined, isLoading: false }),
+  useTripDetailData: () => ({ data: undefined, isLoading: false }),
   useTripTrack: () => ({ data: undefined, isLoading: false }),
   useTripDetailSeries: () => ({ data: undefined, isLoading: false }),
   useTripPowerProfile: () => ({ data: undefined, isLoading: false }),

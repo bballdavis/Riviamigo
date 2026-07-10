@@ -7,7 +7,9 @@ export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from '.
 export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
 export {
 	useTrips,
+	useTripMapRoutes,
 	useTrip,
+	useTripDetailData,
 	useTripTrack,
 	useSpeedProfile,
 	useElevationProfile,

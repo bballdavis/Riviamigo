@@ -296,6 +296,18 @@ fn catalog(include_admin: bool) -> ApiCatalogResponse {
         },
         ApiEndpointDoc {
             method: "GET",
+            path: "/v1/trips/map",
+            minimum_access: "view",
+            purpose: "Read compact route previews for all trips in a timeframe.",
+        },
+        ApiEndpointDoc {
+            method: "GET",
+            path: "/v1/trips/{id}/detail",
+            minimum_access: "view",
+            purpose: "Read one adaptive, synchronized trip telemetry payload.",
+        },
+        ApiEndpointDoc {
+            method: "GET",
             path: "/v1/charging",
             minimum_access: "view",
             purpose: "Read charging session summaries.",

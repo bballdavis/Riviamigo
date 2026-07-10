@@ -19,7 +19,7 @@ class MockMap {
   removeLayer = vi.fn((id: string) => {
     this.layers.delete(id);
   });
-  addSource = vi.fn((id: string) => {
+  addSource = vi.fn((id: string, _source?: unknown) => {
     this.sources.set(id, { setData: vi.fn() });
   });
   getSource = vi.fn((id: string) => this.sources.get(id));
@@ -85,9 +85,16 @@ describe('TripMapChart', () => {
       mockMap.emit('load');
     });
 
-    expect(mockMap.addSource).toHaveBeenCalledTimes(15);
-    expect(mockMap.sources.has('trip-trip-1')).toBe(true);
-    expect(mockMap.sources.has('trip-trip-15')).toBe(true);
+    expect(mockMap.addSource).toHaveBeenCalledTimes(1);
+    expect(mockMap.sources.has('trip-routes')).toBe(true);
+    expect(mockMap.layers.has('trip-routes-line')).toBe(true);
+    expect(mockMap.layers.has('trip-routes-hit')).toBe(true);
+    expect(mockMap.addSource).toHaveBeenCalledWith(
+      'trip-routes',
+      expect.objectContaining({ data: expect.objectContaining({ features: expect.any(Array) }) }),
+    );
+    const sourceCall = mockMap.addSource.mock.calls[0]?.[1] as unknown as { data: { features: unknown[] } };
+    expect(sourceCall.data.features).toHaveLength(15);
     expect(mockMap.fitBounds).toHaveBeenCalledTimes(1);
   });
 
@@ -108,8 +115,7 @@ describe('TripMapChart', () => {
       mockMap.emit('load');
     });
 
-    expect(mockMap.sources.has('trip-trip-1')).toBe(true);
-    expect(mockMap.sources.has('trip-trip-2')).toBe(true);
+    expect(mockMap.sources.has('trip-routes')).toBe(true);
 
     rerender(
       <TripMapChart
@@ -122,8 +128,7 @@ describe('TripMapChart', () => {
     );
 
     await waitFor(() => {
-      expect(mockMap.sources.has('trip-trip-1')).toBe(false);
-      expect(mockMap.sources.has('trip-trip-2')).toBe(true);
+      expect(mockMap.sources.has('trip-routes')).toBe(true);
     });
 
     expect(mockMap.fitBounds).toHaveBeenLastCalledWith(

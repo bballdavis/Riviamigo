@@ -13,6 +13,10 @@ export interface RichSeries {
   color?: string;
   values: Array<number | null>;
   mode?: 'line' | 'area' | 'bar' | 'scatter';
+  /** Include values in the hover tooltip without drawing a series or legend item. */
+  tooltipOnly?: boolean;
+  /** Formats this series in the hover tooltip, independent of the chart axis unit. */
+  tooltipFormatter?: (value: number | null | undefined) => string;
   /** Which Y scale this series is drawn on. Default 'y' (left). Use 'y2' for a right axis. */
   yScale?: 'y' | 'y2';
 }
@@ -40,6 +44,10 @@ export interface RichTimeSeriesChartProps {
   yRightRange?: [number, number] | undefined;
   stepInterpolation?: boolean | undefined;
   xSplits?: number[] | undefined;
+  /** Native uPlot cursor synchronization group for dense coordinated charts. */
+  cursorSyncKey?: string | undefined;
+  /** Receives the aligned sample index without forcing the chart to re-render. */
+  onCursorIndexChange?: ((index: number | null) => void) | undefined;
 }
 
 function toSeconds(value: string | number | Date) {
@@ -308,6 +316,8 @@ export function RichTimeSeriesChart({
   yRightRange,
   stepInterpolation = false,
   xSplits,
+  cursorSyncKey,
+  onCursorIndexChange,
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
@@ -322,6 +332,7 @@ export function RichTimeSeriesChart({
   const xUnitRef = React.useRef(xUnit);
   const xValueFormatterRef = React.useRef(xValueFormatter);
   const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
+  const onCursorIndexChangeRef = React.useRef(onCursorIndexChange);
   const yPrecisionRef = React.useRef(0);
   const yRightPrecisionRef = React.useRef(0);
   const alignedDataRef = React.useRef<AlignedData>([[], []]);
@@ -333,6 +344,7 @@ export function RichTimeSeriesChart({
   xUnitRef.current = xUnit;
   xValueFormatterRef.current = xValueFormatter;
   xSecondaryFormatterRef.current = xSecondaryFormatter;
+  onCursorIndexChangeRef.current = onCursorIndexChange;
 
   const smoothingAmount = smoothing ?? 0;
 
@@ -344,7 +356,8 @@ export function RichTimeSeriesChart({
   alignedDataRef.current = alignedData;
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
-  const showLegend = series.length > 0;
+  const legendSeries = series.filter((item) => !item.tooltipOnly);
+  const showLegend = legendSeries.length > 0;
   const chartHeight = Math.max(120, height - (showLegend ? 34 : 0));
   const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
 
@@ -353,9 +366,10 @@ export function RichTimeSeriesChart({
       `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
-      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}`).join('|') +
+      `${cursorSyncKey ?? ''}|` +
+      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -375,14 +389,14 @@ export function RichTimeSeriesChart({
     const xValues = alignedDataRef.current[0] as number[];
     const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
 
-    const hasRightAxis = seriesRef.current.some((s) => s.yScale === 'y2');
+    const hasRightAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
 
     const makeUSeries = (): Series[] => [
       {},
       ...seriesRef.current.map((item, index) => {
         const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
         const seriesMode = item.mode ?? mode;
-        const hidden = hiddenKeys.has(item.key);
+        const hidden = hiddenKeys.has(item.key) || item.tooltipOnly === true;
         const next: Series = {
           label: item.label,
           show: !hidden,
@@ -530,6 +544,7 @@ export function RichTimeSeriesChart({
       cursor: {
         drag: { x: true, y: false },
         points: { size: 6 },
+        ...(cursorSyncKey ? { sync: { key: cursorSyncKey, scales: ['x', null] } } : {}),
       },
       legend: { show: false },
       scales: {
@@ -544,9 +559,11 @@ export function RichTimeSeriesChart({
           (u) => {
             const idx = u.cursor.idx;
             if (idx == null || idx < 0) {
+              onCursorIndexChangeRef.current?.(null);
               setTooltip(null);
               return;
             }
+            onCursorIndexChangeRef.current?.(idx);
             const data = alignedDataRef.current;
             const currentSeries = seriesRef.current;
             const timestamp = data[0]?.[idx];
@@ -554,6 +571,9 @@ export function RichTimeSeriesChart({
               .map((item, seriesIndex) => {
                 if (hiddenKeys.has(item.key)) return null;
                 const value = data[seriesIndex + 1]?.[idx] as number | null | undefined;
+                if (item.tooltipFormatter) {
+                  return `${item.label}: ${item.tooltipFormatter(value)}`;
+                }
                 // Use the right-axis unit for y2 series, primary unit for y series.
                 const unit = item.yScale === 'y2' ? yRightUnitRef.current : yUnitRef.current;
                 const precision = item.yScale === 'y2' ? yRightPrecisionRef.current : yPrecisionRef.current;
@@ -652,7 +672,7 @@ export function RichTimeSeriesChart({
       ) : null}
       {showLegend ? (
         <div className="flex h-[34px] shrink-0 items-center justify-center gap-3 border-t border-border/60 px-3 text-[11px] text-fg-tertiary">
-          {series.map((item, index) => {
+          {legendSeries.map((item, index) => {
             const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
             const isHidden = hiddenKeys.has(item.key);
             return (

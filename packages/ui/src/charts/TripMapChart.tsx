@@ -30,9 +30,9 @@ interface MapSourceApi {
 
 interface MapApi {
   remove(): void;
-  on(event: string, cb: () => void): void;
-  on(event: string, layerId: string, cb: () => void): void;
-  off(event: string, cb: () => void): void;
+  on(event: string, cb: (event?: unknown) => void): void;
+  on(event: string, layerId: string, cb: (event?: unknown) => void): void;
+  off(event: string, cb: (event?: unknown) => void): void;
   resize(): void;
   fitBounds(bounds: [[number, number], [number, number]], options?: { padding?: number; animate?: boolean }): void;
   addSource(id: string, source: unknown): void;
@@ -50,6 +50,9 @@ const FALLBACK_ROUTE_COLORS = ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59
 const FALLBACK_ACTIVE_POINT_COLOR = '#F59E0B';
 const ACTIVE_POINT_SOURCE_ID = 'trip-active-point';
 const ACTIVE_POINT_LAYER_ID = 'trip-active-point-layer';
+const ROUTE_SOURCE_ID = 'trip-routes';
+const ROUTE_LAYER_ID = 'trip-routes-line';
+const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 
 const TILE_URLS: Record<MapStyleMode, string> = {
   dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
@@ -95,7 +98,6 @@ export function TripMapChart({
   const containerRef = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<MapApi | null>(null);
   const isLoadedRef = React.useRef(false);
-  const syncedRouteIdsRef = React.useRef<string[]>([]);
   const lastRouteSignatureRef = React.useRef<string>('');
   const onRouteClickRef = React.useRef(onRouteClick);
   const latestRoutesRef = React.useRef<TripMapRoute[]>([]);
@@ -179,7 +181,6 @@ export function TripMapChart({
 
         isLoadedRef.current = true;
         lastRouteSignatureRef.current = '';
-        syncedRouteIdsRef.current = [];
         syncRoutes(
           mapRef.current,
           latestRoutesRef.current,
@@ -197,7 +198,6 @@ export function TripMapChart({
     return () => {
       cancelled = true;
       isLoadedRef.current = false;
-      syncedRouteIdsRef.current = [];
       lastRouteSignatureRef.current = '';
       if (mapRef.current) {
         mapRef.current.remove();
@@ -221,7 +221,6 @@ export function TripMapChart({
     function onStyleLoad() {
       isLoadedRef.current = true;
       lastRouteSignatureRef.current = '';
-      syncedRouteIdsRef.current = [];
       syncRoutes(
         map,
         latestRoutesRef.current,
@@ -232,8 +231,8 @@ export function TripMapChart({
       syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
     }
 
-    map.setStyle(buildMapLibreStyle(mapStyle));
     map.on('style.load', onStyleLoad);
+    map.setStyle(buildMapLibreStyle(mapStyle));
 
     return () => {
       map.off('style.load', onStyleLoad);
@@ -275,88 +274,68 @@ export function TripMapChart({
     nextRouteSignature: string,
   ) {
     const routeColors = getRouteColors();
-    const nextRouteIds = new Set(nextRoutes.map((route) => route.id));
-
-    syncedRouteIdsRef.current.forEach((routeId) => {
-      if (nextRouteIds.has(routeId)) return;
-      const sourceId = `trip-${routeId}`;
-      const lineId = `${sourceId}-line`;
-      const hitId = `${sourceId}-hit`;
-
-      if (map.getLayer(hitId)) map.removeLayer(hitId);
-      if (map.getLayer(lineId)) map.removeLayer(lineId);
-      if (map.getSource(sourceId)) map.removeSource(sourceId);
-    });
-
-    nextRoutes.forEach((route, index) => {
-      const sourceId = `trip-${route.id}`;
-      const lineId = `${sourceId}-line`;
-      const hitId = `${sourceId}-hit`;
-      const selected = nextSelectedRouteIds.includes(route.id);
-      const routeColor = route.color?.trim() || routeColors[index % routeColors.length];
-      const geojson = {
+    const geojson = {
+      type: 'FeatureCollection' as const,
+      features: nextRoutes.map((route, index) => ({
         type: 'Feature' as const,
         geometry: {
           type: 'LineString' as const,
           coordinates: route.track.map((point) => [point.lng, point.lat]),
         },
-        properties: { id: route.id },
-      };
+        properties: {
+          id: route.id,
+          color: route.color?.trim() || routeColors[stableColorIndex(route.id, index) % routeColors.length],
+          selected: nextSelectedRouteIds.includes(route.id),
+        },
+      })),
+    };
 
-      const source = map.getSource(sourceId);
-      if (source) {
-        source.setData(geojson);
-      } else {
-        map.addSource(sourceId, { type: 'geojson', data: geojson });
-      }
+    const source = map.getSource(ROUTE_SOURCE_ID);
+    if (source) {
+      source.setData(geojson);
+    } else {
+      map.addSource(ROUTE_SOURCE_ID, { type: 'geojson', data: geojson });
+    }
 
-      if (!map.getLayer(lineId)) {
-        map.addLayer({
-          id: lineId,
-          type: 'line',
-          source: sourceId,
-          paint: {
-            'line-color': routeColor,
-            'line-width': 3,
-            'line-opacity': 0.9,
-          },
-        });
-      }
+    if (!map.getLayer(ROUTE_LAYER_ID)) {
+      map.addLayer({
+        id: ROUTE_LAYER_ID,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['case', ['boolean', ['get', 'selected'], false], 5, 3],
+          'line-opacity': 0.9,
+        },
+      });
+    }
 
-      if (!map.getLayer(hitId)) {
-        map.addLayer({
-          id: hitId,
-          type: 'line',
-          source: sourceId,
-          paint: {
-            'line-color': 'transparent',
-            'line-width': 18,
-            'line-opacity': 0,
-          },
-        });
+    if (!map.getLayer(ROUTE_HIT_LAYER_ID)) {
+      map.addLayer({
+        id: ROUTE_HIT_LAYER_ID,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        paint: {
+          'line-color': 'transparent',
+          'line-width': 18,
+          'line-opacity': 0,
+        },
+      });
 
-        map.on('click', hitId, () => {
-          routeClickRef.current?.(route.id);
-        });
-        map.on('mouseenter', hitId, () => {
-          map.getCanvas().style.cursor = routeClickRef.current ? 'pointer' : '';
-        });
-        map.on('mouseleave', hitId, () => {
-          map.getCanvas().style.cursor = '';
-        });
-      }
-
-      if (!map.getLayer(lineId)) return;
-
-      // Keep each route's distinct color even when selected so multiple selected
-      // trips are easy to differentiate from one another.
-      map.setPaintProperty(lineId, 'line-color', routeColor);
-      map.setPaintProperty(lineId, 'line-width', selected ? 5 : 3);
-      map.setPaintProperty(lineId, 'line-opacity', 0.9);
-    });
+      map.on('click', ROUTE_HIT_LAYER_ID, (event) => {
+        const id = (event as { features?: Array<{ properties?: { id?: unknown } }> } | undefined)
+          ?.features?.[0]?.properties?.id;
+        if (typeof id === 'string') routeClickRef.current?.(id);
+      });
+      map.on('mouseenter', ROUTE_HIT_LAYER_ID, () => {
+        map.getCanvas().style.cursor = routeClickRef.current ? 'pointer' : '';
+      });
+      map.on('mouseleave', ROUTE_HIT_LAYER_ID, () => {
+        map.getCanvas().style.cursor = '';
+      });
+    }
 
     if (nextRoutes.length === 0) {
-      syncedRouteIdsRef.current = [];
       lastRouteSignatureRef.current = nextRouteSignature;
       return;
     }
@@ -368,7 +347,6 @@ export function TripMapChart({
       lastRouteSignatureRef.current = nextRouteSignature;
     }
 
-    syncedRouteIdsRef.current = nextRoutes.map((route) => route.id);
   }
 
   return (
@@ -445,6 +423,14 @@ function syncActivePoint(
 
 function getRouteColors(): string[] {
   return FALLBACK_ROUTE_COLORS.map((fallbackColor, i) => getCssColor(`--rm-map-route-${i}`, fallbackColor));
+}
+
+function stableColorIndex(routeId: string, fallbackIndex: number) {
+  let hash = fallbackIndex;
+  for (let index = 0; index < routeId.length; index += 1) {
+    hash = ((hash << 5) - hash + routeId.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
 }
 
 function getCssColor(variableName: string, fallbackColor: string) {
