@@ -45,6 +45,16 @@ const routeCases = [
   { path: '/d/custom-dashboard', slug: 'custom-dashboard', widgetId: '33333333-3333-3333-3333-333333333333' },
 ] as const;
 
+const EDIT_CONTROL_GEOMETRY = {
+  position: 'absolute',
+  top: '8px',
+  right: '8px',
+  zIndex: '200',
+  pointerEvents: 'auto',
+  anchored: true,
+  hit: true,
+};
+
 test.describe('dashboard editability in a browser', () => {
   for (const routeCase of routeCases) {
     test(`${routeCase.slug} exposes visible, hit-testable widget editing`, async ({ page }) => {
@@ -59,6 +69,14 @@ test.describe('dashboard editability in a browser', () => {
 
       const config = dashboards.get(routeCase.slug)!;
       await expect(page.locator('[data-widget-frame="edit"]')).toHaveCount(config.widgets.length);
+      const editControls = page.locator('[data-widget-edit-control="true"]');
+      await expect(editControls).toHaveCount(config.widgets.length);
+
+      for (let index = 0; index < config.widgets.length; index += 1) {
+        const button = editControls.nth(index).getByRole('button', { name: 'Edit widget settings' });
+        await button.scrollIntoViewIfNeeded();
+        expect(await controlHitTest(button)).toEqual({ opacity: 0.72, ...EDIT_CONTROL_GEOMETRY });
+      }
 
       const frame = page.locator(`[data-widget-id="${routeCase.widgetId}"]`);
       const editControl = frame.locator('[data-widget-edit-control="true"]');
@@ -69,11 +87,7 @@ test.describe('dashboard editability in a browser', () => {
       await expect(editControl).toBeVisible();
       await expect(editButton).toBeVisible();
       await expect(frame.locator('.react-resizable-handle-se')).toBeVisible();
-      expect(await controlHitTest(editButton)).toEqual({
-        opacity: 0.72,
-        pointerEvents: 'auto',
-        hit: true,
-      });
+      expect(await controlHitTest(editButton)).toEqual({ opacity: 0.72, ...EDIT_CONTROL_GEOMETRY });
 
       await editButton.click();
       await expect(page.getByText('Editing', { exact: true })).toBeVisible();
@@ -153,11 +167,7 @@ test.describe('dashboard editability on coarse pointers', () => {
     await button.scrollIntoViewIfNeeded();
 
     await expect(control).toBeVisible();
-    expect(await controlHitTest(button)).toEqual({
-      opacity: 1,
-      pointerEvents: 'auto',
-      hit: true,
-    });
+    expect(await controlHitTest(button)).toEqual({ opacity: 1, ...EDIT_CONTROL_GEOMETRY });
     await button.click();
     await expect(page.getByText('Editing', { exact: true })).toBeVisible();
   });
@@ -230,7 +240,11 @@ async function controlHitTest(button: ReturnType<Page['locator']>) {
   return button.evaluate((buttonElement) => {
     const control = buttonElement.closest('[data-widget-edit-control="true"]');
     if (!control) throw new Error('Widget edit control is missing');
+    const frame = control.closest('[data-widget-frame="edit"]');
+    if (!frame) throw new Error('Widget edit frame is missing');
     const style = getComputedStyle(control);
+    const controlRect = control.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
     const buttonRect = buttonElement.getBoundingClientRect();
     const topmost = document.elementFromPoint(
       buttonRect.left + buttonRect.width / 2,
@@ -238,7 +252,14 @@ async function controlHitTest(button: ReturnType<Page['locator']>) {
     );
     return {
       opacity: Number(style.opacity),
+      position: style.position,
+      top: style.top,
+      right: style.right,
+      zIndex: style.zIndex,
       pointerEvents: style.pointerEvents,
+      anchored:
+        Math.abs(controlRect.top - frameRect.top - 8) <= 1 &&
+        Math.abs(frameRect.right - controlRect.right - 8) <= 1,
       hit: topmost === buttonElement || buttonElement.contains(topmost),
     };
   });
