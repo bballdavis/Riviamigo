@@ -140,10 +140,22 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
           opacity: 1;
         }
         .rgl-editor .rgl-widget-control {
-          z-index: 70;
+          /* Keep editor controls functional even if a host app misses package Tailwind utilities. */
+          position: absolute;
+          top: 0.5rem;
+          z-index: 200;
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
           opacity: 0.72;
           pointer-events: auto;
           transition: opacity 120ms ease;
+        }
+        .rgl-editor [data-widget-move-control="true"] {
+          left: 0.5rem;
+        }
+        .rgl-editor [data-widget-edit-control="true"] {
+          right: 0.5rem;
         }
         .rgl-editor .react-grid-item:hover .rgl-widget-control,
         .rgl-editor .react-grid-item:focus-within .rgl-widget-control,
