@@ -17,6 +17,7 @@ import {
 import {
   CHART_COLORS,
   DailyChargeSessionsChart,
+  DailyEnergyBarChart,
   EfficiencyPillBarChart,
   formatChartNumber,
   getAdaptiveDecimalPrecision,
@@ -27,7 +28,6 @@ import { cn } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import {
   formatMiles,
-  formatPercent,
   formatTemp,
   getEfficiencyDisplay,
   getUnitSystem,
@@ -35,7 +35,7 @@ import {
   whPerMileToMiPerKwh,
   whPerMileToWhPerKm,
 } from '@riviamigo/ui/lib/utils';
-import type { ChargeCurveAnalysisPoint, ChargeCurvePoint, PhantomDrainPeriod } from '@riviamigo/types';
+import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@riviamigo/types';
 import {
   getChartDefinition,
   getChartDefinitions,
@@ -50,6 +50,9 @@ import {
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
+import { PhantomDrainChart } from './PhantomDrainChart';
+
+export { buildPhantomDrainDailySeries } from './PhantomDrainChart';
 
 interface DashboardChartOptions {
   chartId?: string;
@@ -411,7 +414,6 @@ export function DashboardChartRenderer({
 
   const dailyChargeSeries = chargingChartSeries?.daily ?? [];
   const dailyChargeSessions = chargingChartSeries?.daily_sessions ?? [];
-  const phantomDrainDaily = buildPhantomDrainDailySeries(phantomPeriods?.periods ?? []);
   const mileagePoints = mileage.map((point) => ({
     ts: point.ts,
     x: point.odometer_mi,
@@ -490,7 +492,16 @@ export function DashboardChartRenderer({
     case 'efficiency_mode':
       return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
     case 'phantom_drain':
-      return renderPhantomDrainChart(definition, height, phantomLoading, phantomDrainDaily, yRange);
+      return (
+        <PhantomDrainChart
+          periods={phantomPeriods?.periods ?? []}
+          loading={phantomLoading}
+          height={height}
+          emptyTitle={definition.emptyTitle}
+          yUnit={definition.yUnit}
+          yRange={yRange ?? definition.yRange}
+        />
+      );
     case 'battery_degradation':
       return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), rendererSmoothing, yRange);
     case 'battery_capacity_mileage':
@@ -619,118 +630,6 @@ function ChargingSessionsChart({
       height={height}
       {...(selectedDayLocal !== undefined ? { selectedDayLocal } : {})}
       {...(onDayClick ? { onDayClick } : {})}
-    />
-  );
-}
-
-interface PhantomDrainDailyPoint {
-  ts: string;
-  drainRate: number;
-  socLost: number;
-  parkedHours: number;
-  periodCount: number;
-}
-
-function isFiniteNumber(value: number | null | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-export function buildPhantomDrainDailySeries(periods: PhantomDrainPeriod[]): PhantomDrainDailyPoint[] {
-  const byDay = new Map<string, PhantomDrainDailyPoint>();
-
-  for (const period of periods) {
-    if (period.validation_status !== 'validated') continue;
-    const start = period.period_start ? new Date(period.period_start) : null;
-    const end = period.period_end ? new Date(period.period_end) : null;
-    const socLost = period.soc_lost_pct;
-    if (!start || !end || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || !isFiniteNumber(socLost) || end <= start) {
-      continue;
-    }
-
-    const totalMilliseconds = end.getTime() - start.getTime();
-    let cursor = new Date(start);
-    while (cursor < end) {
-      const nextDay = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
-      const segmentEnd = nextDay < end ? nextDay : end;
-      const segmentMilliseconds = segmentEnd.getTime() - cursor.getTime();
-      if (segmentMilliseconds <= 0) break;
-
-      const dayStart = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
-      const key = dayStart.toISOString();
-      const segmentHours = segmentMilliseconds / (60 * 60 * 1000);
-      const segmentLoss = socLost * (segmentMilliseconds / totalMilliseconds);
-      const current = byDay.get(key) ?? {
-        ts: key,
-        drainRate: 0,
-        socLost: 0,
-        parkedHours: 0,
-        periodCount: 0,
-      };
-
-      current.socLost += segmentLoss;
-      current.parkedHours += segmentHours;
-      current.periodCount += 1;
-      byDay.set(key, current);
-      cursor = segmentEnd;
-    }
-  }
-
-  return [...byDay.values()]
-    .map((point) => ({
-      ...point,
-      drainRate: point.parkedHours > 0 ? point.socLost / point.parkedHours : 0,
-    }))
-    .filter((point) => Number.isFinite(point.drainRate))
-    .sort((a, b) => a.ts.localeCompare(b.ts));
-}
-
-function renderPhantomDrainChart(
-  definition: DashboardChartDefinition,
-  height: number,
-  loading: boolean,
-  data: PhantomDrainDailyPoint[],
-  manualYRange?: [number, number],
-) {
-  return (
-    <RichTimeSeriesChart
-      points={data.map((point) => ({ ts: point.ts }))}
-      series={[
-        {
-          key: definition.id,
-          label: 'Drain Rate',
-          values: data.map((point) => point.drainRate),
-          mode: 'bar',
-          tooltipFormatter: (value) => value == null ? '-' : `${formatPercent(value, 2)} / h`,
-        },
-        {
-          key: `${definition.id}-loss`,
-          label: 'SoC Lost',
-          values: data.map((point) => point.socLost),
-          tooltipOnly: true,
-          tooltipFormatter: (value) => value == null ? '-' : formatPercent(value, 2),
-        },
-        {
-          key: `${definition.id}-hours`,
-          label: 'Parked',
-          values: data.map((point) => point.parkedHours),
-          tooltipOnly: true,
-          tooltipFormatter: (value) => value == null ? '-' : `${value.toFixed(1)} h`,
-        },
-        {
-          key: `${definition.id}-periods`,
-          label: 'Periods',
-          values: data.map((point) => point.periodCount),
-          tooltipOnly: true,
-          tooltipFormatter: (value) => value == null ? '-' : String(Math.round(value)),
-        },
-      ]}
-      loading={loading}
-      emptyTitle={definition.emptyTitle}
-      height={height}
-      yUnit={definition.yUnit}
-      yRange={manualYRange ?? definition.yRange}
-      mode="bar"
-      smoothing={0}
     />
   );
 }
@@ -1081,28 +980,18 @@ function DailyEnergyChart({
   yRange,
 }: {
   definition: DashboardChartDefinition;
-  daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number }>;
+  daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number; session_count: number }>;
   loading: boolean;
   height: number;
   yRange?: [number, number];
 }) {
-  const formatDayLabel = (seconds: number) => {
-    const d = new Date(seconds * 1000);
-    return d.toLocaleString([], { month: 'short', day: 'numeric' });
-  };
-
   return (
-    <RichTimeSeriesChart
-      points={daily.map((point) => ({ ts: point.day_start }))}
-      series={[{ key: 'energy', label: 'Energy Charged', values: daily.map((point) => point.total_energy_kwh ?? null) }]}
+    <DailyEnergyBarChart
+      daily={daily}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      yUnit={definition.yUnit}
       yRange={yRange}
-      mode="bar"
-      xValueFormatter={formatDayLabel}
-      smoothing={0}
     />
   );
 }
@@ -1488,7 +1377,8 @@ function setChartSettingsEntry(
 ) {
   const normalized = normalizeChartDisplaySettings(chartSettings);
   if (!normalized) {
-    const { [chartId]: _removed, ...rest } = current;
+    const rest = { ...current };
+    delete rest[chartId];
     return rest;
   }
   return {

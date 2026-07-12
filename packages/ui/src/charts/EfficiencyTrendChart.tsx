@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 
 export interface EfficiencyTrendPoint {
@@ -73,8 +73,8 @@ export function EfficiencyTrendChart({
         <Bar
           dataKey="day_avg_wh_mi"
           fill={CHART_COLORS.sky}
-          fillOpacity={0.35}
-          radius={[2, 2, 0, 0]}
+          fillOpacity={CHART_BAR_STYLE.fillOpacity}
+          radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}
           isAnimationActive={false}
         />
         <Line

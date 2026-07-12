@@ -4,7 +4,7 @@ import type { AlignedData, Options, Series } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { CHART_COLORS, CHART_FONT } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
 
 export interface RichSeries {
@@ -309,6 +309,61 @@ function lerp(start: number, end: number, amount: number) {
   return start + (end - start) * amount;
 }
 
+export function buildRichTimeSeriesUPlotSeries(
+  items: RichSeries[],
+  {
+    mode = 'line',
+    barCount = 0,
+    hiddenKeys = new Set<string>(),
+    connectGaps = false,
+    smoothingAmount = 0,
+    stepInterpolation = false,
+  }: {
+    mode?: RichTimeSeriesChartProps['mode'];
+    barCount?: number;
+    hiddenKeys?: ReadonlySet<string>;
+    connectGaps?: boolean;
+    smoothingAmount?: number;
+    stepInterpolation?: boolean;
+  } = {},
+): Series[] {
+  return [
+    {},
+    ...items.map((item, index) => {
+      const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
+      const seriesMode = item.mode ?? mode;
+      const hidden = hiddenKeys.has(item.key) || item.tooltipOnly === true;
+      const next: Series = {
+        label: item.label,
+        show: !hidden,
+        stroke: color,
+        scale: item.yScale ?? 'y',
+        width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : 2,
+        points: {
+          show: seriesMode === 'scatter',
+          size: 6,
+          stroke: color,
+          fill: color,
+        },
+      };
+      if (seriesMode === 'area') next.fill = `${color}22`;
+      if (connectGaps && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
+      if (seriesMode === 'bar') {
+        const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
+        next.fill = color;
+        next.paths = uPlot.paths.bars!({ size: [CHART_BAR_STYLE.slotRatio, maxBarPx] });
+      }
+      if (seriesMode === 'scatter') next.paths = () => null;
+      if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
+        next.paths = uPlot.paths.stepped!({ align: 1 });
+      } else if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
+        next.paths = createVariableSplinePathBuilder(smoothingAmount);
+      }
+      return next;
+    }),
+  ];
+}
+
 export function RichTimeSeriesChart({
   points,
   series,
@@ -415,42 +470,6 @@ export function RichTimeSeriesChart({
     const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
 
     const hasRightAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
-
-    const makeUSeries = (): Series[] => [
-      {},
-      ...seriesRef.current.map((item, index) => {
-        const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
-        const seriesMode = item.mode ?? mode;
-        const hidden = hiddenKeys.has(item.key) || item.tooltipOnly === true;
-        const next: Series = {
-          label: item.label,
-          show: !hidden,
-          stroke: color,
-          scale: item.yScale ?? 'y',
-          width: seriesMode === 'scatter' ? 0 : 2,
-          points: {
-            show: seriesMode === 'scatter',
-            size: 6,
-            stroke: color,
-            fill: color,
-          },
-        };
-        if (seriesMode === 'area') next.fill = `${color}22`;
-        if (connectGaps && (seriesMode === 'line' || seriesMode === 'area')) next.spanGaps = true;
-        if (seriesMode === 'bar') {
-          const barCount = xValues.length;
-          const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : 80;
-          next.paths = uPlot.paths.bars!({ size: [0.64, maxBarPx] });
-        }
-        if (seriesMode === 'scatter') next.paths = () => null;
-        if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
-          next.paths = uPlot.paths.stepped!({ align: 1 });
-        } else if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
-          next.paths = createVariableSplinePathBuilder(smoothingAmount);
-        }
-        return next;
-      }),
-    ];
 
     const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
 
@@ -579,7 +598,14 @@ export function RichTimeSeriesChart({
         ...(hasRightAxis && rightYScaleConfig ? { y2: rightYScaleConfig } : {}),
       },
       axes: allAxes,
-      series: makeUSeries(),
+      series: buildRichTimeSeriesUPlotSeries(seriesRef.current, {
+        mode,
+        barCount: xValues.length,
+        hiddenKeys,
+        connectGaps,
+        smoothingAmount,
+        stepInterpolation,
+      }),
       hooks: {
         setCursor: [
           (u) => {

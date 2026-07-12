@@ -8,10 +8,8 @@
 
 use anyhow::Result;
 use riviamigo_api::{
-    db::vehicles::get_vehicle_owner_id,
-    services::charge_sessions::canonicalize_charge_sessions,
-    services::cost::recompute_charge_session_cost,
-    services::geofences::match_geofence,
+    db::vehicles::get_vehicle_owner_id, services::charge_sessions::canonicalize_charge_sessions,
+    services::cost::recompute_charge_session_cost, services::geofences::match_geofence,
 };
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;

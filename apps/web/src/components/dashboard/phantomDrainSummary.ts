@@ -2,7 +2,7 @@ import { formatKwh, formatPercent } from '@riviamigo/ui/lib/utils';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
 
 export interface PhantomDrainSummary {
-  maxDrainPct: number;
+  maxDrainPctPerHour: number | null;
   avgSleepPct: number | null;
   avgStateCoveragePct: number | null;
   totalEnergyDrainedKwh: number;
@@ -23,10 +23,11 @@ function formatRatioPercent(value: number | null, decimals = 0) {
 }
 
 export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): PhantomDrainSummary {
-  const maxDrainPct = periods.reduce((max, period) => {
-    if (period.soc_lost_pct == null || Number.isNaN(period.soc_lost_pct)) return max;
-    return Math.max(max, period.soc_lost_pct);
-  }, 0);
+  const maxDrainPctPerHour = periods.reduce<number | null>((max, period) => {
+    const rate = finiteNumber(period.drain_pct_per_hour);
+    if (rate == null) return max;
+    return max == null ? rate : Math.max(max, rate);
+  }, null);
 
   const weightedSleep = periods.reduce(
     (acc, period) => {
@@ -70,7 +71,7 @@ export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): Pha
   const avgDrainPctPerHour = totalDurationHours > 0 ? totalSocLostPct / totalDurationHours : null;
 
   return {
-    maxDrainPct,
+    maxDrainPctPerHour,
     avgSleepPct,
     avgStateCoveragePct,
     totalEnergyDrainedKwh,
@@ -81,9 +82,9 @@ export function summarizePhantomDrainPeriods(periods: PhantomDrainPeriod[]): Pha
 export function buildPhantomDrainSummaryCards(summary: PhantomDrainSummary): PhantomDrainSummaryCard[] {
   return [
     {
-      key: 'max-drain',
-      title: 'Max drain',
-      value: formatPercent(summary.maxDrainPct, 2),
+      key: 'max-drain-rate',
+      title: 'Max drain rate',
+      value: summary.maxDrainPctPerHour == null ? '-' : `${formatPercent(summary.maxDrainPctPerHour, 2)} / h`,
       icon: 'lucide:activity',
       accentBorder: true,
     },

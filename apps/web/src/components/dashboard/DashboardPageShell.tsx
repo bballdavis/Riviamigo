@@ -273,6 +273,7 @@ function DashboardPageShellContent({
   const ctx = useMemo<WidgetCtx>(
     () => ({
       vehicleId: effectiveVehicleId,
+      dashboardSlug: slug,
       timeframe,
       from,
       to,
@@ -282,6 +283,7 @@ function DashboardPageShellContent({
     }),
     [
       effectiveVehicleId,
+      slug,
       timeframe,
       from,
       to,

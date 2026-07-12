@@ -3,7 +3,8 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -13,12 +14,14 @@ use crate::{
     },
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
-    routes::users_support::{hash_password, parse_membership_role, parse_role},
+    routes::users_support::{parse_membership_role, parse_role},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/admin/users", get(list_users).post(create_user))
+        .route("/admin/users", get(list_users))
+        .route("/admin/account-invitations", get(list_account_invitations).post(create_account_invitation))
+        .route("/admin/account-invitations/:id", axum::routing::delete(revoke_account_invitation))
         .route("/admin/users/:id", patch(update_user).delete(delete_user))
         .route("/admin/users/:id/detail", get(get_user_detail))
         .route(
@@ -44,10 +47,9 @@ struct ListUsersQuery {
 }
 
 #[derive(Deserialize)]
-struct CreateUserBody {
+struct CreateAccountInvitationBody {
     email: String,
-    password: String,
-    role: Option<String>,
+    expires_in_days: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -107,51 +109,98 @@ async fn list_users(
     Ok(Json(serde_json::json!({ "users": users })))
 }
 
-async fn create_user(
+#[derive(Serialize, sqlx::FromRow)]
+struct AccountInvitationPayload {
+    id: Uuid,
+    invitee_email: String,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    accepted_at: Option<chrono::DateTime<chrono::Utc>>,
+    revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn create_account_invitation(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(body): Json<CreateUserBody>,
+    Json(body): Json<CreateAccountInvitationBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let actor_role = require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    if body.password.len() < 12 {
-        return Err(AppError::Validation("password min 12 chars".into()));
-    }
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
     let email = body.email.trim().to_lowercase();
     if email.is_empty() || !email.contains('@') {
         return Err(AppError::Validation("valid email required".into()));
     }
-
-    let requested_role = parse_role(body.role.as_deref().unwrap_or("user"))?;
-    if !can_manage_user(actor_role, requested_role) {
-        return Err(AppError::Forbidden);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE lower(email) = $1)")
+        .bind(&email)
+        .fetch_one(&state.pool)
+        .await?;
+    if exists {
+        return Err(AppError::Validation("email already registered".into()));
     }
-
-    let hash = hash_password(&body.password)?;
-    let user_id = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO riviamigo.users (email, password_hash, role)
-         VALUES ($1, $2, $3)
-         RETURNING id",
+    let days = body.expires_in_days.unwrap_or(7);
+    if !(1..=30).contains(&days) {
+        return Err(AppError::Validation("expires_in_days must be between 1 and 30".into()));
+    }
+    let token = random_invitation_token();
+    let token_hash = hash_token(&token);
+    let expires_at = chrono::Utc::now() + chrono::Duration::days(i64::from(days));
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO riviamigo.account_invitations (invited_by, invitee_email, token_hash, expires_at)
+         VALUES ($1, $2, $3, $4) RETURNING id",
     )
-    .bind(email)
-    .bind(hash)
-    .bind(requested_role.as_str())
+    .bind(auth.user_id)
+    .bind(&email)
+    .bind(token_hash)
+    .bind(expires_at)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db) if db.constraint() == Some("users_email_key") => {
-            AppError::Validation("email already registered".into())
+    .map_err(|error| match error {
+        sqlx::Error::Database(ref db) if db.constraint() == Some("account_invitations_active_email_idx") => {
+            AppError::Validation("an active invitation already exists for this email".into())
         }
         other => AppError::Database(other),
     })?;
+    audit_log(&state.pool, "account_invitation_created", auth.user_id, format!("invite_id={id} email={email}"));
+    Ok(Json(serde_json::json!({ "id": id, "invitee_email": email, "expires_at": expires_at, "activation_token": token })))
+}
 
-    let _ = sqlx::query(
-        "INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING",
-    )
-    .bind(user_id)
-    .execute(&state.pool)
-    .await?;
+async fn list_account_invitations(
+    State(state): State<AppState>, auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    let invitations = sqlx::query_as::<_, AccountInvitationPayload>(
+        "SELECT id, invitee_email, expires_at, accepted_at, revoked_at, created_at
+         FROM riviamigo.account_invitations ORDER BY created_at DESC",
+    ).fetch_all(&state.pool).await?;
+    Ok(Json(serde_json::json!({ "invitations": invitations })))
+}
 
-    Ok(Json(serde_json::json!({ "id": user_id })))
+async fn revoke_account_invitation(
+    State(state): State<AppState>, auth: AuthUser, Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    sqlx::query("UPDATE riviamigo.account_invitations SET revoked_at = now(), updated_at = now() WHERE id = $1 AND accepted_at IS NULL")
+        .bind(id).execute(&state.pool).await?;
+    audit_log(&state.pool, "account_invitation_revoked", auth.user_id, format!("invite_id={id}"));
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn random_invitation_token() -> String {
+    use rand::Rng;
+    (0..48).map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char).collect()
+}
+
+fn hash_token(token: &str) -> Vec<u8> {
+    Sha256::digest(token.as_bytes()).to_vec()
+}
+
+fn audit_log(pool: &sqlx::PgPool, event: &'static str, user_id: Uuid, detail: String) {
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        if let Err(error) = sqlx::query("INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) VALUES ($1, $2, $3, now())")
+            .bind(event).bind(user_id).bind(detail).execute(&pool).await {
+            tracing::warn!(%error, event, "failed to record account invitation audit event");
+        }
+    });
 }
 
 async fn update_user(

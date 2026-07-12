@@ -393,6 +393,44 @@ describe('dashboard sensor chips', () => {
     expect(screen.getByText('/109.0 kWh')).toHaveClass('text-fg-tertiary');
   });
 
+  it('renders battery charge cycles inline with the charge count', () => {
+    metricMocks.batteryHealth = {
+      usable_now_kwh: 111.6,
+      usable_new_kwh: 109.0,
+      battery_health_pct: 102.4,
+      estimated_degradation_pct: 0,
+      charging_cycles: 16,
+      charge_count: 45,
+      total_energy_added_kwh: 1800,
+      total_energy_used_kwh: 1900,
+      charging_efficiency_pct: 94.4,
+    };
+
+    render(
+      <DashboardRenderer
+        config={{
+          ...config(false),
+          widgets: [
+            {
+              id: 'd9000009-0000-0000-0000-000000000018',
+              componentType: 'sensor',
+              definitionId: 'charge_count',
+              title: 'Charges',
+              options: {},
+              layout: { x: 0, y: 0, w: 3, h: 2 },
+            },
+          ],
+        }}
+        ctx={defaultCtx}
+      />
+    );
+
+    const value = screen.getByText('45');
+    const cycles = screen.getByText('(16 cycles)');
+    expect(cycles.parentElement).toBe(value.parentElement);
+    expect(screen.queryByText('16 cycles')).not.toBeInTheDocument();
+  });
+
   it('shows lifetime badges only on lifetime battery cards', () => {
     metricMocks.batteryHealth = {
       usable_now_kwh: 111.6,

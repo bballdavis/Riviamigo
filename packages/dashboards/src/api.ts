@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { useAuthReady, api } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
 import { sanitizeDashboardConfig } from './layout';
-import type { DashboardConfig, WidgetInstance } from './schema';
+import type { DashboardConfig } from './schema';
 
 const BASE = '/v1/dashboards';
 const DASHBOARD_QUERY_STALE_TIME_MS = 60 * 60 * 1000;
@@ -44,89 +44,70 @@ export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
   });
 
   const normalized = parsed.slug === 'charging'
-    ? normalizeChargingDashboardWidgetHeights(normalizeChargingConnectionSwap(parsed))
+    ? normalizeChargingDashboardWidgetHeights(parsed)
     : parsed;
-  return sanitizeDashboardConfig(normalized);
+  return sanitizeDashboardConfig(normalizeLegacyTripStatWidgets(normalized));
 }
 
-const CHARGING_CONNECTION_VISIBILITY_OPTION = 'chargingConnectionVisibility';
+const LEGACY_TRIP_STAT_TO_SENSOR: Record<string, string> = {
+  miles: 'trip_miles',
+  count: 'total_trips',
+  efficiency: 'avg_efficiency',
+  duration: 'avg_trip_duration',
+};
 
-const CHARGING_SWAP_WIDGET_KEYS = new Set([
-  'charging:sessions',
-  'charging:total_energy',
-  'charging:total_cost',
-  'charging:avg_session',
-  'charging:charging_cycles',
-  'charging:charge_efficiency',
-  'charging:max_charge_rate',
-  'charging:max_charge_limit',
-  'charging:home_share',
-  'charging:dc_share',
-  'sensor:charging_sessions_summary',
-  'sensor:charging_total_energy',
-  'sensor:charging_total_cost',
-  'sensor:charging_avg_session',
-  'sensor:charging_cycles_summary',
-  'sensor:charging_efficiency_summary',
-  'sensor:charging_max_rate',
-  'sensor:charging_max_limit',
-  'sensor:charging_home_share',
-  'sensor:charging_dc_share',
-  'sensor:charging_free_sessions',
-  'sensor:charging_range_added',
-  'custom:charging.connection',
-  'custom:charging.sessions.table',
-  'custom:charging.network_breakdown',
-  'chart:catalog',
+const TRIP_SENSOR_DEFINITION_IDS = new Set([
+  'trip_miles',
+  'total_trips',
+  'avg_efficiency',
+  'avg_trip_duration',
 ]);
 
-const CHARGING_SWAP_WIDGETS: WidgetInstance[] = [
-  // Always-visible stat chips (left 6 columns)
-  sensorWidget('d4000004-0000-0000-0000-000000000001', 'charging_sessions_summary', 'Sessions', {}, { x: 0, y: 0, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000002', 'charging_total_energy', 'Total Energy', {}, { x: 3, y: 0, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000005', 'charging_cycles_summary', 'Charging Cycles', {}, { x: 0, y: 2, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000003', 'charging_total_cost', 'Total Cost', {}, { x: 3, y: 2, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000009', 'charging_home_share', 'Home Charging', {}, { x: 0, y: 4, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000010', 'charging_dc_share', 'DC Fast Charging', {}, { x: 3, y: 4, w: 3, h: 2 }),
-  // Plugged-in: connection widget spans x:6-11, y:0-5.
-  customWidget('d4000004-0000-0000-0000-000000000013', 'charging.connection', 'Charging Connection', pluggedOptions(), { x: 6, y: 0, w: 6, h: 6 }),
-  // Unplugged-only: stat chips at the same grid cells as the connection widget above
-  sensorWidget('d4000004-0000-0000-0000-000000000006', 'charging_efficiency_summary', 'Charge Efficiency', unpluggedOptions(), { x: 6, y: 0, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000008', 'charging_max_limit', 'Max Charge Limit', unpluggedOptions(), { x: 9, y: 0, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000007', 'charging_max_rate', 'Max Charge Rate', unpluggedOptions(), { x: 6, y: 2, w: 3, h: 2 }),
-  sensorWidget('d4000004-0000-0000-0000-000000000004', 'charging_avg_session', 'Avg / Session', unpluggedOptions(), { x: 9, y: 2, w: 3, h: 2 }),
-  // Keep network enrichment below the session table so the primary chart row stays full-width.
-  chartWidget('d4000004-0000-0000-0000-000000000011', 'catalog', 'Charging Charts', {
-    page: 'charging',
-    chartId: 'charging-sessions-energy',
-    chartIds: ['charging-sessions-energy', 'charge-level', 'charging-weekly-energy', 'charging-curve-analysis'],
-    showPicker: true,
-  }, { x: 0, y: 6, w: 12, h: 11 }),
-  customWidget('d4000004-0000-0000-0000-000000000012', 'charging.sessions.table', 'Charging Sessions', {}, { x: 0, y: 17, w: 12, h: 12 }),
-  customWidget('d4000004-0000-0000-0000-000000000016', 'charging.network_breakdown', 'Network Breakdown', {}, { x: 0, y: 29, w: 12, h: 2 }),
-];
+function normalizeLegacyTripStatWidgets(config: DashboardConfig): DashboardConfig {
+  return {
+    ...config,
+    widgets: config.widgets.map((widget) => {
+      if (widget.componentType !== 'custom' || widget.definitionId !== 'trips.stat') {
+        return widget;
+      }
+
+      const legacyOptions = (widget.options ?? {}) as Record<string, unknown>;
+      const metric = typeof legacyOptions.metric === 'string' ? legacyOptions.metric : null;
+      const stat = typeof legacyOptions.stat === 'string' ? legacyOptions.stat : null;
+      const definitionId = metric && TRIP_SENSOR_DEFINITION_IDS.has(metric)
+        ? metric
+        : stat
+          ? LEGACY_TRIP_STAT_TO_SENSOR[stat]
+          : undefined;
+
+      if (!definitionId) return widget;
+
+      const sensorOptions = { ...legacyOptions };
+      delete sensorOptions.stat;
+      delete sensorOptions.metric;
+      const valueMode = definitionId === 'trip_miles' || definitionId === 'total_trips'
+        ? 'sum'
+        : definitionId === 'avg_trip_duration'
+          ? 'avg'
+          : undefined;
+
+      return {
+        ...widget,
+        componentType: 'sensor' as const,
+        definitionId,
+        options: {
+          ...sensorOptions,
+          metric: definitionId,
+          ...(valueMode ? { valueMode } : {}),
+          tripSelectionAware: true,
+        },
+      };
+    }),
+  };
+}
 
 const CHARGING_NETWORK_BREAKDOWN_MIN_H = 1;
 const CHARGING_NETWORK_BREAKDOWN_MAX_H = 20;
-
-function normalizeChargingConnectionSwap(config: DashboardConfig): DashboardConfig {
-  // Build a set of widget IDs already in the saved config so user edits are preserved.
-  const existingIds = new Set(config.widgets.map((w) => w.id));
-
-  // Only inject defaults that the user hasn't already saved (by ID).
-  const missingDefaults = CHARGING_SWAP_WIDGETS.filter((w) => !existingIds.has(w.id));
-
-  // Strip any legacy hard-coded widgets the user hasn't touched, then prepend the
-  // missing defaults. Widgets the user has edited (same UUID) are kept in place.
-  const userWidgets = config.widgets.filter((w) => {
-    const key = `${w.componentType}:${w.definitionId}`;
-    // Keep user widget if it's NOT a swap widget, OR if it IS a swap widget that
-    // was already present in the saved config (meaning the user edited it).
-    return !CHARGING_SWAP_WIDGET_KEYS.has(key) || existingIds.has(w.id);
-  });
-
-  return { ...config, widgets: [...missingDefaults, ...userWidgets] };
-}
 
 function normalizeChargingDashboardWidgetHeights(config: DashboardConfig): DashboardConfig {
   return {
@@ -154,44 +135,6 @@ function normalizeChargingDashboardWidgetHeights(config: DashboardConfig): Dashb
 function clampBreakdownHeight(height: number): number {
   if (!Number.isFinite(height)) return CHARGING_NETWORK_BREAKDOWN_MAX_H;
   return Math.max(CHARGING_NETWORK_BREAKDOWN_MIN_H, Math.min(CHARGING_NETWORK_BREAKDOWN_MAX_H, Math.round(height)));
-}
-
-function sensorWidget(
-  id: string,
-  definitionId: string,
-  title: string,
-  options: Record<string, unknown>,
-  layout: WidgetInstance['layout'],
-): WidgetInstance {
-  return { id, componentType: 'sensor', definitionId, title, options, layout };
-}
-
-function customWidget(
-  id: string,
-  definitionId: string,
-  title: string,
-  options: Record<string, unknown>,
-  layout: WidgetInstance['layout'],
-): WidgetInstance {
-  return { id, componentType: 'custom', definitionId, title, options, layout };
-}
-
-function chartWidget(
-  id: string,
-  definitionId: string,
-  title: string,
-  options: Record<string, unknown>,
-  layout: WidgetInstance['layout'],
-): WidgetInstance {
-  return { id, componentType: 'chart', definitionId, title, options, layout };
-}
-
-function pluggedOptions() {
-  return { [CHARGING_CONNECTION_VISIBILITY_OPTION]: 'plugged' };
-}
-
-function unpluggedOptions() {
-  return { [CHARGING_CONNECTION_VISIBILITY_OPTION]: 'unplugged' };
 }
 
 function dashboardMutationBody(config: DashboardConfig) {

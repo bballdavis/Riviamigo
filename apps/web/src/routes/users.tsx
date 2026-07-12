@@ -23,8 +23,7 @@ function UsersContent() {
   const authReady = useAuthReady();
   const [search, setSearch] = React.useState('');
   const [newEmail, setNewEmail] = React.useState('');
-  const [newPassword, setNewPassword] = React.useState('');
-  const [newRole, setNewRole] = React.useState<'user' | 'admin' | 'super_user'>('user');
+  const [activationLink, setActivationLink] = React.useState<string | null>(null);
   const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
   const [activeTab, setActiveTab] = React.useState<'account' | 'vehicles' | 'invites'>('account');
   const [grantVehicleId, setGrantVehicleId] = React.useState('');
@@ -61,14 +60,24 @@ function UsersContent() {
     enabled: authReady && isPrivileged && !!selectedUserId && !!accessToken,
   });
 
-  const createUser = useMutation({
-    mutationFn: () => api.createUser({ email: newEmail.trim(), password: newPassword, role: newRole }),
-    onSuccess: () => {
+  const accountInvitations = useQuery({
+    queryKey: ['admin-account-invitations'],
+    queryFn: () => api.listAccountInvitations(),
+    enabled: authReady && isPrivileged && !!accessToken,
+  });
+
+  const createInvitation = useMutation({
+    mutationFn: () => api.createAccountInvitation({ email: newEmail.trim() }),
+    onSuccess: (result) => {
       setNewEmail('');
-      setNewPassword('');
-      setNewRole('user');
-      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      setActivationLink(`${window.location.origin}/activate#${result.activation_token}`);
+      queryClient.invalidateQueries({ queryKey: ['admin-account-invitations'] });
     },
+  });
+
+  const revokeAccountInvitation = useMutation({
+    mutationFn: (id: string) => api.revokeAccountInvitation(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-account-invitations'] }),
   });
 
   const updateUser = useMutation({
@@ -122,40 +131,41 @@ function UsersContent() {
           <div className="grid gap-5">
             <Card>
               <CardHeader>
-                <CardTitle>Create User</CardTitle>
+                <CardTitle>Invite user</CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_10rem_auto]">
+              <CardContent className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                 <input
                   value={newEmail}
                   onChange={(event) => setNewEmail(event.target.value)}
                   placeholder="email@example.com"
                   className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                 />
-                <input
-                  value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
-                  type="password"
-                  placeholder="Temporary password"
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                />
-                <select
-                  value={newRole}
-                  onChange={(event) => setNewRole(event.target.value as 'user' | 'admin' | 'super_user')}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                >
-                  <option value="user">User</option>
-                  <option value="admin">Admin</option>
-                  <option value="super_user">Super User</option>
-                </select>
                 <Button
                   size="sm"
                   className="h-9"
-                  loading={createUser.isPending}
-                  disabled={!newEmail.trim() || newPassword.length < 12}
-                  onClick={() => createUser.mutate()}
+                  loading={createInvitation.isPending}
+                  disabled={!newEmail.trim()}
+                  onClick={() => createInvitation.mutate()}
                 >
-                  Create
+                  Create invitation
                 </Button>
+                <p className="text-xs text-fg-tertiary md:col-span-2">The link is shown once and grants a standard user account. Promote roles after activation if needed.</p>
+                {activationLink && <div className="grid gap-2 md:col-span-2">
+                  <label className="text-xs font-medium text-fg-secondary">Activation link</label>
+                  <div className="flex gap-2"><input readOnly value={activationLink} className="min-w-0 flex-1 h-9 rounded-lg border border-border bg-bg-elevated px-3 text-xs text-fg" />
+                    <Button size="sm" variant="secondary" onClick={() => void navigator.clipboard?.writeText(activationLink)}>Copy</Button></div>
+                </div>}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle>Account invitations</CardTitle></CardHeader>
+              <CardContent className="grid gap-2">
+                {(accountInvitations.data ?? []).map((invite) => <div key={invite.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3 text-sm">
+                  <span className="text-fg">{invite.invitee_email}</span><span className="text-fg-tertiary">{invite.accepted_at ? 'accepted' : invite.revoked_at ? 'revoked' : `expires ${new Date(invite.expires_at).toLocaleString()}`}</span>
+                  {!invite.accepted_at && !invite.revoked_at && <Button size="sm" variant="secondary" loading={revokeAccountInvitation.isPending} onClick={() => revokeAccountInvitation.mutate(invite.id)}>Revoke</Button>}
+                </div>)}
+                {(accountInvitations.data?.length ?? 0) === 0 && <p className="text-sm text-fg-tertiary">No account invitations have been created.</p>}
               </CardContent>
             </Card>
 

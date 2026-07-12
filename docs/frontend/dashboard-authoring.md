@@ -29,7 +29,7 @@ If the change crosses more than one row, start from the lowest reusable layer an
    - read params or search state
    - pass explicit page composition pieces
 4. If the page needs a hero panel, tabs, or a summary strip above the grid, render that through a page composition hook such as `renderBeforeDashboard` or a page-local wrapper component.
-5. Seed or update the default dashboard config under `packages/dashboards/src/defaults/` and keep backend seeded JSON aligned where applicable.
+5. Update the default dashboard config under `packages/dashboards/src/defaults/`, then run `pnpm dashboards:sync-defaults` to generate the backend seed copies. Verify with `pnpm dashboards:sync-defaults --check`.
 
 ## Adding a Widget
 
@@ -60,7 +60,7 @@ Use this for:
 - `maxSize` when a widget can grow but has a meaningful upper bound.
 - `deprecated: true` to hide a component from the palette without breaking existing saved dashboards.
 
-Compact source-backed sensor chips should normally stay resizable. Custom visual composites such as trip stat chips or vehicle artwork should opt into fixed size when resizing would break the composition.
+Compact source-backed sensor chips should normally stay resizable. Trips summary chips belong here too. Custom visual composites such as vehicle artwork or charging connection cards should opt into fixed size when resizing would break the composition.
 
 ## Adding A Table
 
@@ -146,6 +146,21 @@ Default dashboards and user dashboards should share the same basic behaviors:
 - clone/customize
 - import/export
 
+## Bundled Baseline Contract
+
+The five system dashboards (Overview, Battery, Efficiency, Charging, and
+Trips) are authored in `packages/dashboards/src/defaults/`. The matching files
+under `apps/api/dashboards/` are generated seed copies for the Rust binary; do
+not hand-edit them. `pnpm dashboards:sync-defaults --check` enforces parity in
+CI.
+
+Startup creates a missing system dashboard but does not overwrite an existing
+admin-managed layout. The explicit admin restore action is the only path that
+applies the bundled baseline to an existing system dashboard. User-owned
+dashboard copies are never changed by seed updates. Do not add client-side
+widget injection to redefine a saved dashboard at render time; use an explicit
+compatibility migration only when an older saved config must be supported.
+
 If you need to change one of those flows, change the shared shell or the shared action wiring. Do not add a second implementation for one route family.
 
 `DashboardPageShell` owns the page-level edit entry and the save/discard actions for grid-backed dashboards. Route wrappers may add adjacent utilities such as import, export, or duplicate, but they should not provide their own edit-mode toggle or save controls.
@@ -202,6 +217,8 @@ Bad examples:
 
 - multiple widgets each reimplementing the same response normalization
 - route wrappers doing heavy transformation that should live in hooks
+
+When a chart is presented on both a dashboard and a dedicated detail page, share the typed chart component and data transform. Both surfaces should consume the same validated source rows and timeframe rather than maintaining separate chart-only aggregation paths.
 
 ## File Placement Checklist
 

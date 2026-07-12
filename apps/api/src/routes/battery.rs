@@ -665,7 +665,10 @@ mod tests {
         let (from, resolved_to) = resolve_time_bounds(None, Some(to), true, 90);
 
         assert_eq!(resolved_to, to);
-        assert_eq!(from, chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap());
+        assert_eq!(
+            from,
+            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap()
+        );
     }
 
     #[test]

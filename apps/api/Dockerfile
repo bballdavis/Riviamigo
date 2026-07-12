@@ -19,10 +19,10 @@ COPY . .
 RUN touch src/lib.rs src/main.rs migrations/0001_schema_init.sql && cargo build --release
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+FROM postgres:16-bookworm AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 curl postgresql-client-16 && rm -rf /var/lib/apt/lists/*
+    ca-certificates libssl3 curl && rm -rf /var/lib/apt/lists/*
 
 # Non-root user with a dedicated group so the process does not run with GID 0.
 RUN groupadd -r -g 1001 riviamigo && useradd -r -u 1001 -g 1001 riviamigo

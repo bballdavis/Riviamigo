@@ -202,8 +202,7 @@ pub async fn create_restore_request(
 ) -> Result<Uuid, AppError> {
     if confirmation_phrase.trim() != RESTORE_CONFIRMATION_PHRASE {
         return Err(AppError::Validation(format!(
-            "Type {} to request a restore",
-            RESTORE_CONFIRMATION_PHRASE
+            "Type {RESTORE_CONFIRMATION_PHRASE} to request a restore"
         )));
     }
 

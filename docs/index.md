@@ -22,6 +22,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 | [`docs/rivian-auth.md`](./rivian-auth.md) | auth/connection contributors | Rivian auth flow or upstream drift changes local behavior | API access, backend data flow |
 | [`docs/api-access.md`](./api-access.md) | API consumers and maintainers | auth headers, API-key flow, or local testing access changes | security, README |
 | [`docs/security.md`](./security.md) | maintainers | auth, headers, secrets, or operational security expectations change | backend data flow, runbooks |
+| [`docs/security-audit.md`](./security-audit.md) | maintainers and release reviewers | audit scope, findings, or release evidence changes | security, secure-deployment runbook |
 | [`docs/dashboard-data-map.md`](./dashboard-data-map.md) | telemetry and dashboard contributors | field mapping, parity targets, or dashboard contract changes | metrics reference |
 | [`docs/metrics-reference.md`](./metrics-reference.md) | backend and dashboard contributors | metrics catalog or meaning changes | dashboard data map |
 
@@ -39,6 +40,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 | [`docs/runbooks/README.md`](./runbooks/README.md) | maintainers | runbook taxonomy or recurring maintenance surface changes | documentation maintenance |
 | [`docs/runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md) | maintainers and agents | doc publishing or drift-prevention workflow changes | wiki drafts, contributing |
 | [`docs/runbooks/vehicle-history-rebuild.md`](./runbooks/vehicle-history-rebuild.md) | maintainers and agents | rebuild steps, trip enrichment behavior, or post-replay verification changes | backend data flow, metrics reference |
+| [`docs/runbooks/secure-deployment.md`](./runbooks/secure-deployment.md) | self-hosters and maintainers | public exposure boundary, gateway requirements, or production secret behavior changes | security, deployment wiki draft |
 | [`docs/decision-log.md`](./decision-log.md) | maintainers and future contributors | durable repo/process decisions are made | contributing, architecture |
 
 ## User-Facing Documentation

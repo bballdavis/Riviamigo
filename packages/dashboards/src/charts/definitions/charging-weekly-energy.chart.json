@@ -1,7 +1,7 @@
 {
   "id": "charging-weekly-energy",
   "title": "Energy Charged",
-  "description": "Daily charging energy from stored charging sessions.",
+  "description": "Daily total charging energy from stored charging sessions, shown as filled bars with day-level hover details.",
   "pages": ["overview", "charging"],
   "source": "charging_weekly_energy",
   "mode": "bar",

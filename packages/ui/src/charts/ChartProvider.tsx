@@ -47,6 +47,15 @@ export const CHART_FONT = {
   fill: colors.slate[400],
 } as const;
 
+/** Shared visual contract for ordinary quantitative bars across dashboard charts. */
+export const CHART_BAR_STYLE = {
+  slotRatio: 0.66,
+  maxWidth: 78,
+  radius: 8,
+  fillOpacity: 0.96,
+  activeOpacity: 1,
+} as const;
+
 export const TICK_STYLE = {
   ...CHART_FONT,
   fill: colors.slate[400],

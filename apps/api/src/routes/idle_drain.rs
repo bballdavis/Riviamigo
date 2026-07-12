@@ -168,12 +168,8 @@ async fn idle_drain(
 ) -> Result<Json<IdleDrainResponse>, AppError> {
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
-    let (from, to) = resolve_time_bounds(
-        params.from,
-        params.to,
-        params.lifetime.unwrap_or(false),
-        30,
-    );
+    let (from, to) =
+        resolve_time_bounds(params.from, params.to, params.lifetime.unwrap_or(false), 30);
     let min_duration_hours = params.min_duration_hours.max(0.0);
     let limit = params.limit.clamp(1, MAX_LIMIT as i64) as usize;
 

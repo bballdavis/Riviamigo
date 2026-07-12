@@ -1,5 +1,5 @@
 import React from 'react';
-import { SensorChipSummary } from '@riviamigo/dashboards';
+import { getChartDefinition, PhantomDrainChart, SensorChipSummary } from '@riviamigo/dashboards';
 import { usePhantomDrainPeriods } from '@riviamigo/hooks';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
 import { DataTable, TableControls, phantomDrainColumns } from '@riviamigo/ui/tables';
@@ -23,6 +23,7 @@ function formatPeriodSearchText(period: PhantomDrainPeriod) {
     period.soc_start == null ? null : formatPercent(period.soc_start, 0),
     period.soc_end == null ? null : formatPercent(period.soc_end, 0),
     period.soc_lost_pct == null ? null : `-${formatPercent(period.soc_lost_pct, 2)}`,
+    period.drain_pct_per_hour == null ? null : `drain ${formatPercent(period.drain_pct_per_hour, 2)} / h`,
     period.range_lost_mi == null ? null : `${period.range_lost_mi.toFixed(1)} mi`,
     period.energy_drained_kwh == null ? null : `${period.energy_drained_kwh.toFixed(2)} kWh`,
     period.avg_power_w == null ? null : `${period.avg_power_w.toFixed(0)} W`,
@@ -65,6 +66,9 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
 
   const summary = React.useMemo(() => summarizePhantomDrainPeriods(periods), [periods]);
   const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
+  const chartDefinition = getChartDefinition('phantom-drain');
+  const chartTitle = chartDefinition?.title ?? 'Phantom Drain Rate';
+  const chartDescription = chartDefinition?.description ?? 'Duration-weighted battery drain rate during validated parked periods.';
 
   return (
     <div className="grid gap-4 min-w-0">
@@ -80,6 +84,22 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
           />
         ))}
       </div>
+
+      <section className="min-w-0" aria-labelledby="phantom-drain-chart-title" data-testid="phantom-drain-chart-section">
+        <div className="mb-2">
+          <h2 id="phantom-drain-chart-title" className="text-sm font-medium uppercase tracking-wider text-fg-secondary">
+            {chartTitle}
+          </h2>
+          <p className="mt-0.5 text-xs text-fg-tertiary">{chartDescription}</p>
+        </div>
+        <PhantomDrainChart
+          periods={periods}
+          loading={isLoading}
+          height={300}
+          emptyTitle={chartDefinition?.emptyTitle}
+          yUnit={chartDefinition?.yUnit}
+        />
+      </section>
 
       <div className="min-w-0 rounded-xl border border-border bg-bg-surface p-3">
         <TableControls
@@ -105,7 +125,6 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
           columnVisibilityMenu
           fixedLayout
           defaultHiddenColumns={['range_lost_per_hour_mi', 'state_coverage_pct', 'validation_reason']}
-          className="overflow-x-hidden"
         />
 
         <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">

@@ -69,6 +69,21 @@ vi.mock('@riviamigo/dashboards', () => ({
       {secondary ? <div>{secondary}</div> : null}
     </div>
   ),
+  getChartDefinition: () => ({
+    id: 'phantom-drain',
+    title: 'Phantom Drain Rate',
+    description: 'Duration-weighted battery drain rate during validated parked periods.',
+    source: 'phantom_drain',
+    yUnit: '%/h',
+    emptyTitle: 'No phantom drain data for this period',
+  }),
+  PhantomDrainChart: ({ periods, loading }: { periods: unknown[]; loading: boolean }) => (
+    <div
+      data-testid="phantom-drain-chart"
+      data-period-count={String(periods.length)}
+      data-loading={String(loading)}
+    />
+  ),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   getDefaultBySlug: () => ({
     schemaVersion: 2,
@@ -134,12 +149,19 @@ vi.mock('../../lib/dates', () => ({
 import { BatteryPhantomDrainPage } from '../../components/dashboard/BatteryPhantomDrainPage';
 
 describe('BatteryPhantomDrainPage', () => {
-  it('renders unified table controls and combined SoC values', async () => {
+  it('renders the shared chart above unified table controls with aligned rate copy', async () => {
     render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
+
+    const chart = screen.getByTestId('phantom-drain-chart');
+    const tableSearch = screen.getByPlaceholderText('Search periods');
+    expect(chart).toHaveAttribute('data-period-count', '1');
+    expect(chart.compareDocumentPosition(tableSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     expect(screen.getByPlaceholderText('Search periods')).toBeInTheDocument();
     expect(screen.getByText('Rows')).toBeInTheDocument();
     expect(screen.getByText('Avg sleep')).toBeInTheDocument();
+    expect(screen.getByText('Max drain rate')).toBeInTheDocument();
+    expect(screen.getByText('Drain / h')).toBeInTheDocument();
 
     await waitFor(() => expect(
       screen.getByText((content) => content.includes('68') && content.includes('62'))

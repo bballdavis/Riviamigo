@@ -483,6 +483,7 @@ fn validate_slug(slug: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dashboard_config_with_metadata(
     mut config: Value,
     id: Uuid,
@@ -533,8 +534,11 @@ fn bundled_default_config(id: Uuid) -> Option<Value> {
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
 
-/// Idempotently insert system default dashboards on startup.
-/// Defaults are embedded JSON files; call this once from main.rs after pool is ready.
+/// Insert missing system default dashboards on startup.
+///
+/// Existing system defaults are deliberately left untouched: administrators may
+/// manage them in the UI, and an explicit restore action applies the bundled
+/// baseline when that is wanted. User-owned dashboards are never seeded here.
 pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let defaults: &[(&str, &str)] = &[
         (
@@ -564,16 +568,14 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         let config: Value = serde_json::from_str(json_str)?;
         let name = config["name"].as_str().unwrap_or("Dashboard").to_string();
         let slug = config["slug"].as_str().unwrap_or("dashboard").to_string();
-        let config = dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
+        let config =
+            dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
 
         sqlx::query(
             r#"
             INSERT INTO dashboards (id, owner_id, slug, name, is_default, is_locked, config)
             VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4)
-            ON CONFLICT (id) DO UPDATE
-                SET config     = EXCLUDED.config,
-                    name       = EXCLUDED.name,
-                    updated_at = NOW()
+            ON CONFLICT (id) DO NOTHING
             "#,
         )
         .bind(id)
@@ -592,15 +594,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn overview_seed_matches_frontend_default_layout() {
-        let api_config: Value =
-            serde_json::from_str(include_str!("../../dashboards/dashboard.json")).unwrap();
-        let frontend_config: Value = serde_json::from_str(include_str!(
-            "../../../../packages/dashboards/src/defaults/dashboard.json"
-        ))
-        .unwrap();
-
-        assert_eq!(api_config["widgets"], frontend_config["widgets"]);
+    fn every_system_seed_matches_the_canonical_dashboard_source() {
+        for (file_name, api_source, frontend_source) in [
+            (
+                "dashboard.json",
+                include_str!("../../dashboards/dashboard.json"),
+                include_str!("../../../../packages/dashboards/src/defaults/dashboard.json"),
+            ),
+            (
+                "battery.json",
+                include_str!("../../dashboards/battery.json"),
+                include_str!("../../../../packages/dashboards/src/defaults/battery.json"),
+            ),
+            (
+                "efficiency.json",
+                include_str!("../../dashboards/efficiency.json"),
+                include_str!("../../../../packages/dashboards/src/defaults/efficiency.json"),
+            ),
+            (
+                "charging.json",
+                include_str!("../../dashboards/charging.json"),
+                include_str!("../../../../packages/dashboards/src/defaults/charging.json"),
+            ),
+            (
+                "trips.json",
+                include_str!("../../dashboards/trips.json"),
+                include_str!("../../../../packages/dashboards/src/defaults/trips.json"),
+            ),
+        ] {
+            let api_config: Value = serde_json::from_str(api_source).unwrap();
+            let frontend_config: Value = serde_json::from_str(frontend_source).unwrap();
+            assert_eq!(api_config, frontend_config, "seed drift in {file_name}");
+        }
     }
 
     #[test]
@@ -767,14 +792,14 @@ mod tests {
             .as_str()
             .expect("access_token in response");
 
-        // Non-admin trying to create a global dashboard must get 403 (not 500).
+        // Non-admin trying to update a global dashboard must get 403 (not 500).
         let req = Request::builder()
-            .method("POST")
-            .uri("/v1/admin/dashboards")
+            .method("PUT")
+            .uri(format!("/v1/admin/dashboards/{}", uuid::Uuid::nil()))
             .header("authorization", format!("Bearer {access_token}"))
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"slug":"require-admin-test-slug","name":"Test","config":{}}"#,
+                r#"{"name":"Test"}"#,
             ))
             .unwrap();
 

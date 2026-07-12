@@ -301,10 +301,6 @@ function chargingCropFamily(model: string | null | undefined): ChargingCropFamil
   return 'default';
 }
 
-function formatPercent(value: number | null | undefined) {
-  return value === null || value === undefined ? '-' : `${Math.round(value)}%`;
-}
-
 function formatTimeToFull(minutes: number | null | undefined) {
   if (minutes === null || minutes === undefined || minutes <= 0) return '-';
   const hours = Math.floor(minutes / 60);

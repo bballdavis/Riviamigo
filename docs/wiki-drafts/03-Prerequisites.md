@@ -24,16 +24,16 @@ docker compose version    # Docker Compose version v2.x or later
 - **~2 GB RAM minimum** for the full stack. **4 GB recommended** — TimescaleDB benefits significantly from additional memory for query performance and compression.
 - **10–50 GB disk** depending on how long you retain raw telemetry. TimescaleDB compression is aggressive, but raw telemetry can accumulate over months of driving.
 
-### Network / Ports
+### Network / Gateway
 
-The default configuration exposes:
+Riviamigo is not approved for direct Internet exposure. Production Compose binds
+its internal web origin only to `127.0.0.1:8080`; it does not publish the API,
+database, or Redis service to the host.
 
-| Port | Service |
-|------|---------|
-| 3000 | Web frontend (Nginx) |
-| 3001 | Rust API |
-
-Both ports must be available on the host, or you must run a reverse proxy (Nginx, Caddy, Traefik) and adjust `ALLOWED_ORIGINS` accordingly.
+Place an authenticated tunnel or identity-aware reverse proxy in front of that
+origin. Examples include Cloudflare Tunnel with Access or Authentik in front of
+Caddy, Nginx, or Traefik. A tunnel without an access policy is not sufficient.
+Set `ALLOWED_ORIGINS` to the exact public HTTPS URL.
 
 Outbound internet access is required for the Rivian WebSocket connection (`api.rivian.com`).
 
@@ -47,15 +47,21 @@ Outbound internet access is required for the Rivian WebSocket connection (`api.r
 
 ## Optional
 
-### Reverse Proxy
+### Authenticated Gateway
 
-If you want HTTPS or a custom domain, place a reverse proxy in front of the stack:
+An authenticated gateway is required for any shared deployment. It must:
+
+- terminate public HTTPS and require an identity policy before forwarding;
+- support WebSocket upgrades and forward traffic to `http://127.0.0.1:8080`;
+- keep ports 3001, 5432, 6379, and 8080 unavailable from the public Internet.
+
+Suitable gateway components include:
 
 - **Caddy** — automatic HTTPS with minimal config.
 - **Nginx Proxy Manager** — GUI-based management.
 - **Traefik** — good for homelab Docker environments.
 
-Set `ALLOWED_ORIGINS` in your `.env` to match the public URL you'll be using.
+See [Secure Deployment](Secure-Deployment) for the full deployment contract.
 
 ### S3-Compatible Object Storage (for backups)
 

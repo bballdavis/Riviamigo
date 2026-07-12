@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_DASHBOARDS, getAllWidgets, getWidgetEditorMeta, sanitizeDashboardConfig } from '@riviamigo/dashboards';
+import { DEFAULT_DASHBOARDS, getAllWidgets, getWidgetEditorMeta, normalizeDashboardConfig, sanitizeDashboardConfig } from '@riviamigo/dashboards';
 
 describe('dashboard component registry', () => {
   it('keeps default dashboards on the current component model', () => {
@@ -28,6 +28,70 @@ describe('dashboard component registry', () => {
     }
   });
 
+  it('uses reusable sensor chips for the trips dashboard summary row', () => {
+    const dashboard = DEFAULT_DASHBOARDS.find((item) => item.slug === 'trips');
+    expect(dashboard).toBeTruthy();
+
+    const topStats = dashboard?.widgets.filter((widget) => widget.layout.y === 0) ?? [];
+    expect(topStats).toHaveLength(4);
+    expect(topStats.every((widget) => widget.componentType === 'sensor')).toBe(true);
+    expect(topStats.every((widget) => widget.options?.['tripSelectionAware'] === true)).toBe(true);
+    expect(topStats.map((widget) => widget.definitionId)).toEqual([
+      'trip_miles',
+      'total_trips',
+      'avg_efficiency',
+      'avg_trip_duration',
+    ]);
+    expect(topStats.some((widget) => widget.definitionId === 'trips.stat')).toBe(false);
+  });
+
+  it('keeps the API trips seed aligned with the frontend default layout', () => {
+    const apiTrips = JSON.parse(
+      readFileSync(
+        resolve(process.cwd(), '../api/dashboards/trips.json'),
+        'utf8'
+      )
+    ) as { widgets: Array<{ id: string; layout: unknown }> };
+    const frontendTrips = DEFAULT_DASHBOARDS.find((dashboard) => dashboard.slug === 'trips');
+
+    expect(apiTrips.widgets).toEqual(frontendTrips?.widgets);
+  });
+
+  it('normalizes persisted legacy Trips stat chips into reusable sensors', () => {
+    const normalized = normalizeDashboardConfig({
+      schemaVersion: 2,
+      id: '11111111-1111-1111-1111-111111111111',
+      slug: 'trips',
+      name: 'Trips',
+      isDefault: true,
+      isLocked: true,
+      ownerId: null,
+      controls: { dateRange: true },
+      widgets: [
+        {
+          id: '22222222-2222-2222-2222-222222222222',
+          componentType: 'custom',
+          definitionId: 'trips.stat',
+          title: 'Miles Driven',
+          options: { stat: 'miles', metric: 'trip_miles', icon: 'map', accentBorder: true },
+          layout: { x: 0, y: 0, w: 3, h: 2 },
+        },
+      ],
+    });
+
+    expect(normalized.widgets[0]).toMatchObject({
+      componentType: 'sensor',
+      definitionId: 'trip_miles',
+      options: {
+        metric: 'trip_miles',
+        icon: 'map',
+        accentBorder: true,
+        valueMode: 'sum',
+        tripSelectionAware: true,
+      },
+    });
+  });
+
   it('does not register outdated dashboard component names', () => {
     const registeredNames = getAllWidgets().map((widget) => `${widget.componentType}:${widget.definitionId}`.toLowerCase());
 
@@ -39,6 +103,7 @@ describe('dashboard component registry', () => {
     const registered = new Map(getAllWidgets().map((widget) => [`${widget.componentType}:${widget.definitionId}`, widget]));
 
     expect(getWidgetEditorMeta(registered.get('custom:trips.stat'))).toMatchObject({
+      deprecated: true,
       fixedSize: true,
       resizable: false,
     });

@@ -31,6 +31,14 @@ import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import { resolveIconId } from '../../editor/iconMigration';
 import { seriesToDailyDeltas } from '../../editor/dailyDelta';
+import type { TripRow } from '@riviamigo/ui/tables';
+import { useTripSelection } from '../table/tripSelectionStore';
+import {
+  computeTripStat,
+  formatTripSelectionLabel,
+  formatTripStat,
+  getTripStatKind,
+} from '../table/tripStatMetrics';
 import {
   getSensorDefinition,
   SENSOR_DEFINITIONS,
@@ -67,6 +75,7 @@ interface SensorChipOptions {
   curveColor?: ChartColorKey;
   windowDays?: number;
   timeframeScope?: 'range' | 'current' | 'lifetime';
+  tripSelectionAware?: boolean;
 }
 
 const DEFAULT_CURVE_SMOOTHING = 0.45;
@@ -104,6 +113,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     valueMode: options.valueMode ?? definition.valueMode,
     curveColor: options.curveColor ?? 'accent',
     timeframeScope: options.timeframeScope ?? definition.timeframeScope ?? 'range',
+    tripSelectionAware: options.tripSelectionAware ?? false,
     curveSmoothing: normalizeCurveSmoothing(
       options.curveSmoothing,
       defaultCurveSmoothing(chartType)
@@ -119,9 +129,19 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const definition = getSensorDefinition(instance.definitionId);
   const options = readOptions(instance);
   const metric = options.dataSource === 'metric' ? options.metric : null;
+  const { selectedIds, tripRegistry } = useTripSelection();
   const needsHealth = options.dataSource === 'batteryHealth';
   const needsCharging = options.dataSource === 'chargingSummary';
   const needsStatus = options.dataSource === 'vehicleStatus' || usesStatus(options);
+  const tripSelectionStat = (ctx.dashboardSlug === 'trips' || options.tripSelectionAware)
+    ? getTripStatKind(metric)
+    : null;
+  const selectedTrips = tripSelectionStat
+    ? selectedIds.map((id) => tripRegistry[id]).filter((trip): trip is TripRow => Boolean(trip))
+    : [];
+  const activeTripSelectionStat = tripSelectionStat != null && selectedTrips.length > 0 ? tripSelectionStat : null;
+  const selectionLabel = activeTripSelectionStat ? formatTripSelectionLabel(selectedTrips.length) : null;
+  const selectionValue = activeTripSelectionStat ? computeTripStat(activeTripSelectionStat, selectedTrips) : null;
   const { data: value } = useMetricValue(ctx.vehicleId, metric);
   const { data: series = [] } = useMetricSeries(ctx.vehicleId, metric, ctx.from, ctx.to);
   const { data: efficiencySummary } = useEfficiencySummary(
@@ -182,18 +202,24 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     ? statusPresentation.label
     : isLoading
       ? '...'
-      : formatMetricValue(resolvedValue, unit);
+      : activeTripSelectionStat
+        ? formatTripStat(activeTripSelectionStat, selectionValue)
+        : formatMetricValue(resolvedValue, unit);
   const inlineSecondary = statusPresentation
     ? ''
     : isLoading
       ? ''
-      : resolveInlineSecondary(options, sourceValues);
+      : activeTripSelectionStat
+        ? ''
+        : resolveInlineSecondary(options, sourceValues);
   const secondary = statusPresentation
     ? (statusPresentation.secondaryText ?? '')
     : isLoading
       ? ''
-      : resolveTemplate(options.secondaryTemplate, sourceValues);
-  const lastUpdatedLabel = statusPresentation?.lastUpdatedLabel ?? null;
+      : activeTripSelectionStat
+        ? ''
+        : resolveTemplate(options.secondaryTemplate, sourceValues);
+  const lastUpdatedLabel = activeTripSelectionStat ? null : statusPresentation?.lastUpdatedLabel ?? null;
   const valueToneClass = statusPresentation
     ? statusToneClass(statusPresentation.variant)
     : options.valueColor === 'accent'
@@ -211,7 +237,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         allowLatestFallback ? resolvedValue : null,
         value?.ts ?? ctx.to ?? new Date().toISOString()
       );
-  const showSprite = options.showSprite && options.chartType !== 'none';
+  const showSprite = options.showSprite && options.chartType !== 'none' && !activeTripSelectionStat;
 
   return (
     <Card
@@ -242,7 +268,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
         </div>
       ) : null}
 
-      <div className={cn('relative z-10 flex flex-col', !showSprite && 'flex-1 justify-center')}>
+      <div className={cn('relative z-10 flex flex-col', !activeTripSelectionStat && !showSprite && 'flex-1 justify-center')}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -284,7 +310,9 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             </span>
           ) : null}
         </div>
-        {lastUpdatedLabel ? (
+        {selectionLabel ? (
+          <p className="mt-0.5 text-[10px] text-fg-tertiary">{selectionLabel}</p>
+        ) : lastUpdatedLabel ? (
           <p className="mt-0.5 truncate text-[11px] text-fg-tertiary">{lastUpdatedLabel}</p>
         ) : null}
         {secondary ? <p className="mt-0.5 truncate text-xs text-fg-tertiary">{secondary}</p> : null}

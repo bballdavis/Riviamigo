@@ -26,8 +26,8 @@ Variables marked **Required** must be set. Variables marked **Optional** have de
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `REDIS_URL` | **Required** | — | Redis connection string. Example: `redis://localhost:6379`. Used for session state, OTP challenges, and refresh token rotation locking. |
-| `REDIS_PASSWORD` | Optional | — | Redis password if your instance requires authentication. |
+| `REDIS_URL` | Development only | — | Development Redis connection string. Production Compose constructs its internal Redis URL from `REDIS_PASSWORD`. |
+| `REDIS_PASSWORD` | **Required in production** | — | Password for the internal production Redis service. Use a strong unique value. |
 
 ---
 
@@ -43,13 +43,16 @@ Variables marked **Required** must be set. Variables marked **Optional** have de
 
 ## JWT and Encryption Keys
 
-All three keys are auto-generated on first API boot and stored in the `system_config` database table. You only need to set these explicitly if you want to manage your own keys (for example, to rotate them or share them across multiple API instances).
+Development may auto-generate these keys on first API boot and store them in
+`system_config`. Production requires all three values to be supplied from a
+secret manager or protected deployment environment; startup fails if any are
+missing.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | Optional | Auto-generated | RSA private key PEM content. Used to sign JWT access tokens (RS256). |
-| `JWT_PUBLIC_KEY` | Optional | Auto-generated | RSA public key PEM content. Used to verify JWT access tokens. |
-| `AGE_ENCRYPTION_KEY` | Optional | Auto-generated | age X25519 secret key (`AGE-SECRET-KEY-...` format). Used to encrypt Rivian credentials at rest. |
+| `JWT_SECRET` | **Required in production** | Development auto-generated | RSA private key PEM content. Used to sign JWT access tokens (RS256). |
+| `JWT_PUBLIC_KEY` | **Required in production** | Development auto-generated | RSA public key PEM content. Used to verify JWT access tokens. |
+| `AGE_ENCRYPTION_KEY` | **Required in production** | Development auto-generated | age X25519 secret key (`AGE-SECRET-KEY-...` format). Used to encrypt Rivian credentials at rest. |
 
 > **Note:** If you change `AGE_ENCRYPTION_KEY` after credentials have been stored, existing Rivian credentials in the database will be unreadable. You will need to re-enter them via the UI.
 
@@ -60,7 +63,7 @@ All three keys are auto-generated on first API boot and stored in the `system_co
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `PORT` | Optional | `3001` | Port the Rust API listens on. |
-| `ALLOWED_ORIGINS` | Optional | `http://localhost:3000` | Comma-separated list of allowed CORS origins. Set to your public URL in production. Example: `https://riviamigo.yourdomain.com`. |
+| `ALLOWED_ORIGINS` | **Required in production** | Localhost origins in development | Comma-separated list of exact allowed origins. Production accepts HTTPS origins with no path, query, or fragment. |
 
 ---
 
@@ -118,15 +121,24 @@ These variables control backup behavior (if the backup subsystem is enabled).
 ## Example `.env` for Production
 
 ```env
-DATABASE_URL=postgresql://riviamigo:STRONG_PASSWORD@timescaledb:5432/riviamigo
-REDIS_URL=redis://redis:6379
+DATABASE_URL=postgresql://riviamigo:STRONG_DATABASE_PASSWORD@timescaledb:5432/riviamigo
+POSTGRES_USER=riviamigo
+POSTGRES_PASSWORD=STRONG_DATABASE_PASSWORD
+REDIS_PASSWORD=STRONG_REDIS_PASSWORD
 
 PORT=3001
 ALLOWED_ORIGINS=https://riviamigo.yourdomain.com
 
 RIVIAMIGO_ENV=production
 
+# Supply these from a secret manager or protected deployment environment.
+JWT_SECRET=<RSA private key PEM>
+JWT_PUBLIC_KEY=<RSA public key PEM>
+AGE_ENCRYPTION_KEY=AGE-SECRET-KEY-1...
+
 RUST_LOG=riviamigo_api=info,tower_http=warn
 ```
 
-Leave JWT/age keys unset to let the API auto-generate them. Set `S3_*` variables if you want offsite backups.
+Place an authenticated tunnel or identity-aware reverse proxy in front of the
+loopback origin at `127.0.0.1:8080`. Set `S3_*` variables if you want offsite
+backups.

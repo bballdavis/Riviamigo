@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { rootRoute } from './__root';
-import { useAuth, useDocumentTheme } from '@riviamigo/hooks';
+import { api, useAuth, useDocumentTheme } from '@riviamigo/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
 import { Zap, Route, Battery } from 'lucide-react';
 import { normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
@@ -20,24 +21,26 @@ export function LoginPage() {
   const navigate = useNavigate();
   const search = useSearch({ from: '/login' });
   const { login, register } = useAuth();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const isDark = useDocumentTheme();
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
+  const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
+  const setupRequired = setup.data?.setup_required === true;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      if (mode === 'login') {
-        await login(email, password);
-      } else {
+      if (setupRequired) {
         await register(email, password);
+        navigate({ to: '/connect' });
+        return;
       }
+      await login(email, password);
       navigate({ to: (redirectTarget ?? '/') as never });
     } catch (err) {
       const status = (err as { status?: number }).status;
@@ -96,7 +99,7 @@ export function LoginPage() {
         {/* Auth card */}
         <div className="bg-bg-glass backdrop-blur-md border border-border rounded-2xl p-6 shadow-xl">
           <p className="text-[11px] font-semibold text-fg-tertiary uppercase tracking-widest mb-5">
-            {mode === 'login' ? 'Sign in' : 'Create account'}
+            {setupRequired ? 'Set up Riviamigo' : 'Sign in'}
           </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -116,30 +119,19 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               required
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              autoComplete={setupRequired ? 'new-password' : 'current-password'}
             />
+            {setupRequired && <p className="text-xs text-fg-tertiary">Create the first owner account. Passwords must be at least 12 characters.</p>}
             {error && (
               <p className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
                 {error}
               </p>
             )}
             <Button type="submit" loading={loading} size="lg" className="mt-1 w-full">
-              {mode === 'login' ? 'Sign in' : 'Create account'}
+              {setupRequired ? 'Create owner account' : 'Sign in'}
             </Button>
           </form>
-
-          <div className="mt-5 pt-5 border-t border-border text-center">
-            <p className="text-xs text-fg-tertiary">
-              {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
-              <button
-                type="button"
-                onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
-                className="text-accent hover:text-accent-hover transition-colors font-medium"
-              >
-                {mode === 'login' ? 'Create one' : 'Sign in'}
-              </button>
-            </p>
-          </div>
+          {!setupRequired && <p className="mt-5 pt-5 border-t border-border text-center text-xs text-fg-tertiary">Need access? Ask an administrator for an activation link.</p>}
         </div>
 
         {/* Feature callouts */}

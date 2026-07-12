@@ -60,12 +60,6 @@ function clonePrefs(prefs: UnitPreferences): UnitPreferences {
   return { ...prefs };
 }
 
-function resolveFromMode(mode: UnitMode): UnitPreferences {
-  if (mode === 'metric') return clonePrefs(METRIC_PREFS);
-  if (mode === 'imperial') return clonePrefs(IMPERIAL_PREFS);
-  return clonePrefs(IMPERIAL_PREFS);
-}
-
 function isUnitPreferences(value: unknown): value is UnitPreferences {
   if (!value || typeof value !== 'object') return false;
   const v = value as Partial<UnitPreferences>;

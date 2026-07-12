@@ -77,6 +77,86 @@ async fn live_handler(
         .on_upgrade(move |socket| handle_socket(socket, vid, redis)))
 }
 
+/// GET /v1/vehicles/:id/live-session
+/// Returns the latest live charging session data from Redis (written by run_poll_loop).
+/// Returns 204 No Content when no live session is active.
+async fn live_session_handler(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+
+    let key = format!("vehicle:{vehicle_id}:live_session");
+    let mut conn = state.redis.get_multiplexed_async_connection().await?;
+    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
+
+    match raw {
+        Some(json) => {
+            let value: serde_json::Value =
+                serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
+            Ok(axum::response::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_string(&value).unwrap_or_default(),
+                ))
+                .unwrap())
+        }
+        None => Ok(axum::response::Response::builder()
+            .status(204)
+            .body(axum::body::Body::empty())
+            .unwrap()),
+    }
+}
+
+async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client) {
+    let (mut sink, mut stream) = socket.split();
+    let topic = format!("vehicle:{vehicle_id}:status");
+
+    let mut pubsub = match redis.get_async_pubsub().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(err=%e, "redis pubsub connect failed");
+            return;
+        }
+    };
+    if let Err(e) = pubsub.subscribe(&topic).await {
+        tracing::error!(err=%e, "redis subscribe failed");
+        return;
+    }
+
+    let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+    let mut msg_stream = pubsub.into_on_message();
+
+    loop {
+        tokio::select! {
+            msg = msg_stream.next() => {
+                match msg {
+                    Some(m) => {
+                        let payload: String = match m.get_payload() {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
+                        if sink.send(Message::Text(payload)).await.is_err() { break; }
+                    }
+                    None => break,
+                }
+            }
+            _ = ping_interval.tick() => {
+                if sink.send(Message::Ping(vec![])).await.is_err() { break; }
+            }
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,85 +252,5 @@ mod tests {
         let claims = extract_jwt_from_headers(&headers_with_proto(&proto), &keys)
             .expect("should find bearer. among multiple protocols");
         assert_eq!(claims.sub, user_id);
-    }
-}
-
-/// GET /v1/vehicles/:id/live-session
-/// Returns the latest live charging session data from Redis (written by run_poll_loop).
-/// Returns 204 No Content when no live session is active.
-async fn live_session_handler(
-    auth: AuthUser,
-    State(state): State<AppState>,
-    Path(vehicle_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
-
-    let key = format!("vehicle:{}:live_session", vehicle_id);
-    let mut conn = state.redis.get_multiplexed_async_connection().await?;
-    let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
-
-    match raw {
-        Some(json) => {
-            let value: serde_json::Value =
-                serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
-            Ok(axum::response::Response::builder()
-                .status(200)
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(
-                    serde_json::to_string(&value).unwrap_or_default(),
-                ))
-                .unwrap())
-        }
-        None => Ok(axum::response::Response::builder()
-            .status(204)
-            .body(axum::body::Body::empty())
-            .unwrap()),
-    }
-}
-
-async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client) {
-    let (mut sink, mut stream) = socket.split();
-    let topic = format!("vehicle:{}:status", vehicle_id);
-
-    let mut pubsub = match redis.get_async_pubsub().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(err=%e, "redis pubsub connect failed");
-            return;
-        }
-    };
-    if let Err(e) = pubsub.subscribe(&topic).await {
-        tracing::error!(err=%e, "redis subscribe failed");
-        return;
-    }
-
-    let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-    let mut msg_stream = pubsub.into_on_message();
-
-    loop {
-        tokio::select! {
-            msg = msg_stream.next() => {
-                match msg {
-                    Some(m) => {
-                        let payload: String = match m.get_payload() {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        };
-                        if sink.send(Message::Text(payload)).await.is_err() { break; }
-                    }
-                    None => break,
-                }
-            }
-            _ = ping_interval.tick() => {
-                if sink.send(Message::Ping(vec![])).await.is_err() { break; }
-            }
-            msg = stream.next() => {
-                match msg {
-                    Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | None => break,
-                    _ => {}
-                }
-            }
-        }
     }
 }

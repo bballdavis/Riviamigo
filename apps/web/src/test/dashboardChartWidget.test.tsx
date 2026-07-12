@@ -501,6 +501,7 @@ describe('DashboardChartWidget — charging_weekly_energy', () => {
   it('renders chart when daily data is present', () => {
     renderChart('charging-weekly-energy');
     expectChartHasData('No charging energy for this period');
+    expect(screen.getAllByTestId('daily-energy-bar')).toHaveLength(2);
   });
 
   it('shows empty state when no daily data', () => {
@@ -648,14 +649,68 @@ describe('DashboardChartWidget — phantom_drain', () => {
 });
 
 describe('buildPhantomDrainDailySeries', () => {
+  const basePeriod = mockPhantomDrainPeriods().data.periods[0]!;
+
+  it('keeps a same-day daily bar equal to the table rate', () => {
+    const period = {
+      ...basePeriod,
+      period_start: '2024-01-03T08:00:00Z',
+      period_end: '2024-01-03T16:00:00Z',
+      duration_hours: 8,
+      soc_lost_pct: 4,
+      drain_pct_per_hour: 0.5,
+    };
+
+    const [point] = buildPhantomDrainDailySeries([period]);
+
+    expect(point?.drainRate).toBeCloseTo(period.drain_pct_per_hour);
+    expect(point?.parkedHours).toBeCloseTo(period.duration_hours);
+    expect(point?.socLost).toBeCloseTo(period.soc_lost_pct);
+  });
+
   it('splits a parked period across local days and preserves its duration-weighted drain rate', () => {
-    const period = mockPhantomDrainPeriods().data.periods[0]!;
+    const period = basePeriod;
     const points = buildPhantomDrainDailySeries([period]);
 
     expect(points.length).toBeGreaterThan(1);
     expect(points.reduce((sum, point) => sum + point.parkedHours, 0)).toBeCloseTo(12);
     expect(points.reduce((sum, point) => sum + point.socLost, 0)).toBeCloseTo(2.4);
     points.forEach((point) => expect(point.drainRate).toBeCloseTo(0.2));
+  });
+
+  it('duration-weights multiple periods that contribute to one day', () => {
+    const periods = [
+      {
+        ...basePeriod,
+        period_start: '2024-01-04T08:00:00Z',
+        period_end: '2024-01-04T14:00:00Z',
+        duration_hours: 6,
+        soc_lost_pct: 3,
+        drain_pct_per_hour: 0.5,
+      },
+      {
+        ...basePeriod,
+        period_start: '2024-01-04T16:00:00Z',
+        period_end: '2024-01-04T18:00:00Z',
+        duration_hours: 2,
+        soc_lost_pct: 2,
+        drain_pct_per_hour: 1,
+      },
+    ];
+
+    const [point] = buildPhantomDrainDailySeries(periods);
+
+    expect(point?.periodCount).toBe(2);
+    expect(point?.parkedHours).toBeCloseTo(8);
+    expect(point?.socLost).toBeCloseTo(5);
+    expect(point?.drainRate).toBeCloseTo(0.625);
+  });
+
+  it('ignores excluded periods and malformed period boundaries', () => {
+    const excluded = { ...basePeriod, validation_status: 'excluded' as const };
+    const malformed = { ...basePeriod, period_start: 'not-a-date' };
+
+    expect(buildPhantomDrainDailySeries([excluded, malformed])).toEqual([]);
   });
 });
 

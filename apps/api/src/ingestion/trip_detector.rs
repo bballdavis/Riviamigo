@@ -14,6 +14,7 @@ const STOPPED_DURATION_SECS: i64 = 300; // 5 min
 const MIN_TRIP_DISTANCE_MI: f64 = 0.1;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum TripEvent {
     TripStarted {
         trip_id: Uuid,
@@ -250,9 +251,9 @@ impl TripDetectorState {
                 self.last_moving_at = Some(ts);
             }
 
-            let stopped_long_enough = self.last_moving_at.map_or(false, |last| {
-                (ts - last).num_seconds() > STOPPED_DURATION_SECS
-            });
+            let stopped_long_enough = self
+                .last_moving_at
+                .is_some_and(|last| (ts - last).num_seconds() > STOPPED_DURATION_SECS);
 
             if is_asleep || stopped_long_enough {
                 return self.close_trip(ts);

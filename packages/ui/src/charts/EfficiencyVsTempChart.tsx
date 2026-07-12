@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Cell,
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { colors } from '../tokens/colors';
 
@@ -74,12 +74,12 @@ export function EfficiencyVsTempChart({
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
-        <Bar dataKey="efficiency" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+        <Bar dataKey="efficiency" radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]} fillOpacity={CHART_BAR_STYLE.fillOpacity} isAnimationActive={false}>
           {chartData.map((entry, idx) => (
             <Cell
               key={`cell-${idx}`}
               fill={entry.efficiency !== null ? barColor(entry.efficiency) : CHART_COLORS.muted}
-              fillOpacity={0.8}
+              fillOpacity={CHART_BAR_STYLE.fillOpacity}
             />
           ))}
         </Bar>

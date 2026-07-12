@@ -81,6 +81,12 @@ Common usage:
 - Compact card badges should use the shared `Badge` primitive instead of ad hoc border pills.
 - Only show timeframe badges when the timeframe itself adds meaning. For battery and charging summary cards, omit `Current` labels and use a small `Lifetime` badge only on lifetime-scoped history cards.
 
+### Charts
+
+- Ordinary quantitative bars use the shared filled-bar treatment from `CHART_BAR_STYLE`: semantic chart colors, quiet gridlines, consistent width/opacity, and rounded tops where the renderer supports them. Outline-only bars are not the default dashboard treatment.
+- Every interactive bar chart must expose the date/category and formatted metric value on hover. Stacked bars must also provide a legend and keep hover/click hit-testing on the full bar rather than individual visual segments.
+- Keep chart geometry semantically appropriate: daily totals may use one filled series, while daily charge-session composition remains a stacked AC/DC/Unknown view.
+
 ### Empty, loading, and error states
 
 - Use `<EmptyState>` and `<Skeleton>` from shared primitives when they fit.

@@ -106,7 +106,7 @@ async fn query(
     Query(qp): Query<VehicleIdQuery>,
     Json(body): Json<GrafanaQueryBody>,
 ) -> Result<Json<Vec<TimeSeriesResult>>, AppError> {
-    let max_points = body.max_data_points.unwrap_or(1000).min(10_000).max(1) as i64;
+    let max_points = body.max_data_points.unwrap_or(1000).clamp(1, 10_000);
     let mut results = Vec::with_capacity(body.targets.len());
 
     for target in &body.targets {
@@ -145,8 +145,7 @@ async fn query(
               AND {column} IS NOT NULL
             ORDER BY ts
             LIMIT $4
-            "#,
-            column = column
+            "#
         );
 
         let rows = sqlx::query_as::<_, (f64, f64)>(&sql)

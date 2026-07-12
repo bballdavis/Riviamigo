@@ -45,6 +45,7 @@ pub async fn get_status(
     pool: &PgPool,
     vehicle_id: Uuid,
 ) -> Result<ChargeBackfillStatus, ChargeBackfillError> {
+    #[allow(clippy::type_complexity)]
     let row: Option<(
         Option<chrono::DateTime<chrono::Utc>>,
         Option<String>,
@@ -64,8 +65,13 @@ pub async fn get_status(
     .fetch_optional(pool)
     .await?;
 
-    let (history_backfilled_at, status, rivian_session_count, local_session_count, missing_source_count) =
-        row.unwrap_or((None, None, None, 0, 0));
+    let (
+        history_backfilled_at,
+        status,
+        rivian_session_count,
+        local_session_count,
+        missing_source_count,
+    ) = row.unwrap_or((None, None, None, 0, 0));
 
     Ok(ChargeBackfillStatus {
         vehicle_id,

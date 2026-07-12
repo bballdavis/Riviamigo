@@ -163,7 +163,10 @@ mod tests {
     #[test]
     fn trusted_proxy_key_extractor_falls_back_without_connect_info() {
         let extractor = TrustedProxyIpKeyExtractor;
-        let req = Request::builder().uri("/v1/charging/chart-series").body(()).unwrap();
+        let req = Request::builder()
+            .uri("/v1/charging/chart-series")
+            .body(())
+            .unwrap();
 
         let key = extractor.extract(&req).expect("key should be extractable");
 
@@ -172,7 +175,10 @@ mod tests {
 
     #[test]
     fn trusted_client_ip_falls_back_without_connect_info() {
-        let req = Request::builder().uri("/v1/charging/chart-series").body(()).unwrap();
+        let req = Request::builder()
+            .uri("/v1/charging/chart-series")
+            .body(())
+            .unwrap();
 
         assert_eq!(trusted_client_ip(&req), Some(IpAddr::from([127, 0, 0, 1])));
     }

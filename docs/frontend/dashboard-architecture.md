@@ -80,7 +80,7 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 - shared widget chrome and edit overlay
 - dashboard CRUD helpers
 - YAML import and export
-- bundled default dashboard configs
+- bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
 
 This package should stay framework-focused. It should not accumulate page-specific business rules.
 
@@ -107,6 +107,8 @@ The shared chart widget owns reusable chart display controls.
 - Keep the settings UI inside the shared chart widget and shared chart primitives. Do not recreate chart-settings popovers in route files or page components.
 - Rich time-series charts may expose manual `y` and `y2` ranges broadly, but `x` range controls are only valid when the chart owns its own non-dashboard domain.
 - When a chart follows the shared dashboard timeframe, the page shell remains the source of truth for the X domain. Do not expose per-widget time-range overrides that conflict with `DashboardPageShell`.
+
+Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx` as `CHART_BAR_STYLE`. Use the filled mark treatment for ordinary quantitative bars and preserve renderer-specific semantics for stacked, histogram, efficiency, and segmented pill views. Interactive bars must provide date/category and value details on hover; stacked views additionally require a legend and a full-bar hit target.
 
 ### 6. Hooks and Data Layer
 

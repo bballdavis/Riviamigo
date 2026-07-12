@@ -64,7 +64,6 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
     if (!open) { setPopoverPos(null); return; }
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const POPUP_WIDTH = 368;
     const POPUP_EST_HEIGHT = 440;
     const spaceBelow = window.innerHeight - rect.bottom - 8;
     const right = Math.max(8, window.innerWidth - rect.right);

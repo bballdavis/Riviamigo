@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Laptop, Moon, Sun } from 'lucide-react';
+import { Check, Laptop, Moon, Sun, type LucideIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
   applyThemeMode,
@@ -28,7 +28,7 @@ const THEME_OPTIONS: Array<{
   mode: ThemeMode;
   label: string;
   description: string;
-  icon: React.ComponentType<any>;
+  icon: LucideIcon;
 }> = [
   {
     mode: 'light',

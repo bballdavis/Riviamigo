@@ -165,6 +165,7 @@ fn resolve_time_bounds(
     (resolved_from, resolved_to)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_fallback_curve_samples(
     session_id: Uuid,
     started_at: DateTime<Utc>,
@@ -194,8 +195,8 @@ fn build_fallback_curve_samples(
             let soc = if points.len() == 1 {
                 Some((soc_start + soc_end) / 2.0)
             } else {
-                let ratio = ((row.ts - first_ts).num_seconds() as f64 / point_span_seconds)
-                    .clamp(0.0, 1.0);
+                let ratio =
+                    ((row.ts - first_ts).num_seconds() as f64 / point_span_seconds).clamp(0.0, 1.0);
                 Some(soc_start + (soc_end - soc_start) * ratio)
             };
 
@@ -382,7 +383,8 @@ async fn update_session_location(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id).await?;
+    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id)
+        .await?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -392,7 +394,8 @@ async fn update_session_location_path(
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<SessionLocationUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id).await?;
+    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id)
+        .await?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -460,7 +463,7 @@ async fn update_charge_session_location(
                 return Err(AppError::NotFound);
             }
             Ok(())
-        },
+        }
         None => Err(AppError::NotFound),
     }
 }
@@ -604,19 +607,17 @@ async fn get_curve_analysis(
     .flatten()
     .collect::<Vec<_>>();
 
-    Ok(Json(serde_json::json!(
-        curve_rows
-            .iter()
-            .map(|row| serde_json::json!({
-                "session_id": row.session_id,
-                "minutes_elapsed": row.minutes_elapsed,
-                "soc_pct": row.soc,
-                "charge_rate_kw": row.charge_rate_kw,
-                "sample_source": row.sample_source,
-                "charger_type": row.charger_type,
-            }))
-            .collect::<Vec<_>>()
-    )))
+    Ok(Json(serde_json::json!(curve_rows
+        .iter()
+        .map(|row| serde_json::json!({
+            "session_id": row.session_id,
+            "minutes_elapsed": row.minutes_elapsed,
+            "soc_pct": row.soc,
+            "charge_rate_kw": row.charge_rate_kw,
+            "sample_source": row.sample_source,
+            "charger_type": row.charger_type,
+        }))
+        .collect::<Vec<_>>())))
 }
 
 async fn list_sessions_response(
@@ -841,7 +842,10 @@ fn normalize_chart_charger_type(
         _ => {}
     }
 
-    let vendor = network_vendor.unwrap_or_default().trim().to_ascii_lowercase();
+    let vendor = network_vendor
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
     if ["tesla", "rivian", "electrify america", "evgo"].contains(&vendor.as_str()) {
         return Some("DC".to_string());
     }
@@ -1376,7 +1380,9 @@ mod tests {
         let rows = (0..205)
             .map(|index| ChartSeriesSessionSourceRow {
                 session_id: Uuid::new_v4(),
-                started_at: Utc.with_ymd_and_hms(2026, 6, 1 + (index / 10) as u32, (index % 24) as u32, 0, 0).unwrap(),
+                started_at: Utc
+                    .with_ymd_and_hms(2026, 6, 1 + (index / 10) as u32, (index % 24) as u32, 0, 0)
+                    .unwrap(),
                 session_day_local: Some(format!("2026-06-{:02}", 1 + (index / 10))),
                 energy_kwh: Some(1.0),
                 location_name: None,
@@ -1617,6 +1623,7 @@ async fn load_curve(
         .collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_curve_analysis_samples(
     pool: &sqlx::PgPool,
     vehicle_id: Uuid,
@@ -1834,6 +1841,3 @@ async fn load_curve_analysis_samples(
         cap_kw,
     ))
 }
-
-
-

@@ -517,10 +517,6 @@ function parseUserInput(value: string, fallback: Date): Date | null {
   return isValid(nativeDate) ? nativeDate : null;
 }
 
-function formatInputValue(value: Date) {
-  return format(value, 'M/d/yy');
-}
-
 function formatDateInputValue(value: Date) {
   return format(value, 'M/d/yy');
 }

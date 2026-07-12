@@ -10,8 +10,9 @@ import { resolveIconId } from '../../editor/iconMigration';
 import type { SensorIconKey } from '../sensor/sensorDefinitions';
 import type { TripRow } from '@riviamigo/ui/tables';
 import { useTripSelection, resetTripSelection } from './tripSelectionStore';
+import { computeTripStat, formatTripSelectionLabel, formatTripStat, type TripStatKind } from './tripStatMetrics';
 
-type TripStat = 'miles' | 'count' | 'efficiency' | 'duration';
+type TripStat = TripStatKind;
 
 interface TripStatOptions {
   stat: TripStat;
@@ -28,30 +29,6 @@ function readOptions(instance: WidgetInstance): TripStatOptions {
     icon: opts.icon ?? 'calendar',
     accentBorder: opts.accentBorder ?? false,
   };
-}
-
-function computeTripStat(stat: TripStat, trips: TripRow[]): number | null {
-  if (trips.length === 0) return null;
-  if (stat === 'count') return trips.length;
-  if (stat === 'miles') return trips.reduce((sum, t) => sum + t.distance_mi, 0);
-  if (stat === 'duration') return trips.reduce((sum, t) => sum + t.duration_min, 0) / trips.length;
-  const weightedTrips = trips.filter((t) => t.distance_mi > 0 && t.efficiency_wh_mi != null);
-  if (weightedTrips.length === 0) return null;
-  const totalDistance = weightedTrips.reduce((sum, trip) => sum + trip.distance_mi, 0);
-  if (totalDistance <= 0) return null;
-  const weightedEfficiency = weightedTrips.reduce(
-    (sum, trip) => sum + (trip.distance_mi * (trip.efficiency_wh_mi ?? 0)),
-    0,
-  );
-  return weightedEfficiency / totalDistance;
-}
-
-function formatTripStat(stat: TripStat, value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '-';
-  if (stat === 'miles') return formatMiles(value);
-  if (stat === 'duration') return formatDuration(value);
-  if (stat === 'efficiency') return formatEfficiency(value);
-  return value.toFixed(0);
 }
 
 function formatApiValue(value: number | null | undefined, unit: string | null | undefined): string {
@@ -156,7 +133,7 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
         </div>
         {hasSelection ? (
           <p className="mt-0.5 text-[10px] text-fg-tertiary">
-            {selectedTrips.length} trip{selectedTrips.length === 1 ? '' : 's'} selected
+            {formatTripSelectionLabel(selectedTrips.length)}
           </p>
         ) : null}
       </div>
@@ -174,7 +151,8 @@ registerWidget({
   editor: {
     category: 'Trips',
     fixedSize: true,
-    description: 'Compact trip stat chip with a fixed dashboard footprint.',
+    deprecated: true,
+    description: 'Legacy fixed-size trip stat chip retained for imported dashboards.',
   },
   component: TripStatWidget,
 });

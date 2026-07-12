@@ -327,6 +327,7 @@ async fn insert_geofence(
     .expect("insert geofence")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_trip(
     pool: &PgPool,
     vehicle_id: Uuid,

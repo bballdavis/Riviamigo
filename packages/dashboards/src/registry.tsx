@@ -1,4 +1,4 @@
-import React from 'react';
+import type React from 'react';
 import type { DashboardTimeframe } from '@riviamigo/types';
 import type { DashboardComponentType, WidgetInstance } from './schema';
 
@@ -6,6 +6,7 @@ export type { WidgetInstance };
 
 export interface WidgetCtx {
   vehicleId: string | null;
+  dashboardSlug?: string;
   timeframe?: DashboardTimeframe;
   from: string | null;
   to: string | null;

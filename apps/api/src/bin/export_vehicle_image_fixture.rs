@@ -2,7 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, path::{Path, PathBuf}};
 use uuid::Uuid;
 
 #[derive(Debug, FromRow)]
@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn download_fixture_asset(
     client: &Client,
-    output_dir: &PathBuf,
+    output_dir: &Path,
     source_url: &str,
     used_filenames: &mut HashSet<String>,
 ) -> anyhow::Result<String> {

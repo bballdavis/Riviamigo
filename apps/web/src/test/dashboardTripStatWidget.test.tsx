@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
@@ -54,36 +55,42 @@ function config(): DashboardConfig {
     widgets: [
       {
         id: 'd5000005-0000-0000-0000-000000000003',
-        componentType: 'custom',
-        definitionId: 'trips.stat',
+        componentType: 'sensor',
+        definitionId: 'avg_efficiency',
         title: 'Avg Efficiency',
-        options: { stat: 'efficiency', metric: 'avg_efficiency', icon: 'gauge', accentBorder: false },
+        options: { tripSelectionAware: true },
         layout: { x: 0, y: 0, w: 3, h: 2 },
       },
     ],
   };
 }
 
-describe('Trips weighted efficiency stat', () => {
+describe('Trips weighted efficiency sensor', () => {
   beforeEach(() => {
     resetTripSelection('vehicle-1::2026-05-01T00:00:00Z::2026-05-07T00:00:00Z', { force: true });
   });
 
   it('uses the weighted average for selected trips and the metric summary when nothing is selected', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+
     render(
-      <DashboardRenderer
-        config={config()}
-        ctx={{
-          vehicleId: 'vehicle-1',
-          timeframe: {
-            kind: 'custom',
-            from: new Date('2026-05-01T00:00:00Z'),
-            to: new Date('2026-05-07T00:00:00Z'),
-          },
-          from: '2026-05-01T00:00:00Z',
-          to: '2026-05-07T00:00:00Z',
-        }}
-      />
+      <QueryClientProvider client={queryClient}>
+        <DashboardRenderer
+          config={config()}
+          ctx={{
+            vehicleId: 'vehicle-1',
+            timeframe: {
+              kind: 'custom',
+              from: new Date('2026-05-01T00:00:00Z'),
+              to: new Date('2026-05-07T00:00:00Z'),
+            },
+            from: '2026-05-01T00:00:00Z',
+            to: '2026-05-07T00:00:00Z',
+          }}
+        />
+      </QueryClientProvider>
     );
 
     await waitFor(() => expect(screen.getByText('5.0 mi/kWh')).toBeInTheDocument());
