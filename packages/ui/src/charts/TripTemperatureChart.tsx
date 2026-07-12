@@ -46,28 +46,10 @@ export function TripTemperatureChart({
   activeElapsedS = null,
   onActiveElapsedSChange,
 }: TripTemperatureChartProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        Loading temperature chart...
-      </div>
-    );
-  }
-
-  const hasAnyData = data.some((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null);
-  if (!hasAnyData) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        Outside temp unavailable for this trip.
-      </div>
-    );
-  }
-
   const chartData = data.map((point) => ({
     ...point,
     hvac_on: point.hvac_active ? 1 : 0,
   }));
-
   const measuredData = React.useMemo(
     () => data.filter((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null),
     [data],
@@ -97,6 +79,23 @@ export function TripTemperatureChart({
     ),
     [data],
   );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        Loading temperature chart...
+      </div>
+    );
+  }
+
+  const hasAnyData = data.some((point) => point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null);
+  if (!hasAnyData) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        Outside temp unavailable for this trip.
+      </div>
+    );
+  }
 
   return (
     <ResponsiveContainer width="100%" height={height}>

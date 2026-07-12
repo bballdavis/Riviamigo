@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { CHART_COLORS, CHART_FONT } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { formatSmartNumber } from '../lib/utils';
 
@@ -106,9 +106,9 @@ export function ChargeSessionDistributionChart({
                 y={barTop}
                 width={barWidth}
                 height={barHeight}
-                rx={4}
+                rx={CHART_BAR_STYLE.radius}
                 fill={CHART_COLORS.accent}
-                opacity={0.88}
+                opacity={CHART_BAR_STYLE.fillOpacity}
               />
               <text x={centerX} y={barTop - 8} textAnchor="middle" fill={CHART_COLORS.accent} fontFamily={CHART_FONT.fontFamily} fontSize={CHART_FONT.fontSize} fontWeight={CHART_FONT.fontWeight}>
                 {band.count > 0 ? band.count : ''}

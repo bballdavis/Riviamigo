@@ -85,7 +85,10 @@ pub struct ChargeSessionExternalAlias {
 pub enum UnmatchedInsertPolicy {
     Never,
     Always,
-    RecentOnly { now: DateTime<Utc>, lookback_days: i64 },
+    RecentOnly {
+        now: DateTime<Utc>,
+        lookback_days: i64,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,9 +216,15 @@ fn infer_alias_kind_from_id(external_id: &str) -> ExternalAliasKind {
     }
 }
 
-pub fn parse_summary_aliases(summary: &ChargeSessionSummaryPayload) -> Vec<ChargeSessionExternalAlias> {
-    let grouping_key =
-        normalize_grouping_key(summary.meta.as_ref().and_then(|meta| meta.transaction_id_grouping_key.as_deref()));
+pub fn parse_summary_aliases(
+    summary: &ChargeSessionSummaryPayload,
+) -> Vec<ChargeSessionExternalAlias> {
+    let grouping_key = normalize_grouping_key(
+        summary
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.transaction_id_grouping_key.as_deref()),
+    );
     let mut aliases = Vec::<ChargeSessionExternalAlias>::new();
 
     if let Some(data_sources) = summary
@@ -235,7 +244,10 @@ pub fn parse_summary_aliases(summary: &ChargeSessionSummaryPayload) -> Vec<Charg
     }
 
     if let Some(transaction_id) = summary.transaction_id.as_ref().map(|value| value.trim()) {
-        if !transaction_id.is_empty() && !aliases.iter().any(|alias| alias.external_id == transaction_id)
+        if !transaction_id.is_empty()
+            && !aliases
+                .iter()
+                .any(|alias| alias.external_id == transaction_id)
         {
             aliases.push(ChargeSessionExternalAlias {
                 external_id: transaction_id.to_string(),
@@ -255,9 +267,9 @@ pub fn parse_summary_aliases(summary: &ChargeSessionSummaryPayload) -> Vec<Charg
     aliases
 }
 
-pub fn preferred_external_alias<'a>(
-    aliases: &'a [ChargeSessionExternalAlias],
-) -> Option<&'a ChargeSessionExternalAlias> {
+pub fn preferred_external_alias(
+    aliases: &[ChargeSessionExternalAlias],
+) -> Option<&ChargeSessionExternalAlias> {
     aliases
         .iter()
         .min_by(|left, right| left.alias_kind.rank().cmp(&right.alias_kind.rank()))
@@ -270,9 +282,9 @@ fn should_insert_unmatched_session(
     match policy {
         UnmatchedInsertPolicy::Never => false,
         UnmatchedInsertPolicy::Always => started_at.is_some(),
-        UnmatchedInsertPolicy::RecentOnly { now, lookback_days } => started_at.is_some_and(|start| {
-            start >= now - chrono::Duration::days(lookback_days)
-        }),
+        UnmatchedInsertPolicy::RecentOnly { now, lookback_days } => {
+            started_at.is_some_and(|start| start >= now - chrono::Duration::days(lookback_days))
+        }
     }
 }
 
@@ -616,7 +628,10 @@ async fn insert_api_only_session(
     .bind(is_rivian_network)
     .bind(summary.paid_total)
     .bind(summary.is_home_charger)
-    .bind(normalized_charger_type.or_else(|| infer_api_charger_type(summary.vendor.as_deref(), summary.is_home_charger)))
+    .bind(
+        normalized_charger_type
+            .or_else(|| infer_api_charger_type(summary.vendor.as_deref(), summary.is_home_charger)),
+    )
     .bind(
         summary
             .end_instant
@@ -715,13 +730,11 @@ pub async fn finalize_charge_session_aliases(pool: &PgPool, charge_session_id: U
         return Ok(());
     };
 
-    sqlx::query(
-        "UPDATE riviamigo.charge_sessions SET rivian_session_id = $2 WHERE id = $1",
-    )
-    .bind(charge_session_id)
-    .bind(best_alias.external_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE riviamigo.charge_sessions SET rivian_session_id = $2 WHERE id = $1")
+        .bind(charge_session_id)
+        .bind(best_alias.external_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
@@ -737,7 +750,10 @@ fn alias_kind_from_str(value: &str) -> ExternalAliasKind {
     }
 }
 
-pub async fn backfill_charge_session_sources(pool: &PgPool, vehicle_id: Option<Uuid>) -> Result<u64> {
+pub async fn backfill_charge_session_sources(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<u64> {
     let result = sqlx::query(
         r#"
         UPDATE riviamigo.charge_sessions
@@ -793,10 +809,9 @@ pub async fn backfill_charge_session_aliases_from_rows(
 
     let mut written = 0u64;
     for row in rows {
-        let summary = row
-            .rivian_meta
-            .as_ref()
-            .and_then(|value| serde_json::from_value::<ChargeSessionSummaryPayload>(value.clone()).ok());
+        let summary = row.rivian_meta.as_ref().and_then(|value| {
+            serde_json::from_value::<ChargeSessionSummaryPayload>(value.clone()).ok()
+        });
         let aliases = if let Some(summary) = summary.as_ref() {
             let parsed = parse_summary_aliases(summary);
             if parsed.is_empty() {
@@ -857,22 +872,26 @@ pub async fn reconcile_completed_session_summary(
             .and_then(|meta| meta.transaction_id_grouping_key.as_deref()),
     );
 
-    let matched = if let Some(existing) =
-        find_session_by_external_alias(pool, vehicle_id, &aliases).await?
-    {
-        Some(existing)
-    } else if let Some(existing) =
-        find_session_by_grouping_key(pool, vehicle_id, grouping_key.as_deref(), summary.start_instant)
-            .await?
-    {
-        Some(existing)
-    } else if let Some(existing) =
-        find_overlapping_session(pool, vehicle_id, summary.start_instant, summary.end_instant).await?
-    {
-        Some(existing)
-    } else {
-        find_time_window_session(pool, vehicle_id, summary.start_instant).await?
-    };
+    let matched =
+        if let Some(existing) = find_session_by_external_alias(pool, vehicle_id, &aliases).await? {
+            Some(existing)
+        } else if let Some(existing) = find_session_by_grouping_key(
+            pool,
+            vehicle_id,
+            grouping_key.as_deref(),
+            summary.start_instant,
+        )
+        .await?
+        {
+            Some(existing)
+        } else if let Some(existing) =
+            find_overlapping_session(pool, vehicle_id, summary.start_instant, summary.end_instant)
+                .await?
+        {
+            Some(existing)
+        } else {
+            find_time_window_session(pool, vehicle_id, summary.start_instant).await?
+        };
 
     let session_id = if let Some(existing) = matched {
         update_session_from_summary(
@@ -1056,7 +1075,12 @@ fn canonical_priority(
     };
     let alias_priority = aliases_by_session
         .get(&session.id)
-        .and_then(|aliases| aliases.iter().map(|alias| -alias_rank_from_str(&alias.alias_kind)).max())
+        .and_then(|aliases| {
+            aliases
+                .iter()
+                .map(|alias| -alias_rank_from_str(&alias.alias_kind))
+                .max()
+        })
         .unwrap_or(0);
     (source_priority, alias_priority)
 }
@@ -1264,6 +1288,7 @@ pub async fn diagnose_charge_sessions(
     })
 }
 
+#[allow(clippy::field_reassign_with_default)]
 pub async fn canonicalize_charge_sessions(
     pool: &PgPool,
     vehicle_id: Option<Uuid>,
@@ -1352,7 +1377,8 @@ pub async fn canonicalize_charge_sessions(
         let mut union_find = UnionFind::new(sessions.len());
         let mut aliases_by_external = std::collections::HashMap::<String, Vec<Uuid>>::new();
         let mut aliases_by_grouping = std::collections::HashMap::<String, Vec<Uuid>>::new();
-        let mut aliases_by_session = std::collections::HashMap::<Uuid, Vec<CanonicalAliasRow>>::new();
+        let mut aliases_by_session =
+            std::collections::HashMap::<Uuid, Vec<CanonicalAliasRow>>::new();
         for alias in aliases {
             aliases_by_external
                 .entry(alias.external_id.clone())
@@ -1394,8 +1420,10 @@ pub async fn canonicalize_charge_sessions(
         }
         for left_index in 0..sessions.len() {
             for right_index in (left_index + 1)..sessions.len() {
-                if session_window_start(&sessions[left_index]) <= session_window_end(&sessions[right_index])
-                    && session_window_start(&sessions[right_index]) <= session_window_end(&sessions[left_index])
+                if session_window_start(&sessions[left_index])
+                    <= session_window_end(&sessions[right_index])
+                    && session_window_start(&sessions[right_index])
+                        <= session_window_end(&sessions[left_index])
                 {
                     union_find.union(left_index, right_index);
                 }
@@ -1413,7 +1441,8 @@ pub async fn canonicalize_charge_sessions(
                 continue;
             }
 
-            let canonical = choose_canonical_session(&cluster_sessions, &aliases_by_session).clone();
+            let canonical =
+                choose_canonical_session(&cluster_sessions, &aliases_by_session).clone();
             let has_telemetry = cluster_sessions
                 .iter()
                 .any(|session| is_telemetry_backed(session.source.as_deref()));
@@ -1454,7 +1483,11 @@ pub async fn canonicalize_charge_sessions(
             let api_ended_at = cluster_sessions
                 .iter()
                 .filter(|session| has_api_evidence(session))
-                .map(|session| session.api_ended_at.unwrap_or(session.ended_at.unwrap_or(session.started_at)))
+                .map(|session| {
+                    session
+                        .api_ended_at
+                        .unwrap_or(session.ended_at.unwrap_or(session.started_at))
+                })
                 .max();
             let source = if has_telemetry && has_api {
                 CHARGE_SESSION_SOURCE_TELEMETRY_AND_API
@@ -1687,12 +1720,10 @@ pub async fn canonicalize_charge_sessions(
                 .execute(pool)
                 .await?;
 
-                sqlx::query(
-                    "DELETE FROM riviamigo.charge_sessions WHERE id = $1",
-                )
-                .bind(duplicate.id)
-                .execute(pool)
-                .await?;
+                sqlx::query("DELETE FROM riviamigo.charge_sessions WHERE id = $1")
+                    .bind(duplicate.id)
+                    .execute(pool)
+                    .await?;
                 stats.duplicate_rows_deleted += 1;
             }
 
@@ -1777,8 +1808,12 @@ mod tests {
         let preferred = preferred_external_alias(&aliases).expect("preferred alias");
         assert_eq!(preferred.alias_kind, ExternalAliasKind::Cdrs);
         assert_eq!(preferred.external_id, "USCPI123");
-        assert!(aliases.iter().any(|alias| alias.alias_kind == ExternalAliasKind::Txn));
-        assert!(aliases.iter().any(|alias| alias.alias_kind == ExternalAliasKind::Vtxn));
+        assert!(aliases
+            .iter()
+            .any(|alias| alias.alias_kind == ExternalAliasKind::Txn));
+        assert!(aliases
+            .iter()
+            .any(|alias| alias.alias_kind == ExternalAliasKind::Vtxn));
     }
 
     #[test]

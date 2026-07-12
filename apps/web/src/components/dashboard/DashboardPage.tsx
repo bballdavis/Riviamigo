@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
-import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude, formatPressure } from '@riviamigo/ui/lib/utils';
+import { formatMiles as formatDistance, formatMph, formatTemp as formatTemperature, formatAltitude } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, MapPin, Thermometer, TriangleAlert } from 'lucide-react';

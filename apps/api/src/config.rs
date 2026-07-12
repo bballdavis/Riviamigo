@@ -5,11 +5,11 @@ use std::path::PathBuf;
 pub struct Config {
     pub database_url: String,
     pub redis_url: String,
-    /// RSA private key PEM. Auto-generated and persisted to DB if not set.
+    /// RSA private key PEM. Required in production; development may bootstrap it.
     pub jwt_secret: Option<String>,
-    /// RSA public key PEM. Auto-generated and persisted to DB if not set.
+    /// RSA public key PEM. Required in production; development may bootstrap it.
     pub jwt_public_key: Option<String>,
-    /// age X25519 secret key. Auto-generated and persisted to DB if not set.
+    /// age X25519 secret key. Required in production; development may bootstrap it.
     pub age_encryption_key: Option<String>,
     #[serde(default = "default_port")]
     pub port: u16,
@@ -169,7 +169,7 @@ fn default_heavy_read_burst() -> u32 {
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let config =
-            envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
+            envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {e}"))?;
         config.validate()?;
         Ok(config)
     }
@@ -178,11 +178,7 @@ impl Config {
     ///
     /// Hard-rejects insecure configurations when `RIVIAMIGO_ENV=production`.
     pub fn validate(&self) -> anyhow::Result<()> {
-        let is_production = self
-            .riviamigo_env
-            .as_deref()
-            .map(|e| e.eq_ignore_ascii_case("production"))
-            .unwrap_or(false);
+        let is_production = self.is_production();
 
         if is_production {
             if self.cookie_insecure.is_some() {
@@ -191,11 +187,63 @@ impl Config {
                      Remove it from your environment before starting the API."
                 );
             }
+
+            for (name, value) in [
+                ("JWT_SECRET", self.jwt_secret.as_deref()),
+                ("JWT_PUBLIC_KEY", self.jwt_public_key.as_deref()),
+                ("AGE_ENCRYPTION_KEY", self.age_encryption_key.as_deref()),
+            ] {
+                if value.map_or(true, |value| value.trim().is_empty()) {
+                    anyhow::bail!(
+                        "{name} must be supplied by the deployment secret manager when RIVIAMIGO_ENV=production; database-generated key fallback is development-only"
+                    );
+                }
+            }
+
+            if self.allowed_origins.is_empty() {
+                anyhow::bail!(
+                    "ALLOWED_ORIGINS must contain the external HTTPS origin in production"
+                );
+            }
+
+            for origin in &self.allowed_origins {
+                let parsed = url::Url::parse(origin).map_err(|error| {
+                    anyhow::anyhow!(
+                        "ALLOWED_ORIGINS contains an invalid origin `{origin}`: {error}"
+                    )
+                })?;
+                if parsed.scheme() != "https"
+                    || parsed.host_str().is_none()
+                    || parsed.path() != "/"
+                    || parsed.query().is_some()
+                    || parsed.fragment().is_some()
+                {
+                    anyhow::bail!(
+                        "ALLOWED_ORIGINS must contain exact HTTPS origins without paths, queries, or fragments in production; found `{origin}`"
+                    );
+                }
+            }
+
+            let database_url = url::Url::parse(&self.database_url)
+                .map_err(|error| anyhow::anyhow!("DATABASE_URL is invalid: {error}"))?;
+            let password = database_url.password().unwrap_or_default();
+            if password.is_empty() || matches!(password, "devpassword" | "CHANGE_ME" | "change_me")
+            {
+                anyhow::bail!(
+                    "DATABASE_URL must contain a non-default database password in production"
+                );
+            }
         }
 
         self.rate_limit.validate()?;
 
         Ok(())
+    }
+
+    fn is_production(&self) -> bool {
+        self.riviamigo_env
+            .as_deref()
+            .is_some_and(|environment| environment.eq_ignore_ascii_case("production"))
     }
 }
 
@@ -253,5 +301,86 @@ impl RateLimitConfig {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn production_config() -> Config {
+        Config {
+            database_url: "postgresql://riviamigo:strong-password@timescaledb:5432/riviamigo"
+                .into(),
+            redis_url: "redis://redis:6379".into(),
+            jwt_secret: Some("private".into()),
+            jwt_public_key: Some("public".into()),
+            age_encryption_key: Some("age-key".into()),
+            port: 3001,
+            allowed_origins: vec!["https://riviamigo.example.com".into()],
+            s3_endpoint: None,
+            s3_access_key: None,
+            s3_secret_key: None,
+            backup_artifact_dir: default_backup_artifact_dir(),
+            vehicle_image_cache_dir: default_vehicle_image_cache_dir(),
+            backup_driver: default_backup_driver(),
+            backup_poll_interval_seconds: default_backup_poll_interval_seconds(),
+            rivian_ws_reconnect_initial_seconds: default_rivian_ws_reconnect_initial_seconds(),
+            rivian_ws_reconnect_max_seconds: default_rivian_ws_reconnect_max_seconds(),
+            rivian_raw_event_retention_days: default_rivian_raw_event_retention_days(),
+            rivian_persist_raw_events: true,
+            rivian_suppress_duplicate_telemetry: true,
+            riviamigo_env: Some("production".into()),
+            cookie_insecure: None,
+            rate_limit: RateLimitConfig::default(),
+        }
+    }
+
+    #[test]
+    fn production_requires_externally_managed_keys() {
+        let mut config = production_config();
+        config.age_encryption_key = None;
+
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("AGE_ENCRYPTION_KEY"));
+    }
+
+    #[test]
+    fn production_rejects_non_https_origins_and_default_database_passwords() {
+        let mut config = production_config();
+        config.allowed_origins = vec!["http://riviamigo.example.com".into()];
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("exact HTTPS origins"));
+
+        config.allowed_origins = vec!["https://riviamigo.example.com".into()];
+        config.database_url =
+            "postgresql://riviamigo:devpassword@timescaledb:5432/riviamigo".into();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("non-default database password"));
+    }
+
+    #[test]
+    fn development_keeps_key_bootstrap_available() {
+        let mut config = production_config();
+        config.riviamigo_env = Some("development".into());
+        config.jwt_secret = None;
+        config.jwt_public_key = None;
+        config.age_encryption_key = None;
+        config.allowed_origins = default_origins();
+        config.database_url =
+            "postgresql://riviamigo:devpassword@timescaledb:5432/riviamigo".into();
+
+        config
+            .validate()
+            .expect("development bootstrap stays supported");
     }
 }

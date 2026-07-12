@@ -645,7 +645,7 @@ async fn connect_and_subscribe(
                 http_status = status.as_u16(),
                 "Rivian WS handshake rejected"
             );
-            anyhow::bail!("Rivian WS handshake rejected with HTTP {}", status);
+            anyhow::bail!("Rivian WS handshake rejected with HTTP {status}");
         }
         Err(e) => return Err(e.into()),
     };

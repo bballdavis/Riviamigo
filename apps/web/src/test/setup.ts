@@ -1,4 +1,12 @@
 import '@testing-library/jest-dom';
+import { vi } from 'vitest';
+
+// Iconify schedules DOM updates for remote icon data. In jsdom those timers
+// can outlive a test environment and call React after `window` is torn down.
+vi.mock('@iconify/react', () => ({
+  Icon: () => null,
+  InlineIcon: () => null,
+}));
 
 // Stub canvas context so uPlot doesn't throw in jsdom
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

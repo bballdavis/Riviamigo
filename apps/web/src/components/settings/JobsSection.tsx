@@ -133,7 +133,3 @@ function formatBackfillEvidence(rivianCount: number | null | undefined, localCou
   const local = typeof localCount === 'number' ? localCount.toLocaleString() : '-';
   return `${rivian} Rivian / ${local} local`;
 }
-
-function formatPct(value: number | null | undefined) {
-  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}%` : '-';
-}

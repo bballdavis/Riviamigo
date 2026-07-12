@@ -18,13 +18,19 @@ Sources:
 | Dashboard | Widgets | Primary data source | Current status |
 | --- | --- | --- | --- |
 | Dashboard | total miles, trips, energy, efficiency, SoC chart, efficiency trend | latest telemetry, trips, charges | Total miles now uses live odometer; efficiency waits for completed trips. |
-| Battery | current SoC, estimated range, phantom drain, capacity health, SoC/range/drain/degradation charts | latest telemetry plus battery time-series views | Current SoC/range now use latest vehicle status; capacity falls back to latest usable kWh. |
+| Battery | current SoC, estimated range, phantom drain, capacity health, SoC/range/drain/degradation charts | latest telemetry plus validated parked periods from the idle-drain route | Phantom Drain rate is duration-weighted from validated parked periods; current SoC/range use latest vehicle status; capacity falls back to latest usable kWh. |
 | Efficiency | avg Wh/mi, best/worst bands, efficiency by mode, trend, temp bins | completed trips | Needs more trip finalization and outside-temp capture before it becomes rich. |
-| Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts now use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
+| Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; daily totals and stacked session composition share the filled charging-bar visual; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
 | Trips | trip list, route map, synchronized detail charts, speed, elevation | completed trip detector, persisted route previews, adaptive telemetry samples | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Raw compatibility endpoints remain available. |
 | Settings Raw Data | telemetry field coverage and recent samples | raw Timescale telemetry | Use this to verify ingestion before wiring new dashboard cards. |
 
 ## TeslaMate parity targets
+
+### Charging chart semantics
+
+- `Energy Charged` (`charging-weekly-energy`) is a daily total-energy bar chart. Each bar is one local charge day and hover shows the day plus total kWh.
+- `Daily Charge Sessions` (`charging-sessions-energy`) is a daily stacked bar chart. Each local-day bar is composed of AC, DC, and Unknown session groups, with legend, grouped hover details, and optional day selection for the charging table.
+- Both charts use the shared filled-bar treatment; the stacked chart retains its segmentation because it answers a different question from the daily total chart.
 
 TeslaMate-style dashboards generally cover these data families:
 

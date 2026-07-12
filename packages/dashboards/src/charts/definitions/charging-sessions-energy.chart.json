@@ -1,7 +1,7 @@
 {
   "id": "charging-sessions-energy",
   "title": "Daily Charge Sessions",
-  "description": "Daily stacked charge sessions, with each session contributing to its local charge day.",
+  "description": "Daily stacked charge sessions, with AC/DC/Unknown grouping, legend, and day-level hover details.",
   "pages": ["overview", "charging"],
   "source": "charging_sessions_energy",
   "mode": "bar",

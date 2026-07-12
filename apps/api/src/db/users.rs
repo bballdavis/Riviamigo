@@ -18,6 +18,7 @@ impl UserRole {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
             "super_user" => Some(Self::SuperUser),
@@ -68,6 +69,18 @@ pub fn can_manage_user(actor: UserRole, target: UserRole) -> bool {
     }
 }
 
+pub async fn get_electricity_rate(pool: &PgPool, user_id: Uuid) -> Result<f64, AppError> {
+    let rate = sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT electricity_rate_per_kwh FROM riviamigo.user_preferences WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten()
+    .unwrap_or(0.13);
+    Ok(rate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{can_manage_user, UserRole};
@@ -92,16 +105,4 @@ mod tests {
         assert!(!can_manage_user(UserRole::User, UserRole::Admin));
         assert!(!can_manage_user(UserRole::User, UserRole::SuperUser));
     }
-}
-
-pub async fn get_electricity_rate(pool: &PgPool, user_id: Uuid) -> Result<f64, AppError> {
-    let rate = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT electricity_rate_per_kwh FROM riviamigo.user_preferences WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten()
-    .unwrap_or(0.13);
-    Ok(rate)
 }

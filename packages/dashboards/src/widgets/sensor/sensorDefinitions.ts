@@ -87,7 +87,7 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
     valueColor: 'default',
     timeframeScope: 'current',
   },
-  { id: 'charge_count', title: 'Charges', dataSource: 'batteryHealth', valuePath: 'charge_count', secondaryTemplate: '[charging_cycles:int] cycles', icon: 'lucide:refresh-cw', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
+  { id: 'charge_count', title: 'Charges', dataSource: 'batteryHealth', valuePath: 'charge_count', inlineSecondaryTemplate: '([charging_cycles:int] cycles)', icon: 'lucide:refresh-cw', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
   { id: 'charging_cycles_health', title: 'Charging Cycles', dataSource: 'batteryHealth', valuePath: 'charging_cycles', fallbackValuePath: 'charge_count', icon: 'lucide:refresh-ccw', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
   { id: 'battery_energy_added', title: 'Energy Added', dataSource: 'batteryHealth', valuePath: 'total_energy_added_kwh', unit: 'kWh', icon: 'lucide:bolt', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },
   { id: 'battery_charge_efficiency', title: 'Charge Efficiency', dataSource: 'batteryHealth', valuePath: 'charging_efficiency_pct', unit: '%', icon: 'lucide:zap', chartType: 'none', valueMode: 'latest', valueColor: 'default', timeframeScope: 'lifetime' },

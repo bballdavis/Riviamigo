@@ -25,13 +25,6 @@ function formatKwh(kwh: number | null): string {
   return `${kwh.toFixed(2)} kWh`;
 }
 
-function formatKm(km: number | null): string {
-  if (km === null) return '—';
-  // Convert to miles for display consistency with the rest of the app
-  const mi = km * 0.621371;
-  return `+${mi.toFixed(1)} mi`;
-}
-
 function formatSoc(soc: number | null): string {
   if (soc === null) return '—';
   return `${Math.round(soc)}%`;

@@ -10,7 +10,7 @@ import {
   Cell,
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatDuration } from '../lib/utils';
 
 function hexToRgb(hex: string) {
@@ -107,7 +107,7 @@ export function SpeedHistogramChart({
           />}
           cursor={TOOLTIP_CURSOR_STYLE}
         />
-        <Bar dataKey="duration_seconds" radius={[4, 4, 0, 0]}>
+        <Bar dataKey="duration_seconds" radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}>
           {bins.map((bin) => {
             const intensity = (bin.duration_seconds - minDuration) / durationRange;
             const fill = blendColor(CHART_COLORS.success, CHART_COLORS.accent, intensity);
@@ -115,7 +115,7 @@ export function SpeedHistogramChart({
               <Cell
                 key={bin.label}
                 fill={fill}
-                fillOpacity={bin.label === activeBinLabel ? 0.98 : 0.82}
+                fillOpacity={bin.label === activeBinLabel ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity}
               />
             );
           })}

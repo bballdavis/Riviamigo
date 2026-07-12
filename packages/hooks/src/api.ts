@@ -14,7 +14,8 @@ import type {
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
   CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
   AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
-  AdminUserRecord, CreateAdminUserBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
+  AdminUserRecord, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
+  AccountInvitation, AccountInvitationPreview, AuthSetupResponse,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -157,6 +158,9 @@ interface ApiFailureDetail {
 const AUTH_REFRESH_EXCLUDED_PATHS = new Set([
   '/v1/auth/login',
   '/v1/auth/register',
+  '/v1/auth/setup',
+  '/v1/auth/account-invitations/preview',
+  '/v1/auth/account-invitations/accept',
   '/v1/auth/bootstrap',
   '/v1/auth/refresh',
 ]);
@@ -353,6 +357,18 @@ class ApiClient {
     return this.request('POST', '/v1/auth/refresh', undefined, undefined, true, false);
   }
 
+  async setup(): Promise<AuthSetupResponse> {
+    return this.request('GET', '/v1/auth/setup', undefined, undefined, true, false);
+  }
+
+  async previewAccountInvitation(token: string): Promise<AccountInvitationPreview> {
+    return this.request('POST', '/v1/auth/account-invitations/preview', { token }, undefined, true, false);
+  }
+
+  async acceptAccountInvitation(token: string, password: string): Promise<AuthTokens> {
+    return this.request('POST', '/v1/auth/account-invitations/accept', { token, password }, undefined, true, false);
+  }
+
   async resumeSession(): Promise<AuthTokens | null> {
     const res = await this.requestResponse('POST', '/v1/auth/bootstrap', undefined, undefined, false, false);
     if (res.status === 204) return null;
@@ -474,8 +490,17 @@ class ApiClient {
     return res.users ?? [];
   }
 
-  async createUser(body: CreateAdminUserBody): Promise<{ id: string }> {
-    return this.request('POST', '/v1/admin/users', body);
+  async listAccountInvitations(): Promise<AccountInvitation[]> {
+    const res = await this.request<{ invitations: AccountInvitation[] }>('GET', '/v1/admin/account-invitations');
+    return res.invitations ?? [];
+  }
+
+  async createAccountInvitation(body: CreateAccountInvitationBody): Promise<{ id: string; invitee_email: string; expires_at: string; activation_token: string }> {
+    return this.request('POST', '/v1/admin/account-invitations', body);
+  }
+
+  async revokeAccountInvitation(id: string): Promise<void> {
+    return this.request('DELETE', `/v1/admin/account-invitations/${id}`);
   }
 
   async updateUser(id: string, body: UpdateAdminUserBody): Promise<void> {
@@ -1114,7 +1139,7 @@ class ApiClient {
 
     if (typeof window !== 'undefined') {
       const onLoginRoute = window.location.pathname === '/login';
-      if (onLoginRoute && detail.path !== '/v1/auth/login' && detail.path !== '/v1/auth/register') {
+      if (onLoginRoute && !isPublicAuthPath(detail.path)) {
         return;
       }
 
@@ -1306,10 +1331,7 @@ function parsePositiveNumberHeader(value: string | null) {
 }
 
 function inferClientRateLimitClass(method: string, path: string) {
-  if (path.startsWith('/v1/auth/login')
-    || path.startsWith('/v1/auth/register')
-    || path.startsWith('/v1/auth/bootstrap')
-    || path.startsWith('/v1/auth/refresh')) {
+  if (isPublicAuthPath(path)) {
     return 'auth_public';
   }
 
@@ -1328,6 +1350,15 @@ function inferClientRateLimitClass(method: string, path: string) {
   }
 
   return 'auth_write';
+}
+
+function isPublicAuthPath(path: string) {
+  return path.startsWith('/v1/auth/login')
+    || path.startsWith('/v1/auth/register')
+    || path.startsWith('/v1/auth/setup')
+    || path.startsWith('/v1/auth/account-invitations/')
+    || path.startsWith('/v1/auth/bootstrap')
+    || path.startsWith('/v1/auth/refresh');
 }
 
 function classifyClientRequestSource(path: string) {

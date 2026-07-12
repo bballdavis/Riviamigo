@@ -9,9 +9,13 @@ This page covers deploying Riviamigo in production using Docker Compose. For a f
 The production Compose file (`infra/docker-compose.prod.yml`) defines:
 
 - **timescaledb** — TimescaleDB (PostgreSQL + time-series extension)
-- **redis** — Redis for session state and token locking
-- **api** — the Rust API container (port 3001)
-- **web** — the React frontend served by Nginx (port 3000)
+- **redis** — password-protected Redis for session state and token locking
+- **api** — the Rust API container on the internal Docker network
+- **nginx** — the React frontend and API origin, bound only to `127.0.0.1:8080`
+
+Riviamigo is not approved for direct Internet exposure. Put an authenticated
+tunnel or identity-aware reverse proxy in front of the loopback origin. A tunnel
+without an access policy is not sufficient.
 
 > **Note:** The development Compose file (`infra/docker-compose.yml`) also includes a Garage S3-compatible object store container for local testing. This is not included in the production file. If you want S3 backups in production, point the `S3_*` env vars at an external store (MinIO, Backblaze B2, Cloudflare R2, etc.).
 
@@ -28,11 +32,14 @@ cp .env.example .env
 Edit `.env` and set:
 
 - `DATABASE_URL` — with a strong password (not the dev default)
-- `ALLOWED_ORIGINS` — your public URL (e.g. `https://riviamigo.yourdomain.com`)
+- `POSTGRES_PASSWORD` and `REDIS_PASSWORD` — strong unique values
+- `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` — supplied from a secret manager or protected deployment environment
+- `ALLOWED_ORIGINS` — your exact public HTTPS URL (for example, `https://riviamigo.yourdomain.com`)
 - `RIVIAMIGO_ENV=production`
 - `RUST_LOG=riviamigo_api=info,tower_http=warn`
 
-Leave JWT/age keys blank — they are auto-generated on first boot.
+Production startup rejects missing signing and encryption keys. Automatic key
+generation is available only in development.
 
 > ⚠️ **Warning:** Never use `devpassword` or any other weak password in production. If your TimescaleDB port is exposed to the network, a weak password is a serious vulnerability.
 
@@ -52,26 +59,33 @@ docker compose -f infra/docker-compose.prod.yml ps
 
 All containers should show `Up` or `Up (healthy)`.
 
-Check the API health endpoint:
+Check the private origin health endpoint locally:
 
 ```bash
-curl http://localhost:3001/health
+curl http://127.0.0.1:8080/health
 ```
 
 Should return `200 OK`.
 
 ---
 
-## Reverse Proxy (HTTPS)
+## Authenticated Gateway (HTTPS)
 
-For production use, place a reverse proxy in front of the stack. Example Caddy configuration:
+For production use, place an authenticated tunnel or identity-aware reverse
+proxy in front of the stack. It must authenticate users before forwarding and
+support WebSocket upgrades. Example origin target for Caddy or an Authentik
+proxy-outpost integration:
 
 ```
 riviamigo.yourdomain.com {
-    reverse_proxy /v1/* localhost:3001
-    reverse_proxy /* localhost:3000
+    reverse_proxy 127.0.0.1:8080
 }
 ```
+
+Use an identity policy in the gateway (for example, Authentik forward auth or
+Cloudflare Access). Do not expose the loopback origin, API, database, or Redis
+ports directly. See [Secure Deployment](Secure-Deployment) for the required
+boundary.
 
 Update `ALLOWED_ORIGINS` in `.env` to match your public URL and restart the API:
 
@@ -103,8 +117,8 @@ docker compose -f infra/docker-compose.prod.yml logs -f
 # API only
 docker compose -f infra/docker-compose.prod.yml logs -f api
 
-# Last 100 lines of the web container
-docker compose -f infra/docker-compose.prod.yml logs --tail=100 web
+# Last 100 lines of the origin container
+docker compose -f infra/docker-compose.prod.yml logs --tail=100 nginx
 ```
 
 ---
@@ -160,7 +174,7 @@ For automated and S3-backed backups, see [Backup and Restore](Backup-and-Restore
 
 | Port | Service | Notes |
 |------|---------|-------|
-| 3000 | Nginx (web frontend) | Public — expose via reverse proxy |
-| 3001 | Rust API | Public — expose via reverse proxy |
+| 8080 | Nginx origin | Loopback only; target from authenticated gateway |
+| 3001 | Rust API | Internal Docker network only |
 | 5432 | TimescaleDB | Internal only — do not expose |
 | 6379 | Redis | Internal only — do not expose |

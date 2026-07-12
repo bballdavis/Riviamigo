@@ -32,8 +32,6 @@ export function MetricTabs({
   className,
 }: MetricTabsProps) {
   const useDropdown = tabs.length > dropdownThreshold;
-  const activeTab = tabs.find((t) => t.key === active) ?? tabs[0];
-
   return (
     <div className={cn('bg-bg-surface border border-border rounded-xl', className)}>
       {/* Header row */}

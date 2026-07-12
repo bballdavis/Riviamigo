@@ -5,7 +5,6 @@ import batteryJson from './battery.json';
 import efficiencyJson from './efficiency.json';
 import chargingJson from './charging.json';
 import tripsJson from './trips.json';
-import healthJson from './health.json';
 
 function parse(raw: unknown): DashboardConfig {
   return DashboardConfigSchema.parse(raw);
@@ -17,7 +16,6 @@ export const DEFAULT_DASHBOARDS: DashboardConfig[] = [
   parse(efficiencyJson),
   parse(chargingJson),
   parse(tripsJson),
-  parse(healthJson),
 ];
 
 export function getDefaultBySlug(slug: string): DashboardConfig | undefined {

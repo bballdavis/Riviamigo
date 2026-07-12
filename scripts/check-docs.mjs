@@ -11,6 +11,8 @@ const requiredFiles = [
   "docs/branding.md",
   "docs/contributing.md",
   "docs/decision-log.md",
+  "docs/security.md",
+  "docs/security-audit.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
   "docs/runbooks/README.md",
@@ -27,6 +29,8 @@ const docsFilesToCheck = [
   "docs/branding.md",
   "docs/contributing.md",
   "docs/decision-log.md",
+  "docs/security.md",
+  "docs/security-audit.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
   "docs/runbooks/README.md",
@@ -76,6 +80,7 @@ const requiredWikiDrafts = [
   "13-API-Keys.md",
   "14-Grafana-Integration.md",
   "15-Backup-and-Restore.md",
+  "16-Secure-Deployment.md",
 ];
 
 function fail(message) {
@@ -228,12 +233,43 @@ function checkEnvVarReferences() {
   }
 }
 
+function checkProductionDeploymentContract() {
+  const productionCompose = readFile("infra/docker-compose.prod.yml");
+  const nginxConfig = readFile("infra/nginx/nginx.conf");
+
+  for (const requiredSnippet of [
+    '"127.0.0.1:8080:8080"',
+    "JWT_SECRET: ${JWT_SECRET}",
+    "JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}",
+    "AGE_ENCRYPTION_KEY: ${AGE_ENCRYPTION_KEY}",
+    "redis:",
+    "context: ../apps/api",
+  ]) {
+    if (!productionCompose.includes(requiredSnippet)) {
+      fail(`production compose is missing required secure-deployment contract: ${requiredSnippet}`);
+    }
+  }
+
+  for (const forbiddenSnippet of ['"80:80"', '"443:443"', "COOKIE_INSECURE:"]) {
+    if (productionCompose.includes(forbiddenSnippet)) {
+      fail(`production compose must not include direct-public deployment setting: ${forbiddenSnippet}`);
+    }
+  }
+
+  for (const requiredSnippet of ["resolver 127.0.0.11", "http://api:3001", "listen 8080;"]) {
+    if (!nginxConfig.includes(requiredSnippet)) {
+      fail(`nginx must use the internal secure-deployment topology: ${requiredSnippet}`);
+    }
+  }
+}
+
 checkRequiredFiles();
 checkMarkdownLinks();
 checkWikiDrafts();
 checkRouteContracts();
 checkApiContracts();
 checkEnvVarReferences();
+checkProductionDeploymentContract();
 
 if (process.exitCode) {
   process.exit(process.exitCode);

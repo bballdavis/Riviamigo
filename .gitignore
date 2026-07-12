@@ -28,6 +28,8 @@ assets/text_white.xcf
 coverage/
 playwright-report/
 test-results/
+.playwright-cli/
+*.tsbuildinfo
 infra/resolv.conf
 .codex_tmp/
 

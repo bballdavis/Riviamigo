@@ -91,7 +91,7 @@ describe('dashboard API wiring', () => {
     expect(normalized.widgets[0]?.definitionId).toBe('battery_level');
   });
 
-  it('upgrades stale charging dashboard copies to the current connected-charging band', () => {
+  it('does not inject or replace widgets in a saved charging dashboard', () => {
     const staleCharging: DashboardConfig = {
       ...dashboardConfig,
       id: '00000000-0000-0000-0000-000000000004',
@@ -115,16 +115,13 @@ describe('dashboard API wiring', () => {
     const normalized = normalizeDashboardConfig(dashboardRecord(staleCharging));
     const widgetIds = normalized.widgets.map((widget) => widget.definitionId);
 
-    expect(widgetIds).toContain('charging.connection');
+    expect(widgetIds).not.toContain('charging.connection');
     expect(widgetIds).toContain('avg_session');
     expect(widgetIds).toContain('charge_efficiency');
     expect(widgetIds).toContain('max_charge_limit');
-    expect(normalized.widgets.find((widget) => widget.definitionId === 'charging.connection')).toMatchObject({
-      options: { chargingConnectionVisibility: 'plugged' },
-      layout: { x: 6, y: 0, w: 6, h: 6 },
-    });
     expect(widgetIds).toContain('catalog');
     expect(widgetIds).toContain('charging.sessions.table');
+    expect(normalized.widgets).toHaveLength(staleCharging.widgets.length);
   });
 
   it('returns the nested config from by-slug responses', async () => {

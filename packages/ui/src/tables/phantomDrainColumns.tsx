@@ -193,6 +193,20 @@ export const phantomDrainColumns = [
       return <span className="font-mono text-fg">-{formatPercent(value, 2)}</span>;
     },
   }),
+  col.accessor('drain_pct_per_hour', {
+    header: () => infoHeader('Drain / h', 'Validated battery percentage lost per parked hour during this session.'),
+    meta: {
+      headerClassName: 'w-[5.75rem] text-center',
+      cellClassName: 'w-[5.75rem] whitespace-nowrap text-center',
+      headerContentClassName: 'w-full justify-center',
+      columnLabel: 'Drain / h',
+    },
+    cell: (info) => {
+      const value = info.getValue();
+      if (value == null || Number.isNaN(value)) return <span className="text-fg-tertiary">-</span>;
+      return <span className="font-mono text-fg">{formatPercent(value, 2)} / h</span>;
+    },
+  }),
   col.accessor('range_lost_mi', {
     header: () => infoHeader(
       'Range',

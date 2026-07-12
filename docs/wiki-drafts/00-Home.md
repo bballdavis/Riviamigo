@@ -4,6 +4,10 @@ Welcome to the Riviamigo wiki. Riviamigo is a self-hosted dashboard for Rivian E
 
 All your vehicle data stays on your hardware. No third-party cloud service, no subscription required.
 
+> **Security note:** Riviamigo is not approved for direct Internet exposure.
+> Shared installations require an authenticated tunnel or identity-aware reverse
+> proxy in front of the application.
+
 ---
 
 ## Navigation
@@ -29,6 +33,7 @@ All your vehicle data stays on your hardware. No third-party cloud service, no s
 | [API Keys](API-Keys) | Programmatic access and integration |
 | [Grafana Integration](Grafana-Integration) | Using Riviamigo as a Grafana datasource |
 | [Backup and Restore](Backup-and-Restore) | Protecting and recovering your data |
+| [Secure Deployment](Secure-Deployment) | Required authenticated gateway and network boundary |
 
 ---
 

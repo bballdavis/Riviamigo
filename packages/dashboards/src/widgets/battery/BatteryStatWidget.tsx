@@ -53,7 +53,7 @@ const BATTERY_STAT_DEFINITIONS: BatteryStatDefinition[] = [
     title: 'Max Range',
     icon: 'lucide:route',
     labelSuffix: 'now/new',
-    getValue: ({ health, status }) => {
+    getValue: ({ status }) => {
       const range = status?.range_miles ?? null;
       const level = status?.battery_level ?? null;
       if (range == null || level == null || level <= 0) return '—';

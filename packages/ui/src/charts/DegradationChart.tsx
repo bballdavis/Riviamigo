@@ -25,7 +25,7 @@ export interface DegradationChartProps {
 
 export function DegradationChart({
   data,
-  ratedKwh,
+  ratedKwh: _ratedKwh,
   loading = false,
   height = 220,
 }: DegradationChartProps) {

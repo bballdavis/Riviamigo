@@ -83,6 +83,7 @@ pub struct ChargeDetectorState {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ChargeEvent {
     SessionStarted,
     SessionEnded(CompletedChargeSession),
@@ -218,9 +219,9 @@ impl ChargeDetectorState {
             }
 
             // Timeout: no charging event in 30 min
-            let timed_out = self.last_charge_ts.map_or(false, |last| {
-                (ts - last).num_seconds() > CHARGE_TIMEOUT_SECS
-            });
+            let timed_out = self
+                .last_charge_ts
+                .is_some_and(|last| (ts - last).num_seconds() > CHARGE_TIMEOUT_SECS);
 
             if session_ended || timed_out {
                 return self.close_session(ts);

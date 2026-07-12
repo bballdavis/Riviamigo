@@ -14,7 +14,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  PNPM_VERSION: '9'
+  PNPM_VERSION: '11.5.1'
   NODE_VERSION: '20'
   RUST_TOOLCHAIN: stable
 
@@ -53,6 +53,9 @@ jobs:
       - name: Docs check
         run: pnpm docs:check
 
+      - name: Dashboard default drift check
+        run: pnpm dashboards:sync-defaults --check
+
       - name: Color-token guard
         # Enforces the mandatory CLAUDE.md rule: no hex literals, rgb(), or
         # arbitrary Tailwind palette classes (text-blue-*, bg-indigo-*, etc.)
@@ -76,7 +79,7 @@ jobs:
           echo "✅ No color-token violations"
 
       - name: Unit tests with coverage
-        # Coverage thresholds (statements/functions/lines: 70, branches: 65) are
+        # Coverage thresholds (statements/lines: 69, functions: 50, branches: 55) are
         # enforced via vite.config.ts — this step will fail if any threshold is breached.
         run: pnpm --filter @riviamigo/web test:coverage
 

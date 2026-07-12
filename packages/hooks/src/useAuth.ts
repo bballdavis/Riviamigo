@@ -15,6 +15,7 @@ interface AuthState {
 
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
+  acceptAccountInvitation: (token: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   resumeSession: () => Promise<boolean>;
   setTokens: (accessToken: string, defaultVehicleId: string | null) => void;
@@ -85,8 +86,20 @@ export const useAuth = create<AuthState>()(
         });
       },
 
+      acceptAccountInvitation: async (token, password) => {
+        const tokens = await api.acceptAccountInvitation(token, password);
+        api.setToken(tokens.access_token);
+        set({
+          accessToken: tokens.access_token,
+          defaultVehicleId: tokens.default_vehicle_id ?? null,
+          activeVehicleId: null,
+          isAuthenticated: true,
+          isBootstrapping: false,
+        });
+      },
+
       logout: async () => {
-        try { await api.logout(); } catch {}
+        try { await api.logout(); } catch { /* session state is cleared below */ }
         get().clearSession();
       },
 

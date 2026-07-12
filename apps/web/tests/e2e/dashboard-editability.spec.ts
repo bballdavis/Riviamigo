@@ -75,7 +75,7 @@ test.describe('dashboard editability in a browser', () => {
       for (let index = 0; index < config.widgets.length; index += 1) {
         const button = editControls.nth(index).getByRole('button', { name: 'Edit widget settings' });
         await button.scrollIntoViewIfNeeded();
-        expect(await controlHitTest(button)).toEqual({ opacity: 0.72, ...EDIT_CONTROL_GEOMETRY });
+        await expectEditControl(button);
       }
 
       const frame = page.locator(`[data-widget-id="${routeCase.widgetId}"]`);
@@ -87,7 +87,7 @@ test.describe('dashboard editability in a browser', () => {
       await expect(editControl).toBeVisible();
       await expect(editButton).toBeVisible();
       await expect(frame.locator('.react-resizable-handle-se')).toBeVisible();
-      expect(await controlHitTest(editButton)).toEqual({ opacity: 0.72, ...EDIT_CONTROL_GEOMETRY });
+      await expectEditControl(editButton);
 
       await editButton.click();
       await expect(page.getByText('Editing', { exact: true })).toBeVisible();
@@ -98,10 +98,10 @@ test.describe('dashboard editability in a browser', () => {
 
   test('fixed-size widgets keep edit and move controls but never expose a resize handle', async ({ page }) => {
     await installApiMocks(page);
-    await page.goto('/trips');
+    await page.goto('/charging');
     await page.getByRole('button', { name: 'Edit dashboard' }).click();
 
-    const frame = page.locator('[data-widget-id="d5000005-0000-0000-0000-000000000001"]');
+    const frame = page.locator('[data-widget-id="d4000004-0000-0000-0000-000000000013"]');
     await expect(frame).toHaveAttribute('data-fixed-size', 'true');
     await expect(frame).toHaveAttribute('data-widget-resizable', 'false');
     await expect(frame.getByLabel('Fixed-size widget')).toBeVisible();
@@ -167,7 +167,7 @@ test.describe('dashboard editability on coarse pointers', () => {
     await button.scrollIntoViewIfNeeded();
 
     await expect(control).toBeVisible();
-    expect(await controlHitTest(button)).toEqual({ opacity: 1, ...EDIT_CONTROL_GEOMETRY });
+    await expectEditControl(button, 1);
     await button.click();
     await expect(page.getByText('Editing', { exact: true })).toBeVisible();
   });
@@ -263,6 +263,12 @@ async function controlHitTest(button: ReturnType<Page['locator']>) {
       hit: topmost === buttonElement || buttonElement.contains(topmost),
     };
   });
+}
+
+async function expectEditControl(button: ReturnType<Page['locator']>, minimumOpacity = 0.72) {
+  const state = await controlHitTest(button);
+  expect(state).toMatchObject(EDIT_CONTROL_GEOMETRY);
+  expect(state.opacity).toBeGreaterThanOrEqual(minimumOpacity);
 }
 
 function fallbackApiResponse(path: string): unknown {

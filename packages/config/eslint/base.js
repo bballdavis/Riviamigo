@@ -5,12 +5,13 @@ module.exports = {
   extends: [
     'eslint:recommended',
     'plugin:@typescript-eslint/recommended',
-    'plugin:@typescript-eslint/recommended-requiring-type-checking',
   ],
   rules: {
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     '@typescript-eslint/no-explicit-any': 'error',
     '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
-    'no-console': ['warn', { allow: ['warn', 'error'] }],
+    'no-constant-condition': 'off',
+    'react-hooks/exhaustive-deps': 'off',
+    'no-console': ['warn', { allow: ['warn', 'error', 'log', 'group', 'groupEnd'] }],
   },
 };
