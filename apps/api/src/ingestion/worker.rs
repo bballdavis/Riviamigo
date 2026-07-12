@@ -233,18 +233,18 @@ pub async fn run_vehicle_worker(
     // ────────────────────────────────────────────────────────────────────────
 
     let mut trip_det = TripDetectorState::new(vehicle_id);
-    let mut charge_det = if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await
-    {
-        tracing::info!(
-            vehicle_id=%vehicle_id,
-            charge_session_id=%snapshot.session_id,
-            started_at=%snapshot.started_at,
-            "rehydrated active charge detector state from stamped telemetry"
-        );
-        ChargeDetectorState::from_snapshot(vehicle_id, snapshot)
-    } else {
-        ChargeDetectorState::new(vehicle_id)
-    };
+    let mut charge_det =
+        if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await {
+            tracing::info!(
+                vehicle_id=%vehicle_id,
+                charge_session_id=%snapshot.session_id,
+                started_at=%snapshot.started_at,
+                "rehydrated active charge detector state from stamped telemetry"
+            );
+            ChargeDetectorState::from_snapshot(vehicle_id, snapshot)
+        } else {
+            ChargeDetectorState::new(vehicle_id)
+        };
     let mut redis_conn = match redis.get_multiplexed_async_connection().await {
         Ok(c) => c,
         Err(e) => {
@@ -365,7 +365,7 @@ pub async fn run_vehicle_worker(
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
-        let topic = format!("vehicle:{}:status", vehicle_id);
+        let topic = format!("vehicle:{vehicle_id}:status");
         if let Err(e) = redis_conn.publish::<_, _, ()>(&topic, &snapshot).await {
             tracing::debug!(vehicle_id=%vehicle_id, err=%e, "redis publish failed");
         }
@@ -452,18 +452,15 @@ pub async fn run_vehicle_worker(
         }
 
         // ── Trip detection ───────────────────────────────────────────────────
-        match trip_det.process(&event) {
-            TripEvent::TripEnded { trip } => {
-                let distance = compute_distance_odometer_or_gps(
-                    trip.start_odometer_mi,
-                    trip.end_odometer_mi,
-                    &trip.points,
-                );
-                if distance >= MIN_TRIP_DISTANCE_MILES {
-                    let _ = persist_trip(&pool, &http_client, &trip, distance).await;
-                }
+        if let TripEvent::TripEnded { trip } = trip_det.process(&event) {
+            let distance = compute_distance_odometer_or_gps(
+                trip.start_odometer_mi,
+                trip.end_odometer_mi,
+                &trip.points,
+            );
+            if distance >= MIN_TRIP_DISTANCE_MILES {
+                let _ = persist_trip(&pool, &http_client, &trip, distance).await;
             }
-            _ => {}
         }
 
         // ── Charge detection ─────────────────────────────────────────────────
@@ -1025,11 +1022,11 @@ fn changed_f64(current: Option<f64>, previous: Option<f64>, threshold: f64) -> b
 }
 
 fn changed_bool(current: Option<bool>, previous: Option<bool>) -> bool {
-    matches!(current, Some(_)) && current != previous
+    current.is_some() && current != previous
 }
 
 fn changed_i32(current: Option<i32>, previous: Option<i32>) -> bool {
-    matches!(current, Some(_)) && current != previous
+    current.is_some() && current != previous
 }
 
 fn changed_string(current: Option<&str>, previous: Option<&str>) -> bool {
@@ -2640,9 +2637,8 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
 /// Infer a coarse VehicleState from the latest telemetry event.
 fn infer_vehicle_state(e: &TelemetryEvent) -> VehicleState {
     use crate::models::telemetry::{ChargerState, PowerState};
-    match &e.charger_state {
-        Some(ChargerState::Charging) => return VehicleState::Charging,
-        _ => {}
+    if let Some(ChargerState::Charging) = &e.charger_state {
+        return VehicleState::Charging;
     }
     if e.ota_status.as_deref() == Some("installing")
         || e.ota_current_status.as_deref() == Some("installing")

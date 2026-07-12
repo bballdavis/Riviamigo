@@ -658,6 +658,15 @@ export interface AuthMeResponse {
   default_vehicle_id: string | null;
 }
 
+export interface AuthSetupResponse {
+  setup_required: boolean;
+}
+
+export interface AccountInvitationPreview {
+  email: string;
+  expires_at: string;
+}
+
 export type UserRole = 'super_user' | 'admin' | 'user';
 
 export type UnitMode = 'imperial' | 'metric' | 'custom';
@@ -751,10 +760,18 @@ export interface AdminUserRecord {
   updated_at: string;
 }
 
-export interface CreateAdminUserBody {
+export interface CreateAccountInvitationBody {
   email: string;
-  password: string;
-  role?: UserRole;
+  expires_in_days?: number;
+}
+
+export interface AccountInvitation {
+  id: string;
+  invitee_email: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
 }
 
 export interface UpdateAdminUserBody {

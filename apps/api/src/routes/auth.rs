@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     http::{header::SET_COOKIE, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -13,13 +13,17 @@ use crate::{
     db::vehicles::get_default_vehicle_id,
     errors::AppError,
     middleware::auth::{issue_access_token, AppState, AuthUser},
+    routes::users_support::hash_password,
 };
 
 const MIN_PASSWORD_LEN: usize = 12;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/auth/setup", get(setup))
         .route("/auth/register", post(register))
+        .route("/auth/account-invitations/preview", post(preview_account_invitation))
+        .route("/auth/account-invitations/accept", post(accept_account_invitation))
         .route("/auth/login", post(login))
         .route("/auth/bootstrap", post(bootstrap))
         .route("/auth/refresh", post(refresh))
@@ -47,11 +51,34 @@ struct LoginBody {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct InvitationTokenBody {
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct AcceptAccountInvitationBody {
+    token: String,
+    password: String,
+}
+
 #[derive(Serialize)]
 struct AccessTokenResponse {
     access_token: String,
     expires_in: u64,
     default_vehicle_id: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+struct SetupResponse {
+    setup_required: bool,
+}
+
+async fn setup(State(state): State<AppState>) -> Result<Json<SetupResponse>, AppError> {
+    let has_users: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users)")
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(SetupResponse { setup_required: !has_users }))
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -101,11 +128,10 @@ async fn register(
         .fetch_one(&mut *tx)
         .await?
         .unwrap_or(0);
-    let role = if user_count == 0 {
-        "super_user"
-    } else {
-        "user"
-    };
+    if user_count != 0 {
+        return Err(AppError::Forbidden);
+    }
+    let role = "super_user";
 
     let user_id: Uuid = sqlx::query_scalar!(
         "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id",
@@ -148,6 +174,94 @@ async fn register(
         .into_response())
 }
 
+async fn preview_account_invitation(
+    State(state): State<AppState>,
+    Json(body): Json<InvitationTokenBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let token_hash = sha2_hash(body.token.trim());
+    let invitation = sqlx::query(
+        "SELECT invitee_email, expires_at, accepted_at, revoked_at
+         FROM riviamigo.account_invitations WHERE token_hash = $1",
+    )
+    .bind(token_hash)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    validate_account_invitation(&invitation)?;
+    Ok(Json(serde_json::json!({
+        "email": invitation.get::<String, _>("invitee_email"),
+        "expires_at": invitation.get::<chrono::DateTime<chrono::Utc>, _>("expires_at"),
+    })))
+}
+
+async fn accept_account_invitation(
+    State(state): State<AppState>,
+    Json(body): Json<AcceptAccountInvitationBody>,
+) -> Result<Response, AppError> {
+    if body.password.len() < MIN_PASSWORD_LEN {
+        return Err(AppError::Validation("password min 12 chars".into()));
+    }
+    let token_hash = sha2_hash(body.token.trim());
+    let password_hash = hash_password(&body.password)?;
+    let mut tx = state.pool.begin().await?;
+    let invitation = sqlx::query(
+        "SELECT id, invitee_email, expires_at, accepted_at, revoked_at
+         FROM riviamigo.account_invitations WHERE token_hash = $1 FOR UPDATE",
+    )
+    .bind(token_hash)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    validate_account_invitation(&invitation)?;
+    let invitation_id: Uuid = invitation.get("id");
+    let email: String = invitation.get("invitee_email");
+    let user_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, 'user') RETURNING id",
+    )
+    .bind(&email)
+    .bind(password_hash)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| match error {
+        sqlx::Error::Database(ref db) if db.constraint() == Some("users_email_key") => {
+            AppError::Validation("email already registered".into())
+        }
+        other => AppError::Database(other),
+    })?;
+    sqlx::query("INSERT INTO riviamigo.user_preferences (user_id) VALUES ($1)")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE riviamigo.account_invitations SET accepted_at = now(), created_user_id = $2, updated_at = now() WHERE id = $1",
+    )
+    .bind(invitation_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    audit_log(state.pool.clone(), "account_invitation_accepted", Some(user_id), "account invitation accepted".to_string());
+    let token = issue_access_token(user_id, None, &state.jwt_keys)?;
+    let refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let cookie = refresh_cookie(&refresh, 2_592_000);
+    Ok((StatusCode::CREATED, [(SET_COOKIE, cookie)], Json(AccessTokenResponse {
+        access_token: token, expires_in: 900, default_vehicle_id: None,
+    })).into_response())
+}
+
+fn validate_account_invitation(row: &sqlx::postgres::PgRow) -> Result<(), AppError> {
+    if row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at").is_some() {
+        return Err(AppError::Validation("invitation revoked".into()));
+    }
+    if row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at").is_some() {
+        return Err(AppError::Validation("invitation already accepted".into()));
+    }
+    if row.get::<chrono::DateTime<chrono::Utc>, _>("expires_at") <= chrono::Utc::now() {
+        return Err(AppError::Validation("invitation expired".into()));
+    }
+    Ok(())
+}
+
 // A well-formed Argon2 hash of a random dummy password. Used to perform a
 // constant-time Argon2 verification even when the email doesn't exist, so
 // the response time doesn't reveal whether the account exists.
@@ -174,7 +288,7 @@ async fn login(
                 state.pool.clone(),
                 "login_failure",
                 None,
-                format!("failed login for {}", email),
+                format!("failed login for {email}"),
             );
         }
         return Err(e);
@@ -194,7 +308,7 @@ async fn login(
         state.pool.clone(),
         "login_success",
         Some(user_id),
-        format!("user logged in"),
+        "user logged in".to_string(),
     );
 
     let cookie = refresh_cookie(&refresh, 2_592_000);
@@ -234,20 +348,14 @@ async fn refresh_from_cookie(
     state: &AppState,
     headers: &axum::http::HeaderMap,
 ) -> Result<Option<Response>, AppError> {
-    let Some(cookie_str) = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-    else {
+    let Some(cookie_str) = headers.get("cookie").and_then(|v| v.to_str().ok()) else {
         return Ok(None);
     };
 
-    let Some(token) = cookie_str
-        .split(';')
-        .find_map(|part| {
-            let p = part.trim();
-            p.strip_prefix("refresh_token=")
-        })
-    else {
+    let Some(token) = cookie_str.split(';').find_map(|part| {
+        let p = part.trim();
+        p.strip_prefix("refresh_token=")
+    }) else {
         return Ok(None);
     };
 
@@ -276,15 +384,17 @@ async fn refresh_from_cookie(
     let max_age = 30 * 24 * 3600;
     let cookie = refresh_cookie(&new_refresh, max_age);
 
-    Ok(Some((
-        [(axum::http::header::SET_COOKIE, cookie)],
-        Json(AccessTokenResponse {
-            access_token,
-            expires_in: 900,
-            default_vehicle_id,
-        }),
-    )
-        .into_response()))
+    Ok(Some(
+        (
+            [(axum::http::header::SET_COOKIE, cookie)],
+            Json(AccessTokenResponse {
+                access_token,
+                expires_in: 900,
+                default_vehicle_id,
+            }),
+        )
+            .into_response(),
+    ))
 }
 
 async fn logout(
@@ -456,6 +566,7 @@ async fn update_preferences(
     Ok(Json(PreferencesResponse { units }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolved_units_payload(
     mode: &str,
     custom_distance: Option<&str>,

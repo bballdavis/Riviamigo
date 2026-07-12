@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ChartSkeleton } from '../primitives/Skeleton';
-import { CHART_COLORS, CHART_FONT } from './ChartProvider';
+import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatSmartNumber } from '../lib/utils';
 
 export interface DailyChargeSessionsDay {
@@ -28,6 +28,20 @@ export interface DailyChargeSessionsChartProps {
   emptyTitle?: string | undefined;
   selectedDayLocal?: string | null;
   onDayClick?: (dayLocal: string | null) => void;
+}
+
+export interface DailyEnergyBarChartProps {
+  daily: DailyChargeSessionsDay[];
+  height?: number;
+  loading?: boolean;
+  emptyTitle?: string | undefined;
+  yRange?: [number, number] | undefined;
+}
+
+export interface DailyChargingBarChartProps extends Omit<DailyChargeSessionsChartProps, 'dailySessions'> {
+  dailySessions?: DailyChargeSessionsSession[];
+  variant: 'total' | 'stacked';
+  yRange?: [number, number] | undefined;
 }
 
 type ChargerGroupKey = 'ac' | 'dc' | 'unknown';
@@ -105,19 +119,17 @@ function nextAxisMax(value: number) {
   return Math.ceil(value / 100) * 100;
 }
 
-export function DailyChargeSessionsChart({
+export function DailyChargingBarChart({
   daily,
-  dailySessions,
+  dailySessions = [],
   height = 280,
   loading = false,
   emptyTitle = 'No charging sessions for this period',
   selectedDayLocal,
   onDayClick,
-}: DailyChargeSessionsChartProps) {
-  if (loading) {
-    return <ChartSkeleton height={height} />;
-  }
-
+  variant,
+  yRange,
+}: DailyChargingBarChartProps) {
   const chartRef = React.useRef<HTMLDivElement | null>(null);
   const [hoverState, setHoverState] = React.useState<HoverState | null>(null);
   const clipPathPrefix = React.useId().replace(/:/g, '');
@@ -176,10 +188,12 @@ export function DailyChargeSessionsChart({
       }
     }
 
+    if (variant !== 'stacked') return [];
+
     return GROUP_ORDER
       .filter((key) => presentKeys.has(key))
       .map((key) => GROUP_META[key]);
-  }, [days]);
+  }, [days, variant]);
 
   const activeDay = React.useMemo(
     () => (hoverState ? days.find((day) => day.day_local === hoverState.dayLocal) ?? null : null),
@@ -217,6 +231,10 @@ export function DailyChargeSessionsChart({
     [isDaySelected, onDayClick],
   );
 
+  if (loading) {
+    return <ChartSkeleton height={height} />;
+  }
+
   if (days.length === 0) {
     return (
       <div
@@ -234,14 +252,22 @@ export function DailyChargeSessionsChart({
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = chartHeight - margin.top - margin.bottom;
   const maxEnergy = Math.max(1, ...days.map((day) => day.totalEnergyKwh));
-  const axisMaxEnergy = nextAxisMax(maxEnergy);
+  const axisMinEnergy = Math.min(0, yRange?.[0] ?? 0);
+  const axisMaxEnergy = Math.max(
+    axisMinEnergy + 1,
+    maxEnergy,
+    yRange?.[1] ?? nextAxisMax(maxEnergy),
+  );
+  const axisSpan = axisMaxEnergy - axisMinEnergy;
   const topPaddingPx = 8;
   const renderHeight = Math.max(1, innerHeight - topPaddingPx);
   const slotWidth = innerWidth / Math.max(days.length, 1);
-  const barWidth = Math.min(78, slotWidth * 0.66);
+  const barWidth = Math.min(CHART_BAR_STYLE.maxWidth, slotWidth * CHART_BAR_STYLE.slotRatio);
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
   const tooltipHeight = activeDay
-    ? 96 + activeDay.groups.length * 28 + activeDay.groups.reduce((sum, group) => sum + Math.max(0, group.sessions.length - 1) * 6, 0)
+    ? variant === 'stacked'
+      ? 96 + activeDay.groups.length * 28 + activeDay.groups.reduce((sum, group) => sum + Math.max(0, group.sessions.length - 1) * 6, 0)
+      : 74
     : 0;
   const tooltipWidth = 288;
 
@@ -279,46 +305,52 @@ export function DailyChargeSessionsChart({
           }}
         >
           <div className="mb-1 font-medium text-fg">{formatDayLabel(activeDay.day_start, activeDay.day_local)}</div>
-          <div className="mb-2 text-fg-tertiary">
-            {formatEnergy(activeDay.totalEnergyKwh)} total, {formatSessionCount(activeDay.groups.reduce((sum, group) => sum + group.sessionCount, 0))}
-          </div>
-          <div className="space-y-1">
-            {activeDay.groups.map((group) => {
-              return (
-                <div key={group.key} className="flex items-start gap-2">
-                  <span
-                    className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: group.color }}
-                    aria-hidden="true"
-                  />
-                  <div className="min-w-0">
-                    <div className="text-fg">
-                      <span className="font-medium text-fg">{group.label}</span>
-                      <span className="text-fg-tertiary"> {formatEnergy(group.energyKwh)}</span>
+          {variant === 'stacked' ? (
+            <>
+              <div className="mb-2 text-fg-tertiary">
+                {formatEnergy(activeDay.totalEnergyKwh)} total, {formatSessionCount(activeDay.groups.reduce((sum, group) => sum + group.sessionCount, 0))}
+              </div>
+              <div className="space-y-1">
+                {activeDay.groups.map((group) => {
+                  return (
+                    <div key={group.key} className="flex items-start gap-2">
+                      <span
+                        className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: group.color }}
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-fg">
+                          <span className="font-medium text-fg">{group.label}</span>
+                          <span className="text-fg-tertiary"> {formatEnergy(group.energyKwh)}</span>
+                        </div>
+                        <div className="text-fg-tertiary">
+                          {formatSessionCount(group.sessionCount)}
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-fg-tertiary">
-                      {formatSessionCount(group.sessionCount)}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="text-fg-tertiary">Energy Charged: {formatEnergy(activeDay.totalEnergyKwh)}</div>
+          )}
         </div>
       ) : null}
 
       <svg
-        aria-label="Daily charge sessions"
+        aria-label={variant === 'stacked' ? 'Daily charge sessions' : 'Daily energy charged'}
         role="img"
         viewBox={`0 0 ${width} ${chartHeight}`}
         width="100%"
         height={chartHeight}
-        data-testid="daily-charge-sessions-chart"
+        data-testid={variant === 'stacked' ? 'daily-charge-sessions-chart' : 'daily-energy-chart'}
       >
         <defs>
           {days.map((day, dayIndex) => {
             const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-            const barHeight = (day.totalEnergyKwh / axisMaxEnergy) * renderHeight;
+            const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
             if (barHeight <= 0) return null;
             const y = margin.top + innerHeight - barHeight;
             const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
@@ -332,7 +364,7 @@ export function DailyChargeSessionsChart({
 
         {yTicks.map((fraction) => {
           const y = margin.top + innerHeight - fraction * innerHeight;
-          const value = axisMaxEnergy * fraction;
+          const value = axisMinEnergy + axisSpan * fraction;
           return (
             <g key={`grid-${fraction}`}>
               <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke={CHART_COLORS.grid} strokeWidth={1} />
@@ -353,11 +385,11 @@ export function DailyChargeSessionsChart({
 
         {days.map((day, dayIndex) => {
           const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
-          const barHeight = (day.totalEnergyKwh / axisMaxEnergy) * renderHeight;
+          const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
           const clippedBarHeight = Math.max(0, barHeight);
           const clipId = `${clipPathPrefix}-daily-charge-stack-${dayIndex}`;
           const isActive = hoverState?.dayLocal === day.day_local;
-          const totalLabelY = margin.top + innerHeight - (day.totalEnergyKwh / axisMaxEnergy) * renderHeight - 8;
+          const totalLabelY = margin.top + innerHeight - (day.totalEnergyKwh / axisSpan) * renderHeight - 8;
           const sessionCount = day.groups.reduce((sum, group) => sum + group.sessionCount, 0);
           const isSelected = isDaySelected(day.day_local);
 
@@ -382,20 +414,22 @@ export function DailyChargeSessionsChart({
                     event.preventDefault();
                     handleDaySelect(day.day_local);
                   }}
-                  aria-label={`${formatDayLabel(day.day_start, day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} across ${formatSessionCount(sessionCount)}`}
+                  aria-label={variant === 'stacked'
+                    ? `${formatDayLabel(day.day_start, day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} across ${formatSessionCount(sessionCount)}`
+                    : `${formatDayLabel(day.day_start, day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} energy charged`}
                   className={onDayClick ? 'cursor-pointer' : undefined}
                 />
-                <g clipPath={`url(#${clipId})`} opacity={isActive || isSelected ? 1 : 0.92}>
-                {day.groups.map((group, groupIndex) => {
+                <g clipPath={`url(#${clipId})`} opacity={isActive || isSelected ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity}>
+                {variant === 'stacked' ? day.groups.map((group, groupIndex) => {
                   const segmentHeight = day.totalEnergyKwh > 0
-                    ? (group.energyKwh / axisMaxEnergy) * renderHeight
+                    ? (group.energyKwh / axisSpan) * renderHeight
                     : 0;
                   if (segmentHeight <= 0) return null;
 
                   const y = margin.top + innerHeight - clippedBarHeight
                     + day.groups
                       .slice(0, groupIndex)
-                      .reduce((sum, candidate) => sum + (day.totalEnergyKwh > 0 ? (candidate.energyKwh / axisMaxEnergy) * renderHeight : 0), 0);
+                      .reduce((sum, candidate) => sum + (day.totalEnergyKwh > 0 ? (candidate.energyKwh / axisSpan) * renderHeight : 0), 0);
 
                   return (
                     <rect
@@ -407,11 +441,20 @@ export function DailyChargeSessionsChart({
                       width={barWidth}
                       height={Math.max(segmentHeight, group.energyKwh > 0 ? 2 : 0)}
                       fill={group.color}
-                      opacity={0.96}
                       pointerEvents="none"
                     />
                   );
-                })}
+                }) : (
+                  <rect
+                    data-testid="daily-energy-bar"
+                    x={x}
+                    y={margin.top + innerHeight - clippedBarHeight}
+                    width={barWidth}
+                    height={clippedBarHeight}
+                    fill={CHART_COLORS.accent}
+                    pointerEvents="none"
+                  />
+                )}
                 </g>
               </g>
               <text
@@ -454,5 +497,28 @@ export function DailyChargeSessionsChart({
         </text>
       </svg>
     </div>
+  );
+}
+
+export function DailyChargeSessionsChart(props: DailyChargeSessionsChartProps) {
+  return <DailyChargingBarChart {...props} variant="stacked" />;
+}
+
+export function DailyEnergyBarChart({
+  daily,
+  height,
+  loading,
+  emptyTitle = 'No charging energy for this period',
+  yRange,
+}: DailyEnergyBarChartProps) {
+  return (
+    <DailyChargingBarChart
+      daily={daily}
+      emptyTitle={emptyTitle}
+      variant="total"
+      {...(height !== undefined ? { height } : {})}
+      {...(loading !== undefined ? { loading } : {})}
+      {...(yRange !== undefined ? { yRange } : {})}
+    />
   );
 }

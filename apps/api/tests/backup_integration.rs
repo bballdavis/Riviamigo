@@ -25,6 +25,7 @@ use riviamigo_api::{
 
 struct TestResponse {
     status: StatusCode,
+    #[allow(dead_code)]
     headers: HeaderMap,
     body: Value,
 }

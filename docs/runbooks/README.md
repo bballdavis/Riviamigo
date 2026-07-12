@@ -14,6 +14,8 @@ This directory is canonical for operational and process runbooks. Update it when
   How to keep repo docs and wiki drafts live, validate them, and publish safely.
 - [`vehicle-history-rebuild.md`](./vehicle-history-rebuild.md)
   How the one-off vehicle history rebuild works, what it replays, and how post-replay trip enrichment is restored.
+- [`secure-deployment.md`](./secure-deployment.md)
+  Required authenticated-gateway posture, production secret requirements, and verification steps for shared instances.
 
 ## When To Add A Runbook
 

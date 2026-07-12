@@ -3,6 +3,7 @@ export {
   CHART_COLOR_OPTIONS,
   CHART_MARGINS,
   CHART_FONT,
+  CHART_BAR_STYLE,
   TICK_STYLE,
   TOOLTIP_CURSOR_STYLE,
   getChartColor,
@@ -22,11 +23,13 @@ export type {
   ChargeSessionDistributionBand,
   ChargeSessionDistributionChartProps,
 } from './ChargeSessionDistributionChart';
-export { DailyChargeSessionsChart } from './DailyChargeSessionsChart';
+export { DailyChargeSessionsChart, DailyChargingBarChart, DailyEnergyBarChart } from './DailyChargeSessionsChart';
 export type {
   DailyChargeSessionsChartProps,
+  DailyChargingBarChartProps,
   DailyChargeSessionsDay,
   DailyChargeSessionsSession,
+  DailyEnergyBarChartProps,
 } from './DailyChargeSessionsChart';
 export { EfficiencyPillBarChart } from './EfficiencyPillBarChart';
 export type {

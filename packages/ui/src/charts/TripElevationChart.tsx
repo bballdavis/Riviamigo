@@ -43,19 +43,10 @@ export function TripElevationChart({
   activeElapsedS = null,
   onActiveElapsedSChange,
 }: TripElevationChartProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        Loading elevation chart...
-      </div>
-    );
-  }
-
   const chartData = data.map((point) => ({
     elapsed_s: point.elapsed_s,
     altitude_ft: point.altitude_m != null ? point.altitude_m * M_TO_FT : null,
   }));
-
   const measuredData = React.useMemo(
     () => data.filter((point) => point.altitude_m != null),
     [data],
@@ -67,6 +58,14 @@ export function TripElevationChart({
     ),
     [data],
   );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        Loading elevation chart...
+      </div>
+    );
+  }
 
   const hasAnyData = chartData.some((point) => point.altitude_ft != null);
   if (!hasAnyData) {

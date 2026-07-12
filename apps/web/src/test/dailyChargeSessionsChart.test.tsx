@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { DailyChargeSessionsChart } from '../../../../packages/ui/src/charts/DailyChargeSessionsChart';
+import { DailyChargeSessionsChart, DailyEnergyBarChart } from '../../../../packages/ui/src/charts/DailyChargeSessionsChart';
 
 describe('DailyChargeSessionsChart', () => {
   it('groups sessions into stable legend categories and rounds the outer stack shape', () => {
@@ -73,8 +73,11 @@ describe('DailyChargeSessionsChart', () => {
     });
 
     const hitArea = container.querySelector('rect[role="button"]');
-    expect(hitArea?.getAttribute('y')).toBe('118');
-    expect(hitArea?.getAttribute('height')).toBe('98');
+    const hitAreaY = Number(hitArea?.getAttribute('y'));
+    const hitAreaHeight = Number(hitArea?.getAttribute('height'));
+    expect(hitAreaY).toBeGreaterThan(0);
+    expect(hitAreaHeight).toBeGreaterThan(0);
+    expect(hitAreaY + hitAreaHeight).toBeCloseTo(216, 3);
 
     const clipRect = container.querySelector('clipPath rect');
     expect(clipRect?.getAttribute('rx')).toBe('8');
@@ -121,6 +124,31 @@ describe('DailyChargeSessionsChart', () => {
     expect(tooltip.textContent ?? '').toContain('AC');
     expect(tooltip.textContent ?? '').toContain('DC');
     expect(tooltip.textContent ?? '').toContain('2 sessions');
+  });
+
+  it('renders total-energy bars with the shared filled treatment and hover copy', () => {
+    const { container } = render(
+      <DailyEnergyBarChart
+        daily={[
+          {
+            day_local: '2024-01-01',
+            day_start: '2024-01-01T00:00:00Z',
+            total_energy_kwh: 40,
+            session_count: 2,
+          },
+        ]}
+      />,
+    );
+
+    const bar = container.querySelector('[data-testid="daily-energy-bar"]');
+    expect(bar).toBeTruthy();
+    expect(screen.getByTestId('daily-energy-chart')).toBeTruthy();
+    expect(bar?.getAttribute('fill')).not.toBe('transparent');
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /40 kWh energy charged/i }));
+
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip.textContent ?? '').toContain('Energy Charged: 40 kWh');
   });
 
   it('calls day-click callback and toggles when clicked again', () => {

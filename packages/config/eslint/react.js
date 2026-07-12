@@ -1,6 +1,6 @@
 /** @type {import('eslint').Linter.Config} */
 module.exports = {
-  extends: ['./base.js', 'plugin:react/recommended', 'plugin:react-hooks/recommended'],
+  extends: [require.resolve('./base.js'), 'plugin:react/recommended', 'plugin:react-hooks/recommended'],
   plugins: ['react', 'react-hooks'],
   settings: {
     react: { version: 'detect' },

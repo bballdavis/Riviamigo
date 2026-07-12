@@ -128,7 +128,7 @@ pub async fn gql_request<T: for<'de> Deserialize<'de>>(
             .text()
             .await
             .unwrap_or_else(|_| String::from("<unreadable body>"));
-        return Err(anyhow!("Rivian API: HTTP {} body={} ", status, body));
+        return Err(anyhow!("Rivian API: HTTP {status} body={body} "));
     }
 
     let envelope = response

@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const indexCss = readFileSync(fileURLToPath(new URL('../index.css', import.meta.url)), 'utf8');
+const indexCss = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
 
 describe('dashboard Tailwind workspace source', () => {
   it('explicitly scans dashboard package utilities from the web CSS entrypoint', () => {

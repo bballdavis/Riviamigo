@@ -45,28 +45,6 @@ export function TripTirePressureChart({
   activeElapsedS = null,
   onActiveElapsedSChange,
 }: TripTirePressureChartProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        Loading tire pressure chart...
-      </div>
-    );
-  }
-
-  const hasAnyData = data.some(
-    (point) => point.tire_fl_psi != null
-      || point.tire_fr_psi != null
-      || point.tire_rl_psi != null
-      || point.tire_rr_psi != null,
-  );
-  if (!hasAnyData) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        No tire pressure data for this trip.
-      </div>
-    );
-  }
-
   const measuredData = React.useMemo(
     () => data.filter((point) => point.tire_fl_psi != null || point.tire_fr_psi != null || point.tire_rl_psi != null || point.tire_rr_psi != null),
     [data],
@@ -99,6 +77,28 @@ export function TripTirePressureChart({
     ),
     [data],
   );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        Loading tire pressure chart...
+      </div>
+    );
+  }
+
+  const hasAnyData = data.some(
+    (point) => point.tire_fl_psi != null
+      || point.tire_fr_psi != null
+      || point.tire_rl_psi != null
+      || point.tire_rr_psi != null,
+  );
+  if (!hasAnyData) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        No tire pressure data for this trip.
+      </div>
+    );
+  }
 
   return (
     <ResponsiveContainer width="100%" height={height}>

@@ -43,31 +43,6 @@ export function TripDriveChart({
   activeElapsedS = null,
   onActiveElapsedSChange,
 }: TripDriveChartProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        Loading drive chart...
-      </div>
-    );
-  }
-
-  if (data.length === 0) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        No drive profile data for this trip.
-      </div>
-    );
-  }
-
-  const hasAnyData = data.some((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null);
-  if (!hasAnyData) {
-    return (
-      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
-        No power samples were captured for this trip.
-      </div>
-    );
-  }
-
   const measuredData = React.useMemo(
     () => data.filter((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null),
     [data],
@@ -93,6 +68,31 @@ export function TripDriveChart({
     ),
     [data],
   );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        Loading drive chart...
+      </div>
+    );
+  }
+
+  if (data.length === 0) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        No drive profile data for this trip.
+      </div>
+    );
+  }
+
+  const hasAnyData = data.some((point) => point.power_kw != null || point.regen_kw != null || point.speed_mph != null);
+  if (!hasAnyData) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-border bg-bg-elevated text-sm text-fg-tertiary" style={{ height }}>
+        No power samples were captured for this trip.
+      </div>
+    );
+  }
 
   return (
     <ResponsiveContainer width="100%" height={height}>

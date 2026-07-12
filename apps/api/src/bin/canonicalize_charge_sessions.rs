@@ -29,7 +29,10 @@ async fn main() -> Result<()> {
     let diagnostics = diagnose_charge_sessions(&pool, args.vehicle_id).await?;
 
     println!("repair_stats={}", serde_json::to_string_pretty(&stats)?);
-    println!("post_repair_diagnostics={}", serde_json::to_string_pretty(&diagnostics)?);
+    println!(
+        "post_repair_diagnostics={}",
+        serde_json::to_string_pretty(&diagnostics)?
+    );
     Ok(())
 }
 

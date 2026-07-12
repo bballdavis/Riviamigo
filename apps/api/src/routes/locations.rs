@@ -64,7 +64,7 @@ async fn locations(
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
     let to = params.to.unwrap_or_else(Utc::now);
-    let bucket_secs = params.bucket_secs.max(60).min(86400);
+    let bucket_secs = params.bucket_secs.clamp(60, 86400);
     let limit = params.limit.min(20_000);
 
     let points = sqlx::query_as::<_, LocationPoint>(

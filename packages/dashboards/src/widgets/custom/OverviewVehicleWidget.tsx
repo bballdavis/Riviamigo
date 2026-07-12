@@ -3,7 +3,7 @@ import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Ther
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { useAuth, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
-import { formatAltitude, formatKwh, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
+import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';

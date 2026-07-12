@@ -2,6 +2,10 @@
 
 Riviamigo is a self-hosted Rivian telemetry dashboard built with Rust, React, and TimescaleDB. It ingests vehicle telemetry, stores it locally, and exposes battery, charging, trip, and efficiency views through a typed web app.
 
+> **Security posture:** Riviamigo is not approved for direct Internet exposure.
+> Shared deployments must sit behind an authenticated tunnel or identity-aware
+> reverse proxy; see the [secure deployment runbook](./docs/runbooks/secure-deployment.md).
+
 ## Quick Start
 
 1. Install prerequisites:

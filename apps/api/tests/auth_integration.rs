@@ -1133,7 +1133,11 @@ async fn charging_curve_analysis_uses_fallback_history_for_longer_windows() {
         .await;
 
     assert_eq!(thirty_day_res.status, StatusCode::OK);
-    assert!(thirty_day_res.body.as_array().expect("30-day array").is_empty());
+    assert!(thirty_day_res
+        .body
+        .as_array()
+        .expect("30-day array")
+        .is_empty());
 
     let ninety_day_res = app
         .request(
@@ -1152,7 +1156,9 @@ async fn charging_curve_analysis_uses_fallback_history_for_longer_windows() {
     assert_eq!(ninety_day_res.status, StatusCode::OK);
     let rows = ninety_day_res.body.as_array().expect("90-day array");
     assert!(!rows.is_empty(), "expected fallback-backed curve rows");
-    assert!(rows.iter().all(|row| row["session_id"] == json!(session_id)));
+    assert!(rows
+        .iter()
+        .all(|row| row["session_id"] == json!(session_id)));
     assert!(rows
         .iter()
         .all(|row| row["sample_source"] == json!("rivian_charge_curve_points")));

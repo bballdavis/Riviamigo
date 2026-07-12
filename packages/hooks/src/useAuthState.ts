@@ -17,7 +17,7 @@ export function useResolvedVehicleSelection() {
   const setDefaultVehicleId = useAuth((state) => state.setDefaultVehicleId);
   const setActiveVehicleId = useAuth((state) => state.setActiveVehicleId);
   const vehiclesQuery = useVehicles();
-  const vehicles = vehiclesQuery.data ?? [];
+  const vehicles = React.useMemo(() => vehiclesQuery.data ?? [], [vehiclesQuery.data]);
 
   const ownedVehicleIds = React.useMemo(
     () => new Set(vehicles.map((vehicle) => vehicle.id)),

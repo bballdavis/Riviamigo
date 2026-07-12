@@ -109,10 +109,6 @@ const METRIC_UNITS: UnitPreferences = {
   efficiency_display: 'distance_per_energy',
 };
 
-function unitSystemFromPrefs(prefs: UnitPreferences): UnitSystem {
-  return prefs.distance_unit === 'kilometers' ? 'metric' : 'imperial';
-}
-
 function formatRawNumber(value: number | null | undefined, unit = '') {
   return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : '-';
 }
@@ -393,7 +389,6 @@ export function SettingsContent() {
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
   const [rawVehicleId, setRawVehicleId] = React.useState('');
   const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
-  const unitSystem = unitSystemFromPrefs(unitPreferences);
   const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
   const [rawTableView, setRawTableView] = React.useState<'table' | 'json'>('table');
   const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
@@ -820,8 +815,6 @@ export function SettingsContent() {
                       const needsReauth = v.auth_state === 'needs_reauth';
                       const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
                       const collectorPassive = v.worker_health === 'passive';
-                      const selectedPreset = RIVIAN_BATTERY_PRESETS[batteryGen].find((p) => p.key === batteryPreset) || ALL_PRESETS.find((p) => p.key === batteryPreset);
-
                       const healthColor = needsReauth
                         ? 'var(--rm-status-warning)'
                         : collectorHealthy

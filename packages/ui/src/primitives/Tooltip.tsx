@@ -11,17 +11,6 @@ export interface TooltipProps {
   contentClassName?: string;
 }
 
-const sideClasses: Record<NonNullable<TooltipProps['side']>, string> = {
-  top: 'bottom-[calc(100%+0.5rem)]',
-  bottom: 'top-[calc(100%+0.5rem)]',
-};
-
-const alignClasses: Record<NonNullable<TooltipProps['align']>, string> = {
-  start: 'left-0',
-  center: 'left-1/2 -translate-x-1/2',
-  end: 'right-0',
-};
-
 export function Tooltip({
   content,
   children,
