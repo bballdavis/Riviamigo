@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/logo-lockup-dark.svg" />
-    <img src="./docs/assets/readme/logo-lockup-light.svg" alt="Riviamigo" width="340" />
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/logo-lockup-dark.png" />
+    <img src="./docs/assets/readme/logo-lockup-light.png" alt="Riviamigo" width="340" />
   </picture>
 </p>
 
