@@ -8,7 +8,7 @@
  *   data is present, and shows the empty state when data is absent.
  */
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
 import { getProjectedRangeMileageYRange } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
@@ -230,6 +230,27 @@ describe('DashboardChartWidget mobile viewer', () => {
     expect(title).toBeTruthy();
     expect(title.closest('.bg-accent.text-fg-on-accent')).toBeTruthy();
     expect(screen.queryByTestId('rich-chart')).toBeNull();
+  });
+
+  it('fades viewer controls once after entry and restores them with a chart tap', () => {
+    vi.useFakeTimers();
+    setMatchMedia(true, false);
+    renderWidget(viewerInstance());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand chart' }));
+    const dialog = screen.getByRole('dialog', { name: /efficiency trend expanded chart/i });
+    const controls = dialog.querySelector('[data-mobile-chart-controls="true"]');
+    expect(controls?.getAttribute('aria-hidden')).toBe('false');
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(controls?.getAttribute('aria-hidden')).toBe('true');
+    expect(controls?.className).toContain('opacity-0');
+
+    fireEvent.pointerDown(dialog, { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 160 });
+    fireEvent.pointerUp(dialog, { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 160 });
+    expect(controls?.getAttribute('aria-hidden')).toBe('false');
+
+    vi.useRealTimers();
   });
 });
 
