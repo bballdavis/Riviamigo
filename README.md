@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="./apps/web/public/logo_color_lighter.svg" alt="Riviamigo logo" height="72" />
-  <img src="./apps/web/public/text_black.svg" alt="Riviamigo" height="72" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/readme/logo-lockup-dark.png" />
+    <img src="./docs/assets/readme/logo-lockup-light.png" alt="Riviamigo" width="390" />
+  </picture>
 </p>
 
 <p align="center">
@@ -8,13 +10,13 @@
   A private, self-hosted home for your vehicle's battery, charging, trips, and efficiency data.
 </p>
 
-Riviamigo connects to your Rivian account, keeps the telemetry on hardware you control, and turns it into a dashboard that is pleasant to check every day. There is no separate cloud service to sign up for and no subscription layer in the middle.
+Riviamigo connects to your Rivian account and turns its telemetry into a dashboard you can make your own. It runs on hardware you control—there is no Riviamigo-hosted account, subscription, or product analytics service in the middle.
 
-> **A quick security heads-up:** Riviamigo is not designed to be exposed directly to the internet. If you share an installation outside your home network, put it behind an authenticated tunnel or identity-aware reverse proxy. The [secure deployment runbook](./docs/runbooks/secure-deployment.md) has the details.
+> **Keep it private:** Riviamigo is for a trusted home network. If you need remote access, put it behind an authenticated tunnel or identity-aware reverse proxy; do not expose it directly to the internet. The [secure deployment guide](./docs/guides/secure-deployment.md) explains the boundary.
 
 ## A quick look
 
-Light or dark, wide screen or phone — Riviamigo is designed to stay easy to read.
+These are live, redacted views of Riviamigo at desktop and iPhone 17 Pro Max–style mobile sizes.
 
 | Desktop — light | Desktop — dark |
 | --- | --- |
@@ -22,61 +24,39 @@ Light or dark, wide screen or phone — Riviamigo is designed to stay easy to re
 
 | Mobile — light | Mobile — dark |
 | --- | --- |
-| <img src="./docs/assets/readme/overview-mobile-light.png" alt="Riviamigo overview in light mode on mobile" width="280" /> | <img src="./docs/assets/readme/overview-mobile-dark.png" alt="Riviamigo overview in dark mode on mobile" width="280" /> |
+| <img src="./docs/assets/readme/overview-mobile-light.png" alt="Riviamigo overview in light mode on mobile" width="260" /> | <img src="./docs/assets/readme/overview-mobile-dark.png" alt="Riviamigo overview in dark mode on mobile" width="260" /> |
 
-## What it helps with
+## What you can do here
 
-- Keep an eye on battery state, range, charging, and vehicle health.
-- Look back at trips, efficiency, and charging history without handing the data to another service.
-- Shape dashboards around the things you actually care about.
-- Use the same responsive app from a desktop dashboard or your phone.
+- Check battery state, range, charging, health, trips, and efficiency at a glance.
+- Keep historical vehicle data in your own stack instead of a third-party dashboard.
+- Make dashboards fit the information you care about.
+- Use the same responsive app from your desktop or phone.
 
-## AI-assisted development
+## Set up your own stack
 
-Riviamigo uses AI coding tools, including Codex and Claude, as development assistants for exploration, implementation, tests, documentation, and review preparation. AI output is treated as untrusted draft work: a human contributor remains responsible for the change, its security, its behavior, and its license compatibility.
+You only need a host that can run Docker Compose, Git, and a safe way to keep the instance private. Start with the [prerequisites](./docs/guides/prerequisites.md), then follow the [getting-started guide](./docs/guides/getting-started.md) for the small amount of production configuration Riviamigo needs.
 
-Do not put Rivian credentials, access tokens, private keys, production data, precise vehicle locations, or other sensitive telemetry into prompts, issues, logs, or fixtures. Use synthetic or redacted data when asking for help. AI-assisted pull requests follow the same review, testing, documentation, and approval requirements as every other change; AI does not approve or merge its own work.
+Once your secrets and `.env` file are ready, bring up the self-hosted stack from the repository root:
 
-See the [contributor review process](./docs/contributing.md) and [roadmap](./docs/roadmap.md) for the durable project policy and planned work.
+```bash
+docker compose --env-file .env -f compose/docker-compose.prod.yml up -d --build
+```
 
-## Review and CI
+Open Riviamigo through your authenticated HTTPS address, create the first owner account, and connect your Rivian. The [deployment guide](./docs/guides/deployment.md) covers updates, logs, backups, and the gateway setup.
 
-Every pull request should explain the change, its documentation impact, and the verification performed. Reviewers check the real ownership seam, authentication and data boundaries, telemetry truthfulness, failure handling, responsive behavior for UI changes, and whether tests cover the changed behavior.
+## Privacy
 
-CI currently covers frontend typechecking, linting, unit coverage, Storybook, Playwright, and dashboard drift; backend formatting, SQLx metadata, Clippy, tests, and coverage; fresh-database/API health checks; production Compose validation; and security checks with `cargo audit`, `pnpm audit`, Gitleaks, Semgrep, and Trivy. Dependency and secret checks are blocking. Semgrep and Trivy currently report advisory findings while their baselines are hardened, so a green run is not a substitute for human security review.
+Riviamigo does not include product analytics, tracking pixels, or metrics sent to a Riviamigo-operated service. Your dashboard data stays in the database and backups you operate. It does make the external requests needed to talk to Rivian, and some optional map, weather, geocoding, or backup features may contact their respective providers. Read the [privacy details](./docs/privacy.md) before choosing where and how to host it.
 
-The [security architecture](./docs/security.md), [security audit](./docs/security-audit.md), and [contributor guide](./docs/contributing.md) describe the review boundaries and the commands to run locally.
+## AI, review, and releases
 
-## Get started locally
+We use AI coding tools as assistants—not as owners of a release. Contributors review and test AI-assisted changes before release, and the project’s CI includes dependency and secret checks, plus security auditing with `cargo audit`, `pnpm audit`, Gitleaks, Semgrep, and Trivy. CI is useful evidence, not a substitute for human review; see the [contributor guide](./docs/contributing.md) and [security audit](./docs/security-audit.md) for the full process.
 
-The easiest way to try or contribute to Riviamigo is the local development stack.
+## License
 
-1. Install [Node.js 20+](https://nodejs.org/), [pnpm 9+](https://pnpm.io/installation), Rust stable, and Docker Desktop.
-2. Clone the repo and install its dependencies:
+Riviamigo is licensed under [GPL-3.0-only](./LICENSE): you can use, modify, and share it, and distributed derivative work must remain open source under the same license. See the [GNU GPL v3](https://www.gnu.org/licenses/gpl-3.0.html) for the plain-language details.
 
-   ```bash
-   git clone https://github.com/bballdavis/Riviamigo.git
-   cd Riviamigo
-   pnpm install
-   ```
+## Developing Riviamigo
 
-3. Start everything:
-
-   ```bash
-   pnpm run dev:stack
-   ```
-
-4. Open [http://localhost:5173](http://localhost:5173), create your local account, and connect your Rivian when you are ready.
-
-That command brings up the web app, API, TimescaleDB, Redis, and local object storage together. For the complete developer setup, environment details, tests, and troubleshooting commands, see [`CLAUDE.md`](./CLAUDE.md). For a production/self-hosted installation, start with the [deployment guide](./docs/wiki-drafts/11-Docker-Compose-Deployment.md).
-
-## Where to go next
-
-- Want to connect your vehicle? See [Rivian account setup](./docs/wiki-drafts/12-Rivian-Account-Setup.md).
-- Setting up a server or NAS? Read the [prerequisites](./docs/wiki-drafts/03-Prerequisites.md) and [secure deployment runbook](./docs/runbooks/secure-deployment.md).
-- Building on Riviamigo? The [docs hub](./docs/index.md) points to the dashboard, API, and architecture guides.
-- Looking for the full contributor workflow? [`AGENTS.md`](./AGENTS.md) explains the project conventions, and [`CLAUDE.md`](./CLAUDE.md) is the practical command reference.
-
-## A small note about Rivian access
-
-Riviamigo uses the same unofficial Rivian API flow used by the mobile app. You do not need a Rivian developer account or API key, but Rivian can change that API without notice. Keep an eye on the project issues if a Rivian app update affects connectivity.
+Want to contribute or run the developer stack? [`CLAUDE.md`](./CLAUDE.md) is the concise developer setup and command guide. The [docs hub](./docs/index.md) routes you to the architecture and contributor references.

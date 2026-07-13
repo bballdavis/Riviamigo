@@ -1,46 +1,14 @@
-# Riviamigo Wiki
+# Riviamigo user guides
 
-Welcome to the Riviamigo wiki. Riviamigo is a self-hosted dashboard for Rivian EV owners — it connects to Rivian's unofficial cloud API, ingests vehicle telemetry into a local TimescaleDB instance, and displays it through a React web interface you control entirely.
+These are the in-repository source pages for self-hosters. The GitHub Wiki mirrors them after review; please edit these files rather than the Wiki directly.
 
-All your vehicle data stays on your hardware. No third-party cloud service, no subscription required.
+- [Getting started](./getting-started.md) — the shortest path to a private Compose installation.
+- [Prerequisites](./prerequisites.md) — host, Docker, and network expectations.
+- [Deployment](./deployment.md) — configuration, gateways, updates, logs, and recovery.
+- [Configuration](./configuration.md) — environment variables and production secrets.
+- [Rivian account setup](./rivian-account.md) — connecting your vehicle and handling Rivian MFA.
+- [Backup and restore](./backup-and-restore.md) — protecting and recovering your data.
+- [Secure deployment](./secure-deployment.md) — keeping a remote installation behind authentication.
+- [Features](./features.md) — what the dashboard currently covers.
 
-> **Security note:** Riviamigo is not approved for direct Internet exposure.
-> Shared installations require an authenticated tunnel or identity-aware reverse
-> proxy in front of the application.
-
----
-
-## Navigation
-
-### Developer / Contributor Docs (Wave 1)
-
-| Page | Description |
-|------|-------------|
-| [Feature Overview](Feature-Overview) | What Riviamigo can do |
-| [Quick Start](Quick-Start) | Get running in under 5 minutes |
-| [Prerequisites](Prerequisites) | Hardware and software requirements |
-| [Architecture Summary](Architecture-Summary) | System design for contributors |
-| [Coding Conventions](Coding-Conventions) | Standards for frontend and backend code |
-| [Development Setup](Development-Setup) | Local dev environment step-by-step |
-
-### Self-Hoster / Operational Docs (Wave 2)
-
-| Page | Description |
-|------|-------------|
-| [Environment Variables](Environment-Variables) | Complete env var reference |
-| [Docker Compose Deployment](Docker-Compose-Deployment) | Production deployment guide |
-| [Rivian Account Setup](Rivian-Account-Setup) | Connecting your vehicle |
-| [API Keys](API-Keys) | Programmatic access and integration |
-| [Grafana Integration](Grafana-Integration) | Using Riviamigo as a Grafana datasource |
-| [Backup and Restore](Backup-and-Restore) | Protecting and recovering your data |
-| [Secure Deployment](Secure-Deployment) | Required authenticated gateway and network boundary |
-
----
-
-## Getting Help
-
-- Open an issue on GitHub for bugs or feature requests.
-- Check [Rivian Account Setup](Rivian-Account-Setup) if your vehicle is not appearing.
-- Check [Environment Variables](Environment-Variables) if the API fails to start.
-
-> **Note:** Riviamigo uses Rivian's unofficial API. If something breaks after a Rivian app update, check the GitHub issues page — the API shape can change without notice.
+For privacy and third-party requests, read [the privacy details](../privacy.md). For contributing and local development, start at the [docs hub](../index.md).
