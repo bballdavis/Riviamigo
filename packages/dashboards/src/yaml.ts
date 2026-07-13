@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DashboardConfigSchema, SCHEMA_VERSION } from './schema';
 import { sanitizeDashboardConfig } from './layout';
 import type { DashboardConfig, DashboardExport } from './schema';
+import { normalizeDashboardConfig } from './api';
 
 const YAML_HEADER = `# Riviamigo dashboard v${SCHEMA_VERSION}\n`;
 
@@ -42,5 +43,5 @@ export function importDashboardYaml(text: string): DashboardConfig {
     ownerId: null,
   };
 
-  return sanitizeDashboardConfig(DashboardConfigSchema.parse(config));
+  return normalizeDashboardConfig(sanitizeDashboardConfig(DashboardConfigSchema.parse(config)));
 }

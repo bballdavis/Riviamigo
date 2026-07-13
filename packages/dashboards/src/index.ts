@@ -14,6 +14,7 @@ export type { WidgetDef, WidgetCtx, WidgetEditorMeta } from './registry';
 export * from './schema';
 export * from './api';
 export * from './dashboardModel';
+export * from './dashboardVisibility';
 export { getChartDefinition, getChartDefinitions, getChartOptions, getChartSettingsCapabilities } from './charts/catalog';
 export type {
   DashboardChartAxisCapability,

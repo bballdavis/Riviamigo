@@ -20,6 +20,7 @@ import {
   subMonths,
 } from 'date-fns';
 import { cn } from '../lib/utils';
+import { SelectPicker } from './SelectPicker';
 
 export type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@riviamigo/types';
 
@@ -377,25 +378,31 @@ function DateTimeRow({
         />
         <div className="flex items-center gap-2">
           <Clock className="h-3.5 w-3.5 text-fg-tertiary" />
-          <select
-            value={hours}
-            onChange={(event) => onHour(Number(event.target.value))}
-            className="h-7 min-w-0 rounded-md border border-border bg-bg-elevated px-1 text-xs text-fg"
-          >
-            {Array.from({ length: 24 }, (_, index) => (
-              <option key={index} value={index}>{index.toString().padStart(2, '0')}</option>
-            ))}
-          </select>
+          <SelectPicker
+            className="min-w-0 flex-1"
+            triggerClassName="h-7 rounded-md px-1 text-xs"
+            value={String(hours)}
+            onChange={(value) => onHour(Number(value))}
+            aria-label={`${label} hour`}
+            size="sm"
+            options={Array.from({ length: 24 }, (_, index) => ({
+              value: String(index),
+              label: index.toString().padStart(2, '0'),
+            }))}
+          />
           <span className="text-fg-tertiary">:</span>
-          <select
-            value={minutes}
-            onChange={(event) => onMinute(Number(event.target.value))}
-            className="h-7 min-w-0 rounded-md border border-border bg-bg-elevated px-1 text-xs text-fg"
-          >
-            {[0, 15, 30, 45].map((minute) => (
-              <option key={minute} value={minute}>{minute.toString().padStart(2, '0')}</option>
-            ))}
-          </select>
+          <SelectPicker
+            className="min-w-0 flex-1"
+            triggerClassName="h-7 rounded-md px-1 text-xs"
+            value={String(minutes)}
+            onChange={(value) => onMinute(Number(value))}
+            aria-label={`${label} minute`}
+            size="sm"
+            options={[0, 15, 30, 45].map((minute) => ({
+              value: String(minute),
+              label: minute.toString().padStart(2, '0'),
+            }))}
+          />
         </div>
       </div>
     </div>
@@ -435,26 +442,20 @@ function ThemedCalendar({
           <ChevronLeft className="h-4 w-4 text-fg-secondary" />
         </button>
         <div className="flex items-center gap-2">
-          <select
+          <SelectPicker
             aria-label="Month"
-            value={month.getMonth()}
-            onChange={(event) => onMonth(new Date(month.getFullYear(), Number(event.target.value), 1))}
-            className="h-8 rounded-md border border-border bg-bg-elevated px-2 text-xs text-fg"
-          >
-            {MONTH_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <select
+            value={String(month.getMonth())}
+            onChange={(value) => onMonth(new Date(month.getFullYear(), Number(value), 1))}
+            size="sm"
+            options={MONTH_OPTIONS.map((option) => ({ value: String(option.value), label: option.label }))}
+          />
+          <SelectPicker
             aria-label="Year"
-            value={month.getFullYear()}
-            onChange={(event) => onMonth(new Date(Number(event.target.value), month.getMonth(), 1))}
-            className="h-8 rounded-md border border-border bg-bg-elevated px-2 text-xs text-fg"
-          >
-            {YEAR_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
+            value={String(month.getFullYear())}
+            onChange={(value) => onMonth(new Date(Number(value), month.getMonth(), 1))}
+            size="sm"
+            options={YEAR_OPTIONS.map((option) => ({ value: String(option.value), label: option.label }))}
+          />
         </div>
         <button type="button" onClick={() => onMonth(startOfMonth(addMonths(month, 1)))} className="rounded-md p-1 hover:bg-bg-elevated">
           <ChevronRight className="h-4 w-4 text-fg-secondary" />

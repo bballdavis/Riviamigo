@@ -2,8 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
 import { CHART_COLOR_OPTIONS, getChartColor, type ChartColorKey } from '@riviamigo/ui/charts';
+import { SelectPicker } from '@riviamigo/ui/primitives';
 import { getWidgetForInstance } from '../registry';
 import type { WidgetInstance } from '../schema';
+import {
+  getWidgetVisibilityRules,
+  setVehicleConnectionVisibility,
+} from '../dashboardVisibility';
 import { getChartDefinitions, type DashboardChartPage } from '../charts/catalog';
 import {
   getSensorDefinition,
@@ -41,6 +46,8 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
 
   const options = (widget.options ?? {}) as Record<string, unknown>;
   const title = widget.title ?? '';
+  const connectionVisibility = getWidgetVisibilityRules(widget)
+    .find((rule) => rule.type === 'vehicle-connection')?.value ?? 'always';
   const dataSource = isSensorDataSource(options.dataSource)
     ? options.dataSource
     : sensorDefinition?.dataSource ?? 'metric';
@@ -76,6 +83,11 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
 
   const chartPage = isDashboardChartPage(options.page) ? options.page : undefined;
   const chartDefinitions = getChartDefinitions(chartPage);
+  const metricOptions = catalog.length > 0
+    ? catalog.map((entry) => ({ value: entry.id, label: entry.label }))
+    : SENSOR_DEFINITIONS
+      .filter((entry) => (entry.dataSource ?? 'metric') === 'metric')
+      .map((entry) => ({ value: entry.metric ?? entry.id, label: entry.title }));
   const configuredChartIds = Array.isArray(options.chartIds)
     ? options.chartIds.filter(
         (id): id is string =>
@@ -204,15 +216,13 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           {sensorMode ? (
             <div className="grid grid-cols-2 gap-2">
               <Field label="Value size">
-                <select
+                <SelectPicker
+                  className="w-full"
                   value={valueSize}
-                  onChange={(e) => patch({ valueSize: e.target.value })}
-                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                >
-                  <option value="sm">Small</option>
-                  <option value="md">Medium</option>
-                  <option value="lg">Large</option>
-                </select>
+                  onChange={(value) => patch({ valueSize: value })}
+                  aria-label="Value size"
+                  options={[{ value: 'sm', label: 'Small' }, { value: 'md', label: 'Medium' }, { value: 'lg', label: 'Large' }]}
+                />
               </Field>
               <ToggleSwitch
                 label="Show subtitle"
@@ -232,52 +242,65 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           ) : null}
         </Section>
 
+        <Section title="Visibility">
+          <Field label="Show this widget">
+            <SelectPicker
+              className="w-full"
+              value={connectionVisibility}
+              onChange={(value) => onChange(setVehicleConnectionVisibility(
+                widget,
+                value === 'plugged' || value === 'unplugged' ? value : null,
+              ))}
+              aria-label="Widget visibility"
+              options={[
+                { value: 'always', label: 'Always' },
+                { value: 'plugged', label: 'Vehicle plugged in' },
+                { value: 'unplugged', label: 'Vehicle unplugged' },
+              ]}
+            />
+          </Field>
+        </Section>
+
         {sensorMode ? (
           <Section title="Sensor">
             <Field label="Data source">
-              <select
+              <SelectPicker
+                className="w-full"
                 value={dataSource}
-                onChange={(e) => patch({ dataSource: e.target.value as SensorDataSource })}
-                className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-              >
-                <option value="metric">Metric catalog</option>
-                <option value="batteryHealth">Battery health</option>
-                <option value="chargingSummary">Charging summary</option>
-                <option value="vehicleStatus">Vehicle status</option>
-              </select>
+                onChange={(value) => patch({ dataSource: value as SensorDataSource })}
+                aria-label="Data source"
+                options={[
+                  { value: 'metric', label: 'Metric catalog' },
+                  { value: 'batteryHealth', label: 'Battery health' },
+                  { value: 'chargingSummary', label: 'Charging summary' },
+                  { value: 'vehicleStatus', label: 'Vehicle status' },
+                ]}
+              />
             </Field>
             {dataSource === 'metric' ? (
               <>
                 <Field label="Metric">
-                  <select
+                  <SelectPicker
+                    className="w-full"
                     value={metric}
-                    onChange={(e) => patch({ metric: e.target.value })}
-                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                  >
-                    {catalog.length > 0
-                      ? catalog.map((entry) => (
-                          <option key={entry.id} value={entry.id}>
-                            {entry.label}
-                          </option>
-                        ))
-                      : SENSOR_DEFINITIONS.filter((entry) => (entry.dataSource ?? 'metric') === 'metric').map((entry) => (
-                          <option key={entry.id} value={entry.metric ?? entry.id}>
-                            {entry.title}
-                          </option>
-                        ))}
-                  </select>
+                    onChange={(value) => patch({ metric: value })}
+                    aria-label="Metric"
+                    options={metricOptions}
+                  />
                 </Field>
                 <Field label="Aggregation">
-                  <select
+                  <SelectPicker
+                    className="w-full"
                     value={valueMode}
-                    onChange={(e) => patch({ valueMode: e.target.value })}
-                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                  >
-                    <option value="latest">Latest</option>
-                    <option value="sum">Sum</option>
-                    <option value="avg">Average</option>
-                    <option value="count">Count</option>
-                  </select>
+                    onChange={(value) => patch({ valueMode: value })}
+                    aria-label="Aggregation"
+                    options={[
+                      { value: 'latest', label: 'Latest' },
+                      { value: 'sum', label: 'Sum' },
+                      { value: 'avg', label: 'Average' },
+                      { value: 'count', label: 'Count' },
+                    ]}
+                  />
                 </Field>
               </>
             ) : (
@@ -331,14 +354,13 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                 />
               </Field>
               <Field label="Value color">
-                <select
+                <SelectPicker
+                  className="w-full"
                   value={valueColor}
-                  onChange={(e) => patch({ valueColor: e.target.value as SensorValueColor })}
-                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                >
-                  <option value="accent">Accent</option>
-                  <option value="default">Default</option>
-                </select>
+                  onChange={(value) => patch({ valueColor: value as SensorValueColor })}
+                  aria-label="Value color"
+                  options={[{ value: 'accent', label: 'Accent' }, { value: 'default', label: 'Default' }]}
+                />
               </Field>
             </div>
             <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,5rem)] gap-2">
@@ -406,17 +428,19 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
             {showSprite ? (
               <div className="grid gap-2">
                 <Field label="Graph type">
-                  <select
+                  <SelectPicker
+                    className="w-full"
                     value={chartType}
-                    onChange={(e) => handleChartTypeChange(e.target.value)}
-                    className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                  >
-                    <option value="none">None</option>
-                    <option value="line">Line</option>
-                    <option value="area">Area</option>
-                    <option value="bar">Bar</option>
-                    <option value="daily_delta">Daily delta (per-day change)</option>
-                  </select>
+                    onChange={handleChartTypeChange}
+                    aria-label="Graph type"
+                    options={[
+                      { value: 'none', label: 'None' },
+                      { value: 'line', label: 'Line' },
+                      { value: 'area', label: 'Area' },
+                      { value: 'bar', label: 'Bar' },
+                      { value: 'daily_delta', label: 'Daily delta (per-day change)' },
+                    ]}
+                  />
                 </Field>
                 {chartType === 'daily_delta' ? (
                   <Field label={`Show last ${windowDays} day${windowDays === 1 ? '' : 's'}`}>
@@ -470,17 +494,13 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                       className="h-4 w-4 shrink-0 rounded border border-border"
                       style={{ backgroundColor: getChartColor(curveColor) }}
                     />
-                    <select
+                    <SelectPicker
+                      className="min-w-0 flex-1"
                       value={curveColor}
-                      onChange={(e) => patch({ curveColor: e.target.value })}
-                      className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                    >
-                      {CHART_COLOR_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(value) => patch({ curveColor: value })}
+                      aria-label="Chart color"
+                      options={CHART_COLOR_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                    />
                   </div>
                 </Field>
               </div>
@@ -502,33 +522,31 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           <Section title="Chart">
             <div className="grid grid-cols-2 gap-2">
               <Field label="Group">
-                <select
+                <SelectPicker
+                  className="w-full"
                   value={chartPage ?? ''}
-                  onChange={(e) =>
-                    patch({ page: e.target.value || undefined, chartIds: undefined })
+                  onChange={(value) =>
+                    patch({ page: value || undefined, chartIds: undefined })
                   }
-                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                >
-                  <option value="">All charts</option>
-                  <option value="overview">Overview</option>
-                  <option value="battery">Battery</option>
-                  <option value="charging">Charging</option>
-                  <option value="efficiency">Efficiency</option>
-                  <option value="trips">Trips</option>
-                </select>
+                  aria-label="Chart group"
+                  options={[
+                    { value: '', label: 'All charts' },
+                    { value: 'overview', label: 'Overview' },
+                    { value: 'battery', label: 'Battery' },
+                    { value: 'charging', label: 'Charging' },
+                    { value: 'efficiency', label: 'Efficiency' },
+                    { value: 'trips', label: 'Trips' },
+                  ]}
+                />
               </Field>
               <Field label="Default chart">
-                <select
+                <SelectPicker
+                  className="w-full"
                   value={selectedChartId}
-                  onChange={(e) => patch({ chartId: e.target.value })}
-                  className={`w-full rounded-lg border border-border ${FIELD_BG} px-3 py-2 text-sm text-fg outline-none focus:border-accent`}
-                >
-                  {chartDefinitions.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.title}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => patch({ chartId: value })}
+                  aria-label="Default chart"
+                  options={chartDefinitions.map((definition) => ({ value: definition.id, label: definition.title }))}
+                />
               </Field>
             </div>
             <ToggleSwitch

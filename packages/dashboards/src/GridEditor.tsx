@@ -14,6 +14,8 @@ import {
 import { WidgetChrome } from './WidgetChrome';
 import type { DashboardConfig, WidgetInstance } from './schema';
 import type { WidgetCtx, WidgetDef } from './registry';
+import type { DashboardVisibilityState } from './dashboardVisibility';
+import { getWidgetVisibilityRules } from './dashboardVisibility';
 import { EditorDrawer } from './editor/EditorDrawer';
 import { PaletteView } from './editor/PaletteView';
 import { WidgetEditForm } from './editor/WidgetEditForm';
@@ -23,6 +25,13 @@ interface GridEditorProps {
   ctx: WidgetCtx;
   onConfigChange: ((next: DashboardConfig) => void) | undefined;
   editActions?: React.ReactNode;
+  previewControls?: React.ReactNode;
+  visibleWidgetIds: string[];
+  visibilityState: DashboardVisibilityState;
+  onVisibilityStateChange: (
+    type: 'vehicle-connection',
+    value: DashboardVisibilityState['vehicle-connection'],
+  ) => void;
 }
 
 function layoutFromConfig(widgets: WidgetInstance[]): LayoutItem[] {
@@ -55,8 +64,19 @@ function layoutItemForWidget(widget: WidgetInstance): LayoutItem {
   return item;
 }
 
-export default function GridEditor({ config, ctx, onConfigChange, editActions }: GridEditorProps) {
+export default function GridEditor({
+  config,
+  ctx,
+  onConfigChange,
+  editActions,
+  previewControls,
+  visibleWidgetIds,
+  visibilityState,
+  onVisibilityStateChange,
+}: GridEditorProps) {
   const widgets = Array.isArray(config.widgets) ? config.widgets.map(sanitizeWidgetInstance) : [];
+  const visibleWidgetIdSet = new Set(visibleWidgetIds);
+  const visibleWidgets = widgets.filter((widget) => visibleWidgetIdSet.has(widget.id));
   const [editingId, setEditingId] = useState<string | null>(null);
   const { width, containerRef, mounted } = useContainerWidth();
   const currentDashboardKey = dashboardKey(config, config.slug);
@@ -87,6 +107,11 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
 
   function updateWidget(next: WidgetInstance) {
     const sanitized = sanitizeWidgetInstance(next);
+    for (const rule of getWidgetVisibilityRules(sanitized)) {
+      if (visibilityState[rule.type] !== rule.value) {
+        onVisibilityStateChange(rule.type, rule.value);
+      }
+    }
     commit(widgets.map((widget) => (widget.id === sanitized.id ? sanitized : widget)));
   }
 
@@ -116,6 +141,10 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
       setEditingId(null);
     }
   }, [currentDashboardKey, editingId, widgets]);
+
+  useEffect(() => {
+    if (editingId && !visibleWidgetIdSet.has(editingId)) setEditingId(null);
+  }, [editingId, visibleWidgetIds.join('|')]);
 
   return (
     <>
@@ -220,7 +249,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         <div ref={containerRef as React.Ref<HTMLDivElement>} className="w-full min-w-0">
           {mounted ? (
             <GridLayout
-              layout={layoutFromConfig(widgets)}
+              layout={layoutFromConfig(visibleWidgets)}
               width={width}
               gridConfig={{
                 cols: DASHBOARD_GRID_COLUMNS,
@@ -234,7 +263,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
               onLayoutChange={handleLayoutChange}
               className="rounded-xl border border-dashed border-border bg-bg-elevated/30"
             >
-              {widgets.map((widget) => {
+              {visibleWidgets.map((widget) => {
                 const isEditing = editingId === widget.id;
                 const def = getWidgetForInstance(widget);
                 const editor = getWidgetEditorMeta(def);
@@ -260,6 +289,7 @@ export default function GridEditor({ config, ctx, onConfigChange, editActions }:
         mode={drawerMode}
         onBackToPalette={() => setEditingId(null)}
         editActions={editActions}
+        previewControls={previewControls}
         paletteContent={<PaletteView widgets={getAllWidgets()} onAdd={addWidget} />}
         editContent={
           editingWidget ? (
