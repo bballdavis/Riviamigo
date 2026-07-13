@@ -15,10 +15,10 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
    cd Riviamigo
    ```
 
-2. Create a production `.env` file. Copy the example as a reference, then set the database, Redis, origin, and production key values described in [configuration](./configuration.md). Do not commit this file.
+2. Create a production `.env` file. The compact Compose template contains only the values a standard install needs; set each placeholder as described in [configuration](./configuration.md). Do not commit this file.
 
    ```bash
-   cp .env.example .env
+   cp compose/.env.example .env
    ```
 
 3. Start the stack:

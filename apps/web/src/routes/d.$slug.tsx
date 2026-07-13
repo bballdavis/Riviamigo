@@ -12,7 +12,7 @@ import { Copy, Download, Upload } from 'lucide-react';
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
 
 const searchSchema = z.object({
-  edit: z.string().optional(),
+  edit: z.literal(1).optional(),
   dashboardId: z.string().uuid().optional(),
 });
 
@@ -32,7 +32,7 @@ function UserDashboardPage() {
   const search = useSearch({ from: '/d/$slug' });
   const navigate = useNavigate();
 
-  const isEditMode = search.edit === '1';
+  const isEditMode = search.edit === 1;
   const cloneDashboard = useCloneDashboard();
 
   return (
@@ -46,7 +46,7 @@ function UserDashboardPage() {
           to: '/d/$slug',
           params: { slug },
           search: next
-            ? { edit: '1', ...(search.dashboardId ? { dashboardId: search.dashboardId } : {}) }
+            ? { edit: 1, ...(search.dashboardId ? { dashboardId: search.dashboardId } : {}) }
             : search.dashboardId ? { dashboardId: search.dashboardId } : {},
         });
       }}
@@ -59,7 +59,7 @@ function UserDashboardPage() {
           navigate({
             to: '/d/$slug',
             params: { slug: cloned.slug },
-            search: { edit: '1', dashboardId: cloned.id },
+            search: { edit: 1, dashboardId: cloned.id },
           });
         }
 
@@ -70,7 +70,7 @@ function UserDashboardPage() {
           try {
             const imported = importDashboardYaml(text);
             setLocalConfig(imported);
-            navigate({ to: '/d/$slug', params: { slug }, search: { edit: '1' } });
+            navigate({ to: '/d/$slug', params: { slug }, search: { edit: 1 } });
           } catch (err) {
             alert(`Import failed: ${err instanceof Error ? err.message : String(err)}`);
           }

@@ -52,7 +52,7 @@ function AdminDashboardsPage() {
           {d.isDefault && (
             <>
               <button
-                onClick={() => navigate({ to: '/d/$slug', params: { slug: d.slug }, search: { edit: '1' } } as never)}
+                onClick={() => navigate({ to: '/d/$slug', params: { slug: d.slug }, search: { edit: 1 } } as never)}
                 className="p-1.5 rounded-lg border border-border hover:bg-bg-elevated transition-colors text-fg-tertiary hover:text-fg"
                 title="Edit (admin)"
               >

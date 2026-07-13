@@ -8,6 +8,7 @@ storybook-static
 *.env.local
 .env.*
 !.env.example
+!compose/.env.full.example
 jwt_private.pem
 jwt_public.pem
 age_key.txt
