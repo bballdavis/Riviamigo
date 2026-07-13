@@ -673,6 +673,55 @@ async fn vehicles_only_returns_current_users_vehicles() {
 }
 
 #[tokio::test]
+async fn admin_vehicle_options_require_an_admin_role_and_return_picker_safe_fields() {
+    let app = TestApp::new().await;
+    let user_token = register_and_login(&app, "vehicle-picker@example.com").await;
+    let user_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "vehicle-picker@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+    let vehicle_id = insert_vehicle(&app.pool, user_id, "picker-vehicle", "Family R1S").await;
+
+    let denied = app
+        .request(
+            Method::GET,
+            "/v1/admin/vehicles",
+            None,
+            Some(&user_token),
+            None,
+        )
+        .await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+
+    sqlx::query!("UPDATE riviamigo.users SET role = 'admin' WHERE id = $1", user_id)
+        .execute(&app.pool)
+        .await
+        .expect("promote to admin");
+
+    let allowed = app
+        .request(
+            Method::GET,
+            "/v1/admin/vehicles",
+            None,
+            Some(&user_token),
+            None,
+        )
+        .await;
+    assert_eq!(allowed.status, StatusCode::OK);
+    let vehicles = allowed.body["vehicles"].as_array().expect("vehicle options");
+    let option = vehicles
+        .iter()
+        .find(|option| option["id"] == serde_json::json!(vehicle_id))
+        .expect("created vehicle option");
+    assert_eq!(option["display_name"], "Family R1S");
+    assert_eq!(option["model"], "R1T");
+    assert_eq!(option.as_object().expect("option object").len(), 3);
+}
+
+#[tokio::test]
 async fn stats_summary_requires_vehicle_id() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "stats-missing@example.com").await;

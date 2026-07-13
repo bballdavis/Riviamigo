@@ -10,6 +10,13 @@ Use Settings > API Access to create vehicle-scoped API keys for local troublesho
 
 Vehicle ownership checks still apply to all levels.
 
+## Admin vehicle picker
+
+The Users admin workspace uses `GET /v1/admin/vehicles` to populate its
+vehicle-membership picker. It requires an authenticated admin or super-user account and
+returns only each vehicle's `id`, `display_name`, and `model`; it is not a
+telemetry endpoint.
+
 ## List the API catalog
 
 PowerShell:

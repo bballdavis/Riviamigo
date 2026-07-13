@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppLayout } from '../components/layout/AppLayout';
 
@@ -105,5 +105,50 @@ describe('AppLayout sidebar collapse', () => {
     );
 
     expect(screen.queryByText('Phantom Drain')).not.toBeInTheDocument();
+  });
+
+  it('opens a full-screen mobile navigation sheet with touch-safe destinations and utilities', async () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(trigger);
+
+    const sheet = screen.getByRole('dialog', { name: 'Navigation' });
+    const sheetControls = within(sheet);
+    const overview = sheetControls.getByRole('button', { name: 'Overview' });
+    const battery = sheetControls.getByRole('button', { name: 'Battery' });
+    const settings = sheetControls.getByRole('button', { name: 'Open settings' });
+    const signOut = sheetControls.getByRole('button', { name: 'Sign out' });
+
+    expect(sheet).toHaveAttribute('data-mobile-navigation', 'true');
+    expect(sheet).toHaveClass('inset-0');
+    expect(overview).toHaveAttribute('aria-current', 'page');
+    expect(overview).toHaveClass('min-h-14');
+    expect(battery).toHaveClass('min-h-14');
+    expect(settings).toHaveClass('h-12');
+    expect(signOut).toHaveClass('h-12');
+
+    fireEvent.click(battery);
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/battery' });
+    expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle navigation' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Navigation' })).getByRole('button', { name: 'Open settings' }));
+    expect(navigate).toHaveBeenCalledWith({ to: '/settings' });
+    expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle navigation' }));
+    expect(screen.getByRole('dialog', { name: 'Navigation' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Toggle navigation' })).toHaveFocus());
+    expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
   });
 });

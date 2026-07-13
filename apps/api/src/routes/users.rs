@@ -20,6 +20,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/users", get(list_users))
+        .route("/admin/vehicles", get(list_admin_vehicle_options))
         .route("/admin/account-invitations", get(list_account_invitations).post(create_account_invitation))
         .route("/admin/account-invitations/:id", axum::routing::delete(revoke_account_invitation))
         .route("/admin/users/:id", patch(update_user).delete(delete_user))
@@ -107,6 +108,34 @@ async fn list_users(
         .collect();
 
     Ok(Json(serde_json::json!({ "users": users })))
+}
+
+async fn list_admin_vehicle_options(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, COALESCE(name, model) AS display_name, model
+         FROM riviamigo.vehicles
+         ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let vehicles: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.get::<Uuid, _>("id"),
+                "display_name": row.get::<String, _>("display_name"),
+                "model": row.get::<String, _>("model"),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "vehicles": vehicles })))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
