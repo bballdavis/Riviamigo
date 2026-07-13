@@ -50,6 +50,131 @@ export interface RichTimeSeriesChartProps {
   onCursorIndexChange?: ((index: number | null) => void) | undefined;
   /** Connect line/area paths across null samples and carry the last value in tooltips. */
   connectGaps?: boolean | undefined;
+  /** Enables touch-first pan and pinch exploration for a dedicated mobile chart view. */
+  interactionMode?: 'standard' | 'touch-explore' | undefined;
+}
+
+export function clampExplorationRange(
+  proposed: [number, number],
+  bounds: [number, number],
+  minimumSpan: number,
+): [number, number] {
+  const [boundMin, boundMax] = bounds;
+  const maxSpan = boundMax - boundMin;
+  if (maxSpan <= 0) return bounds;
+
+  const span = Math.min(maxSpan, Math.max(minimumSpan, proposed[1] - proposed[0]));
+  let min = proposed[0];
+  let max = min + span;
+  if (min < boundMin) {
+    min = boundMin;
+    max = min + span;
+  }
+  if (max > boundMax) {
+    max = boundMax;
+    min = max - span;
+  }
+  return [min, max];
+}
+
+function attachTouchExploration(root: HTMLDivElement, chart: uPlot, bounds: [number, number]) {
+  const pointers = new Map<number, { x: number; y: number }>();
+  const minimumSpan = Math.max((bounds[1] - bounds[0]) / 500, Number.EPSILON);
+  let startRange: [number, number] = bounds;
+  let startPoint: { x: number; y: number } | null = null;
+  let pinch: { distance: number; centerX: number; range: [number, number] } | null = null;
+  let lastTapAt = 0;
+  const previousTouchAction = root.style.touchAction;
+  root.style.touchAction = 'none';
+
+  const currentRange = (): [number, number] => {
+    const scale = chart.scales.x;
+    return [scale?.min ?? bounds[0], scale?.max ?? bounds[1]];
+  };
+  const reset = () => chart.setScale('x', { min: bounds[0], max: bounds[1] });
+  const firstTwoPoints = () => Array.from(pointers.values()).slice(0, 2) as [{ x: number; y: number }, { x: number; y: number }];
+
+  const startPinch = () => {
+    if (pointers.size < 2) return;
+    const [left, right] = firstTwoPoints();
+    pinch = {
+      distance: Math.max(1, Math.hypot(right.x - left.x, right.y - left.y)),
+      centerX: (left.x + right.x) / 2,
+      range: currentRange(),
+    };
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') return;
+    const now = Date.now();
+    if (pointers.size === 0 && now - lastTapAt < 300) {
+      reset();
+      lastTapAt = 0;
+    } else if (pointers.size === 0) {
+      lastTapAt = now;
+    }
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    root.setPointerCapture?.(event.pointerId);
+    startRange = currentRange();
+    startPoint = { x: event.clientX, y: event.clientY };
+    startPinch();
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const rect = root.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    if (pointers.size >= 2) {
+      if (!pinch) startPinch();
+      if (!pinch) return;
+      const [left, right] = firstTwoPoints();
+      const distance = Math.max(1, Math.hypot(right.x - left.x, right.y - left.y));
+      const nextSpan = (pinch.range[1] - pinch.range[0]) * (pinch.distance / distance);
+      const focusRatio = Math.min(1, Math.max(0, (pinch.centerX - rect.left) / rect.width));
+      const focus = pinch.range[0] + (pinch.range[1] - pinch.range[0]) * focusRatio;
+      const nextRange = clampExplorationRange(
+        [focus - nextSpan * focusRatio, focus + nextSpan * (1 - focusRatio)],
+        bounds,
+        minimumSpan,
+      );
+      chart.setScale('x', { min: nextRange[0], max: nextRange[1] });
+      event.preventDefault();
+      return;
+    }
+
+    if (!startPoint) return;
+    const span = startRange[1] - startRange[0];
+    const delta = ((event.clientX - startPoint.x) / rect.width) * span;
+    const nextRange = clampExplorationRange([startRange[0] - delta, startRange[1] - delta], bounds, minimumSpan);
+    chart.setScale('x', { min: nextRange[0], max: nextRange[1] });
+    event.preventDefault();
+  };
+
+  const onPointerEnd = (event: PointerEvent) => {
+    pointers.delete(event.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 1) {
+      const [point] = pointers.values();
+      startPoint = point ?? null;
+      startRange = currentRange();
+    } else {
+      startPoint = null;
+    }
+  };
+
+  root.addEventListener('pointerdown', onPointerDown, { passive: false });
+  root.addEventListener('pointermove', onPointerMove, { passive: false });
+  root.addEventListener('pointerup', onPointerEnd);
+  root.addEventListener('pointercancel', onPointerEnd);
+  return () => {
+    root.style.touchAction = previousTouchAction;
+    root.removeEventListener('pointerdown', onPointerDown);
+    root.removeEventListener('pointermove', onPointerMove);
+    root.removeEventListener('pointerup', onPointerEnd);
+    root.removeEventListener('pointercancel', onPointerEnd);
+  };
 }
 
 function toSeconds(value: string | number | Date) {
@@ -388,6 +513,7 @@ export function RichTimeSeriesChart({
   cursorSyncKey,
   onCursorIndexChange,
   connectGaps = false,
+  interactionMode = 'standard',
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
@@ -447,9 +573,10 @@ export function RichTimeSeriesChart({
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
+      `${interactionMode}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -587,7 +714,7 @@ export function RichTimeSeriesChart({
       // Right gutter grows when a right axis is present so its labels aren't clipped.
       padding: [topPadding, hasRightAxis ? 4 : 14, 0, 10],
       cursor: {
-        drag: { x: true, y: false },
+        drag: { x: interactionMode !== 'touch-explore', y: false },
         points: { size: 6 },
         ...(cursorSyncKey ? { sync: { key: cursorSyncKey, scales: ['x', null] } } : {}),
       },
@@ -666,6 +793,11 @@ export function RichTimeSeriesChart({
 
     chartRef.current = new uPlot(opts, alignedDataRef.current, root);
 
+    const chart = chartRef.current;
+    const touchCleanup = interactionMode === 'touch-explore'
+      ? attachTouchExploration(root, chart, xRange ?? [xValues[0]!, xValues[xValues.length - 1]!])
+      : undefined;
+
     const observer =
       typeof ResizeObserver !== 'undefined'
         ? new ResizeObserver(() => {
@@ -676,6 +808,7 @@ export function RichTimeSeriesChart({
 
     return () => {
       observer?.disconnect();
+      touchCleanup?.();
       chartRef.current?.destroy();
       chartRef.current = null;
       setTooltip(null);
@@ -714,6 +847,20 @@ export function RichTimeSeriesChart({
       style={{ height }}
     >
       <div ref={rootRef} className="rich-uplot-chart w-full min-h-0 flex-1" style={{ height: chartHeight }} />
+      {interactionMode === 'touch-explore' ? (
+        <button
+          type="button"
+          onClick={() => {
+            const chart = chartRef.current;
+            const values = alignedDataRef.current[0] as number[];
+            if (!chart || values.length < 2) return;
+            chart.setScale('x', { min: xRange?.[0] ?? values[0]!, max: xRange?.[1] ?? values[values.length - 1]! });
+          }}
+          className="absolute right-2 top-2 z-20 rounded-md border border-border bg-bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-fg shadow-sm transition-colors hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-accent"
+        >
+          Reset zoom
+        </button>
+      ) : null}
       {tooltip ? (
         <div
           className="pointer-events-none absolute z-10 whitespace-pre rounded-md border border-border-strong bg-bg-surface px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"

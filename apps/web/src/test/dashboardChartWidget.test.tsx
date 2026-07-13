@@ -8,19 +8,19 @@
  *   data is present, and shows the empty state when data is absent.
  */
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
 import { getProjectedRangeMileageYRange } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
 const originalMatchMedia = window.matchMedia;
 
-function setMatchMedia(mobile = false) {
+function setMatchMedia(mobile = false, portrait = false) {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
-    value: (_query: string) => ({
-      matches: mobile,
-      media: '(max-width: 639px)',
+    value: (query: string) => ({
+      matches: query.includes('orientation') ? portrait : mobile,
+      media: query,
       onchange: null,
       addListener: () => {},
       removeListener: () => {},
@@ -180,6 +180,52 @@ describe('DashboardChartWidget - smoothing controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
     fireEvent.click(screen.getByRole('option', { name: /state of charge/i }));
     expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('10|90');
+  });
+});
+
+describe('DashboardChartWidget mobile viewer', () => {
+  function viewerInstance() {
+    return {
+      ...makeInstance('efficiency-trend', true),
+      options: {
+        chartId: 'efficiency-trend',
+        chartIds: ['efficiency-trend', 'efficiency-temperature', 'efficiency-mode'],
+        page: 'efficiency' as const,
+        showPicker: true,
+      },
+    };
+  }
+
+  it('opens a widget-scoped chart picker in the landscape viewer without persisting the selection', async () => {
+    setMatchMedia(true, false);
+    const updateWidgetOptions = vi.fn();
+    renderWidget(viewerInstance(), { ...CTX, updateWidgetOptions });
+
+    const expand = screen.getByRole('button', { name: 'Expand chart' });
+    fireEvent.click(expand);
+
+    const dialog = screen.getByRole('dialog', { name: /efficiency trend expanded chart/i });
+    expect(dialog.getAttribute('data-mobile-chart-viewer')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Choose chart' }));
+    expect(screen.getByRole('option', { name: 'Efficiency by Temperature' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'State of Charge' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('option', { name: 'Efficiency by Drive Mode' }));
+    expect(screen.getByRole('dialog', { name: /efficiency by drive mode expanded chart/i })).toBeTruthy();
+    expect(updateWidgetOptions).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close expanded chart' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(expand));
+  });
+
+  it('shows the rotate prompt before rendering the expanded chart in portrait', () => {
+    setMatchMedia(true, true);
+    renderWidget(viewerInstance());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand chart' }));
+    expect(screen.getByText('Rotate for a wider chart')).toBeTruthy();
+    expect(screen.queryByTestId('rich-chart')).toBeNull();
   });
 });
 
@@ -428,7 +474,10 @@ function makeInstance(chartId: string, showPicker = false) {
   };
 }
 
-function renderWidget(instance: ReturnType<typeof makeInstance>, ctx = CTX) {
+function renderWidget(
+  instance: React.ComponentProps<typeof DashboardChartWidget>['instance'],
+  ctx: React.ComponentProps<typeof DashboardChartWidget>['ctx'] = CTX,
+) {
   return render(<DashboardChartWidget instance={instance} ctx={ctx} />);
 }
 

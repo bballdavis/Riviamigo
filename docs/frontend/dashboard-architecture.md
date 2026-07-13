@@ -110,6 +110,12 @@ The shared chart widget owns reusable chart display controls.
 
 Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx` as `CHART_BAR_STYLE`. Use the filled mark treatment for ordinary quantitative bars and preserve renderer-specific semantics for stacked, histogram, efficiency, and segmented pill views. Interactive bars must provide date/category and value details on hover; stacked views additionally require a legend and a full-bar hit target.
 
+#### Mobile chart viewer
+
+- `DashboardChartWidget` owns the mobile-only expand trigger and the portal-based fullscreen viewer for catalog-rendered dashboard charts. The viewer can switch only among that widget's configured `chartIds`; selection and exploration remain local view state and must not mutate the dashboard or URL.
+- `DashboardChartRenderer` accepts `presentation="embedded" | "mobile-viewer"`. It keeps data ownership unchanged while opting rich time/numeric charts into touch exploration. Browser fullscreen and orientation APIs are progressive enhancements; the fixed-viewport viewer and rotate prompt remain the reliable fallback.
+- `RichTimeSeriesChart` owns pinch zoom, horizontal pan, double-tap/reset, and data-domain clamping for the mobile-viewer presentation. Categorical renderers stay readable and tappable rather than inventing a continuous zoom model.
+
 ### 6. Hooks and Data Layer
 
 `packages/hooks` owns dashboard-facing data access and lightweight normalization.

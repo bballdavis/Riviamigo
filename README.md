@@ -1,86 +1,66 @@
-# Riviamigo
+<p align="center">
+  <img src="./apps/web/public/logo_color_lighter.svg" alt="Riviamigo logo" height="72" />
+  <img src="./apps/web/public/text_black.svg" alt="Riviamigo" height="72" />
+</p>
 
-Riviamigo is a self-hosted Rivian telemetry dashboard built with Rust, React, and TimescaleDB. It ingests vehicle telemetry, stores it locally, and exposes battery, charging, trip, and efficiency views through a typed web app.
+<p align="center">
+  <strong>Your Rivian's data companion.</strong><br />
+  A private, self-hosted home for your vehicle's battery, charging, trips, and efficiency data.
+</p>
 
-> **Security posture:** Riviamigo is not approved for direct Internet exposure.
-> Shared deployments must sit behind an authenticated tunnel or identity-aware
-> reverse proxy; see the [secure deployment runbook](./docs/runbooks/secure-deployment.md).
+Riviamigo connects to your Rivian account, keeps the telemetry on hardware you control, and turns it into a dashboard that is pleasant to check every day. There is no separate cloud service to sign up for and no subscription layer in the middle.
 
-## Quick Start
+> **A quick security heads-up:** Riviamigo is not designed to be exposed directly to the internet. If you share an installation outside your home network, put it behind an authenticated tunnel or identity-aware reverse proxy. The [secure deployment runbook](./docs/runbooks/secure-deployment.md) has the details.
 
-1. Install prerequisites:
-   - Node 20+
-   - pnpm 9+
-   - Rust stable
-   - Docker Desktop
-2. Install dependencies:
+## A quick look
 
-```bash
-pnpm install
-```
+Light or dark, wide screen or phone — Riviamigo is designed to stay easy to read.
 
-3. Start the full dev stack:
+| Desktop — light | Desktop — dark |
+| --- | --- |
+| ![Riviamigo overview in light mode on desktop](./docs/assets/readme/overview-desktop-light.png) | ![Riviamigo overview in dark mode on desktop](./docs/assets/readme/overview-desktop-dark.png) |
 
-```bash
-pnpm run dev:stack
-```
+| Mobile — light | Mobile — dark |
+| --- | --- |
+| <img src="./docs/assets/readme/overview-mobile-light.png" alt="Riviamigo overview in light mode on mobile" width="280" /> | <img src="./docs/assets/readme/overview-mobile-dark.png" alt="Riviamigo overview in dark mode on mobile" width="280" /> |
 
-Primary local services:
+## What it helps with
 
-- Web: `http://localhost:5173`
-- API: `http://localhost:3001`
-- Database: `postgresql://localhost:5432`
+- Keep an eye on battery state, range, charging, and vehicle health.
+- Look back at trips, efficiency, and charging history without handing the data to another service.
+- Shape dashboards around the things you actually care about.
+- Use the same responsive app from a desktop dashboard or your phone.
 
-## Repo Shape
+## Get started locally
 
-```text
-apps/
-  api/          Rust API, ingestion, auth, storage
-  web/          React app
-packages/
-  dashboards/   dashboard system
-  hooks/        frontend data access
-  types/        shared contracts
-  ui/           shared design system
-infra/          compose and deployment runtime files
-docs/           canonical docs and wiki-source drafts
-```
+The easiest way to try or contribute to Riviamigo is the local development stack.
 
-## Contributor Entry Points
+1. Install [Node.js 20+](https://nodejs.org/), [pnpm 9+](https://pnpm.io/installation), Rust stable, and Docker Desktop.
+2. Clone the repo and install its dependencies:
 
-- [`AGENTS.md`](./AGENTS.md)
-  Primary Codex/bootstrap guide for workflow, shared seams, and documentation policy.
-- [`CLAUDE.md`](./CLAUDE.md)
-  Companion execution guide with commands and architecture detail.
-- [`docs/index.md`](./docs/index.md)
-  Canonical routing hub for architecture, branding, operations, and user-facing docs.
+   ```bash
+   git clone https://github.com/bballdavis/Riviamigo.git
+   cd Riviamigo
+   pnpm install
+   ```
 
-## Common Commands
+3. Start everything:
 
-```bash
-pnpm run dev:stack
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm docs:check
-```
+   ```bash
+   pnpm run dev:stack
+   ```
 
-Focused frontend test example:
+4. Open [http://localhost:5173](http://localhost:5173), create your local account, and connect your Rivian when you are ready.
 
-```bash
-pnpm -C apps/web exec vitest run src/test/<file>.test.tsx
-```
+That command brings up the web app, API, TimescaleDB, Redis, and local object storage together. For the complete developer setup, environment details, tests, and troubleshooting commands, see [`CLAUDE.md`](./CLAUDE.md). For a production/self-hosted installation, start with the [deployment guide](./docs/wiki-drafts/11-Docker-Compose-Deployment.md).
 
-## Documentation Model
+## Where to go next
 
-- Repo docs are canonical.
-- User-facing docs are authored in [`docs/wiki-drafts/`](./docs/wiki-drafts/README.md).
-- The GitHub Wiki is a published mirror, not the authoring source.
+- Want to connect your vehicle? See [Rivian account setup](./docs/wiki-drafts/12-Rivian-Account-Setup.md).
+- Setting up a server or NAS? Read the [prerequisites](./docs/wiki-drafts/03-Prerequisites.md) and [secure deployment runbook](./docs/runbooks/secure-deployment.md).
+- Building on Riviamigo? The [docs hub](./docs/index.md) points to the dashboard, API, and architecture guides.
+- Looking for the full contributor workflow? [`AGENTS.md`](./AGENTS.md) explains the project conventions, and [`CLAUDE.md`](./CLAUDE.md) is the practical command reference.
 
-## Further Reading
+## A small note about Rivian access
 
-- Visual system: [`docs/branding.md`](./docs/branding.md)
-- Architecture: [`docs/architecture/overview.md`](./docs/architecture/overview.md)
-- Dashboard internals: [`docs/frontend/dashboard-architecture.md`](./docs/frontend/dashboard-architecture.md)
-- Rivian auth flow: [`docs/rivian-auth.md`](./docs/rivian-auth.md)
-- API access: [`docs/api-access.md`](./docs/api-access.md)
+Riviamigo uses the same unofficial Rivian API flow used by the mobile app. You do not need a Rivian developer account or API key, but Rivian can change that API without notice. Keep an eye on the project issues if a Rivian app update affects connectivity.
