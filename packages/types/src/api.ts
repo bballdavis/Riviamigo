@@ -42,6 +42,34 @@ export interface MetricSeriesPoint {
   value: number | null;
 }
 
+export interface MetricBatchMetricRequest {
+  metric: string;
+  include_latest?: boolean;
+  include_series?: boolean;
+}
+
+export interface MetricBatchRequest {
+  vehicle_id: string;
+  metrics: MetricBatchMetricRequest[];
+  from?: string | null;
+  to?: string | null;
+  lifetime?: boolean;
+  bucket?: string;
+  max_points?: number;
+}
+
+export interface MetricBatchSeriesResponse {
+  metric: string;
+  points: MetricSeriesPoint[];
+}
+
+export interface MetricBatchResponse {
+  values: MetricValueResponse[];
+  series: MetricBatchSeriesResponse[];
+  bucket: string;
+  max_points: number;
+}
+
 export interface DataQualityResponse {
   vehicle_id: string;
   window_from: string;

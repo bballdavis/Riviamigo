@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { DashboardTimeframe } from '@riviamigo/types';
+import type { DashboardDataRequirements } from './dashboardData';
 import type { DashboardComponentType, WidgetInstance } from './schema';
 
 export type { WidgetInstance };
@@ -35,6 +36,8 @@ export interface WidgetDef {
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
   defaultOptions?: Record<string, unknown>;
+  /** Declares the compact shared data this widget needs in dashboard view. */
+  dataRequirements?: (instance: WidgetInstance) => DashboardDataRequirements | undefined;
   editor?: Partial<WidgetEditorMeta>;
   component: React.ComponentType<{ instance: WidgetInstance; ctx: WidgetCtx }>;
 }

@@ -91,7 +91,7 @@ Widgets belong in `packages/dashboards/src/widgets`.
 Each widget should:
 
 - represent one dashboard unit
-- call its own hook(s)
+- declare the data it needs through `WidgetDef.dataRequirements` when it can use a dashboard-wide source or metric batch
 - render generic UI from `@riviamigo/ui`
 - avoid coordinating unrelated page sections
 
@@ -118,7 +118,7 @@ Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx`
 
 ### 6. Hooks and Data Layer
 
-`packages/hooks` owns dashboard-facing data access and lightweight normalization.
+`packages/hooks` owns dashboard-facing data access and lightweight normalization. `DashboardRenderer` owns the dashboard-wide coordination layer: it derives a sorted, deduplicated requirement manifest from visible widgets and supplies the result through `DashboardDataProvider`.
 
 Use hooks for:
 
@@ -126,8 +126,11 @@ Use hooks for:
 - response normalization
 - cache keys
 - page-level aggregate fetches that several widgets share
+- the typed `POST /v1/metrics/batch` request used by metric chips
 
-Do not put route orchestration into generic widgets. If a page needs multiple coordinated requests, create a page-specific hook or adapter and keep the widget inputs simple.
+Widgets read provider data through selector adapters so a status update only re-renders chips that select the changed field. Outside a dashboard provider, adapters retain their direct-hook fallback for detail pages and integrations. Live status remains memory-only and fast-refreshing; bounded historical metric summaries may use the normal persisted cache while refreshing.
+
+The batch API is intentionally limited to compact dashboard-chip values and sparklines (at most 96 adaptive points per metric). Maps, tables, trip geometry, and trip-detail synchronized samples stay on their specialized endpoints. Chart widgets mount exactly one query source: the active picker selection. Offscreen charts, maps, and tables mount through an intersection boundary with a small preload margin, preserving their existing loading shapes and interaction contracts once visible.
 
 ### High-density data rules
 

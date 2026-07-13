@@ -127,13 +127,15 @@ export function MobileChartViewer({
       </div>
 
       {isPortrait ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-bg-elevated/40 p-6 text-center">
-          <RotateCw className="h-8 w-8 text-accent" aria-hidden="true" />
-          <div>
-            <p className="text-base font-semibold text-fg">Rotate for a wider chart</p>
-            <p className="mt-1 text-sm text-fg-secondary">Turn your phone sideways to explore {chartTitle}.</p>
+        <div className="flex flex-1 flex-col items-center justify-center gap-6 rounded-2xl border border-accent bg-accent p-8 text-center text-fg-on-accent shadow-glow-button">
+          <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-fg-on-accent/35 bg-fg-on-accent/10 shadow-sm">
+            <RotateCw className="h-12 w-12" strokeWidth={2.5} aria-hidden="true" />
+            <Maximize2 className="absolute -bottom-1 -right-1 h-7 w-7 rounded-full border border-accent bg-bg-surface p-1 text-accent shadow-sm" aria-hidden="true" />
           </div>
-          <Maximize2 className="h-4 w-4 text-fg-tertiary" aria-hidden="true" />
+          <div>
+            <p className="text-2xl font-bold tracking-tight">Rotate for a wider chart</p>
+            <p className="mx-auto mt-3 max-w-sm text-base leading-6 text-fg-on-accent/90">Turn your phone sideways to explore {chartTitle} with the full interactive controls.</p>
+          </div>
         </div>
       ) : (
         <div className={cn('min-h-0 flex-1', chartOptions.length > 1 && 'pt-1')} data-chart-presentation="mobile-viewer">

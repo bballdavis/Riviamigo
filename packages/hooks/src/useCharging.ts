@@ -125,6 +125,7 @@ export function useUpdateChargeSessionLocation(vehicleId: string | null) {
       void queryClient.invalidateQueries({ queryKey: ['charging', 'list', vehicleId] });
       void queryClient.invalidateQueries({ queryKey: ['charging', 'summary', vehicleId] });
       void queryClient.invalidateQueries({ queryKey: ['charging', 'chart-series', vehicleId] });
+      void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch', vehicleId] });
     },
   });
 }

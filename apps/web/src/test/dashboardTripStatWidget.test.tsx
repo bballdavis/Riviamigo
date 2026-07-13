@@ -28,6 +28,28 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         { ts: '2026-05-03T00:00:00Z', value: 999 },
       ],
     }),
+    useMetricBatch: () => ({
+      data: {
+        values: [{
+          metric: 'avg_efficiency',
+          value: 200,
+          unit: 'Wh/mi',
+          label: 'Avg Efficiency',
+          ts: '2026-05-07T00:00:00Z',
+        }],
+        series: [{
+          metric: 'avg_efficiency',
+          points: [
+            { ts: '2026-05-01T00:00:00Z', value: 1000 },
+            { ts: '2026-05-02T00:00:00Z', value: 330 },
+            { ts: '2026-05-03T00:00:00Z', value: 999 },
+          ],
+        }],
+        bucket: 'day',
+        max_points: 96,
+      },
+      isFetching: false,
+    }),
     useEfficiencySummary: () => ({
       data: {
         avg: 200,

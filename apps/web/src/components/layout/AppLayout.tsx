@@ -160,6 +160,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 socPercent={status?.battery_level ?? undefined}
                 isCharging={status?.charger_state?.toLowerCase().includes('charging') ?? false}
                 rangeEstimateMi={status?.range_miles ?? undefined}
+                className="h-12 px-4"
               />
 
               <button

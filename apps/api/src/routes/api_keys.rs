@@ -289,6 +289,12 @@ fn catalog(include_admin: bool) -> ApiCatalogResponse {
             purpose: "Read lifetime summary metrics.",
         },
         ApiEndpointDoc {
+            method: "POST",
+            path: "/v1/metrics/batch",
+            minimum_access: "view",
+            purpose: "Read deduplicated dashboard metric values and bounded sparklines.",
+        },
+        ApiEndpointDoc {
             method: "GET",
             path: "/v1/trips",
             minimum_access: "view",

@@ -178,6 +178,10 @@ for (const definition of BATTERY_STAT_DEFINITIONS) {
     title: definition.title,
     defaultSize: { w: 3, h: 2 },
     minSize: { w: 2, h: 2 },
+    dataRequirements: () => ({
+      batteryHealth: true,
+      ...(definition.id === 'max_range' ? { status: true } : {}),
+    }),
     component: BatteryStatWidget,
   });
 }

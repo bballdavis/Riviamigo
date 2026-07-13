@@ -29,6 +29,12 @@ import {
 import { presentVehicleStatusDefinition, type StatusTone } from '@riviamigo/ui/lib/vehicleStatus';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
+import {
+  useDashboardDataAvailable,
+  useDashboardDataSelector,
+  useDashboardMetric,
+  type DashboardDataRequirements,
+} from '../../dashboardData';
 import { resolveIconId } from '../../editor/iconMigration';
 import { seriesToDailyDeltas } from '../../editor/dailyDelta';
 import type { TripRow } from '@riviamigo/ui/tables';
@@ -142,24 +148,45 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const activeTripSelectionStat = tripSelectionStat != null && selectedTrips.length > 0 ? tripSelectionStat : null;
   const selectionLabel = activeTripSelectionStat ? formatTripSelectionLabel(selectedTrips.length) : null;
   const selectionValue = activeTripSelectionStat ? computeTripStat(activeTripSelectionStat, selectedTrips) : null;
-  const { data: value } = useMetricValue(ctx.vehicleId, metric);
-  const { data: series = [] } = useMetricSeries(ctx.vehicleId, metric, ctx.from, ctx.to);
-  const { data: efficiencySummary } = useEfficiencySummary(
-    metric === 'avg_efficiency' ? ctx.vehicleId : null,
+  const dashboardDataAvailable = useDashboardDataAvailable();
+  const dashboardMetric = useDashboardMetric(metric);
+  const dashboardStatus = useDashboardDataSelector((snapshot) => snapshot.status);
+  const dashboardHealth = useDashboardDataSelector((snapshot) => snapshot.batteryHealth);
+  const dashboardCharging = useDashboardDataSelector((snapshot) => snapshot.chargingSummary);
+  const dashboardEfficiency = useDashboardDataSelector((snapshot) => snapshot.efficiencySummary);
+  const dashboardRefreshing = useDashboardDataSelector((snapshot) => snapshot.isRefreshing) ?? false;
+  const { data: fetchedValue } = useMetricValue(
+    dashboardDataAvailable ? null : ctx.vehicleId,
+    dashboardDataAvailable ? null : metric,
+  );
+  const { data: fetchedSeries = [] } = useMetricSeries(
+    dashboardDataAvailable ? null : ctx.vehicleId,
+    dashboardDataAvailable ? null : metric,
+    ctx.from,
+    ctx.to,
+  );
+  const { data: fetchedEfficiencySummary } = useEfficiencySummary(
+    !dashboardDataAvailable && metric === 'avg_efficiency' ? ctx.vehicleId : null,
     ctx.from,
     ctx.to
   );
-  const { data: health, isLoading: healthLoading } = useBatteryHealth(
-    needsHealth ? ctx.vehicleId : null
+  const { data: fetchedHealth, isLoading: healthLoading } = useBatteryHealth(
+    !dashboardDataAvailable && needsHealth ? ctx.vehicleId : null
   );
-  const { data: chargingSummary, isLoading: chargingLoading } = useChargingSummary(
-    needsCharging ? ctx.vehicleId : null,
+  const { data: fetchedChargingSummary, isLoading: chargingLoading } = useChargingSummary(
+    !dashboardDataAvailable && needsCharging ? ctx.vehicleId : null,
     ctx.from,
     ctx.to
   );
-  const { data: status, isLoading: statusLoading } = useCurrentVehicleStatus(
-    needsStatus ? ctx.vehicleId : null
+  const { data: fetchedStatus, isLoading: statusLoading } = useCurrentVehicleStatus(
+    !dashboardDataAvailable && needsStatus ? ctx.vehicleId : null
   );
+  const value = dashboardDataAvailable ? dashboardMetric?.value : fetchedValue;
+  const series = dashboardDataAvailable ? dashboardMetric?.series ?? [] : fetchedSeries;
+  const efficiencySummary = dashboardDataAvailable ? dashboardEfficiency : fetchedEfficiencySummary;
+  const health = dashboardDataAvailable ? dashboardHealth : fetchedHealth;
+  const chargingSummary = dashboardDataAvailable ? dashboardCharging : fetchedChargingSummary;
+  const status = dashboardDataAvailable ? dashboardStatus : fetchedStatus;
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
   const iconId = resolveIconId(options.icon);
   const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, status);
@@ -168,11 +195,11 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
   const isLoading =
     options.dataSource === 'batteryHealth'
-      ? healthLoading || (needsStatus && statusLoading)
+      ? dashboardDataAvailable ? dashboardRefreshing : healthLoading || (needsStatus && statusLoading)
       : options.dataSource === 'chargingSummary'
-        ? chargingLoading
+        ? dashboardDataAvailable ? dashboardRefreshing : chargingLoading
         : options.dataSource === 'vehicleStatus'
-          ? statusLoading
+          ? dashboardDataAvailable ? dashboardRefreshing : statusLoading
           : false;
   const hasFiniteSeriesPoint = series.some(
     (point) => typeof point.value === 'number' && Number.isFinite(point.value)
@@ -643,6 +670,24 @@ function normalizeCurveSmoothing(value: number | boolean | undefined, fallback: 
   return fallback;
 }
 
+function sensorDataRequirements(instance: WidgetInstance): DashboardDataRequirements {
+  const options = readOptions(instance);
+  const metric = options.dataSource === 'metric' && options.metric ? options.metric : null;
+  return {
+    ...(metric ? {
+      metrics: [{
+        metric,
+        include_latest: true,
+        include_series: options.chartType !== 'none',
+      }],
+    } : {}),
+    ...(options.dataSource === 'batteryHealth' ? { batteryHealth: true } : {}),
+    ...(options.dataSource === 'chargingSummary' ? { chargingSummary: true } : {}),
+    ...(metric === 'avg_efficiency' ? { efficiencySummary: true } : {}),
+    ...(options.dataSource === 'vehicleStatus' || usesStatus(options) ? { status: true } : {}),
+  };
+}
+
 for (const definition of SENSOR_DEFINITIONS) {
   const cumulative = definition.cumulative === true;
   registerWidget({
@@ -684,6 +729,7 @@ for (const definition of SENSOR_DEFINITIONS) {
           ? 'Resizable sensor chip backed by the metric catalog.'
           : 'Resizable sensor chip backed by dashboard summary data.',
     },
+    dataRequirements: sensorDataRequirements,
     component: SensorChipWidget,
   });
 }

@@ -11,7 +11,7 @@ import type {
   ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
-  MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
+  MetricValueResponse, MetricBatchRequest, MetricBatchResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
   CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
   AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
   AdminUserRecord, AdminVehicleOption, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
@@ -1107,6 +1107,10 @@ class ApiClient {
       ...buildTimeframeParams(from, to, lifetime),
       bucket,
     });
+  }
+
+  async getMetricBatch(request: MetricBatchRequest): Promise<MetricBatchResponse> {
+    return this.request('POST', '/v1/metrics/batch', request);
   }
 
   async getRawTelemetry(vehicleId: string, limit = 25) {

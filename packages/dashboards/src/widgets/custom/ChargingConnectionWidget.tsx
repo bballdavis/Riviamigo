@@ -336,6 +336,7 @@ registerWidget({
   defaultSize: { w: 6, h: 6 },
   minSize: { w: 5, h: 5 },
   defaultOptions: {},
+  dataRequirements: () => ({ status: true, chargingSummary: true }),
   editor: {
     category: 'Charging',
     fixedSize: true,

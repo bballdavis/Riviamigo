@@ -5,6 +5,7 @@ import { Card } from '@riviamigo/ui/primitives';
 import { cn, formatCurrency, formatKwh, formatNumber, formatPercent } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
+import { useDashboardDataAvailable, useDashboardDataSelector } from '../../dashboardData';
 
 interface ChargingSummarySnapshot {
   session_count: number;
@@ -121,7 +122,16 @@ const definitionById = new Map(CHARGING_STAT_DEFINITIONS.map((d) => [d.id, d]));
 
 export function ChargingStatWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const definition = definitionById.get(instance.definitionId);
-  const { data: summary, isLoading } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
+  const dashboardDataAvailable = useDashboardDataAvailable();
+  const dashboardSummary = useDashboardDataSelector((snapshot) => snapshot.chargingSummary);
+  const dashboardRefreshing = useDashboardDataSelector((snapshot) => snapshot.isRefreshing) ?? false;
+  const { data: fetchedSummary, isLoading: fetchedLoading } = useChargingSummary(
+    dashboardDataAvailable ? null : ctx.vehicleId,
+    ctx.from,
+    ctx.to,
+  );
+  const summary = dashboardDataAvailable ? dashboardSummary : fetchedSummary;
+  const isLoading = dashboardDataAvailable ? dashboardRefreshing : fetchedLoading;
   const title = instance.title ?? definition?.title ?? instance.definitionId;
   const accentBorder = definition?.accentBorder ?? false;
 
@@ -180,6 +190,7 @@ for (const definition of CHARGING_STAT_DEFINITIONS) {
     title: definition.title,
     defaultSize: { w: 3, h: 2 },
     minSize: { w: 2, h: 2 },
+    dataRequirements: () => ({ chargingSummary: true }),
     component: ChargingStatWidget,
   });
 }

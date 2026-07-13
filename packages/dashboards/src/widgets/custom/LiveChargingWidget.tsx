@@ -177,5 +177,6 @@ registerWidget({
   defaultSize: { w: 8, h: 4 },
   minSize: { w: 6, h: 3 },
   defaultOptions: {},
+  dataRequirements: () => ({ status: true }),
   component: LiveChargingWidget,
 });

@@ -27,3 +27,5 @@ export type {
 export { sanitizeDashboardConfig, sanitizeWidgetInstance, sanitizeWidgetLayout } from './layout';
 export { exportDashboardYaml, downloadDashboardYaml, importDashboardYaml } from './yaml';
 export { DEFAULT_DASHBOARDS, getDefaultBySlug } from './defaults/index';
+export { DashboardDataProvider, collectDashboardDataRequirements, useDashboardDataSelector, useDashboardMetric } from './dashboardData';
+export type { DashboardDataRequirements, DashboardDataSnapshot } from './dashboardData';

@@ -19,7 +19,7 @@ export {
 export { useChargeSessions, useChargeSession, useSavedPlaces, useUpdateChargeSessionLocation, useChargeCurve, useChargeCurveAnalysis, useChargingSummary, useChargingChartSeries, useChargingSchedule, useUpdateChargingSchedule, useDepartureSchedules, useCreateDepartureSchedule, useUpdateDepartureSchedule, useDeleteDepartureSchedule, useLiveSession } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
 export { useSummaryStats } from './useStats';
-export { useMetricCatalog, useMetricValue, useMetricSeries } from './useMetrics';
+export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } from './useMetrics';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
 export { useDocumentTheme } from './useDocumentTheme';
