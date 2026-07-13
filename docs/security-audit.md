@@ -58,9 +58,9 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 - `pnpm docs:check`
 - `pnpm dashboards:sync-defaults --check`
 - `pnpm audit --prod --audit-level=high`
-- `docker compose -f infra/docker-compose.prod.yml config --quiet`
+- `docker compose --env-file .env -f compose/docker-compose.prod.yml config --quiet`
 - `docker run --rm postgres:16-bookworm pg_dump --version`
-- `docker run --rm -v <repo>/infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro nginx:1.27-alpine nginx -t`
+- `docker run --rm -v <repo>/compose/nginx/nginx.conf:/etc/nginx/nginx.conf:ro nginx:1.27-alpine nginx -t`
 
 The full API Docker image build was started after fixing the PostgreSQL client
 base image, but the isolated Rust compile exceeded the five-minute local command

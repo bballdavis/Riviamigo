@@ -30,7 +30,7 @@ playwright-report/
 test-results/
 .playwright-cli/
 *.tsbuildinfo
-infra/resolv.conf
+compose/resolv.conf
 .codex_tmp/
 
 # IDE and system
