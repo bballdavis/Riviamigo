@@ -156,6 +156,14 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByText('32 psi')).toHaveClass('border-status-danger/70');
     expect(screen.getByText('33 psi')).toHaveClass('border-status-danger/70');
     expect(screen.getByText('34 psi')).toHaveClass('border-status-danger/70');
+    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ containerType: 'inline-size' });
+    for (const label of screen.getAllByTestId('overview-tire-label')) {
+      expect(label).toHaveClass('whitespace-nowrap');
+      expect(label).toHaveStyle({
+        fontSize: 'clamp(0.5625rem, 2.125cqw, 0.6875rem)',
+        paddingInline: 'clamp(0.25rem, 1.54cqw, 0.5rem)',
+      });
+    }
     expect(screen.queryByText('To Limit')).not.toBeInTheDocument();
 
     expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);

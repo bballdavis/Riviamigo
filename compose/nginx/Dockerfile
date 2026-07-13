@@ -8,7 +8,7 @@
 #   NGINX_VERSION  (default: 1.27-alpine) — base for the final stage
 #
 # Usage (from repo root):
-#   docker build -f infra/nginx/Dockerfile -t riviamigo-web:latest .
+#   docker build -f compose/nginx/Dockerfile -t riviamigo-web:latest .
 # ---------------------------------------------------------------------------
 
 ARG NODE_VERSION=20-alpine
@@ -47,7 +47,7 @@ RUN rm -rf /etc/nginx/conf.d /usr/share/nginx/html
 COPY --from=builder /build/apps/web/dist /app/dist
 
 # Install the production nginx config
-COPY infra/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf
 
 # Nginx writes pid + temp files here; a writable tmpfs is mounted in compose
 # for read-only rootfs setups.  Only /tmp and /var/run need to be writable.

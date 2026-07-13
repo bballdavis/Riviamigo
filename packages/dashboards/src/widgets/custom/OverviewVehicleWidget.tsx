@@ -251,7 +251,16 @@ function VehicleLabel({
       content={<TireHealthTooltipContent targetTirePressurePsi={targetTirePressurePsi} />}
       contentClassName="w-64 rounded-xl border-border/80 bg-bg-elevated/95 px-3 py-3 text-xs shadow-2xl backdrop-blur"
     >
-      <span className={`rounded-lg border bg-bg-elevated/90 px-2 py-1 font-mono text-[11px] text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)}`}>{value}</span>
+      <span
+        data-testid="overview-tire-label"
+        className={`inline-flex whitespace-nowrap rounded-lg border bg-bg-elevated/90 py-1 font-mono leading-none text-fg shadow-sm backdrop-blur ${tireHealthBorderClass(tone)}`}
+        style={{
+          fontSize: 'clamp(0.5625rem, 2.125cqw, 0.6875rem)',
+          paddingInline: 'clamp(0.25rem, 1.54cqw, 0.5rem)',
+        }}
+      >
+        {value}
+      </span>
     </Tooltip>
   );
 }
@@ -297,8 +306,10 @@ function VehicleArtFrame({
   const frameWidth = Math.round(frameHeight * rotatedAspectRatio);
   return (
     <div
+      data-testid="overview-vehicle-art-frame"
       className="relative"
       style={{
+        containerType: 'inline-size',
         height: frameHeight,
         width: frameWidth,
         transform: 'translateX(-5%)',

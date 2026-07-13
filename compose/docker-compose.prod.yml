@@ -107,7 +107,7 @@ services:
     image: riviamigo-web:${IMAGE_TAG:-latest}
     build:
       context: ..
-      dockerfile: infra/nginx/Dockerfile
+      dockerfile: compose/nginx/Dockerfile
     restart: unless-stopped
     # The origin is intentionally loopback-only. Put an authenticated tunnel
     # or identity-aware reverse proxy in front of this listener; do not expose
