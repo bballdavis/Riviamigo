@@ -35,7 +35,7 @@ VITE_RIVIAMIGO_DEV_API_KEY=rmigo_REPLACE_ME
 VITE_RIVIAMIGO_API_BASE_URL=http://localhost:3001
 ```
 
-`.env.local` is gitignored; keep committed docs and `.env.example` placeholders only.
+The repository-root `.env.local` is gitignored; use `compose/.env.full.example` as the committed variable reference.
 
 Admin catalog:
 

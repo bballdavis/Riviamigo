@@ -59,6 +59,12 @@ The current internal audit evidence and release requirements are tracked in
 - `pnpm audit --prod --audit-level=high` in CI
 - Semgrep SAST on every PR (OWASP Top 10, Rust, TypeScript rules)
 
+## Release Images
+- Standard Compose pulls public API and web images from GitHub Container Registry; source builds use the explicit build overlay only.
+- Stable images use immutable Calendar Version tags and provenance attestations; `latest` is a moving convenience tag, not a reproducible deployment identifier.
+- Development images use `edge` plus immutable SHA tags. Cleanup may delete only expired SHA-only versions and never stable, current-edge, or untagged multi-architecture manifests.
+- See the [release images runbook](./runbooks/release-images.md) for package visibility, tag protection, and recovery requirements.
+
 ## Production Checklist
 - [ ] `COOKIE_INSECURE` is NOT set
 - [ ] `POSTGRES_PASSWORD` changed from default
@@ -69,3 +75,4 @@ The current internal audit evidence and release requirements are tracked in
 - [ ] Riviamigo listens only on `127.0.0.1:8080` or an equivalent private Docker network
 - [ ] Redis is reachable only on a private/internal network
 - [ ] Firewall blocks API, PostgreSQL, Redis, and origin ports from external access
+- [ ] `IMAGE_TAG` is pinned to an exact Calendar Version when repeatability matters

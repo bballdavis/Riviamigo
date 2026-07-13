@@ -15,6 +15,14 @@ Settings actions target the row they appear on:
 - **Duplicate** creates an independent personal dashboard from an existing personal dashboard.
 - **Export** downloads the selected row as YAML, including conditional visibility rules.
 
+## Chart picker defaults
+
+Chart widgets can be switched temporarily from their chart picker. To keep the
+currently selected chart for that widget, open the picker again and choose
+**Set as default**. The choice is stored in this browser for that dashboard
+component and returns after a reload; it does not change other chart widgets or
+sync to another browser.
+
 ## Reset, delete, and restore
 
 The recovery action depends on who owns the row:

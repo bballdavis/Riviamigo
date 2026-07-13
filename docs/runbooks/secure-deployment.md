@@ -15,7 +15,7 @@ the gateway itself is operated and patched by the self-hoster.
 
 ## Required production configuration
 
-- Set `RIVIAMIGO_ENV=production`.
+- The standard Compose stack defaults to `RIVIAMIGO_ENV=production`; do not override it for a shared deployment.
 - Supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` from a secret
   manager or protected deployment environment. Production startup fails when
   any value is absent.
@@ -39,12 +39,12 @@ the gateway itself is operated and patched by the self-hoster.
 
 ## Verification
 
-1. Run `docker compose --env-file .env -f compose/docker-compose.prod.yml config` and confirm
+1. Run `docker compose --env-file .env -f compose/docker-compose.yml config` and confirm
    nginx publishes only `127.0.0.1:8080:8080`.
 2. Start the stack and check `curl http://127.0.0.1:8080/health` locally.
 3. Confirm external access is denied by the gateway before reaching Riviamigo,
    then authenticate through the gateway and sign in to Riviamigo.
-4. Confirm `docker compose --env-file .env -f compose/docker-compose.prod.yml ps` shows no host
+4. Confirm `docker compose --env-file .env -f compose/docker-compose.yml ps` shows no host
    mapping for API, TimescaleDB, or Redis.
 5. Run `pnpm docs:check` and the security test suite before upgrading a shared
    instance.

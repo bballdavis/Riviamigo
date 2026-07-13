@@ -11,6 +11,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
+import { getDefaultBySlug } from '@riviamigo/dashboards';
 import { getProjectedRangeMileageYRange } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
 const originalMatchMedia = window.matchMedia;
@@ -33,6 +34,7 @@ function setMatchMedia(mobile = false, portrait = false) {
 
 beforeEach(() => {
   setMatchMedia(false);
+  localStorage.clear();
 });
 
 afterEach(() => {
@@ -60,6 +62,38 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
+  it('uses projected range by mileage as the Overview app default', () => {
+    const overview = getDefaultBySlug('dashboard');
+    const chart = overview?.widgets.find((widget) => widget.definitionId === 'catalog');
+
+    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('projected-range-mileage');
+  });
+
+  it('persists an explicitly selected default for this component across remounts', () => {
+    const instance = {
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    };
+    const ctx = { ...CTX, dashboardSlug: 'dashboard' };
+    const firstRender = renderWidget(instance, ctx);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    fireEvent.click(screen.getByRole('option', { name: /projected range by mileage/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set as default' }));
+    expect(screen.getByRole('button', { name: 'Default chart' })).toBeDisabled();
+
+    firstRender.unmount();
+    renderWidget(instance, ctx);
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+  });
+
   it('shows smoothing settings without a chart picker and reveals the slider after toggle-on', () => {
     const instance = {
       ...makeInstance('soc-history', false),

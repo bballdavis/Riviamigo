@@ -1,0 +1,93 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.26.3-pg16
+    environment:
+      POSTGRES_DB: riviamigo
+      POSTGRES_USER: riviamigo
+      POSTGRES_PASSWORD: devpassword
+    ports:
+      - "${DEV_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U riviamigo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${DEV_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  garage:
+    image: dxflrs/garage:v1.0.0
+    command: ["/garage", "-c", "/config/garage.toml", "server"]
+    ports:
+      - "${DEV_GARAGE_PORT:-3900}:3900"
+      - "${DEV_GARAGE_ADMIN_PORT:-3903}:3903"
+    volumes:
+      - ./garage.toml:/config/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    healthcheck:
+      test: ["CMD", "/garage", "-c", "/config/garage.toml", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "${DEV_API_PORT:-3001}:3001"
+    environment:
+      DATABASE_URL: postgresql://riviamigo:devpassword@timescaledb:5432/riviamigo
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY: GKdeadbeef0000000000000000000000
+      S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
+      PORT: ${DEV_API_PORT:-3001}
+      ALLOWED_ORIGINS: ${DEV_WEB_ORIGINS:-http://localhost:5173}
+      COOKIE_INSECURE: "1"
+      RIVIAMIGO_ENV: development
+      RUST_LOG: riviamigo_api=info,tower_http=info
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+volumes:
+  timescaledb_data:
+  garage_meta:
+  garage_data:

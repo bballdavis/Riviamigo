@@ -10,7 +10,7 @@ The first update can take a little while, especially if the vehicle is asleep. R
 
 ## Troubleshooting
 
-- Watch the API logs with `docker compose --env-file .env -f compose/docker-compose.prod.yml logs -f api`.
+- Watch the API logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f api`.
 - If authentication expires, remove the vehicle in Settings and add it again.
 - If an OTP does not arrive, confirm the phone number on the Rivian account and retry from Settings.
 

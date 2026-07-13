@@ -9,6 +9,7 @@ interface MobileChartViewerProps {
   chartTitle: string;
   chartOptions: ChartPickerOption[];
   onChartChange: (chartId: string) => void;
+  chartFooter?: React.ReactNode;
   onClose: () => void;
   children: (height: number) => React.ReactNode;
 }
@@ -18,6 +19,7 @@ export function MobileChartViewer({
   chartTitle,
   chartOptions,
   onChartChange,
+  chartFooter,
   onClose,
   children,
 }: MobileChartViewerProps) {
@@ -217,6 +219,7 @@ export function MobileChartViewer({
               searchValue=""
               onSearchChange={() => undefined}
               selectLabel="Choose chart"
+              footer={chartFooter}
             />
           ) : (
             <p className="max-w-[min(16rem,calc(100vw-8rem))] truncate rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm font-semibold text-fg shadow-sm">{chartTitle}</p>

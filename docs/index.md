@@ -42,6 +42,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 | [`docs/runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md) | maintainers and agents | doc publishing or drift-prevention workflow changes | user guides, contributing |
 | [`docs/runbooks/vehicle-history-rebuild.md`](./runbooks/vehicle-history-rebuild.md) | maintainers and agents | rebuild steps, trip enrichment behavior, or post-replay verification changes | backend data flow, metrics reference |
 | [`docs/runbooks/secure-deployment.md`](./runbooks/secure-deployment.md) | self-hosters and maintainers | public exposure boundary, gateway requirements, or production secret behavior changes | security, deployment guide |
+| [`docs/runbooks/release-images.md`](./runbooks/release-images.md) | maintainers | release, GHCR image, provenance, or retention behavior changes | deployment guide, security audit |
 | [`docs/decision-log.md`](./decision-log.md) | maintainers and future contributors | durable repo/process decisions are made | contributing, architecture |
 
 ## User-Facing Documentation

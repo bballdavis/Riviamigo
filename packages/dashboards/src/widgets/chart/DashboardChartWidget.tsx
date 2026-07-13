@@ -1,6 +1,6 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, SlidersHorizontal, X } from 'lucide-react';
+import { Check, Maximize2, SlidersHorizontal, Star, X } from 'lucide-react';
 import {
   useBatteryMileage,
   useChargeCurve,
@@ -93,8 +93,45 @@ const LEGACY_CHART_ID_ALIASES: Record<string, string> = {
   'range-history': 'soc-history',
 };
 
+const CHART_DEFAULTS_STORAGE_KEY = 'rm-dashboard-chart-defaults';
+
 function normalizeChartId(chartId: string) {
   return LEGACY_CHART_ID_ALIASES[chartId] ?? chartId;
+}
+
+function chartDefaultStorageKey(ctx: WidgetCtx, instance: WidgetInstance) {
+  return `${ctx.dashboardSlug ?? 'dashboard'}:${instance.id}`;
+}
+
+function readStoredChartDefault(storageKey: string, validIds: readonly string[], fallback: string) {
+  if (typeof window === 'undefined') return fallback;
+
+  try {
+    const raw = window.localStorage.getItem(CHART_DEFAULTS_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    const value = (parsed as Record<string, unknown>)[storageKey];
+    return typeof value === 'string' && validIds.includes(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveStoredChartDefault(storageKey: string, chartId: string) {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const raw = window.localStorage.getItem(CHART_DEFAULTS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    const stored = parsed && typeof parsed === 'object'
+      ? { ...(parsed as Record<string, unknown>) }
+      : {};
+    stored[storageKey] = chartId;
+    window.localStorage.setItem(CHART_DEFAULTS_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // Preferences are best-effort when storage is unavailable or full.
+  }
 }
 
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
@@ -138,7 +175,15 @@ const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
-  const [chartId, setChartId] = React.useState(options.chartId);
+  const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
+  const chartIdsSignature = options.chartIds.join('|');
+  const [chartId, setChartId] = React.useState(() => (
+    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId)
+  ));
+  const [defaultChartId, setDefaultChartId] = React.useState(() => (
+    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId)
+  ));
+  const previousDefaultStorageKeyRef = React.useRef(defaultStorageKey);
   const [search, setSearch] = React.useState('');
   // smoothing: 0 = off, >0 = smoothing amount (0–1)
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
@@ -150,10 +195,14 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
-    if (!options.chartIds.includes(chartId)) {
-      setChartId(options.chartId);
-    }
-  }, [chartId, options.chartId, options.chartIds]);
+    const storedDefault = readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId);
+    setDefaultChartId(storedDefault);
+    setChartId((current) => {
+      if (previousDefaultStorageKeyRef.current !== defaultStorageKey) return storedDefault;
+      return options.chartIds.includes(current) ? current : storedDefault;
+    });
+    previousDefaultStorageKeyRef.current = defaultStorageKey;
+  }, [defaultStorageKey, options.chartId, chartIdsSignature]);
 
   React.useEffect(() => {
     setDraftChartSettings(options.chartSettings);
@@ -163,6 +212,8 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const activeChartDefinition = getChartDefinition(activeChartId);
   const activeCapabilities = activeChartDefinition ? getChartSettingsCapabilities(activeChartDefinition) : EMPTY_CAPABILITIES;
   const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyCurveSmoothing);
+  const activeChartTitle = activeChartDefinition?.title ?? instance.title ?? 'Chart';
+  const isActiveChartDefault = activeChartId === defaultChartId;
   const smoothing = activeSettings.smoothing;
   const smoothingOn = smoothing > 0;
   const smoothingTrackPercent = Math.min(
@@ -187,6 +238,32 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
       ...current,
       smoothing: normalizeCurveSmoothing(resolvedNext),
     }));
+  }
+
+  function setActiveChartAsDefault() {
+    saveStoredChartDefault(defaultStorageKey, activeChartId);
+    setDefaultChartId(activeChartId);
+  }
+
+  function renderChartDefaultAction() {
+    return (
+      <button
+        type="button"
+        aria-label={isActiveChartDefault ? 'Default chart' : 'Set as default'}
+        title={isActiveChartDefault ? `${activeChartTitle} is the default chart` : `Set ${activeChartTitle} as the default chart`}
+        disabled={isActiveChartDefault}
+        onClick={setActiveChartAsDefault}
+        className={cn(
+          'flex h-9 w-full items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors',
+          isActiveChartDefault
+            ? 'cursor-default text-accent'
+            : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+        )}
+      >
+        {isActiveChartDefault ? <Check className="h-4 w-4" /> : <Star className="h-4 w-4" />}
+        <span>{isActiveChartDefault ? 'Default chart' : 'Set as default'}</span>
+      </button>
+    );
   }
 
   const settingsButton = (
@@ -294,6 +371,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           onSearchChange={setSearch}
           className="shrink-0"
           trailing={chartControls}
+          footer={renderChartDefaultAction()}
         />
       ) : instance.title ? (
         // Compact header: title + optional subtitle on the left, settings button on
@@ -321,7 +399,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
       <ChartSettingsPanel
         open={settingsOpen}
         triggerRef={settingsTriggerRef}
-        chartTitle={activeChartDefinition?.title ?? instance.title ?? 'Chart'}
+        chartTitle={activeChartTitle}
         capabilities={activeCapabilities}
         settings={activeSettings}
         persistent={Boolean(ctx.updateWidgetOptions)}
@@ -370,9 +448,10 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
       {viewerOpen ? (
         <MobileChartViewer
           chartId={activeChartId}
-          chartTitle={activeChartDefinition?.title ?? instance.title ?? 'Chart'}
+          chartTitle={activeChartTitle}
           chartOptions={chartOptions}
           onChartChange={setChartId}
+          chartFooter={renderChartDefaultAction()}
           onClose={() => {
             setViewerOpen(false);
             requestAnimationFrame(() => expandTriggerRef.current?.focus());

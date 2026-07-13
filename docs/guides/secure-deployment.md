@@ -14,7 +14,7 @@ applies after the gateway.
 
 ## Required configuration
 
-- Set `RIVIAMIGO_ENV=production`.
+- The standard Compose stack defaults to `RIVIAMIGO_ENV=production`; do not override it for a shared deployment.
 - Set `ALLOWED_ORIGINS` to the exact public HTTPS URL.
 - Supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` through a
   secret manager or protected deployment environment. Production startup fails

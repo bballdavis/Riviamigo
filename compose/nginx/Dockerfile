@@ -40,6 +40,8 @@ RUN pnpm --filter @riviamigo/web build
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM nginx:${NGINX_VERSION} AS runtime
 
+LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
+
 # Remove default nginx site — we supply our own config
 RUN rm -rf /etc/nginx/conf.d /usr/share/nginx/html
 
