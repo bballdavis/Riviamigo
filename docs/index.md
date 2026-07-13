@@ -25,6 +25,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 | [`docs/security-audit.md`](./security-audit.md) | maintainers and release reviewers | audit scope, findings, or release evidence changes | security, secure-deployment runbook |
 | [`docs/dashboard-data-map.md`](./dashboard-data-map.md) | telemetry and dashboard contributors | field mapping, parity targets, or dashboard contract changes | metrics reference |
 | [`docs/metrics-reference.md`](./metrics-reference.md) | backend and dashboard contributors | metrics catalog or meaning changes | dashboard data map |
+| [`docs/roadmap.md`](./roadmap.md) | contributors and users | feature priorities or parity targets change | dashboard data map, contributing |
 
 ## Visual System
 
