@@ -40,7 +40,7 @@ You only need a host that can run Docker Compose, Git, and a safe way to keep th
 Once your secrets and `.env` file are ready, bring up the self-hosted stack from the repository root:
 
 ```bash
-docker compose --env-file .env -f compose/docker-compose.prod.yml up -d --build
+docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```
 
 Open Riviamigo through your authenticated HTTPS address, create the first owner account, and connect your Rivian. The [deployment guide](./docs/guides/deployment.md) covers updates, logs, backups, and the gateway setup.

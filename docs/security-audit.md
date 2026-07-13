@@ -58,7 +58,7 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 - `pnpm docs:check`
 - `pnpm dashboards:sync-defaults --check`
 - `pnpm audit --prod --audit-level=high`
-- `docker compose --env-file .env -f compose/docker-compose.prod.yml config --quiet`
+- `docker compose --env-file .env -f compose/docker-compose.yml config --quiet`
 - `docker run --rm postgres:16-bookworm pg_dump --version`
 - `docker run --rm -v <repo>/compose/nginx/nginx.conf:/etc/nginx/nginx.conf:ro nginx:1.27-alpine nginx -t`
 

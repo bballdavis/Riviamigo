@@ -21,6 +21,8 @@ RUN touch src/lib.rs src/main.rs migrations/0001_schema_init.sql && cargo build 
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM postgres:16-bookworm AS runtime
 
+LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 curl && rm -rf /var/lib/apt/lists/*
 

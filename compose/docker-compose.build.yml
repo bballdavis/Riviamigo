@@ -1,0 +1,12 @@
+services:
+  api:
+    image: riviamigo-api:local
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+
+  nginx:
+    image: riviamigo-web:local
+    build:
+      context: ..
+      dockerfile: compose/nginx/Dockerfile

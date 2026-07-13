@@ -1,6 +1,6 @@
 # Getting started
 
-This is the quick, self-hosted path—not the developer environment. It uses the production Compose stack in [`compose/`](../../compose/).
+This is the quick, self-hosted path—not the developer environment. It pulls published images through the standard Compose stack in [`compose/`](../../compose/).
 
 ## Before you start
 
@@ -15,7 +15,7 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
    cd Riviamigo
    ```
 
-2. Create a production `.env` file. The compact Compose template contains only the values a standard install needs; set each placeholder as described in [configuration](./configuration.md). Do not commit this file.
+2. Create a `.env` file. The compact Compose template contains only the values a standard install needs; set each placeholder as described in [configuration](./configuration.md). Do not commit this file.
 
    ```bash
    cp compose/.env.example .env
@@ -24,12 +24,12 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
 3. Start the stack:
 
    ```bash
-   docker compose --env-file .env -f compose/docker-compose.prod.yml up -d --build
+   docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
 4. Put an authenticated HTTPS gateway in front of the loopback-only origin, then open that address. Your first account becomes the instance owner and can connect the first Rivian.
 
-The production stack intentionally listens only on `127.0.0.1:8080`. That is a feature: follow [secure deployment](./secure-deployment.md) before making it available outside your local network.
+The standard stack defaults to production mode and intentionally listens only on `127.0.0.1:8080`. That is a feature: follow [secure deployment](./secure-deployment.md) before making it available outside your local network.
 
 ## Next steps
 

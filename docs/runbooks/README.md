@@ -16,6 +16,8 @@ This directory is canonical for operational and process runbooks. Update it when
   How the one-off vehicle history rebuild works, what it replays, and how post-replay trip enrichment is restored.
 - [`secure-deployment.md`](./secure-deployment.md)
   Required authenticated-gateway posture, production secret requirements, and verification steps for shared instances.
+- [`release-images.md`](./release-images.md)
+  Calendar Version releases, public GHCR images, development-image retention, and recovery steps.
 
 ## When To Add A Runbook
 

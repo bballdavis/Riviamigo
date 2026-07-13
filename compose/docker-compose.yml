@@ -1,95 +1,150 @@
 services:
-  timescaledb:
-    image: timescale/timescaledb:2.26.3-pg16
-    environment:
-      POSTGRES_DB: riviamigo
-      POSTGRES_USER: riviamigo
-      POSTGRES_PASSWORD: devpassword
-    ports:
-      - "${DEV_POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - timescaledb_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U riviamigo"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${DEV_REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-
-  garage:
-    image: dxflrs/garage:v1.0.0
-    command: ["/garage", "-c", "/config/garage.toml", "server"]
-    ports:
-      - "${DEV_GARAGE_PORT:-3900}:3900"   # S3 API
-      - "${DEV_GARAGE_ADMIN_PORT:-3903}:3903"   # Admin API
-    volumes:
-      - ./garage.toml:/config/garage.toml:ro
-      - garage_meta:/var/lib/garage/meta
-      - garage_data:/var/lib/garage/data
-    healthcheck:
-      test: ["CMD", "/garage", "-c", "/config/garage.toml", "status"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-
   api:
-    build:
-      context: ../apps/api
-      dockerfile: Dockerfile
-    ports:
-      - "${DEV_API_PORT:-3001}:3001"
+    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://riviamigo:devpassword@timescaledb:5432/riviamigo
-      REDIS_URL: redis://redis:6379
-      S3_ENDPOINT: http://garage:3900
-      S3_ACCESS_KEY: GKdeadbeef0000000000000000000000
-      S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
-      PORT: ${DEV_API_PORT:-3001}
-      ALLOWED_ORIGINS: ${DEV_WEB_ORIGINS:-http://localhost:5173}
-      COOKIE_INSECURE: "1"
-      RUST_LOG: riviamigo_api=info,tower_http=info
-      # JWT_SECRET, JWT_PUBLIC_KEY, AGE_ENCRYPTION_KEY are intentionally omitted.
-      # On first boot the API auto-generates an RSA-2048 keypair and age X25519 key
-      # and stores them in the system_config table. Set these vars to override.
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      AGE_ENCRYPTION_KEY: ${AGE_ENCRYPTION_KEY}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      RUST_LOG: ${RUST_LOG:-info}
+      BACKUP_DRIVER: ${BACKUP_DRIVER:-pg_dump}
+      BACKUP_ARTIFACT_DIR: ${BACKUP_ARTIFACT_DIR:-/tmp/riviamigo-backups}
+      BACKUP_POLL_INTERVAL_SECONDS: ${BACKUP_POLL_INTERVAL_SECONDS:-60}
+      VEHICLE_IMAGE_CACHE_DIR: ${VEHICLE_IMAGE_CACHE_DIR:-/tmp/riviamigo-vehicle-image-cache}
+      RIVIAN_WS_RECONNECT_INITIAL_SECONDS: ${RIVIAN_WS_RECONNECT_INITIAL_SECONDS:-10}
+      RIVIAN_WS_RECONNECT_MAX_SECONDS: ${RIVIAN_WS_RECONNECT_MAX_SECONDS:-900}
+      RIVIAN_RAW_EVENT_RETENTION_DAYS: ${RIVIAN_RAW_EVENT_RETENTION_DAYS:-7}
+      RIVIAN_PERSIST_RAW_EVENTS: ${RIVIAN_PERSIST_RAW_EVENTS:-true}
+      RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY: ${RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY:-true}
+      RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE: ${RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE:-30}
+      RATE_LIMIT_AUTH_PUBLIC_BURST: ${RATE_LIMIT_AUTH_PUBLIC_BURST:-10}
+      RATE_LIMIT_AUTH_METADATA_PER_MINUTE: ${RATE_LIMIT_AUTH_METADATA_PER_MINUTE:-1200}
+      RATE_LIMIT_AUTH_METADATA_BURST: ${RATE_LIMIT_AUTH_METADATA_BURST:-120}
+      RATE_LIMIT_AUTH_READ_PER_MINUTE: ${RATE_LIMIT_AUTH_READ_PER_MINUTE:-900}
+      RATE_LIMIT_AUTH_READ_BURST: ${RATE_LIMIT_AUTH_READ_BURST:-180}
+      RATE_LIMIT_AUTH_WRITE_PER_MINUTE: ${RATE_LIMIT_AUTH_WRITE_PER_MINUTE:-240}
+      RATE_LIMIT_AUTH_WRITE_BURST: ${RATE_LIMIT_AUTH_WRITE_BURST:-60}
+      RATE_LIMIT_HEAVY_READ_PER_MINUTE: ${RATE_LIMIT_HEAVY_READ_PER_MINUTE:-300}
+      RATE_LIMIT_HEAVY_READ_BURST: ${RATE_LIMIT_HEAVY_READ_BURST:-90}
+      RIVIAMIGO_ENV: ${RIVIAMIGO_ENV:-production}
     depends_on:
       timescaledb:
         condition: service_healthy
       redis:
         condition: service_healthy
-      garage:
-        condition: service_healthy
-    restart: unless-stopped
+    networks:
+      - internal
+      - proxy
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     deploy:
       resources:
         limits:
           cpus: '1.0'
           memory: 512M
+        reservations:
+          memory: 128M
+
+  timescaledb:
+    image: timescale/timescaledb:2.26.3-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: riviamigo
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d riviamigo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  nginx:
+    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
+    networks:
+      - internal
+      - proxy
+    depends_on:
+      - api
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          memory: 32M
 
 volumes:
-  timescaledb_data:
-  garage_meta:
-  garage_data:
+  pgdata:
+
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  proxy:
+    driver: bridge
