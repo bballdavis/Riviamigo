@@ -17,11 +17,11 @@ Settings actions target the row they appear on:
 
 ## Chart picker defaults
 
-Chart widgets can be switched temporarily from their chart picker. To keep the
-currently selected chart for that widget, open the picker again and choose
-**Set as default**. The choice is stored in this browser for that dashboard
-component and returns after a reload; it does not change other chart widgets or
-sync to another browser.
+Chart widgets can be switched temporarily from their chart picker. To keep a
+chart as the default for that widget, hover its row and click the favorite star.
+The choice is stored in this browser for that dashboard component and returns
+after a reload; it does not change other chart widgets or sync to another
+browser.
 
 ## Reset, delete, and restore
 
