@@ -78,7 +78,7 @@ Repo docs are canonical. The GitHub Wiki is a published mirror for selected user
   Audience: engineering contributors making structural changes.
 - `docs/runbooks/*`
   Audience: maintainers troubleshooting or updating operations/process.
-- `docs/wiki-drafts/*`
+- `docs/guides/*`
   Audience: self-hosters and end users. These drafts are authored in-repo and mirrored to the Wiki.
 
 ### When docs must be updated
@@ -98,7 +98,7 @@ Update docs in the same change when you modify:
 - `docs/branding.md`: canonical visual language and UI rules
 - `docs/architecture/*`: stable architecture and data-flow guidance
 - `docs/runbooks/*`: operational playbooks and recurring maintenance
-- `docs/wiki-drafts/*`: curated user-facing material only
+- `docs/guides/*`: curated user-facing material only
 
 ## Living Docs Workflow
 
@@ -125,7 +125,7 @@ If implementation must land before final docs:
 
 ### Publishing model
 
-- Author user-facing pages in `docs/wiki-drafts/`
+- Author user-facing pages in `docs/guides/`
 - Validate draft publishability with `scripts/publish-wiki.sh --validate-only`
 - Publish to the GitHub Wiki with `scripts/publish-wiki.sh` after review
 - Do not edit the GitHub Wiki directly
@@ -148,4 +148,4 @@ pnpm -C apps/web exec vitest run src/test/<file>.test.tsx
 - Docs hub: `docs/index.md`
 - Visual system: `docs/branding.md`
 - Dashboard docs: `docs/frontend/dashboard-architecture.md`, `docs/frontend/dashboard-authoring.md`
-- User-facing docs source: `docs/wiki-drafts/README.md`
+- User-facing docs source: `docs/guides/README.md`

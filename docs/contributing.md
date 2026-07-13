@@ -72,7 +72,7 @@ Dependency and secret failures are release blockers. Semgrep and Trivy are curre
 
 - Run `pnpm docs:check` when docs, env vars, routes, or publishing workflow changes.
 - Run the focused tests closest to the changed seam.
-- Keep user-facing docs in `docs/wiki-drafts/`; do not author in the GitHub Wiki UI.
+- Keep user-facing docs in `docs/guides/`; do not author in the GitHub Wiki UI.
 
 ## Doc Debt
 

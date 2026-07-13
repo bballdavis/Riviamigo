@@ -17,7 +17,7 @@ const mode = value('--mode') ?? 'all';
 const productionEnv = value('--production-env');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
-const compose = ['compose', '-p', project, '-f', 'infra/docker-compose.prod.yml'];
+const compose = ['compose', '-p', project, '-f', 'compose/docker-compose.prod.yml'];
 let productionStarted = false;
 let productionEnvironment;
 

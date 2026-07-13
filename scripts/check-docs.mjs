@@ -14,11 +14,12 @@ const requiredFiles = [
   "docs/security.md",
   "docs/security-audit.md",
   "docs/roadmap.md",
+  "docs/privacy.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
   "docs/runbooks/README.md",
   "docs/runbooks/documentation-maintenance.md",
-  "docs/wiki-drafts/README.md",
+  "docs/guides/README.md",
   "scripts/publish-wiki.sh",
 ];
 
@@ -33,11 +34,12 @@ const docsFilesToCheck = [
   "docs/security.md",
   "docs/security-audit.md",
   "docs/roadmap.md",
+  "docs/privacy.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
   "docs/runbooks/README.md",
   "docs/runbooks/documentation-maintenance.md",
-  "docs/wiki-drafts/README.md",
+  "docs/guides/README.md",
 ];
 
 const routeSlugs = [
@@ -68,21 +70,16 @@ const requiredApiRouteFiles = [
   "health.rs",
 ];
 
-const requiredWikiDrafts = [
-  "00-Home.md",
-  "01-Feature-Overview.md",
-  "02-Quick-Start.md",
-  "03-Prerequisites.md",
-  "04-Architecture-Summary.md",
-  "05-Coding-Conventions.md",
-  "06-Development-Setup.md",
-  "10-Environment-Variables.md",
-  "11-Docker-Compose-Deployment.md",
-  "12-Rivian-Account-Setup.md",
-  "13-API-Keys.md",
-  "14-Grafana-Integration.md",
-  "15-Backup-and-Restore.md",
-  "16-Secure-Deployment.md",
+const requiredGuides = [
+  "README.md",
+  "features.md",
+  "getting-started.md",
+  "prerequisites.md",
+  "configuration.md",
+  "deployment.md",
+  "rivian-account.md",
+  "backup-and-restore.md",
+  "secure-deployment.md",
 ];
 
 function fail(message) {
@@ -156,22 +153,22 @@ function checkMarkdownLinks() {
   }
 }
 
-function checkWikiDrafts() {
-  const wikiDir = path.join(repoRoot, "docs/wiki-drafts");
-  const existing = new Set(fs.readdirSync(wikiDir));
-  for (const fileName of requiredWikiDrafts) {
+function checkGuides() {
+  const guidesDir = path.join(repoRoot, "docs/guides");
+  const existing = new Set(fs.readdirSync(guidesDir));
+  for (const fileName of requiredGuides) {
     if (!existing.has(fileName)) {
-      fail(`missing required wiki draft: docs/wiki-drafts/${fileName}`);
+      fail(`missing required guide: docs/guides/${fileName}`);
     }
   }
 
-  const draftFiles = [...existing].filter((name) => name.endsWith(".md") && name !== "README.md");
+  const guideFiles = [...existing].filter((name) => name.endsWith(".md") && name !== "README.md");
   const publishedNames = new Map();
-  for (const fileName of draftFiles) {
-    const publishedName = fileName.replace(/^[0-9]+-/, "");
+  for (const fileName of guideFiles) {
+    const publishedName = fileName;
     const prior = publishedNames.get(publishedName);
     if (prior) {
-      fail(`wiki draft publish collision: ${prior} and ${fileName} both map to ${publishedName}`);
+      fail(`guide publish collision: ${prior} and ${fileName} both map to ${publishedName}`);
     }
     publishedNames.set(publishedName, fileName);
   }
@@ -214,7 +211,7 @@ function checkEnvVarReferences() {
     "docs/index.md",
     "docs/contributing.md",
     "docs/runbooks/documentation-maintenance.md",
-    "docs/wiki-drafts/10-Environment-Variables.md",
+    "docs/guides/configuration.md",
   ];
 
   for (const relativePath of docFiles) {
@@ -236,8 +233,8 @@ function checkEnvVarReferences() {
 }
 
 function checkProductionDeploymentContract() {
-  const productionCompose = readFile("infra/docker-compose.prod.yml");
-  const nginxConfig = readFile("infra/nginx/nginx.conf");
+  const productionCompose = readFile("compose/docker-compose.prod.yml");
+  const nginxConfig = readFile("compose/nginx/nginx.conf");
 
   for (const requiredSnippet of [
     '"127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
@@ -267,7 +264,7 @@ function checkProductionDeploymentContract() {
 
 checkRequiredFiles();
 checkMarkdownLinks();
-checkWikiDrafts();
+checkGuides();
 checkRouteContracts();
 checkApiContracts();
 checkEnvVarReferences();

@@ -10,7 +10,7 @@ body:
     attributes:
       label: Missing documentation
       description: State exactly which canonical docs or wiki drafts still need to be updated.
-      placeholder: docs/branding.md, docs/wiki-drafts/02-Quick-Start.md
+      placeholder: docs/branding.md, docs/guides/getting-started.md
     validations:
       required: true
   - type: textarea
