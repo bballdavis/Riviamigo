@@ -30,5 +30,5 @@ applies after the gateway.
   `http://127.0.0.1:8080`.
 - Keep the gateway patched and apply its own Internet-facing rate limits.
 
-See the repository's `docs/runbooks/secure-deployment.md` for maintainer
-verification steps.
+For the maintainer verification checklist, see the repository's
+[secure-deployment runbook](../runbooks/secure-deployment.md).
