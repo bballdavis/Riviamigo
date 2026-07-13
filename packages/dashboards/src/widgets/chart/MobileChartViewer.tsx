@@ -57,8 +57,27 @@ export function MobileChartViewer({
   }, []);
 
   React.useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
+    const scrollY = window.scrollY;
+    const previousDocumentOverflow = document.documentElement.style.overflow;
+    const previousDocumentOverscroll = document.documentElement.style.overscrollBehavior;
+    const previousBodyStyles = {
+      overflow: document.body.style.overflow,
+      overscrollBehavior: document.body.style.overscrollBehavior,
+      position: document.body.style.position,
+      top: document.body.style.top,
+      width: document.body.style.width,
+    };
+    const appRoot = document.getElementById('root');
+    const previousInert = appRoot?.inert;
+
+    document.documentElement.style.overflow = 'hidden';
+    document.documentElement.style.overscrollBehavior = 'none';
     document.body.style.overflow = 'hidden';
+    document.body.style.overscrollBehavior = 'none';
+    document.body.style.position = 'fixed';
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.width = '100%';
+    if (appRoot) appRoot.inert = true;
     closeRef.current?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -84,7 +103,15 @@ export function MobileChartViewer({
     }
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.documentElement.style.overflow = previousDocumentOverflow;
+      document.documentElement.style.overscrollBehavior = previousDocumentOverscroll;
+      document.body.style.overflow = previousBodyStyles.overflow;
+      document.body.style.overscrollBehavior = previousBodyStyles.overscrollBehavior;
+      document.body.style.position = previousBodyStyles.position;
+      document.body.style.top = previousBodyStyles.top;
+      document.body.style.width = previousBodyStyles.width;
+      if (appRoot) appRoot.inert = previousInert ?? false;
+      if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
     };
@@ -99,9 +126,9 @@ export function MobileChartViewer({
       aria-modal="true"
       aria-label={`${chartTitle} expanded chart`}
       data-mobile-chart-viewer="true"
-      className="fixed inset-0 z-[100] flex min-h-[100dvh] flex-col bg-bg px-[max(0.75rem,env(safe-area-inset-left))] pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))]"
+      className="fixed inset-0 z-[100] isolate h-[100dvh] w-[100dvw] overflow-hidden overscroll-none bg-bg-page touch-none"
     >
-      <div className="flex shrink-0 items-center justify-between gap-3 pb-3">
+      <div className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] z-30">
         {chartOptions.length > 1 ? (
           <ChartPicker
             variant="compact"
@@ -113,21 +140,21 @@ export function MobileChartViewer({
             selectLabel="Choose chart"
           />
         ) : (
-          <p className="min-w-0 truncate text-sm font-semibold text-fg">{chartTitle}</p>
+          <p className="max-w-[min(16rem,calc(100vw-8rem))] truncate rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm font-semibold text-fg shadow-sm">{chartTitle}</p>
         )}
-        <button
-          ref={closeRef}
-          type="button"
-          onClick={close}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
-          aria-label="Close expanded chart"
-        >
-          <X className="h-5 w-5" />
-        </button>
       </div>
+      <button
+        ref={closeRef}
+        type="button"
+        onClick={close}
+        className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+        aria-label="Close expanded chart"
+      >
+        <X className="h-5 w-5" />
+      </button>
 
       {isPortrait ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-6 rounded-2xl border border-accent bg-accent p-8 text-center text-fg-on-accent shadow-glow-button">
+        <div className="m-[max(0.75rem,env(safe-area-inset-top))] flex h-[calc(100%-1.5rem)] flex-col items-center justify-center gap-6 rounded-2xl border border-accent bg-accent p-8 text-center text-fg-on-accent shadow-glow-button">
           <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-fg-on-accent/35 bg-fg-on-accent/10 shadow-sm">
             <RotateCw className="h-12 w-12" strokeWidth={2.5} aria-hidden="true" />
             <Maximize2 className="absolute -bottom-1 -right-1 h-7 w-7 rounded-full border border-accent bg-bg-surface p-1 text-accent shadow-sm" aria-hidden="true" />
@@ -138,7 +165,7 @@ export function MobileChartViewer({
           </div>
         </div>
       ) : (
-        <div className={cn('min-h-0 flex-1', chartOptions.length > 1 && 'pt-1')} data-chart-presentation="mobile-viewer">
+        <div className={cn('h-full w-full', chartOptions.length > 1 && 'pt-1')} data-chart-presentation="mobile-viewer">
           {children(chartHeight)}
         </div>
       )}
@@ -153,5 +180,6 @@ function isPortraitViewport() {
 
 function getChartHeight() {
   if (typeof window === 'undefined') return 320;
-  return Math.max(240, window.innerHeight - 76);
+  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  return Math.max(240, Math.floor(viewportHeight - 16));
 }

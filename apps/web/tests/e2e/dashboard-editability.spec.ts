@@ -254,6 +254,19 @@ test.describe('mobile dashboard chart viewer', () => {
 
     await page.setViewportSize({ width: 844, height: 390 });
     await expect(page.locator('[data-mobile-chart-viewer="true"]')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => ({
+      viewerBackground: getComputedStyle(document.querySelector('[data-mobile-chart-viewer="true"]')!).backgroundColor,
+      viewerTouchAction: getComputedStyle(document.querySelector('[data-mobile-chart-viewer="true"]')!).touchAction,
+      documentOverflow: getComputedStyle(document.documentElement).overflow,
+      bodyPosition: getComputedStyle(document.body).position,
+      appInert: document.getElementById('root')?.inert,
+    }))).toEqual(expect.objectContaining({
+      viewerBackground: expect.not.stringMatching(/transparent|rgba\(0,\s*0,\s*0,\s*0\)/),
+      viewerTouchAction: 'none',
+      documentOverflow: 'hidden',
+      bodyPosition: 'fixed',
+      appInert: true,
+    }));
     await page.getByRole('button', { name: 'Choose chart' }).click();
     await page.getByRole('option', { name: 'Efficiency by Temperature' }).click();
 
@@ -270,6 +283,14 @@ test.describe('mobile dashboard chart viewer', () => {
     }
     await page.getByRole('button', { name: 'Close expanded chart' }).click();
     await expect(page.locator('[data-mobile-chart-viewer="true"]')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => ({
+      documentOverflow: getComputedStyle(document.documentElement).overflow,
+      bodyPosition: getComputedStyle(document.body).position,
+      appInert: document.getElementById('root')?.inert,
+    }))).toEqual(expect.objectContaining({
+      bodyPosition: 'static',
+      appInert: false,
+    }));
   });
 });
 

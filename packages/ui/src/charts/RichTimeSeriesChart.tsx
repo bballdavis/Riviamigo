@@ -841,7 +841,8 @@ export function RichTimeSeriesChart({
   return (
     <div
       className={cn(
-        'relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-bg-elevated/40',
+        'relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-border',
+        interactionMode === 'touch-explore' ? 'bg-bg-surface shadow-xl' : 'bg-bg-elevated/40',
         className,
       )}
       style={{ height }}
@@ -856,7 +857,7 @@ export function RichTimeSeriesChart({
             if (!chart || values.length < 2) return;
             chart.setScale('x', { min: xRange?.[0] ?? values[0]!, max: xRange?.[1] ?? values[values.length - 1]! });
           }}
-          className="absolute right-2 top-2 z-20 rounded-md border border-border bg-bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-fg shadow-sm transition-colors hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-accent"
+          className="absolute bottom-3 right-3 z-20 rounded-md border border-border bg-bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-fg shadow-sm transition-colors hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-accent"
         >
           Reset zoom
         </button>
