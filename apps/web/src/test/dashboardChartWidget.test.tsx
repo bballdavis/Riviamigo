@@ -83,10 +83,10 @@ describe('DashboardChartWidget - smoothing controls', () => {
     const firstRender = renderWidget(instance, ctx);
 
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
-    fireEvent.click(screen.getByRole('option', { name: /projected range by mileage/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Set as default' }));
-    expect(screen.getByRole('button', { name: 'Default chart' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'State of Charge is the default chart' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' }));
+    expect(screen.getByRole('button', { name: 'Projected Range by Mileage is the default chart' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
 
     firstRender.unmount();
     renderWidget(instance, ctx);

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Check, ChevronDown, Search } from 'lucide-react';
+import { Check, ChevronDown, Search, Star } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export interface ChartPickerOption {
@@ -17,7 +17,8 @@ export interface ChartPickerProps<TValue extends string = string> {
   selectLabel?: string;
   className?: string;
   trailing?: React.ReactNode;
-  footer?: React.ReactNode;
+  defaultValue?: TValue;
+  onSetDefault?: (value: TValue) => void;
   variant?: 'default' | 'compact';
 }
 
@@ -31,7 +32,8 @@ export function ChartPicker<TValue extends string = string>({
   selectLabel = 'Chart',
   className,
   trailing,
-  footer,
+  defaultValue,
+  onSetDefault,
   variant = 'default',
 }: ChartPickerProps<TValue>) {
   const [isOpen, setIsOpen] = React.useState(false);
@@ -71,6 +73,33 @@ export function ChartPicker<TValue extends string = string>({
     setIsOpen(false);
   }
 
+  function renderDefaultButton(option: ChartPickerOption & { value: TValue }) {
+    if (!onSetDefault) return null;
+    const isDefault = option.value === defaultValue;
+    return (
+      <button
+        type="button"
+        aria-label={isDefault ? `${option.label} is the default chart` : `Set ${option.label} as default`}
+        title={isDefault ? 'Default chart' : `Set ${option.label} as default`}
+        aria-pressed={isDefault}
+        disabled={isDefault}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSetDefault(option.value);
+        }}
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+          'sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100',
+          isDefault
+            ? 'text-accent sm:opacity-100'
+            : 'text-fg-tertiary hover:bg-bg-elevated hover:text-accent',
+        )}
+      >
+        <Star className="h-4 w-4" fill={isDefault ? 'currentColor' : 'none'} />
+      </button>
+    );
+  }
+
   if (variant === 'compact') {
     return (
       <div ref={rootRef} className={cn('relative', className)}>
@@ -94,25 +123,29 @@ export function ChartPicker<TValue extends string = string>({
               {options.map((option) => {
                 const isSelected = option.value === value;
                 return (
-                  <button
+                  <div
                     key={option.value}
-                    type="button"
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => handleSelect(option.value)}
                     className={cn(
-                      'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm text-fg transition-colors',
-                      'hover:bg-bg-elevated focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+                      'group flex w-full items-center justify-between gap-1 rounded-md text-sm text-fg transition-colors',
+                      'hover:bg-bg-elevated',
                       isSelected && 'bg-accent/10 text-accent',
                     )}
                   >
-                    <span className="truncate">{option.label}</span>
-                    {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                  </button>
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                    >
+                      <span className="truncate">{option.label}</span>
+                      {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                    </button>
+                    {renderDefaultButton(option)}
+                  </div>
                 );
               })}
             </div>
-            {footer ? <div className="mt-1 border-t border-border pt-1">{footer}</div> : null}
           </div>
         ) : null}
       </div>
@@ -169,28 +202,32 @@ export function ChartPicker<TValue extends string = string>({
               visibleOptions.map((option) => {
                 const isSelected = option.value === value;
                 return (
-                  <button
+                  <div
                     key={option.value}
-                    type="button"
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => handleSelect(option.value)}
                     className={cn(
-                      'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm text-fg transition-all',
-                      'hover:-mx-1 hover:w-[calc(100%+0.5rem)] hover:bg-bg-elevated hover:px-4',
+                      'group flex w-full items-center justify-between gap-1 rounded-md text-sm text-fg transition-all',
+                      'hover:bg-bg-elevated',
                       isSelected && 'bg-accent/10 text-accent',
                     )}
                   >
-                    <span className="truncate">{option.label}</span>
-                    {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                  </button>
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md px-3 py-2 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                    >
+                      <span className="truncate">{option.label}</span>
+                      {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                    </button>
+                    {renderDefaultButton(option)}
+                  </div>
                 );
               })
             ) : (
               <div className="px-3 py-3 text-sm text-fg-tertiary">No charts found</div>
             )}
           </div>
-          {footer ? <div className="mt-1 border-t border-border pt-1">{footer}</div> : null}
         </div>
       ) : null}
     </div>
