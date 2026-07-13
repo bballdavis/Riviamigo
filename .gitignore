@@ -50,4 +50,7 @@ pnpm-debug.log*
 # AI agent local state (not project config — CLAUDE.md is intentionally tracked)
 .claude/
 .codex/
-.codex*
+.codex_tmp/
+
+# pnpm is the repository package manager; do not keep an npm lockfile around.
+package-lock.json
