@@ -59,6 +59,7 @@ Common usage:
 - Preserve icon family consistency inside a page and within shared admin/dashboard surfaces.
 - Prefer icon-plus-label patterns already established by shared primitives instead of inventing one-off controls.
 - Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
+- Dashboard toolbar controls use the elevated surface consistently across vehicle selection, efficiency toggles, and date-range triggers.
 - Dashboard edit mode uses compact icon controls directly on each widget. Keep edit and move controls visibly present with subdued default contrast, strengthen them on hover/focus/selection, and never make pointer hover the only way to discover or activate them.
 - Resizable dashboard widgets use a persistent subtle corner handle in edit mode. Fixed-size widgets use a lock indicator and must not expose a resize hit target.
 - Theme selection is a shared shell interaction, not a route-local toggle. Support `light`, `dark`, and `system`, and make the chooser responsive so desktop can anchor to the trigger while mobile renders a viewport-aware sheet or modal that fits on screen.
@@ -87,7 +88,7 @@ Common usage:
 - Ordinary quantitative bars use the shared filled-bar treatment from `CHART_BAR_STYLE`: semantic chart colors, quiet gridlines, consistent width/opacity, and rounded tops where the renderer supports them. Outline-only bars are not the default dashboard treatment.
 - Every interactive bar chart must expose the date/category and formatted metric value on hover. Stacked bars must also provide a legend and keep hover/click hit-testing on the full bar rather than individual visual segments.
 - Keep chart geometry semantically appropriate: daily totals may use one filled series, while daily charge-session composition remains a stacked AC/DC/Unknown view.
-- On mobile, dashboard charts expose an on-theme expand control. The expanded viewer is an opaque, safe-area-aware fullscreen surface: its picker and close controls are anchored to opposite viewport edges so they do not consume chart height, and it uses a solid accent rotate prompt with large iconography before landscape exploration. The viewer must prevent page scroll, overscroll, and background interaction until it closes.
+- On mobile, dashboard charts expose an on-theme expand control. The expanded viewer is an opaque, safe-area-aware fullscreen surface: its picker and close controls are anchored to opposite viewport edges so they do not consume chart height. They fade after the viewer first becomes available and return on a chart tap or Enter/Space, while the viewer uses a solid accent rotate prompt with large iconography before landscape exploration. The viewer must prevent page scroll, overscroll, and background interaction until it closes.
 - Time and numeric charts use touch-first tap, pinch, pan, and reset controls in the viewer. Categorical charts keep full category/value detail and touch-safe selection rather than simulating a meaningless zoom level.
 
 ### Empty, loading, and error states

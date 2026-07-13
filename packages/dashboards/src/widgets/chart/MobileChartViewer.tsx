@@ -24,8 +24,19 @@ export function MobileChartViewer({
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const closeRef = React.useRef<HTMLButtonElement | null>(null);
   const closedRef = React.useRef(false);
+  const viewerTapRef = React.useRef<{ pointerId: number; x: number; y: number; moved: boolean; multiTouch: boolean } | null>(null);
   const [isPortrait, setIsPortrait] = React.useState(() => isPortraitViewport());
   const [chartHeight, setChartHeight] = React.useState(() => getChartHeight());
+  const [showControls, setShowControls] = React.useState(true);
+
+  const hideControls = React.useCallback(() => {
+    setShowControls(false);
+    rootRef.current?.focus();
+  }, []);
+
+  const toggleControls = React.useCallback(() => {
+    setShowControls((visible) => !visible);
+  }, []);
 
   const close = React.useCallback(() => {
     if (closedRef.current) return;
@@ -55,6 +66,15 @@ export function MobileChartViewer({
       window.removeEventListener('resize', updateViewport);
     };
   }, []);
+
+  React.useEffect(() => {
+    if (isPortrait) {
+      setShowControls(true);
+      return undefined;
+    }
+    const timer = window.setTimeout(hideControls, 1000);
+    return () => window.clearTimeout(timer);
+  }, [hideControls, isPortrait]);
 
   React.useEffect(() => {
     const scrollY = window.scrollY;
@@ -119,39 +139,99 @@ export function MobileChartViewer({
 
   if (typeof document === 'undefined') return null;
 
+  const isInteractiveTarget = (target: EventTarget | null) => (
+    target instanceof Element
+    && target.closest('button, input, select, textarea, a, [role="option"], [data-mobile-chart-controls="true"]') !== null
+  );
+
+  const onViewerPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (isPortrait || isInteractiveTarget(event.target)) return;
+    if (viewerTapRef.current) {
+      viewerTapRef.current.multiTouch = true;
+      return;
+    }
+    viewerTapRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+      multiTouch: false,
+    };
+  };
+
+  const onViewerPointerMoveCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    const tap = viewerTapRef.current;
+    if (!tap || tap.pointerId !== event.pointerId) return;
+    if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 12) tap.moved = true;
+  };
+
+  const onViewerPointerUpCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    const tap = viewerTapRef.current;
+    if (!tap || tap.pointerId !== event.pointerId) return;
+    viewerTapRef.current = null;
+    if (!tap.moved && !tap.multiTouch && !isInteractiveTarget(event.target)) toggleControls();
+  };
+
+  const onViewerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleControls();
+    }
+  };
+
   return createPortal(
     <div
       ref={rootRef}
       role="dialog"
       aria-modal="true"
       aria-label={`${chartTitle} expanded chart`}
+      aria-describedby="mobile-chart-viewer-instructions"
+      tabIndex={-1}
       data-mobile-chart-viewer="true"
       className="fixed inset-0 z-[100] isolate h-[100dvh] w-[100dvw] overflow-hidden overscroll-none bg-bg-page touch-none"
+      onPointerDownCapture={onViewerPointerDownCapture}
+      onPointerMoveCapture={onViewerPointerMoveCapture}
+      onPointerUpCapture={onViewerPointerUpCapture}
+      onPointerCancelCapture={() => { viewerTapRef.current = null; }}
+      onKeyDown={onViewerKeyDown}
     >
-      <div className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] z-30">
-        {chartOptions.length > 1 ? (
-          <ChartPicker
-            variant="compact"
-            value={chartId}
-            options={chartOptions}
-            onChange={onChartChange}
-            searchValue=""
-            onSearchChange={() => undefined}
-            selectLabel="Choose chart"
-          />
-        ) : (
-          <p className="max-w-[min(16rem,calc(100vw-8rem))] truncate rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm font-semibold text-fg shadow-sm">{chartTitle}</p>
+      <p id="mobile-chart-viewer-instructions" className="sr-only">Tap the chart, or press Enter or Space, to show or hide chart controls. Press Escape to close the expanded chart.</p>
+      <div
+        ref={(node) => {
+          if (node) node.inert = !showControls;
+        }}
+        data-mobile-chart-controls="true"
+        aria-hidden={!showControls}
+        className={cn(
+          'relative z-30 transition-opacity duration-200 motion-reduce:transition-none',
+          showControls ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
-      </div>
-      <button
-        ref={closeRef}
-        type="button"
-        onClick={close}
-        className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
-        aria-label="Close expanded chart"
       >
-        <X className="h-5 w-5" />
-      </button>
+        <div className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))]">
+          {chartOptions.length > 1 ? (
+            <ChartPicker
+              variant="compact"
+              value={chartId}
+              options={chartOptions}
+              onChange={onChartChange}
+              searchValue=""
+              onSearchChange={() => undefined}
+              selectLabel="Choose chart"
+            />
+          ) : (
+            <p className="max-w-[min(16rem,calc(100vw-8rem))] truncate rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm font-semibold text-fg shadow-sm">{chartTitle}</p>
+          )}
+        </div>
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={close}
+          className="absolute right-[max(0.75rem,env(safe-area-inset-right))] top-[max(0.75rem,env(safe-area-inset-top))] flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+          aria-label="Close expanded chart"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      </div>
 
       {isPortrait ? (
         <div className="m-[max(0.75rem,env(safe-area-inset-top))] flex h-[calc(100%-1.5rem)] flex-col items-center justify-center gap-6 rounded-2xl border border-accent bg-accent p-8 text-center text-fg-on-accent shadow-glow-button">

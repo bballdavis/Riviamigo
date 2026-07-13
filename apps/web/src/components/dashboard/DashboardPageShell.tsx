@@ -349,7 +349,7 @@ function DashboardPageShellContent({
     <label className="inline-flex items-center">
       <span className="sr-only">Selected vehicle</span>
       <select
-        className="h-9 min-w-[11rem] rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+        className="h-9 min-w-[11rem] rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
         value={effectiveVehicleId ?? ''}
         onChange={(event) => setSessionVehicleId(event.target.value || null)}
         aria-label="Select vehicle"
@@ -379,7 +379,7 @@ function DashboardPageShellContent({
     >
       <button
         type="button"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-elevated text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
         onClick={() => {
           const next = efficiencyDisplay === 'distance_per_energy' ? 'energy_per_distance' : 'distance_per_energy';
           setEfficiencyDisplay(next);

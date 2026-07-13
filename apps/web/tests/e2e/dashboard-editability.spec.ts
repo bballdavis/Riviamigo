@@ -267,6 +267,15 @@ test.describe('mobile dashboard chart viewer', () => {
       bodyPosition: 'fixed',
       appInert: true,
     }));
+    const viewer = page.locator('[data-mobile-chart-viewer="true"]');
+    const viewerControls = page.locator('[data-mobile-chart-controls="true"]');
+    await expect(viewerControls).toHaveAttribute('aria-hidden', 'true');
+    await viewer.click({ position: { x: 420, y: 190 } });
+    await expect(viewerControls).toHaveAttribute('aria-hidden', 'false');
+    await viewer.click({ position: { x: 420, y: 190 } });
+    await expect(viewerControls).toHaveAttribute('aria-hidden', 'true');
+    await viewer.click({ position: { x: 420, y: 190 } });
+    await expect(viewerControls).toHaveAttribute('aria-hidden', 'false');
     await page.getByRole('button', { name: 'Choose chart' }).click();
     await page.getByRole('option', { name: 'Efficiency by Temperature' }).click();
 

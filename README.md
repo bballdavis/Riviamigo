@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="./apps/web/public/logo_color_lighter.svg" alt="Riviamigo logo" height="82" align="middle" />
+  <img src="./apps/web/public/logo_color_lighter.svg" alt="Riviamigo logo" height="82" align="bottom" />
   &nbsp;
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./apps/web/public/text_white.svg" />
-    <img src="./apps/web/public/text_black.svg" alt="Riviamigo" height="58" align="middle" />
+    <img src="./apps/web/public/text_black.svg" alt="Riviamigo" height="58" align="bottom" />
   </picture>
 </p>
 
