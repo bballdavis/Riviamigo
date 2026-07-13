@@ -39,12 +39,12 @@ the gateway itself is operated and patched by the self-hoster.
 
 ## Verification
 
-1. Run `docker compose -f infra/docker-compose.prod.yml config` and confirm
+1. Run `docker compose --env-file .env -f compose/docker-compose.prod.yml config` and confirm
    nginx publishes only `127.0.0.1:8080:8080`.
 2. Start the stack and check `curl http://127.0.0.1:8080/health` locally.
 3. Confirm external access is denied by the gateway before reaching Riviamigo,
    then authenticate through the gateway and sign in to Riviamigo.
-4. Confirm `docker compose -f infra/docker-compose.prod.yml ps` shows no host
+4. Confirm `docker compose --env-file .env -f compose/docker-compose.prod.yml ps` shows no host
    mapping for API, TimescaleDB, or Redis.
 5. Run `pnpm docs:check` and the security test suite before upgrading a shared
    instance.

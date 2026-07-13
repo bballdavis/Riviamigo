@@ -20,7 +20,7 @@ packages/
   types/        shared TypeScript contracts
   ui/           design system primitives, charts, tables, tokens
   config/       shared TS, ESLint, Tailwind config
-infra/          compose, nginx, postgres, object-storage runtime files
+compose/        compose, nginx, postgres, object-storage runtime files
 docs/           canonical documentation and wiki source drafts
 scripts/        dev/build/docs utilities
 ```

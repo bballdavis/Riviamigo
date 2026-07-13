@@ -95,7 +95,7 @@ packages/
 - New or changed shared UI/app surfaces must be mobile-friendly by default and checked at small-screen breakpoints in the same change.
 - If routes, env vars, auth flows, or operational behavior change, update the relevant canonical docs in the same change.
 - If a change touches shared seams, ingestion, routing, or other significant runtime behavior, run `pnpm build` before handing it off.
-- User-facing documentation belongs in `docs/wiki-drafts/`, not directly in the GitHub Wiki UI.
+- User-facing documentation belongs in `docs/guides/`, not directly in the GitHub Wiki UI.
 
 ## References
 

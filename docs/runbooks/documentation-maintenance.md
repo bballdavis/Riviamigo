@@ -11,13 +11,13 @@ This document is canonical for the documentation upkeep workflow.
 ## Canonical Model
 
 - Repo docs are canonical.
-- `docs/wiki-drafts/` is the source for user-facing wiki pages.
+- `docs/guides/` is the source for user-facing wiki pages.
 - The GitHub Wiki is a publish target only.
 
 ## Update Procedure
 
 1. Update the relevant canonical docs in the repo.
-2. If the change is user-facing, update the corresponding page in `docs/wiki-drafts/`.
+2. If the change is user-facing, update the corresponding page in `docs/guides/`.
 3. Run `pnpm docs:check`.
 4. If publishability is the only thing you need to verify, run:
    `scripts/publish-wiki.sh --validate-only`
@@ -29,7 +29,7 @@ This document is canonical for the documentation upkeep workflow.
 - visual pattern changes: update `docs/branding.md`
 - repo structure or seam changes: update `docs/index.md` and relevant architecture docs
 - env vars, routes, or operational behavior: update relevant canonical docs and wiki drafts if user-visible
-- publishing workflow changes: update this runbook and `docs/wiki-drafts/README.md`
+- publishing workflow changes: update this runbook and `docs/guides/README.md`
 
 ## Failure Modes
 

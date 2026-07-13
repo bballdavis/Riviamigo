@@ -1,6 +1,6 @@
 # Riviamigo Docs Index
 
-This is the routing hub for repo documentation. Repo docs are canonical; the GitHub Wiki is a published mirror for selected user-facing pages sourced from `docs/wiki-drafts/`.
+This is the routing hub for repo documentation. Repo docs are canonical; the GitHub Wiki is a published mirror for selected user-facing pages sourced from `docs/guides/`.
 
 ## Canonical Entry Points
 
@@ -39,17 +39,17 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 |---|---|---|---|
 | [`docs/contributing.md`](./contributing.md) | contributors and reviewers | workflow, review rules, testing expectations, or doc policy changes | AGENTS, CLAUDE |
 | [`docs/runbooks/README.md`](./runbooks/README.md) | maintainers | runbook taxonomy or recurring maintenance surface changes | documentation maintenance |
-| [`docs/runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md) | maintainers and agents | doc publishing or drift-prevention workflow changes | wiki drafts, contributing |
+| [`docs/runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md) | maintainers and agents | doc publishing or drift-prevention workflow changes | user guides, contributing |
 | [`docs/runbooks/vehicle-history-rebuild.md`](./runbooks/vehicle-history-rebuild.md) | maintainers and agents | rebuild steps, trip enrichment behavior, or post-replay verification changes | backend data flow, metrics reference |
-| [`docs/runbooks/secure-deployment.md`](./runbooks/secure-deployment.md) | self-hosters and maintainers | public exposure boundary, gateway requirements, or production secret behavior changes | security, deployment wiki draft |
+| [`docs/runbooks/secure-deployment.md`](./runbooks/secure-deployment.md) | self-hosters and maintainers | public exposure boundary, gateway requirements, or production secret behavior changes | security, deployment guide |
 | [`docs/decision-log.md`](./decision-log.md) | maintainers and future contributors | durable repo/process decisions are made | contributing, architecture |
 
 ## User-Facing Documentation
 
 | Document | Audience | Source of truth | Update when | Scope |
 |---|---|---|---|---|
-| [`docs/wiki-drafts/README.md`](./wiki-drafts/README.md) | maintainers publishing docs | repo | wiki workflow changes | publishing rules |
-| `docs/wiki-drafts/*.md` | self-hosters and end users | repo, mirrored to GitHub Wiki | user-visible setup, operations, or product behavior changes | curated user-facing subset |
+| [`docs/guides/README.md`](./guides/README.md) | self-hosters and end users | repo, mirrored to GitHub Wiki | user-visible setup, operations, or product behavior changes | curated user-facing subset |
+| [`docs/privacy.md`](./privacy.md) | self-hosters and users | repo | data-flow or third-party request behavior changes | user guides, security |
 
 ## Documentation Rules
 

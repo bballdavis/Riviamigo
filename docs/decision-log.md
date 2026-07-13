@@ -8,7 +8,7 @@ Use this file for short, durable process and documentation decisions that should
 
 - `AGENTS.md` is the primary Codex/bootstrap document for Riviamigo.
 - `CLAUDE.md` remains first-class, but acts as a companion guide rather than a competing source of truth.
-- Repo docs are canonical; the GitHub Wiki is a published mirror for selected user-facing pages from `docs/wiki-drafts/`.
+- Repo docs are canonical; the GitHub Wiki is a published mirror for selected user-facing pages from `docs/guides/`.
 
 ### Documentation governance
 
