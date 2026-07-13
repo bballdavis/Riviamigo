@@ -760,6 +760,13 @@ export interface AdminUserRecord {
   updated_at: string;
 }
 
+/** Minimal vehicle identity returned to administrators for membership assignment. */
+export interface AdminVehicleOption {
+  id: string;
+  display_name: string;
+  model: string;
+}
+
 export interface CreateAccountInvitationBody {
   email: string;
   expires_in_days?: number;

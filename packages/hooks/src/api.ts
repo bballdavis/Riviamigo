@@ -14,7 +14,7 @@ import type {
   MetricValueResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
   CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
   AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
-  AdminUserRecord, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
+  AdminUserRecord, AdminVehicleOption, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
   AccountInvitation, AccountInvitationPreview, AuthSetupResponse,
 } from '@riviamigo/types';
 
@@ -488,6 +488,11 @@ class ApiClient {
   async listUsers(search = ''): Promise<AdminUserRecord[]> {
     const res = await this.request<{ users: AdminUserRecord[] }>('GET', '/v1/admin/users', undefined, search ? { search } : undefined);
     return res.users ?? [];
+  }
+
+  async listAdminVehicleOptions(): Promise<AdminVehicleOption[]> {
+    const res = await this.request<{ vehicles: AdminVehicleOption[] }>('GET', '/v1/admin/vehicles');
+    return res.vehicles ?? [];
   }
 
   async listAccountInvitations(): Promise<AccountInvitation[]> {

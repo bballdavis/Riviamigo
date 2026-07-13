@@ -173,6 +173,47 @@ test.describe('dashboard editability on coarse pointers', () => {
   });
 });
 
+test.describe('mobile app navigation', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('uses a full-screen, touch-safe navigation sheet', async ({ page }) => {
+    await installApiMocks(page);
+    await page.goto('/');
+
+    const menuTrigger = page.getByRole('button', { name: 'Toggle navigation' });
+    await expect(menuTrigger).toBeVisible();
+    await menuTrigger.click();
+
+    const sheet = page.getByRole('dialog', { name: 'Navigation' });
+    await expect(sheet).toBeVisible();
+    const sheetBox = await sheet.boundingBox();
+    expect(sheetBox).not.toBeNull();
+    expect(sheetBox!.x).toBe(0);
+    expect(sheetBox!.y).toBe(0);
+    expect(sheetBox!.width).toBeGreaterThanOrEqual(390);
+    expect(sheetBox!.height).toBeGreaterThanOrEqual(844);
+
+    const overview = sheet.getByRole('button', { name: 'Overview' });
+    const battery = sheet.getByRole('button', { name: 'Battery' });
+    const settings = sheet.getByRole('button', { name: 'Open settings' });
+    const signOut = sheet.getByRole('button', { name: 'Sign out' });
+    const navigation = sheet.getByRole('navigation', { name: 'Primary navigation' });
+
+    await expect(overview).toHaveAttribute('aria-current', 'page');
+    await expect(navigation).toHaveCSS('overflow-y', 'auto');
+
+    for (const control of [overview, battery, settings, signOut]) {
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+
+    await battery.click();
+    await expect(page).toHaveURL(/\/battery$/);
+    await expect(sheet).toHaveCount(0);
+  });
+});
+
 test.describe('mobile dashboard chart viewer', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
