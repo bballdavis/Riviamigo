@@ -329,3 +329,22 @@ jobs:
           echo "Health check timed out"
           kill $API_PID
           exit 1
+
+  container-build:
+    name: Container build (production Compose)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and build deployable images
+        env:
+          DATABASE_URL: postgresql://riviamigo:ci-password@timescaledb:5432/riviamigo
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: ci-password
+          REDIS_PASSWORD: ci-redis-password
+          JWT_SECRET: ci-private-key
+          JWT_PUBLIC_KEY: ci-public-key
+          AGE_ENCRYPTION_KEY: AGE-SECRET-KEY-1CI
+          ALLOWED_ORIGINS: https://ci.example.test
+        run: |
+          docker compose -f infra/docker-compose.prod.yml config --quiet
+          docker compose -f infra/docker-compose.prod.yml build

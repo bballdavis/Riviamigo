@@ -113,7 +113,7 @@ services:
     # or identity-aware reverse proxy in front of this listener; do not expose
     # Riviamigo directly to the Internet.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
     networks:
       - internal
       - proxy

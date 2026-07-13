@@ -51,6 +51,15 @@ This starts TimescaleDB, Redis, the Rust API, and the React web frontend. The da
 
 ### 4. Open the web UI
 
+For production, provide `JWT_SECRET`, `JWT_PUBLIC_KEY`, and
+`AGE_ENCRYPTION_KEY` through a protected deployment environment, and set
+`ALLOWED_ORIGINS` to the exact public HTTPS origin. Production intentionally
+does not generate these keys.
+
+The first account is the instance owner (`super_user`); after it is created,
+public registration closes and admins issue activation links for additional
+users.
+
 Navigate to `http://your-server:3000` in your browser. Create your admin account on first visit.
 
 ### 5. Add your vehicle
