@@ -403,7 +403,7 @@ describe('Settings page', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
       params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview', edit: '1' },
+      search: { dashboardId: 'default-overview', edit: 1 },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
@@ -418,7 +418,7 @@ describe('Settings page', () => {
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/d/$slug',
         params: { slug: 'overview' },
-        search: { dashboardId: 'personal-overview', edit: '1' },
+        search: { dashboardId: 'personal-overview', edit: 1 },
       });
     });
 

@@ -13,7 +13,7 @@ The loopback binding is intentional. Place an authenticated HTTPS tunnel or iden
 
 ## Initial deployment
 
-1. Prepare `.env` using [configuration](./configuration.md). In particular, use `timescaledb` (not `localhost`) in `DATABASE_URL`, set separate strong database and Redis passwords, provide the signing and age encryption keys, set `RIVIAMIGO_ENV=production`, and set `ALLOWED_ORIGINS` to your exact public HTTPS address.
+1. Copy `compose/.env.example` to `.env`, then prepare it using [configuration](./configuration.md). In particular, use `timescaledb` (not `localhost`) in `DATABASE_URL`, set separate strong database and Redis passwords, provide the signing and age encryption keys, and set `ALLOWED_ORIGINS` to your exact public HTTPS address. Production Compose sets `RIVIAMIGO_ENV=production` itself.
 
 2. Start the stack:
 

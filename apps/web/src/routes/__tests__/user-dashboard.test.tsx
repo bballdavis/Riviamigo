@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const routeState = vi.hoisted(() => ({
   slug: 'custom-dashboard',
-  search: {} as { edit?: string },
+  search: {} as { edit?: 1 },
   navigate: vi.fn(),
 }));
 
@@ -104,7 +104,7 @@ describe('user dashboard route', () => {
   });
 
   it('passes URL edit state into the shared dashboard shell', () => {
-    routeState.search = { edit: '1' };
+    routeState.search = { edit: 1 };
 
     render(<RouteComponent />);
 
@@ -114,7 +114,7 @@ describe('user dashboard route', () => {
 
   it('updates the edit query through the shared shell callback', async () => {
     const user = userEvent.setup();
-    routeState.search = { edit: '1' };
+    routeState.search = { edit: 1 };
 
     render(<RouteComponent />);
     await user.click(screen.getByRole('button', { name: 'Leave edit' }));
@@ -130,7 +130,7 @@ describe('user dashboard route', () => {
     expect(routeState.navigate).toHaveBeenCalledWith({
       to: '/d/$slug',
       params: { slug: 'custom-dashboard' },
-      search: { edit: '1' },
+      search: { edit: 1 },
     });
   });
 });

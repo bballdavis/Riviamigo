@@ -96,7 +96,7 @@ function fileExists(relativePath) {
 }
 
 function collectEnvVars() {
-  const envFiles = [".env.example", "apps/api/.env.example", "apps/web/.env.example"];
+  const envFiles = ["compose/.env.example", "compose/.env.full.example", "apps/api/.env.example", "apps/web/.env.example"];
   const names = new Set();
 
   for (const relativePath of envFiles) {

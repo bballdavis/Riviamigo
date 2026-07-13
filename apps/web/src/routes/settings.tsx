@@ -496,7 +496,7 @@ export function SettingsContent() {
       params: { slug: dashboard.slug },
       search: {
         dashboardId: dashboard.id,
-        ...(edit ? { edit: '1' } : {}),
+        ...(edit ? { edit: 1 } : {}),
       },
     } as never);
   }, [navigate]);
