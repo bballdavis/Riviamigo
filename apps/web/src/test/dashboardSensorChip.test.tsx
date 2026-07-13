@@ -21,7 +21,7 @@ const metricMocks = vi.hoisted(() => ({
     from: string | null;
     to: string | null;
   }>,
-  metricBatchCalls: [] as Array<{ vehicleId: string | null; from: string | null; to: string | null }>,
+  metricBatchCalls: [] as Array<{ vehicleId: string | null; metric: string | null; from: string | null; to: string | null }>,
   batteryHealth: null as null | {
     usable_now_kwh: number | null;
     usable_new_kwh: number | null;
@@ -77,8 +77,8 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
       metricMocks.metricSeriesCalls.push({ vehicleId, metric, from, to });
       return { data: metricMocks.series };
     },
-    useMetricBatch: (vehicleId: string | null, _metrics: unknown, from: string | null, to: string | null) => {
-      metricMocks.metricBatchCalls.push({ vehicleId, from, to });
+    useMetricBatch: (vehicleId: string | null, metrics: Array<{ metric?: string }> | undefined, from: string | null, to: string | null) => {
+      metricMocks.metricBatchCalls.push({ vehicleId, metric: metrics?.[0]?.metric ?? null, from, to });
       return {
         data: {
           values: [metricMocks.value],
