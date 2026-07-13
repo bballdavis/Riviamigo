@@ -152,8 +152,43 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
         mobileHeaderSlot={<ThemeToggle variant="ghost" ariaLabel="Theme options" />}
         collapsed={sidebarCollapsed}
         onCollapsedChange={setPersistedSidebarCollapsed}
-        bottomSlot={({ collapsed }) =>
-          collapsed ? (
+        bottomSlot={({ collapsed, mobile, closeMobileNavigation }) =>
+          mobile ? (
+            <div className="flex flex-col gap-3">
+              <StatusBar
+                onlineState={onlineState}
+                socPercent={status?.battery_level ?? undefined}
+                isCharging={status?.charger_state?.toLowerCase().includes('charging') ?? false}
+                rangeEstimateMi={status?.range_miles ?? undefined}
+              />
+
+              <button
+                type="button"
+                onClick={() => {
+                  navigate({ to: '/settings' });
+                  closeMobileNavigation(false);
+                }}
+                aria-label="Open settings"
+                className="flex h-12 w-full items-center gap-3 rounded-lg px-4 text-sm font-medium text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg"
+              >
+                <Settings className="h-5 w-5 shrink-0" />
+                <span>Settings</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  closeMobileNavigation(false);
+                  await handleLogout();
+                }}
+                aria-label="Sign out"
+                className="flex h-12 w-full items-center gap-3 rounded-lg px-4 text-sm font-medium text-fg-secondary transition-colors hover:bg-bg-elevated hover:text-fg"
+              >
+                <LogOut className="h-5 w-5 shrink-0" />
+                <span>Sign out</span>
+              </button>
+            </div>
+          ) : collapsed ? (
             <div className="flex w-full flex-col gap-2">
               <div className={collapsedFooterRow}>
                 <div
