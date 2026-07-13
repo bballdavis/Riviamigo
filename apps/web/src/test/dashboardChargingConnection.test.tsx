@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
@@ -15,6 +15,7 @@ const chargingMocks = vi.hoisted(() => ({
     }>;
     side?: { light?: string | null; dark?: string | null } | null;
   },
+  metricRequests: [] as Array<Array<{ metric: string }>>,
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -46,9 +47,13 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images }] }),
     useMetricCatalog: () => ({ data: [] }),
+    useMetricBatch: (_vehicleId: string, metrics: Array<{ metric: string }>) => {
+      chargingMocks.metricRequests.push(metrics);
+      return { data: null, isFetching: false };
+    },
     useMetricValue: () => ({ data: null }),
     useMetricSeries: () => ({ data: [] }),
-    useBatteryHealth: () => ({ data: null, isLoading: false }),
+    useBatteryHealth: () => ({ data: null, isLoading: false, isFetching: false }),
     useEfficiencySummary: () => ({
       data: {
         avg: null,
@@ -57,6 +62,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         total_miles: 0,
       },
       isLoading: false,
+      isFetching: false,
     }),
     useChargingSummary: () => ({
       data: {
@@ -72,6 +78,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         max_charge_rate_kw: 164.2,
         max_charge_limit_pct: 85,
       },
+      isFetching: false,
     }),
   };
 });
@@ -181,6 +188,29 @@ const vehicleImageUrlOnlyChargingFixtures = {
   },
 };
 
+const metricPreviewConfig: DashboardConfig = {
+  ...baseConfig,
+  slug: 'conditional-metrics',
+  widgets: [
+    {
+      id: '11111111-1111-4111-8111-111111111111',
+      componentType: 'sensor',
+      definitionId: 'total_miles',
+      title: 'Plugged miles',
+      visibility: [{ type: 'vehicle-connection', value: 'plugged' }],
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    },
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      componentType: 'sensor',
+      definitionId: 'battery_level',
+      title: 'Unplugged battery',
+      visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    },
+  ],
+};
+
 const packagedDemoR1TChargingFixtures = {
   all: [
     { placement: 'side', design: 'light', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_light.webp' },
@@ -199,6 +229,7 @@ describe('charging connection custom widget', () => {
     chargingMocks.forcePluggedState = 'Disconnected';
     chargingMocks.model = 'R1S';
     chargingMocks.images = null;
+    chargingMocks.metricRequests = [];
   });
 
   it('does not render until the vehicle is plugged in', () => {
@@ -237,6 +268,48 @@ describe('charging connection custom widget', () => {
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
     expect(screen.queryByTestId('sensor-chip')).toBeNull();
+  });
+
+  it('previews both conditional layouts in edit mode without changing live vehicle state', async () => {
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Unplugged' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('sensor-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plugged in' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Plugged in' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+      expect(screen.queryByTestId('sensor-chip')).toBeNull();
+    });
+  });
+
+  it('requests data only for widgets visible in the selected preview', async () => {
+    render(
+      <DashboardRenderer
+        config={metricPreviewConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(chargingMocks.metricRequests.at(-1)?.map((request) => request.metric)).toEqual(['battery_level']);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Plugged in' }));
+
+    await waitFor(() => {
+      expect(chargingMocks.metricRequests.at(-1)?.map((request) => request.metric)).toEqual(['total_miles']);
+    });
   });
 
   it('expands the home and DC mix chips when the connection chip is hidden', () => {
@@ -288,6 +361,12 @@ describe('charging connection custom widget', () => {
 
     expect(screen.getByText('Standby')).toBeInTheDocument();
     expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    const summaryRows = screen.getByText('Status').closest('div.absolute');
+    expect(summaryRows).not.toBeNull();
+    expect(summaryRows).toHaveClass('left-3');
+    expect(summaryRows).not.toHaveClass('left-6');
+    const statusRow = screen.getByText('Status').closest('div.flex');
+    expect(statusRow).toHaveClass('bg-bg-elevated/90', 'backdrop-blur-sm');
     expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
       '/rivian/side-charging-light.webp',
       '/rivian/side-charging-dark.webp',

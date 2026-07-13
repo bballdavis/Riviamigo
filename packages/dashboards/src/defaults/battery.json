@@ -8,13 +8,13 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d2000002-0000-0000-0000-000000000001", "componentType": "sensor", "definitionId": "battery_health_pct",        "title": "Battery Health",         "options": {}, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000001", "componentType": "sensor", "definitionId": "battery_health_pct",        "title": "Battery Health",         "options": { "icon": "solar:health-bold" }, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
     { "id": "d2000002-0000-0000-0000-000000000002", "componentType": "sensor", "definitionId": "estimated_degradation_pct", "title": "Estimated Degradation",  "options": {}, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
     { "id": "d2000002-0000-0000-0000-000000000003", "componentType": "sensor", "definitionId": "usable_capacity",           "title": "Usable Capacity",        "options": {}, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
     { "id": "d2000002-0000-0000-0000-000000000004", "componentType": "sensor", "definitionId": "max_range",                "title": "Max Range",              "options": {}, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000005", "componentType": "sensor", "definitionId": "charge_count",             "title": "Charges",                "options": {}, "layout": { "x": 0, "y": 2, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000006", "componentType": "sensor", "definitionId": "charging_cycles_health",    "title": "Charging Cycles",        "options": {}, "layout": { "x": 3, "y": 2, "w": 3, "h": 2 } },
-    { "id": "d2000002-0000-0000-0000-000000000007", "componentType": "sensor", "definitionId": "battery_energy_added",      "title": "Energy Added",           "options": {}, "layout": { "x": 6, "y": 2, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000005", "componentType": "sensor", "definitionId": "charge_count",             "title": "Charges",                "options": { "icon": "iconoir:ev-charge-alt", "inlineSecondaryTemplate": "" }, "layout": { "x": 0, "y": 2, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000006", "componentType": "sensor", "definitionId": "charging_cycles_health",    "title": "Charging Cycles",        "options": { "icon": "material-symbols:cycle-rounded" }, "layout": { "x": 3, "y": 2, "w": 3, "h": 2 } },
+    { "id": "d2000002-0000-0000-0000-000000000007", "componentType": "sensor", "definitionId": "battery_energy_added",      "title": "Energy Added",           "options": { "icon": "mdi:battery-add" }, "layout": { "x": 6, "y": 2, "w": 3, "h": 2 } },
     { "id": "d2000002-0000-0000-0000-000000000008", "componentType": "sensor", "definitionId": "battery_charge_efficiency", "title": "Charge Efficiency",      "options": {}, "layout": { "x": 9, "y": 2, "w": 3, "h": 2 } },
     {
       "id": "d2000002-0000-0000-0000-000000000009",

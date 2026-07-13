@@ -5,6 +5,7 @@ import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
+import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
 const CHARGING_SIDE_LIGHT_IMAGE_URL =
@@ -66,7 +67,9 @@ function ChargingConnectionWidget({
   const { data: vehicles } = useVehicles();
   const { data: summary } = useChargingSummary(ctx.vehicleId, ctx.from, ctx.to);
   const activeVehicle = vehicles?.find((vehicle) => vehicle.id === vehicleId);
-  const pluggedIn = isPluggedIn(status);
+  const pluggedIn = ctx.visibilityState
+    ? ctx.visibilityState['vehicle-connection'] === 'plugged'
+    : isVehiclePluggedIn(status);
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
@@ -130,9 +133,9 @@ function ChargingConnectionWidget({
         <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} />
       </div>
 
-      <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/82 to-transparent" />
+      <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/88 to-transparent" />
 
-      <div className="absolute left-6 top-4 z-10 grid w-[40%] min-w-[180px] max-w-[260px] gap-2 pb-[12%]">
+      <div className="absolute left-3 top-4 z-10 grid w-[40%] min-w-[180px] max-w-[260px] gap-2 pb-[12%]">
         {rows.map((row) => (
           <ChargingSummaryRow key={row.label} label={row.label} value={row.value} accent={row.accent === true} />
         ))}
@@ -154,7 +157,7 @@ function ChargingSummaryRow({
 }) {
   return (
     <div
-      className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/70 px-3 py-2 text-xs"
+      className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-border bg-bg-elevated/90 px-3 py-2 text-xs backdrop-blur-sm"
     >
       <span className={`inline-flex min-w-0 items-center gap-2 truncate text-fg-tertiary`}>
         {accent ? <Zap className="h-3.5 w-3.5 shrink-0" /> : null}
@@ -312,16 +315,6 @@ function formatTimeToFull(minutes: number | null | undefined) {
 
 function formatMaybePercent(value: number | null | undefined, digits: number) {
   return value == null ? '-' : formatDashboardPercent(value, digits);
-}
-
-function isPluggedIn(status: VehicleStatus | null | undefined) {
-  // Keep this in sync with DashboardRenderer.isPluggedIn.
-  // charger_state_ts is intentionally NOT checked here: a car sitting plugged in
-  // for hours won't re-emit a charger state event, so ts drift must not be treated
-  // as a disconnect signal.
-  const state = status?.charger_state?.toLowerCase();
-  if (state && !['unknown', 'disconnected'].includes(state)) return true;
-  return Boolean(status?.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
 }
 
 function isActivelyCharging(status: VehicleStatus | null | undefined) {

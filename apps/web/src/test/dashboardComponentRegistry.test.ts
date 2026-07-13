@@ -173,31 +173,31 @@ describe('dashboard component registry', () => {
     // it replaces the hide-when-unplugged sensor chips that share the same coordinates.
     expect(connectedChip).toMatchObject({
       componentType: 'custom',
-      layout: { x: 6, y: 0, w: 6, h: 6 },
-      options: { chargingConnectionVisibility: 'plugged' },
+      layout: { x: 6, y: 2, w: 6, h: 6 },
+      visibility: [{ type: 'vehicle-connection', value: 'plugged' }],
     });
 
     expect(widgets.find((widget) => widget.definitionId === 'charging_total_cost')?.layout).toMatchObject({ x: 3, y: 2, w: 3, h: 2 });
 
     expect(widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
       componentType: 'sensor',
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 6, y: 0, w: 3, h: 2 },
+      visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
+      layout: { x: 9, y: 8, w: 3, h: 2 },
     });
     expect(widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
       componentType: 'sensor',
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 9, y: 0, w: 3, h: 2 },
+      visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
+      layout: { x: 6, y: 0, w: 3, h: 2 },
     });
     expect(widgets.find((widget) => widget.definitionId === 'charging_max_rate')).toMatchObject({
       componentType: 'sensor',
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 6, y: 2, w: 3, h: 2 },
+      visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
+      layout: { x: 6, y: 8, w: 3, h: 2 },
     });
     expect(widgets.find((widget) => widget.definitionId === 'charging_avg_session')).toMatchObject({
       componentType: 'sensor',
-      options: { chargingConnectionVisibility: 'unplugged' },
-      layout: { x: 9, y: 2, w: 3, h: 2 },
+      visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
+      layout: { x: 9, y: 10, w: 3, h: 2 },
     });
 
     expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000009')).toMatchObject({

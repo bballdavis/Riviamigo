@@ -52,7 +52,7 @@ export function DashboardRenderer({
       <Suspense fallback={<div className="text-xs text-fg-tertiary p-4">Loading editor...</div>}>
         <GridEditor
           config={{ ...config, widgets }}
-          ctx={ctx}
+          ctx={{ ...ctx, visibilityState: previewState }}
           onConfigChange={onConfigChange}
           editActions={editActions}
           visibleWidgetIds={previewWidgets.map((widget) => widget.id)}

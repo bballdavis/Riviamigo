@@ -6,7 +6,7 @@
  * secrets and is never copied into this repository or logged by this script.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,11 +48,46 @@ async function verifyOwnerSetup(baseUrl) {
     body: JSON.stringify({ email: 'owner@example.test', password: 'fresh-install-password' }),
   });
   if (first.status !== 201) throw new Error(`First owner registration failed with ${first.status}.`);
+  const firstBody = await first.json();
+  const accessToken = firstBody.access_token;
+  if (!accessToken) throw new Error('First owner registration did not return an access token.');
+  await verifyBundledDashboards(baseUrl, accessToken);
   const closed = await fetch(`${baseUrl}/v1/auth/register`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: 'second@example.test', password: 'fresh-install-password' }),
   });
   if (closed.status !== 403) throw new Error(`Registration remained open after owner setup (status ${closed.status}).`);
+}
+
+async function verifyBundledDashboards(baseUrl, accessToken) {
+  const response = await fetch(`${baseUrl}/v1/dashboards`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) throw new Error(`Fresh dashboard list failed with ${response.status}.`);
+
+  const rows = await response.json();
+  const expectedFiles = ['dashboard', 'battery', 'efficiency', 'charging', 'trips'];
+  if (rows.filter((row) => row.owner_id == null && row.is_default === true).length !== expectedFiles.length) {
+    throw new Error('Fresh install did not seed exactly five system dashboards.');
+  }
+
+  for (const slug of expectedFiles) {
+    const expected = JSON.parse(readFileSync(
+      resolve(root, 'packages', 'dashboards', 'src', 'defaults', `${slug}.json`),
+      'utf8',
+    ));
+    const row = rows.find((entry) => entry.owner_id == null && entry.slug === expected.slug);
+    if (!row) throw new Error(`Fresh install is missing the ${expected.slug} system dashboard.`);
+    if (JSON.stringify(sortJson(row.config)) !== JSON.stringify(sortJson(expected))) {
+      throw new Error(`Fresh install ${expected.slug} dashboard does not match its bundled baseline.`);
+    }
+  }
+}
+
+function sortJson(value) {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJson(value[key])]));
 }
 
 async function verifyProduction() {

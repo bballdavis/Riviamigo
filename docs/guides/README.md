@@ -11,4 +11,6 @@ These are the in-repository source pages for self-hosters. The GitHub Wiki mirro
 - [Secure deployment](./secure-deployment.md) — keeping a remote installation behind authentication.
 - [Features](./features.md) — what the dashboard currently covers.
 
+- [Dashboard customization](./dashboard-customization.md) — system defaults, personal copies, reset/restore behavior, and conditional previews.
+
 For privacy and third-party requests, read [the privacy details](../privacy.md). For contributing and local development, start at the [docs hub](../index.md).

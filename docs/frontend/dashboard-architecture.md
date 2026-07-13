@@ -23,6 +23,7 @@ This document defines the approved layering for dashboard work and the package b
 - View grid: `packages/dashboards/src/DashboardGrid.tsx`
 - Shared widget chrome: `packages/dashboards/src/WidgetChrome.tsx`
 - Dashboard model helpers: `packages/dashboards/src/dashboardModel.ts`
+- Conditional visibility registry: `packages/dashboards/src/dashboardVisibility.ts`
 - Widget registry: `packages/dashboards/src/registry.tsx`
 - Dashboard defaults and persistence helpers: `packages/dashboards/src/api.ts`, `packages/dashboards/src/defaults/`
 
@@ -75,6 +76,7 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 - schema and validation
 - widget registry
 - dashboard model helpers for identity, ownership, layout patches, and view-only widget visibility
+- a typed visibility-rule registry that owns condition labels, preview values, and runtime resolution
 - view grid renderer
 - edit grid renderer
 - shared widget chrome and edit overlay
@@ -83,6 +85,10 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 - bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
 
 This package should stay framework-focused. It should not accumulate page-specific business rules.
+
+Conditional widgets use `WidgetInstance.visibility`. Rules are evaluated with AND semantics, and widgets without rules are always visible. The first registered condition is `vehicle-connection`, with `plugged` and `unplugged` values. Connected standby counts as plugged. Add future condition families to `dashboardVisibility.ts`; do not add slug, route, or widget-definition branches to the renderer.
+
+In view mode, `DashboardRenderer` resolves visibility from live status. In edit mode it owns temporary preview state, filters both the canvas and dashboard-wide data requirements to preview-visible widgets, and keeps the complete draft in `GridEditor`. Preview state never persists. Legacy `options.chargingConnectionVisibility` values are normalized to typed rules at API/import boundaries and are written in the typed form on the next save.
 
 ### 5. Widget Layer
 
@@ -179,6 +185,7 @@ packages/dashboards/src/
   schema.ts                   # config schema
   registry.tsx                # widget definitions
   dashboardModel.ts           # identity, ownership, layout, and visibility helpers
+  dashboardVisibility.ts      # typed conditions, runtime resolution, compatibility migration
   DashboardRenderer.tsx       # mode orchestration between view and edit grids
   DashboardGrid.tsx           # view-mode CSS grid
   GridEditor.tsx              # edit-mode React Grid Layout canvas
@@ -206,6 +213,7 @@ packages/ui/src/
 - keep renderer layout-only
 - keep widget hover/edit chrome in `WidgetChrome`
 - keep layout mutation rules in `dashboardModel.ts`
+- add reusable conditional states through `dashboardVisibility.ts`
 - compose page extras explicitly
 - reuse `packages/ui` before creating page-local visuals
 - reuse `packages/hooks` before embedding fetch logic in route wrappers
@@ -214,6 +222,7 @@ packages/ui/src/
 
 - add `if (slug === ...)` branching inside the shared shell for page-only content
 - add direct page composition logic to `DashboardRenderer`
+- add dashboard- or route-specific conditional visibility branches
 - duplicate edit, clone, export, import, or lock handling in a second route scaffold
 - put page-specific API calls inside `packages/ui`
 - use widgets as a substitute for page-level orchestration when several widgets need shared context

@@ -15,7 +15,10 @@ import { WidgetChrome } from './WidgetChrome';
 import type { DashboardConfig, WidgetInstance } from './schema';
 import type { WidgetCtx, WidgetDef } from './registry';
 import type { DashboardVisibilityState } from './dashboardVisibility';
-import { getWidgetVisibilityRules } from './dashboardVisibility';
+import {
+  DEFAULT_DASHBOARD_VISIBILITY_STATE,
+  getWidgetVisibilityRules,
+} from './dashboardVisibility';
 import { EditorDrawer } from './editor/EditorDrawer';
 import { PaletteView } from './editor/PaletteView';
 import { WidgetEditForm } from './editor/WidgetEditForm';
@@ -26,9 +29,9 @@ interface GridEditorProps {
   onConfigChange: ((next: DashboardConfig) => void) | undefined;
   editActions?: React.ReactNode;
   previewControls?: React.ReactNode;
-  visibleWidgetIds: string[];
-  visibilityState: DashboardVisibilityState;
-  onVisibilityStateChange: (
+  visibleWidgetIds?: string[];
+  visibilityState?: DashboardVisibilityState;
+  onVisibilityStateChange?: (
     type: 'vehicle-connection',
     value: DashboardVisibilityState['vehicle-connection'],
   ) => void;
@@ -70,11 +73,12 @@ export default function GridEditor({
   onConfigChange,
   editActions,
   previewControls,
-  visibleWidgetIds,
-  visibilityState,
-  onVisibilityStateChange,
+  visibleWidgetIds: requestedVisibleWidgetIds,
+  visibilityState = DEFAULT_DASHBOARD_VISIBILITY_STATE,
+  onVisibilityStateChange = () => {},
 }: GridEditorProps) {
   const widgets = Array.isArray(config.widgets) ? config.widgets.map(sanitizeWidgetInstance) : [];
+  const visibleWidgetIds = requestedVisibleWidgetIds ?? widgets.map((widget) => widget.id);
   const visibleWidgetIdSet = new Set(visibleWidgetIds);
   const visibleWidgets = widgets.filter((widget) => visibleWidgetIdSet.has(widget.id));
   const [editingId, setEditingId] = useState<string | null>(null);

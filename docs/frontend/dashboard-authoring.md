@@ -116,7 +116,7 @@ For `vehicleStatus` chips, the definition also owns the semantic availability be
 - `never_seen` fields render the shared blue `Unavailable` chip with tooltip context when available.
 - Composite status chips such as windows or tonneau should treat any current subfield as current, otherwise fall back to historical if any constituent field has been seen before.
 
-For source-backed chips, define the canonical behavior in `packages/dashboards/src/widgets/sensor/sensorDefinitions.ts`. Keep default dashboard JSON minimal when a definition already owns the source, unit, formula, inline secondary, label suffix, icon, value color, and graph defaults. Use widget `options` only for per-instance overrides such as `chargingConnectionVisibility` or an accent border.
+For source-backed chips, define the canonical behavior in `packages/dashboards/src/widgets/sensor/sensorDefinitions.ts`. Keep default dashboard JSON minimal when a definition already owns the source, unit, formula, inline secondary, label suffix, icon, value color, and graph defaults. Use widget `options` only for presentation overrides such as an accent border. Conditional visibility belongs in the typed `visibility` field, not widget options.
 
 The editor exposes the same language under the sensor settings:
 
@@ -159,6 +159,22 @@ Default dashboards and user dashboards should share the same basic behaviors:
 - lock handling
 - clone/customize
 - import/export
+
+### Conditional Visibility
+
+Every widget can opt into shared conditional visibility:
+
+```json
+{
+  "visibility": [
+    { "type": "vehicle-connection", "value": "plugged" }
+  ]
+}
+```
+
+Multiple rules use AND semantics. An absent or empty rule list means Always. The shared widget editor exposes Always, Vehicle plugged in, and Vehicle unplugged. When a visibility edit would hide the selected widget, the editor switches its temporary preview to keep that widget selected. A manual preview change that hides it closes the form.
+
+Condition definitions, labels, values, live-state resolvers, and legacy normalization live in `packages/dashboards/src/dashboardVisibility.ts`. Add future condition types there and extend the schema; do not branch on dashboard slug. The editor canvas and data manifest use only preview-visible widgets, but mutations always apply to the full draft so overlapping state-specific layouts cannot erase one another.
 
 ## Bundled Baseline Contract
 
@@ -208,15 +224,19 @@ Dashboard layout persistence remains explicit-save:
 - Save writes the whole sanitized dashboard config through the dashboard mutation hooks.
 - Cancel discards the local draft and returns to the last saved config.
 - Successful mutations update the dashboard list and by-slug caches immediately, then invalidate for server truth.
+- Exact Settings actions also populate and invalidate by-ID caches; `/d/$slug?dashboardId=<uuid>` must fail inline rather than silently resolving a same-slug copy.
 - Failed saves keep edit mode open and surface an in-page error so the user's draft is not lost.
 
 Use Settings > Dashboards for durable dashboard management:
 
-- open or edit dashboards
-- duplicate a default into a user-owned copy
+- open or edit an exact system or personal dashboard row
+- customize a system default into a same-slug personal override
 - export YAML
-- reset user-owned copies
+- reset a same-slug personal override to fall back to its system default
+- delete standalone personal dashboards
 - admin/super-user lock, unlock, and restore bundled defaults
+
+Normal routing selects a same-slug personal dashboard before the system default. Settings marks that row Active for you. System defaults remain installation-wide and admin-managed; Restore bundled is distinct from personal Reset to default.
 
 ## Data and Adapter Rules
 

@@ -174,7 +174,15 @@ function writeDashboardCache(qc: QueryClient, dashboard: DashboardConfig) {
 }
 
 function removeDashboardFromCache(qc: QueryClient, id: string) {
+  const removed = qc.getQueryData<DashboardConfig[]>(['dashboards'])
+    ?.find((entry) => entry.id === id);
   qc.removeQueries({ queryKey: ['dashboards', 'id', id], exact: true });
+  if (removed) {
+    const bySlug = qc.getQueryData<DashboardConfig>(['dashboards', 'slug', removed.slug]);
+    if (bySlug?.id === id) {
+      qc.removeQueries({ queryKey: ['dashboards', 'slug', removed.slug], exact: true });
+    }
+  }
   qc.setQueryData<DashboardConfig[]>(['dashboards'], (current) =>
     current ? current.filter((entry) => entry.id !== id) : current
   );

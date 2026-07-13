@@ -49,6 +49,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 | Document | Audience | Source of truth | Update when | Scope |
 |---|---|---|---|---|
 | [`docs/guides/README.md`](./guides/README.md) | self-hosters and end users | repo, mirrored to GitHub Wiki | user-visible setup, operations, or product behavior changes | curated user-facing subset |
+| [`docs/guides/dashboard-customization.md`](./guides/dashboard-customization.md) | dashboard users and administrators | repo, mirrored to GitHub Wiki | dashboard ownership, precedence, or editing behavior changes | customization and recovery |
 | [`docs/privacy.md`](./privacy.md) | self-hosters and users | repo | data-flow or third-party request behavior changes | user guides, security |
 
 ## Documentation Rules
