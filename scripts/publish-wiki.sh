@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# publish-wiki.sh - push docs/wiki-drafts pages to the GitHub Wiki
+# publish-wiki.sh - push docs/guides pages to the GitHub Wiki
 #
 # Usage: ./scripts/publish-wiki.sh [--dry-run|--validate-only]
 #
 # Requires: git, gh (GitHub CLI), repo write access
-# The script validates draft naming, optionally clones the wiki repo into a
+# The script validates guide naming, optionally clones the wiki repo into a
 # temp dir, copies pages, commits, and pushes. Run from the repo root.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WIKI_DRAFTS="$REPO_ROOT/docs/wiki-drafts"
+GUIDES_DIR="$REPO_ROOT/docs/guides"
 DRY_RUN=false
 VALIDATE_ONLY=false
 
@@ -19,19 +19,19 @@ if [[ "${1:-}" == "--dry-run" ]]; then
   echo "DRY RUN - no changes will be pushed"
 elif [[ "${1:-}" == "--validate-only" ]]; then
   VALIDATE_ONLY=true
-  echo "VALIDATE ONLY - checking wiki-draft publishability without cloning or pushing"
+  echo "VALIDATE ONLY - checking guide publishability without cloning or pushing"
 fi
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "Copying wiki-draft pages ..."
+echo "Copying user-guide pages ..."
 declare -A seen_wiki_names
-for file in "$WIKI_DRAFTS"/*.md; do
+for file in "$GUIDES_DIR"/*.md; do
   [[ -f "$file" ]] || continue
   basename_file=$(basename "$file")
   [[ "$basename_file" == "README.md" ]] && continue
-  wiki_name=$(echo "$basename_file" | sed 's/^[0-9]*-//')
+  wiki_name="$basename_file"
   if [[ -n "${seen_wiki_names[$wiki_name]+_}" ]]; then
     echo "ERROR: wiki name collision - both '${seen_wiki_names[$wiki_name]}' and '$basename_file' would produce '$wiki_name'" >&2
     exit 1
@@ -41,7 +41,7 @@ for file in "$WIKI_DRAFTS"/*.md; do
 done
 
 if $VALIDATE_ONLY; then
-  echo "Validation complete - wiki-draft names are publishable"
+  echo "Validation complete - guide names are publishable"
   exit 0
 fi
 
@@ -64,11 +64,11 @@ if ! git clone "$WIKI_URL" "$TMPDIR/wiki" 2>/dev/null; then
   exit 1
 fi
 
-for file in "$WIKI_DRAFTS"/*.md; do
+for file in "$GUIDES_DIR"/*.md; do
   [[ -f "$file" ]] || continue
   basename_file=$(basename "$file")
   [[ "$basename_file" == "README.md" ]] && continue
-  wiki_name=$(echo "$basename_file" | sed 's/^[0-9]*-//')
+  wiki_name="$basename_file"
   cp "$file" "$TMPDIR/wiki/$wiki_name"
 done
 
@@ -90,6 +90,6 @@ GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
-git commit -m "docs: sync wiki from docs/wiki-drafts [automated]"
+git commit -m "docs: sync wiki from docs/guides [automated]"
 git push
 echo "Wiki updated successfully."
