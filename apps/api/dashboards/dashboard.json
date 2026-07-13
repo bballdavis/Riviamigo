@@ -20,7 +20,7 @@
       "title": "Overview Charts",
       "options": {
         "page": "overview",
-        "chartId": "soc-history",
+        "chartId": "projected-range-mileage",
         "chartIds": [
           "soc-history",
           "charge-level",

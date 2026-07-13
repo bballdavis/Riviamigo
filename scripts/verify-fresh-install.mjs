@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Disposable new-user verification. Run from a clean worktree:
- *   node scripts/verify-fresh-install.mjs --mode all --production-env /path/to/fresh.env
+ *   node scripts/verify-fresh-install.mjs --mode all --production-env /path/to/fresh.env --source-build
  * The env file is intentionally caller-owned: it must contain valid production
  * secrets and is never copied into this repository or logged by this script.
  */
@@ -15,9 +15,14 @@ const args = process.argv.slice(2);
 const value = (name) => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
 const mode = value('--mode') ?? 'all';
 const productionEnv = value('--production-env');
+const imageTag = value('--image-tag');
+const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
-const compose = ['compose', '-p', project, '-f', 'compose/docker-compose.prod.yml'];
+const compose = [
+  'compose', '-p', project, '-f', 'compose/docker-compose.yml',
+  ...(sourceBuild ? ['-f', 'compose/docker-compose.build.yml'] : []),
+];
 let productionStarted = false;
 let productionEnvironment;
 
@@ -92,10 +97,14 @@ function sortJson(value) {
 
 async function verifyProduction() {
   if (!productionEnv || !existsSync(productionEnv)) throw new Error('--production-env must point to a valid, ephemeral production env file.');
-  const environment = { ...process.env, RIVIAMIGO_ORIGIN_PORT: port };
+  const environment = {
+    ...process.env,
+    RIVIAMIGO_ORIGIN_PORT: port,
+    ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
+  };
   productionEnvironment = environment;
   run('docker', [...compose, '--env-file', productionEnv, 'config', '--quiet'], { env: environment });
-  run('docker', [...compose, '--env-file', productionEnv, 'up', '--build', '-d'], { env: environment });
+  run('docker', [...compose, '--env-file', productionEnv, 'up', ...(sourceBuild ? ['--build'] : []), '-d'], { env: environment });
   productionStarted = true;
   await verifyOwnerSetup(`http://localhost:${port}`);
 }

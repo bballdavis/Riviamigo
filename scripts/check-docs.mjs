@@ -96,7 +96,7 @@ function fileExists(relativePath) {
 }
 
 function collectEnvVars() {
-  const envFiles = ["compose/.env.example", "compose/.env.full.example", "apps/api/.env.example", "apps/web/.env.example"];
+  const envFiles = ["compose/.env.example", "compose/.env.full.example"];
   const names = new Set();
 
   for (const relativePath of envFiles) {
@@ -233,7 +233,8 @@ function checkEnvVarReferences() {
 }
 
 function checkProductionDeploymentContract() {
-  const productionCompose = readFile("compose/docker-compose.prod.yml");
+  const productionCompose = readFile("compose/docker-compose.yml");
+  const buildCompose = readFile("compose/docker-compose.build.yml");
   const nginxConfig = readFile("compose/nginx/nginx.conf");
 
   for (const requiredSnippet of [
@@ -241,8 +242,9 @@ function checkProductionDeploymentContract() {
     "JWT_SECRET: ${JWT_SECRET}",
     "JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}",
     "AGE_ENCRYPTION_KEY: ${AGE_ENCRYPTION_KEY}",
+    "RIVIAMIGO_ENV: ${RIVIAMIGO_ENV:-production}",
+    "ghcr.io/bballdavis}/riviamigo-api:${IMAGE_TAG:-latest}",
     "redis:",
-    "context: ../apps/api",
   ]) {
     if (!productionCompose.includes(requiredSnippet)) {
       fail(`production compose is missing required secure-deployment contract: ${requiredSnippet}`);
@@ -253,6 +255,16 @@ function checkProductionDeploymentContract() {
     if (productionCompose.includes(forbiddenSnippet)) {
       fail(`production compose must not include direct-public deployment setting: ${forbiddenSnippet}`);
     }
+  }
+
+  for (const requiredSnippet of ["context: ../apps/api", "dockerfile: compose/nginx/Dockerfile"]) {
+    if (!buildCompose.includes(requiredSnippet)) {
+      fail(`build overlay is missing required source-build contract: ${requiredSnippet}`);
+    }
+  }
+
+  if (productionCompose.includes("build:")) {
+    fail("standard Compose must pull published images instead of defining build contexts");
   }
 
   for (const requiredSnippet of ["resolver 127.0.0.11", "http://api:3001", "listen 8080;"]) {

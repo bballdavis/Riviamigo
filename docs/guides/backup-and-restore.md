@@ -7,7 +7,7 @@ Your TimescaleDB volume holds Riviamigo's application data, telemetry, dashboard
 From the repository root:
 
 ```bash
-docker compose --env-file .env -f compose/docker-compose.prod.yml exec -T timescaledb \
+docker compose --env-file .env -f compose/docker-compose.yml exec -T timescaledb \
   pg_dump -U "$POSTGRES_USER" -Fc riviamigo > riviamigo-$(date +%Y%m%d-%H%M%S).dump
 ```
 
@@ -24,10 +24,10 @@ pg_restore --list riviamigo-YYYYMMDD-HHMMSS.dump
 Restoring replaces database data. Stop the API first and test this process on a non-production copy when possible.
 
 ```bash
-docker compose --env-file .env -f compose/docker-compose.prod.yml stop api
-docker compose --env-file .env -f compose/docker-compose.prod.yml exec -T timescaledb \
+docker compose --env-file .env -f compose/docker-compose.yml stop api
+docker compose --env-file .env -f compose/docker-compose.yml exec -T timescaledb \
   pg_restore -U "$POSTGRES_USER" -d riviamigo --clean --if-exists --no-owner < riviamigo-YYYYMMDD-HHMMSS.dump
-docker compose --env-file .env -f compose/docker-compose.prod.yml start api
+docker compose --env-file .env -f compose/docker-compose.yml start api
 ```
 
 Use the same PostgreSQL and TimescaleDB major versions as the source where possible. A version change needs the relevant PostgreSQL/TimescaleDB upgrade procedure rather than a blind restore.

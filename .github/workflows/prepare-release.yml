@@ -1,0 +1,37 @@
+name: Prepare calendar release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-calendar-release
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Calculate and push the next Calendar Version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          month="$(date -u +%Y.%m)"
+          mapfile -t tags < <(git tag --list "${month}.*")
+          version="$(node scripts/next-release-version.mjs --month "$month" "${tags[@]}")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$version" -m "Release $version"
+          git push origin "$version"
+
+      - name: Report release tag
+        run: echo "Created Calendar Version ${{ steps.version.outputs.version }} from main."

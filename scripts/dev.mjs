@@ -7,7 +7,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(scriptDir, '..');
 const apiDir = resolve(rootDir, 'apps/api');
 const webDir = resolve(rootDir, 'apps/web');
-const composeFile = resolve(rootDir, 'compose/docker-compose.yml');
+const composeFile = resolve(rootDir, 'compose/docker-compose.dev.yml');
 const isWindows = process.platform === 'win32';
 
 function parsePort(value, fallback) {

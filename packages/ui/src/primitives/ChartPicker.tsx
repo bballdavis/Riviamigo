@@ -17,6 +17,7 @@ export interface ChartPickerProps<TValue extends string = string> {
   selectLabel?: string;
   className?: string;
   trailing?: React.ReactNode;
+  footer?: React.ReactNode;
   variant?: 'default' | 'compact';
 }
 
@@ -30,6 +31,7 @@ export function ChartPicker<TValue extends string = string>({
   selectLabel = 'Chart',
   className,
   trailing,
+  footer,
   variant = 'default',
 }: ChartPickerProps<TValue>) {
   const [isOpen, setIsOpen] = React.useState(false);
@@ -87,27 +89,30 @@ export function ChartPicker<TValue extends string = string>({
           <ChevronDown className={cn('h-4 w-4 shrink-0 text-fg-tertiary transition-transform', isOpen && 'rotate-180')} />
         </button>
         {isOpen ? (
-          <div role="listbox" className="absolute left-0 top-[calc(100%+0.375rem)] z-40 min-w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
-            {options.map((option) => {
-              const isSelected = option.value === value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => handleSelect(option.value)}
-                  className={cn(
-                    'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm text-fg transition-colors',
-                    'hover:bg-bg-elevated focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
-                    isSelected && 'bg-accent/10 text-accent',
-                  )}
-                >
-                  <span className="truncate">{option.label}</span>
-                  {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                </button>
-              );
-            })}
+          <div className="absolute left-0 top-[calc(100%+0.375rem)] z-40 min-w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
+            <div role="listbox">
+              {options.map((option) => {
+                const isSelected = option.value === value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelect(option.value)}
+                    className={cn(
+                      'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm text-fg transition-colors',
+                      'hover:bg-bg-elevated focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+                      isSelected && 'bg-accent/10 text-accent',
+                    )}
+                  >
+                    <span className="truncate">{option.label}</span>
+                    {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {footer ? <div className="mt-1 border-t border-border pt-1">{footer}</div> : null}
           </div>
         ) : null}
       </div>
@@ -155,35 +160,37 @@ export function ChartPicker<TValue extends string = string>({
 
       {isOpen ? (
         <div
-          role="listbox"
           className={cn(
             'absolute left-0 right-0 top-[calc(100%+0.375rem)] z-40 max-h-72 overflow-y-auto rounded-lg border border-border bg-bg-surface p-1 shadow-lg',
           )}
         >
-          {visibleOptions.length > 0 ? (
-            visibleOptions.map((option) => {
-              const isSelected = option.value === value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => handleSelect(option.value)}
-                  className={cn(
-                    'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm text-fg transition-all',
-                    'hover:-mx-1 hover:w-[calc(100%+0.5rem)] hover:bg-bg-elevated hover:px-4',
-                    isSelected && 'bg-accent/10 text-accent',
-                  )}
-                >
-                  <span className="truncate">{option.label}</span>
-                  {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                </button>
-              );
-            })
-          ) : (
-            <div className="px-3 py-3 text-sm text-fg-tertiary">No charts found</div>
-          )}
+          <div role="listbox">
+            {visibleOptions.length > 0 ? (
+              visibleOptions.map((option) => {
+                const isSelected = option.value === value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelect(option.value)}
+                    className={cn(
+                      'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm text-fg transition-all',
+                      'hover:-mx-1 hover:w-[calc(100%+0.5rem)] hover:bg-bg-elevated hover:px-4',
+                      isSelected && 'bg-accent/10 text-accent',
+                    )}
+                  >
+                    <span className="truncate">{option.label}</span>
+                    {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-3 py-3 text-sm text-fg-tertiary">No charts found</div>
+            )}
+          </div>
+          {footer ? <div className="mt-1 border-t border-border pt-1">{footer}</div> : null}
         </div>
       ) : null}
     </div>

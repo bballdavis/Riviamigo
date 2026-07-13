@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Starting Riviamigo production server..."
+echo "🚀 Starting Riviamigo development server..."
 echo ""
 
 # Source .env so DATABASE_URL, REDIS_URL, etc. are available for health checks
@@ -37,15 +37,15 @@ export COMPOSE_PROJECT_NAME="riviamigo"
 
 # Ensure infrastructure is running
 echo "📦 Starting infrastructure (TimescaleDB, Redis, Garage)..."
-docker compose -f compose/docker-compose.yml up -d timescaledb redis garage
+docker compose -f compose/docker-compose.dev.yml up -d timescaledb redis garage
 
 # Wait for services to be healthy using Docker's own health status rather than
 # a fixed sleep so the script proceeds as soon as the DB is ready instead of
 # racing a timer.
 echo "⏳ Waiting for services to be ready..."
-docker compose -f compose/docker-compose.yml wait timescaledb 2>/dev/null || \
-  docker compose -f compose/docker-compose.yml up --wait timescaledb redis 2>/dev/null || \
-  until docker compose -f compose/docker-compose.yml exec -T timescaledb pg_isready -U riviamigo -d riviamigo -q 2>/dev/null; do
+docker compose -f compose/docker-compose.dev.yml wait timescaledb 2>/dev/null || \
+  docker compose -f compose/docker-compose.dev.yml up --wait timescaledb redis 2>/dev/null || \
+  until docker compose -f compose/docker-compose.dev.yml exec -T timescaledb pg_isready -U riviamigo -d riviamigo -q 2>/dev/null; do
     sleep 1
   done
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
   schedule:
@@ -350,7 +350,7 @@ jobs:
           exit 1
 
   container-build:
-    name: Container build (production Compose)
+    name: Container build (standard Compose plus source overlay)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -365,5 +365,5 @@ jobs:
           AGE_ENCRYPTION_KEY: AGE-SECRET-KEY-1CI
           ALLOWED_ORIGINS: https://ci.example.test
         run: |
-          docker compose -f compose/docker-compose.prod.yml config --quiet
-          docker compose -f compose/docker-compose.prod.yml build
+          docker compose -f compose/docker-compose.yml -f compose/docker-compose.build.yml config --quiet
+          docker compose -f compose/docker-compose.yml -f compose/docker-compose.build.yml build
