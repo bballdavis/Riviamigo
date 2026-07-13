@@ -18,6 +18,7 @@ export interface PhantomDrainChartProps {
   yUnit?: string | undefined;
   emptyTitle?: string | undefined;
   yRange?: [number, number] | undefined;
+  interactionMode?: 'standard' | 'touch-explore' | undefined;
 }
 
 function isFiniteNumber(value: number | null | undefined): value is number {
@@ -80,6 +81,7 @@ export function PhantomDrainChart({
   yUnit = '%/h',
   emptyTitle = 'No phantom drain data for this period',
   yRange,
+  interactionMode = 'standard',
 }: PhantomDrainChartProps) {
   const data = React.useMemo(() => buildPhantomDrainDailySeries(periods), [periods]);
 
@@ -123,6 +125,7 @@ export function PhantomDrainChart({
       {...(yRange ? { yRange } : {})}
       mode="bar"
       smoothing={0}
+      interactionMode={interactionMode}
     />
   );
 }

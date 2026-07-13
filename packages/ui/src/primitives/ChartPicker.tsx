@@ -17,6 +17,7 @@ export interface ChartPickerProps<TValue extends string = string> {
   selectLabel?: string;
   className?: string;
   trailing?: React.ReactNode;
+  variant?: 'default' | 'compact';
 }
 
 export function ChartPicker<TValue extends string = string>({
@@ -29,6 +30,7 @@ export function ChartPicker<TValue extends string = string>({
   selectLabel = 'Chart',
   className,
   trailing,
+  variant = 'default',
 }: ChartPickerProps<TValue>) {
   const [isOpen, setIsOpen] = React.useState(false);
   const rootRef = React.useRef<HTMLDivElement>(null);
@@ -65,6 +67,51 @@ export function ChartPicker<TValue extends string = string>({
   function handleSelect(nextValue: TValue) {
     onChange(nextValue);
     setIsOpen(false);
+  }
+
+  if (variant === 'compact') {
+    return (
+      <div ref={rootRef} className={cn('relative', className)}>
+        <button
+          type="button"
+          aria-label={selectLabel}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          onClick={() => setIsOpen((current) => !current)}
+          className={cn(
+            'flex h-10 max-w-[min(16rem,calc(100vw-8rem))] items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm font-medium text-fg',
+            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
+          )}
+        >
+          <span className="truncate">{selectedOption?.label ?? 'Select chart'}</span>
+          <ChevronDown className={cn('h-4 w-4 shrink-0 text-fg-tertiary transition-transform', isOpen && 'rotate-180')} />
+        </button>
+        {isOpen ? (
+          <div role="listbox" className="absolute left-0 top-[calc(100%+0.375rem)] z-40 min-w-56 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-border bg-bg-surface p-1 shadow-lg">
+            {options.map((option) => {
+              const isSelected = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => handleSelect(option.value)}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm text-fg transition-colors',
+                    'hover:bg-bg-elevated focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+                    isSelected && 'bg-accent/10 text-accent',
+                  )}
+                >
+                  <span className="truncate">{option.label}</span>
+                  {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   return (

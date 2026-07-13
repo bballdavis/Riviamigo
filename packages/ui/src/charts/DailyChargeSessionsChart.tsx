@@ -201,7 +201,7 @@ export function DailyChargingBarChart({
   );
 
   const setDayHoverFromEvent = React.useCallback(
-    (dayLocal: string, event: React.MouseEvent<SVGElement>) => {
+    (dayLocal: string, event: React.MouseEvent<SVGElement> | React.PointerEvent<SVGElement>) => {
       const bounds = chartRef.current?.getBoundingClientRect();
       if (!bounds) {
         return;
@@ -405,6 +405,10 @@ export function DailyChargingBarChart({
                   pointerEvents="all"
                   role="button"
                   tabIndex={0}
+                  onPointerEnter={(event) => setDayHoverFromEvent(day.day_local, event)}
+                  onPointerMove={(event) => setDayHoverFromEvent(day.day_local, event)}
+                  onPointerDown={(event) => setDayHoverFromEvent(day.day_local, event)}
+                  onPointerLeave={() => setHoverState((current) => (current?.dayLocal === day.day_local ? null : current))}
                   onMouseEnter={(event) => setDayHoverFromEvent(day.day_local, event)}
                   onMouseMove={(event) => setDayHoverFromEvent(day.day_local, event)}
                   onMouseLeave={() => setHoverState((current) => (current?.dayLocal === day.day_local ? null : current))}

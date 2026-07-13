@@ -1,6 +1,6 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { SlidersHorizontal, X } from 'lucide-react';
+import { Maximize2, SlidersHorizontal, X } from 'lucide-react';
 import {
   useBatteryMileage,
   useChargeCurve,
@@ -51,6 +51,7 @@ import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
 import { PhantomDrainChart } from './PhantomDrainChart';
+import { MobileChartViewer } from './MobileChartViewer';
 
 export { buildPhantomDrainDailySeries } from './PhantomDrainChart';
 
@@ -142,7 +143,9 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   // smoothing: 0 = off, >0 = smoothing amount (0–1)
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [viewerOpen, setViewerOpen] = React.useState(false);
   const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
@@ -264,6 +267,21 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     </div>
   );
 
+  const chartControls = (
+    <div className="flex items-center gap-2">
+      {settingsButton}
+      <button
+        ref={expandTriggerRef}
+        type="button"
+        aria-label="Expand chart"
+        onClick={() => setViewerOpen(true)}
+        className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent sm:hidden"
+      >
+        <Maximize2 className="h-4 w-4" />
+      </button>
+    </div>
+  );
+
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       {options.showPicker && chartOptions.length > 1 ? (
@@ -275,7 +293,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           searchValue={search}
           onSearchChange={setSearch}
           className="shrink-0"
-          trailing={settingsButton}
+          trailing={chartControls}
         />
       ) : instance.title ? (
         // Compact header: title + optional subtitle on the left, settings button on
@@ -289,15 +307,17 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
               <p className="mt-0.5 text-xs text-fg-tertiary">{options.headerSubtitle}</p>
             )}
           </div>
-          <div className="shrink-0">{settingsButton}</div>
+          <div className="shrink-0">{chartControls}</div>
         </div>
       ) : (
         // No title and no picker — float the button so it doesn't consume height.
-        <div className="absolute right-0 top-0 z-10">{settingsButton}</div>
+        <div className="absolute right-0 top-0 z-10">{chartControls}</div>
       )}
-      <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
-        <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} settings={activeSettings} />
-      </div>
+      {!viewerOpen ? (
+        <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
+          <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} settings={activeSettings} />
+        </div>
+      ) : null}
       <ChartSettingsPanel
         open={settingsOpen}
         triggerRef={settingsTriggerRef}
@@ -347,6 +367,28 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           }))
         }
       />
+      {viewerOpen ? (
+        <MobileChartViewer
+          chartId={activeChartId}
+          chartTitle={activeChartDefinition?.title ?? instance.title ?? 'Chart'}
+          chartOptions={chartOptions}
+          onChartChange={setChartId}
+          onClose={() => {
+            setViewerOpen(false);
+            requestAnimationFrame(() => expandTriggerRef.current?.focus());
+          }}
+        >
+          {(viewerHeight) => (
+            <DashboardChartRenderer
+              chartId={activeChartId}
+              ctx={ctx}
+              height={viewerHeight}
+              settings={activeSettings}
+              presentation="mobile-viewer"
+            />
+          )}
+        </MobileChartViewer>
+      ) : null}
     </div>
   );
 }
@@ -357,12 +399,14 @@ export function DashboardChartRenderer({
   height,
   smoothing = 0,
   settings,
+  presentation = 'embedded',
 }: {
   chartId: string;
   ctx: WidgetCtx;
   height: number;
   smoothing?: number;
   settings?: DashboardChartDisplaySettings;
+  presentation?: 'embedded' | 'mobile-viewer';
 }) {
   const definition = getChartDefinition(normalizeChartId(chartId));
   const source = definition?.source;
@@ -426,6 +470,7 @@ export function DashboardChartRenderer({
   const xRange = getManualAxisRange(settings?.axes?.x);
   const yRange = getManualAxisRange(settings?.axes?.y);
   const yRightRange = getManualAxisRange(settings?.axes?.y2);
+  const interactionMode = presentation === 'mobile-viewer' ? 'touch-explore' as const : 'standard' as const;
 
   switch (definition.source) {
     case 'soc_history':
@@ -437,6 +482,7 @@ export function DashboardChartRenderer({
         range.map((point) => ({ ts: point.ts, value: point.value })),
         rendererSmoothing,
         yRange,
+        interactionMode,
       );
     case 'charging_sessions_energy':
       return (
@@ -470,6 +516,7 @@ export function DashboardChartRenderer({
           smoothing={rendererSmoothing}
           startedAt={ctx.from || null}
           sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
+          interactionMode={interactionMode}
           {...(yRange ? { yRange } : {})}
           {...(yRightRange ? { yRightRange } : {})}
         />
@@ -481,12 +528,13 @@ export function DashboardChartRenderer({
           data={chargeCurveAnalysis}
           loading={chargeCurveAnalysisLoading}
           height={height}
+          interactionMode={interactionMode}
           {...(xRange ? { xRange } : {})}
           {...(yRange ? { yRange } : {})}
         />
       );
     case 'efficiency_trend':
-      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={rendererSmoothing} {...(yRange ? { yRange } : {})} />;
+      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={rendererSmoothing} interactionMode={interactionMode} {...(yRange ? { yRange } : {})} />;
     case 'efficiency_temperature':
       return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} />;
     case 'efficiency_mode':
@@ -500,10 +548,11 @@ export function DashboardChartRenderer({
           emptyTitle={definition.emptyTitle}
           yUnit={definition.yUnit}
           yRange={yRange ?? definition.yRange}
+          interactionMode={interactionMode}
         />
       );
     case 'battery_degradation':
-      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), rendererSmoothing, yRange);
+      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), rendererSmoothing, yRange, interactionMode);
     case 'battery_capacity_mileage':
       return (
         <BatteryCapacityMileageChart
@@ -512,6 +561,7 @@ export function DashboardChartRenderer({
           height={height}
           points={mileagePoints}
           smoothing={rendererSmoothing}
+          interactionMode={interactionMode}
           {...(xRange ? { xRange } : {})}
           {...(yRange ? { yRange } : {})}
         />
@@ -524,6 +574,7 @@ export function DashboardChartRenderer({
           height={height}
           points={mileagePoints}
           smoothing={rendererSmoothing}
+          interactionMode={interactionMode}
           {...(yRange ? { yRange } : {})}
           {...(yRightRange ? { yRightRange } : {})}
         />
@@ -539,6 +590,7 @@ function renderSocHistoryChart(
   range: Array<{ ts: string; value: number | null }>,
   smoothing = 0,
   manualYRange?: [number, number],
+  interactionMode: 'standard' | 'touch-explore' = 'standard',
 ) {
   const rangeByTimestamp = new Map(range.map((point) => [point.ts, point.value]));
 
@@ -568,6 +620,7 @@ function renderSocHistoryChart(
       stepInterpolation={definition.stepInterpolation && smoothing <= 0}
       mode={definition.mode}
       smoothing={smoothing}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -579,6 +632,7 @@ function renderSingleChart(
   data: Array<{ ts: string; value: number | null }>,
   smoothing = 0,
   manualYRange?: [number, number],
+  interactionMode: 'standard' | 'touch-explore' = 'standard',
 ) {
   return (
     <RichTimeSeriesChart
@@ -592,6 +646,7 @@ function renderSingleChart(
       stepInterpolation={definition.stepInterpolation && smoothing <= 0}
       mode={definition.mode}
       smoothing={smoothing}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -644,6 +699,7 @@ function ChargeSessionCurveChart({
   sessionEnergyKwh,
   yRange,
   yRightRange,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   data: ChargeCurvePoint[];
@@ -654,6 +710,7 @@ function ChargeSessionCurveChart({
   sessionEnergyKwh: number | null;
   yRange?: [number, number];
   yRightRange?: [number, number];
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   const allRows = data.filter((point) => Number.isFinite(point.soc_pct) && Number.isFinite(point.power_kw));
 
@@ -787,6 +844,7 @@ function ChargeSessionCurveChart({
       xValueFormatter={useTime ? undefined : (value) => `${Math.round(value)}%`}
       xSplits={xSplits}
       smoothing={smoothing}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -798,6 +856,7 @@ function ChargingCurveAnalysisChart({
   height,
   xRange,
   yRange,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   data: ChargeCurveAnalysisPoint[];
@@ -805,6 +864,7 @@ function ChargingCurveAnalysisChart({
   height: number;
   xRange?: [number, number];
   yRange?: [number, number];
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   const rows = data
     .filter((point): point is ChargeCurveAnalysisPoint & { soc_pct: number; charge_rate_kw: number } =>
@@ -865,6 +925,7 @@ function ChargingCurveAnalysisChart({
       mode="scatter"
       xValueFormatter={(value) => `${Math.round(value)}%`}
       smoothing={0}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -1003,6 +1064,7 @@ function EfficiencyTrendChart({
   height,
   smoothing,
   yRange,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   trend: Array<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }>;
@@ -1010,6 +1072,7 @@ function EfficiencyTrendChart({
   height: number;
   smoothing?: number;
   yRange?: [number, number];
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   const unit = getEfficiencyUnit();
   return (
@@ -1026,6 +1089,7 @@ function EfficiencyTrendChart({
       yRange={yRange}
       mode={definition.mode}
       smoothing={smoothing}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -1105,6 +1169,7 @@ function BatteryCapacityMileageChart({
   smoothing,
   xRange,
   yRange,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ x: number | null; y: number | null; degradationPct: number | null }>;
@@ -1113,6 +1178,7 @@ function BatteryCapacityMileageChart({
   smoothing?: number;
   xRange?: [number, number];
   yRange?: [number, number];
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   const rows = points
     .filter((point): point is { x: number; y: number; degradationPct: number | null } => point.x != null && point.y != null)
@@ -1174,6 +1240,7 @@ function BatteryCapacityMileageChart({
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
       yValueFormatter={(value, unit) => formatChartNumber(value, unit, yPrecision)}
       smoothing={smoothing}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -1186,6 +1253,7 @@ function ProjectedRangeMileageChart({
   smoothing,
   yRange: manualYRange,
   yRightRange,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ ts: string; rangeMi: number | null; projectedMaxRangeMi: number | null; x: number | null }>;
@@ -1194,6 +1262,7 @@ function ProjectedRangeMileageChart({
   smoothing?: number;
   yRange?: [number, number];
   yRightRange?: [number, number];
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   const rows = points
     .filter((point) => point.x != null)
@@ -1234,6 +1303,7 @@ function ProjectedRangeMileageChart({
       yRightRange={yRightRange}
       mode={definition.mode}
       smoothing={smoothing}
+      interactionMode={interactionMode}
     />
   );
 }
