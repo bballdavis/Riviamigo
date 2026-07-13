@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { DashboardTimeframe } from '@riviamigo/types';
 import type { DashboardDataRequirements } from './dashboardData';
+import type { DashboardVisibilityState } from './dashboardVisibility';
 import type { DashboardComponentType, WidgetInstance } from './schema';
 
 export type { WidgetInstance };
@@ -17,6 +18,8 @@ export interface WidgetCtx {
   chargeSessionEnergyKwh?: number | null;
   updateWidgetOptions?: (widgetId: string, patch: Record<string, unknown>) => void;
   updateWidgetLayout?: (widgetId: string, nextHeight: number) => void;
+  /** Temporary editor preview state; absent in normal dashboard view mode. */
+  visibilityState?: DashboardVisibilityState;
 }
 
 export interface WidgetEditorMeta {

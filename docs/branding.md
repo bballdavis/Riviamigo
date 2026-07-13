@@ -57,9 +57,11 @@ Common usage:
 ## Icon And Control Rules
 
 - Preserve icon family consistency inside a page and within shared admin/dashboard surfaces.
+- Use the full battery glyph for the shared Battery main-navigation destination; reserve level-specific battery glyphs for live status indicators.
 - Prefer icon-plus-label patterns already established by shared primitives instead of inventing one-off controls.
 - Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
 - Dashboard toolbar controls use the elevated surface consistently across vehicle selection, efficiency toggles, and date-range triggers.
+- Dashboard management rows use matching secondary icon-plus-label buttons for Open, Edit, and Export. Action groups wrap on small screens without shrinking below touch-safe targets; destructive Reset, Delete, and Restore actions remain visually distinct.
 - User-facing choice menus use the shared `SelectPicker` surface with a checkmarked selected state, keyboard navigation, and in-app dismissal; native browser select menus are not part of the product UI.
 - Dashboard edit mode uses compact icon controls directly on each widget. Keep edit and move controls visibly present with subdued default contrast, strengthen them on hover/focus/selection, and never make pointer hover the only way to discover or activate them.
 - Resizable dashboard widgets use a persistent subtle corner handle in edit mode. Fixed-size widgets use a lock indicator and must not expose a resize hit target.
@@ -72,6 +74,7 @@ Common usage:
 - On mobile, the same shared surface should fall back to a bottom sheet or modal with safe-area padding, clear dismissal, and stacked full-width controls.
 - Mobile primary navigation is a full-screen sheet, not a scaled-down desktop rail. Keep destination navigation at the top and vehicle/account utilities at the bottom; use an explicit close control, preserve focus on dismissal, and provide at least 44px touch targets (56px for primary destinations).
 - The dashboard editor follows this rule as a bounded bottom panel on mobile and must reserve enough document space to keep widget controls scrollable above it.
+- Conditional dashboard previews use a compact labeled segmented control in the shared editor drawer. The selected state uses the existing accent treatment, while both choices remain readable and touch-safe on mobile.
 - Compact controls still need touch-safe hit targets, readable labels, and enough spacing for numeric inputs, segmented toggles, and sliders.
 - Reusable settings panels should stay within shared seams such as `packages/ui`, dashboard widgets, or shared shell controls rather than route-local popovers.
 

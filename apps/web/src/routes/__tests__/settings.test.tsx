@@ -27,6 +27,7 @@ const dashboardMocks = vi.hoisted(() => ({
   dashboards: [] as Array<Record<string, unknown>>,
   downloadDashboardYaml: vi.fn(),
   cloneMutateAsync: vi.fn(),
+  createMutateAsync: vi.fn(),
   deleteMutate: vi.fn(),
   lockMutate: vi.fn(),
   restoreMutate: vi.fn(),
@@ -214,7 +215,15 @@ vi.mock('@riviamigo/hooks', () => ({
 
 vi.mock('@riviamigo/dashboards', () => ({
   downloadDashboardYaml: dashboardMocks.downloadDashboardYaml,
-  useDashboards: () => ({ data: dashboardMocks.dashboards, isLoading: false }),
+  materializeUserDashboardDraft: (dashboard: Record<string, unknown>) => ({
+    ...dashboard,
+    id: 'personal-draft',
+    ownerId: null,
+    isDefault: false,
+    isLocked: false,
+  }),
+  useDashboards: () => ({ data: dashboardMocks.dashboards, isLoading: false, refetch: vi.fn() }),
+  useCreateDashboard: () => ({ mutateAsync: dashboardMocks.createMutateAsync, isPending: false }),
   useCloneDashboard: () => ({ mutateAsync: dashboardMocks.cloneMutateAsync, isPending: false, variables: undefined }),
   useDeleteDashboard: () => ({ mutate: dashboardMocks.deleteMutate, isPending: false, variables: undefined }),
   useSetAdminDashboardLock: () => ({ mutate: dashboardMocks.lockMutate, isPending: false, variables: undefined }),
@@ -290,6 +299,7 @@ describe('Settings page', () => {
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
+    dashboardMocks.createMutateAsync.mockReset();
     dashboardMocks.deleteMutate.mockReset();
     dashboardMocks.lockMutate.mockReset();
     dashboardMocks.restoreMutate.mockReset();
@@ -355,6 +365,16 @@ describe('Settings page', () => {
       ownerId: 'u1',
       widgets: [],
     });
+    dashboardMocks.createMutateAsync.mockResolvedValue({
+      id: 'personal-overview',
+      slug: 'overview',
+      name: 'Overview',
+      description: null,
+      isDefault: false,
+      isLocked: false,
+      ownerId: 'u1',
+      widgets: [],
+    });
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderSettings();
@@ -365,30 +385,40 @@ describe('Settings page', () => {
     expect(screen.getByText('Overview')).toBeInTheDocument();
     expect(screen.getByText('My Charging')).toBeInTheDocument();
     expect(screen.getByText('2 saved')).toBeInTheDocument();
+    const ownershipDetails = screen.getByText('How dashboard defaults and personal copies work').closest('details');
+    expect(ownershipDetails).not.toHaveAttribute('open');
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Open' })[0]!);
+    const openDefaultButton = screen.getByRole('button', { name: 'Open default' });
+    const firstExportButton = screen.getAllByRole('button', { name: 'Export' })[0]!;
+    expect(firstExportButton).toHaveAttribute('variant', openDefaultButton.getAttribute('variant'));
+
+    fireEvent.click(openDefaultButton);
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
       params: { slug: 'overview' },
-      search: {},
+      search: { dashboardId: 'default-overview' },
     });
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit default' }));
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
       params: { slug: 'overview' },
-      search: { edit: '1' },
+      search: { dashboardId: 'default-overview', edit: '1' },
     });
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Duplicate' })[0]!);
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
     await waitFor(() => {
-      expect(dashboardMocks.cloneMutateAsync).toHaveBeenCalledWith('default-overview');
+      expect(dashboardMocks.createMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'personal-draft',
+        slug: 'overview',
+        isDefault: false,
+      }));
     });
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/d/$slug',
-        params: { slug: 'overview-copy' },
-        search: { edit: '1' },
+        params: { slug: 'overview' },
+        search: { dashboardId: 'personal-overview', edit: '1' },
       });
     });
 
@@ -398,11 +428,54 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({ id: 'default-overview', locked: false });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
     expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('default-overview');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('user-charging');
+    confirmSpy.mockRestore();
+  });
+
+  it('marks a same-slug personal copy active and resets it back to the system default', () => {
+    dashboardMocks.dashboards = [
+      {
+        id: 'default-overview',
+        slug: 'overview',
+        name: 'Overview',
+        description: null,
+        isDefault: true,
+        isLocked: true,
+        ownerId: null,
+        widgets: [{ id: 'w1' }],
+      },
+      {
+        id: 'personal-overview',
+        slug: 'overview',
+        name: 'Overview',
+        description: null,
+        isDefault: false,
+        isLocked: false,
+        ownerId: 'u1',
+        widgets: [{ id: 'w2' }],
+      },
+    ];
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Dashboards'));
+
+    expect(screen.getAllByText('Active for you')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Customize' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open default' }));
+    expect(mockNavigate).toHaveBeenLastCalledWith({
+      to: '/d/$slug',
+      params: { slug: 'overview' },
+      search: { dashboardId: 'default-overview' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('personal-overview');
     confirmSpy.mockRestore();
   });
 

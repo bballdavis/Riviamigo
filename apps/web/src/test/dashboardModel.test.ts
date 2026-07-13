@@ -119,7 +119,7 @@ describe('dashboard model helpers', () => {
       },
     ];
 
-    const unplugged = resolveDashboardViewWidgets(widgets, { pluggedIn: false });
+    const unplugged = resolveDashboardViewWidgets(widgets, { 'vehicle-connection': 'unplugged' });
     expect(unplugged.map((widget) => widget.definitionId)).toEqual([
       'charging_home_share',
       'charging_dc_share',
@@ -128,7 +128,7 @@ describe('dashboard model helpers', () => {
     expect(unplugged[0]?.layout).toMatchObject({ x: 0, w: 6 });
     expect(unplugged[1]?.layout).toMatchObject({ x: 6, w: 6 });
 
-    const plugged = resolveDashboardViewWidgets(widgets, { pluggedIn: true });
+    const plugged = resolveDashboardViewWidgets(widgets, { 'vehicle-connection': 'plugged' });
     expect(plugged.map((widget) => widget.definitionId)).toEqual([
       'charging_home_share',
       'charging_dc_share',

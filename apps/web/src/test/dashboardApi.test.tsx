@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuth } from '@riviamigo/hooks';
-import { normalizeDashboardConfig, useDashboardBySlug, useDashboards, useUpdateDashboard } from '@riviamigo/dashboards';
+import { normalizeDashboardConfig, useDashboardById, useDashboardBySlug, useDashboards, useUpdateDashboard } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const dashboardConfig: DashboardConfig = {
@@ -140,6 +140,24 @@ describe('dashboard API wiring', () => {
 
     expect(result.current.data?.slug).toBe('battery');
     expect(result.current.data?.widgets).toHaveLength(1);
+  });
+
+  it('loads an exact dashboard ID without resolving through its slug', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(dashboardRecord()), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    const { result } = renderHook(() => useDashboardById(dashboardConfig.id), {
+      wrapper: wrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`/v1/dashboards/${dashboardConfig.id}`);
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('/by-slug/');
   });
 
   it('sends dashboard saves using the backend update envelope', async () => {
