@@ -31,6 +31,22 @@ Light or dark, wide screen or phone — Riviamigo is designed to stay easy to re
 - Shape dashboards around the things you actually care about.
 - Use the same responsive app from a desktop dashboard or your phone.
 
+## AI-assisted development
+
+Riviamigo uses AI coding tools, including Codex and Claude, as development assistants for exploration, implementation, tests, documentation, and review preparation. AI output is treated as untrusted draft work: a human contributor remains responsible for the change, its security, its behavior, and its license compatibility.
+
+Do not put Rivian credentials, access tokens, private keys, production data, precise vehicle locations, or other sensitive telemetry into prompts, issues, logs, or fixtures. Use synthetic or redacted data when asking for help. AI-assisted pull requests follow the same review, testing, documentation, and approval requirements as every other change; AI does not approve or merge its own work.
+
+See the [contributor review process](./docs/contributing.md) and [roadmap](./docs/roadmap.md) for the durable project policy and planned work.
+
+## Review and CI
+
+Every pull request should explain the change, its documentation impact, and the verification performed. Reviewers check the real ownership seam, authentication and data boundaries, telemetry truthfulness, failure handling, responsive behavior for UI changes, and whether tests cover the changed behavior.
+
+CI currently covers frontend typechecking, linting, unit coverage, Storybook, Playwright, and dashboard drift; backend formatting, SQLx metadata, Clippy, tests, and coverage; fresh-database/API health checks; production Compose validation; and security checks with `cargo audit`, `pnpm audit`, Gitleaks, Semgrep, and Trivy. Dependency and secret checks are blocking. Semgrep and Trivy currently report advisory findings while their baselines are hardened, so a green run is not a substitute for human security review.
+
+The [security architecture](./docs/security.md), [security audit](./docs/security-audit.md), and [contributor guide](./docs/contributing.md) describe the review boundaries and the commands to run locally.
+
 ## Get started locally
 
 The easiest way to try or contribute to Riviamigo is the local development stack.

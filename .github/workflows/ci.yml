@@ -19,6 +19,25 @@ env:
   RUST_TOOLCHAIN: stable
 
 jobs:
+  repo-hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject generated state and duplicate lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden=$(git ls-files | grep -E '(^|/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(/|$)|(^|/)package-lock\.json$' || true)
+          if [[ -n "$forbidden" ]]; then
+            echo "Generated or local-only files are tracked:"
+            echo "$forbidden"
+            exit 1
+          fi
+          echo "Repository hygiene check passed"
+
   # ── Frontend ────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend (lint · typecheck · unit coverage · storybook · e2e)
@@ -233,7 +252,7 @@ jobs:
             p/typescript
             p/react
             p/owasp-top-ten
-            .semgrep/custom-rules.yml
+            config/security/semgrep-rules.yml
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
         continue-on-error: true
