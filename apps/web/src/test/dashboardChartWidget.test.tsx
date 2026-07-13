@@ -206,6 +206,8 @@ describe('DashboardChartWidget mobile viewer', () => {
 
     const dialog = screen.getByRole('dialog', { name: /efficiency trend expanded chart/i });
     expect(dialog.getAttribute('data-mobile-chart-viewer')).toBe('true');
+    expect(dialog.className).toContain('bg-bg-page');
+    expect(dialog.className).toContain('touch-none');
     fireEvent.click(screen.getByRole('button', { name: 'Choose chart' }));
     expect(screen.getByRole('option', { name: 'Efficiency by Temperature' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: 'State of Charge' })).toBeNull();
