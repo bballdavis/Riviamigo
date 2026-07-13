@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getExplicitScaleConfig } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
+import { clampExplorationRange, getExplicitScaleConfig } from '../../../../packages/ui/src/charts/RichTimeSeriesChart';
 
 describe('RichTimeSeriesChart range plumbing', () => {
   it('builds fixed scale configs for manual x, y, and y2 ranges', () => {
@@ -28,5 +28,11 @@ describe('RichTimeSeriesChart range plumbing', () => {
     expect(autoScale.auto).toBe(true);
     expect(autoScale.range).toBeUndefined();
     expect(autoScale.time).toBe(true);
+  });
+
+  it('clamps touch exploration to the available domain while retaining the requested zoom span', () => {
+    expect(clampExplorationRange([-20, 30], [0, 100], 5)).toEqual([0, 50]);
+    expect(clampExplorationRange([80, 130], [0, 100], 5)).toEqual([50, 100]);
+    expect(clampExplorationRange([40, 41], [0, 100], 10)).toEqual([40, 50]);
   });
 });

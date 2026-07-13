@@ -1,0 +1,155 @@
+import React from 'react';
+import { createPortal } from 'react-dom';
+import { Maximize2, RotateCw, X } from 'lucide-react';
+import { ChartPicker, type ChartPickerOption } from '@riviamigo/ui/primitives';
+import { cn } from '@riviamigo/ui/lib/utils';
+
+interface MobileChartViewerProps {
+  chartId: string;
+  chartTitle: string;
+  chartOptions: ChartPickerOption[];
+  onChartChange: (chartId: string) => void;
+  onClose: () => void;
+  children: (height: number) => React.ReactNode;
+}
+
+export function MobileChartViewer({
+  chartId,
+  chartTitle,
+  chartOptions,
+  onChartChange,
+  onClose,
+  children,
+}: MobileChartViewerProps) {
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const closeRef = React.useRef<HTMLButtonElement | null>(null);
+  const closedRef = React.useRef(false);
+  const [isPortrait, setIsPortrait] = React.useState(() => isPortraitViewport());
+  const [chartHeight, setChartHeight] = React.useState(() => getChartHeight());
+
+  const close = React.useCallback(() => {
+    if (closedRef.current) return;
+    closedRef.current = true;
+    if (document.fullscreenElement === rootRef.current) {
+      void document.exitFullscreen?.().catch(() => undefined);
+    }
+    try {
+      screen.orientation?.unlock?.();
+    } catch {
+      // Orientation support is optional and should never prevent closing.
+    }
+    onClose();
+  }, [onClose]);
+
+  React.useEffect(() => {
+    const updateViewport = () => {
+      setIsPortrait(isPortraitViewport());
+      setChartHeight(getChartHeight());
+    };
+    const orientationQuery = window.matchMedia('(orientation: portrait)');
+    orientationQuery.addEventListener('change', updateViewport);
+    window.addEventListener('resize', updateViewport);
+    updateViewport();
+    return () => {
+      orientationQuery.removeEventListener('change', updateViewport);
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    const onFullscreenChange = () => {
+      if (!closedRef.current && document.fullscreenElement == null) close();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+
+    const root = rootRef.current;
+    if (root?.requestFullscreen) {
+      void root.requestFullscreen()
+        .then(async () => {
+          try {
+            await screen.orientation?.lock?.('landscape');
+          } catch {
+            // iOS and many browser contexts intentionally reject orientation locks.
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+    };
+  }, [close]);
+
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      ref={rootRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${chartTitle} expanded chart`}
+      data-mobile-chart-viewer="true"
+      className="fixed inset-0 z-[100] flex min-h-[100dvh] flex-col bg-bg px-[max(0.75rem,env(safe-area-inset-left))] pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))]"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-3 pb-3">
+        {chartOptions.length > 1 ? (
+          <ChartPicker
+            variant="compact"
+            value={chartId}
+            options={chartOptions}
+            onChange={onChartChange}
+            searchValue=""
+            onSearchChange={() => undefined}
+            selectLabel="Choose chart"
+          />
+        ) : (
+          <p className="min-w-0 truncate text-sm font-semibold text-fg">{chartTitle}</p>
+        )}
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={close}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+          aria-label="Close expanded chart"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+
+      {isPortrait ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-bg-elevated/40 p-6 text-center">
+          <RotateCw className="h-8 w-8 text-accent" aria-hidden="true" />
+          <div>
+            <p className="text-base font-semibold text-fg">Rotate for a wider chart</p>
+            <p className="mt-1 text-sm text-fg-secondary">Turn your phone sideways to explore {chartTitle}.</p>
+          </div>
+          <Maximize2 className="h-4 w-4 text-fg-tertiary" aria-hidden="true" />
+        </div>
+      ) : (
+        <div className={cn('min-h-0 flex-1', chartOptions.length > 1 && 'pt-1')} data-chart-presentation="mobile-viewer">
+          {children(chartHeight)}
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+function isPortraitViewport() {
+  return typeof window !== 'undefined' && window.matchMedia('(orientation: portrait)').matches;
+}
+
+function getChartHeight() {
+  if (typeof window === 'undefined') return 320;
+  return Math.max(240, window.innerHeight - 76);
+}

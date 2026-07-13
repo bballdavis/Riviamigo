@@ -173,6 +173,65 @@ test.describe('dashboard editability on coarse pointers', () => {
   });
 });
 
+test.describe('mobile dashboard chart viewer', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('keeps efficiency bars visible and expands into the landscape chart viewer', async ({ page }) => {
+    await installApiMocks(page);
+    await page.addInitScript(() => {
+      Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    await page.route('**/v1/efficiency/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/v1/efficiency/trend') {
+        return json(route, [
+          { day: '2026-07-01', day_avg_wh_mi: 315, rolling_7d_wh_mi: 320 },
+          { day: '2026-07-02', day_avg_wh_mi: 305, rolling_7d_wh_mi: 315 },
+        ]);
+      }
+      if (path === '/v1/efficiency/vs-temp') {
+        return json(route, [
+          { temp_c_low: 5, temp_c_high: 10, avg_efficiency_wh_mi: 360, trip_count: 2, total_miles: 20, avg_speed_mph: 31 },
+          { temp_c_low: 15, temp_c_high: 20, avg_efficiency_wh_mi: 310, trip_count: 4, total_miles: 42, avg_speed_mph: 39 },
+        ]);
+      }
+      if (path === '/v1/efficiency/by-mode') {
+        return json(route, [
+          { drive_mode: 'all_purpose', avg_wh_per_mi: 320, trip_count: 4 },
+          { drive_mode: 'sport', avg_wh_per_mi: 370, trip_count: 2 },
+        ]);
+      }
+      return json(route, []);
+    });
+
+    await page.goto('/efficiency');
+    await page.getByRole('button', { name: 'Expand chart' }).click();
+    await expect(page.getByText('Rotate for a wider chart')).toBeVisible();
+
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect(page.locator('[data-mobile-chart-viewer="true"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Choose chart' }).click();
+    await page.getByRole('option', { name: 'Efficiency by Temperature' }).click();
+
+    const allBars = page.locator('[data-efficiency-pill-bar="true"]');
+    const bars = [];
+    for (let index = 0; index < await allBars.count(); index += 1) {
+      const bar = allBars.nth(index);
+      if (await bar.isVisible()) bars.push(bar);
+    }
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      const box = await bar.boundingBox();
+      expect(box?.width).toBeGreaterThan(100);
+    }
+    await page.getByRole('button', { name: 'Close expanded chart' }).click();
+    await expect(page.locator('[data-mobile-chart-viewer="true"]')).toHaveCount(0);
+  });
+});
+
 function loadDashboard(slug: string): DashboardConfig {
   const path = new URL(`../../../../packages/dashboards/src/defaults/${slug}.json`, import.meta.url);
   return JSON.parse(readFileSync(path, 'utf8')) as DashboardConfig;
