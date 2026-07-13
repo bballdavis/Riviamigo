@@ -51,6 +51,16 @@ docker compose -f infra/docker-compose.prod.yml up -d
 
 The API container runs database migrations automatically on startup. The first boot may take 30–60 seconds while TimescaleDB initializes.
 
+### 2a. Create the first owner
+
+Open the authenticated HTTPS URL. An empty installation presents **Set up
+Riviamigo**; its first account becomes the `super_user` and is taken directly
+to Rivian connection. Public registration closes immediately after that. Use
+**Users → Invite user** to create an expiring activation link for additional
+users, then share that link through your normal secure channel. Activation
+tokens live in the URL fragment, so reverse-proxy access logs do not receive
+them.
+
 ### 3. Verify the stack is running
 
 ```bash
@@ -169,6 +179,19 @@ This creates a compressed custom-format dump. Store this file securely — it co
 For automated and S3-backed backups, see [Backup and Restore](Backup-and-Restore).
 
 ---
+
+## Fresh-install verification
+
+Run the disposable verifier only from a clean, isolated worktree:
+
+```bash
+pnpm verify:fresh-install -- --mode all --production-env /secure/path/fresh-install.env
+```
+
+The caller-owned env file must contain valid production database, Redis, JWT,
+age, and origin settings. The verifier starts a random Compose project,
+confirms migration and `/health`, creates the first owner, confirms public
+registration closes, then removes only its own containers and volumes.
 
 ## Ports Reference
 
