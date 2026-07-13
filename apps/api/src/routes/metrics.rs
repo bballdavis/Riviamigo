@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/metrics/catalog", get(get_catalog))
         .route("/metrics/value", get(get_value))
         .route("/metrics/series", get(get_series))
+        .route("/metrics/batch", post(get_batch))
 }
 
 #[derive(Clone, Copy)]
@@ -50,7 +51,7 @@ struct MetricCatalogEntry {
     default_aggregation: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct MetricValueResponse {
     metric: String,
     value: Option<f64>,
@@ -59,7 +60,7 @@ struct MetricValueResponse {
     ts: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Clone, Serialize, sqlx::FromRow)]
 struct MetricSeriesPoint {
     ts: DateTime<Utc>,
     value: Option<f64>,
@@ -89,6 +90,51 @@ struct SeriesParams {
     to: Option<DateTime<Utc>>,
     lifetime: Option<bool>,
     bucket: Option<String>,
+}
+
+/// A compact dashboard-oriented metric request.  The singular metric routes
+/// remain the public compatibility surface; this route avoids one HTTP request
+/// per sensor chip when a dashboard needs several values and sparklines.
+#[derive(Deserialize)]
+struct MetricBatchRequest {
+    vehicle_id: Uuid,
+    metrics: Vec<MetricBatchMetricRequest>,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: Option<bool>,
+    bucket: Option<String>,
+    /// The response is intended for miniature dashboard charts, not detailed
+    /// explorers.  The server enforces this upper bound as a safety rail.
+    max_points: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct MetricBatchMetricRequest {
+    metric: String,
+    #[serde(default = "default_true")]
+    include_latest: bool,
+    #[serde(default = "default_true")]
+    include_series: bool,
+}
+
+#[derive(Serialize)]
+struct MetricBatchSeriesResponse {
+    metric: String,
+    points: Vec<MetricSeriesPoint>,
+}
+
+#[derive(Serialize)]
+struct MetricBatchResponse {
+    values: Vec<MetricValueResponse>,
+    series: Vec<MetricBatchSeriesResponse>,
+    bucket: String,
+    max_points: usize,
+}
+
+const DASHBOARD_METRIC_MAX_POINTS: usize = 96;
+
+fn default_true() -> bool {
+    true
 }
 
 fn resolve_time_bounds(
@@ -424,6 +470,129 @@ async fn get_series(
     };
 
     Ok(Json(points))
+}
+
+async fn get_batch(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(p): Json<MetricBatchRequest>,
+) -> Result<Json<MetricBatchResponse>, AppError> {
+    if p.metrics.is_empty() {
+        return Err(AppError::Validation(
+            "at least one metric is required".into(),
+        ));
+    }
+    if p.metrics.len() > 32 {
+        return Err(AppError::Validation(
+            "at most 32 metrics may be requested".into(),
+        ));
+    }
+
+    // Validate and coalesce before touching the database.  A custom dashboard
+    // can contain the same sensor more than once; it should never multiply
+    // either authorization work or the metric queries behind this endpoint.
+    let mut requested: Vec<(&'static MetricDef, bool, bool)> = Vec::new();
+    for item in p.metrics {
+        let metric = find_metric(&item.metric)?;
+        if let Some((_, include_latest, include_series)) = requested
+            .iter_mut()
+            .find(|(existing, _, _)| existing.id == metric.id)
+        {
+            *include_latest |= item.include_latest;
+            *include_series |= item.include_series;
+        } else {
+            requested.push((metric, item.include_latest, item.include_series));
+        }
+    }
+
+    require_vehicle_owned(&state.pool, auth.user_id, p.vehicle_id).await?;
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
+    let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
+    let max_points = p
+        .max_points
+        .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
+        .clamp(2, DASHBOARD_METRIC_MAX_POINTS);
+
+    let mut values = Vec::new();
+    let mut series = Vec::new();
+    for (metric, include_latest, include_series) in requested {
+        if include_latest {
+            let (value, ts) = metric_value(&state.pool, p.vehicle_id, metric).await?;
+            values.push(MetricValueResponse {
+                metric: metric.id.to_string(),
+                value,
+                unit: metric.unit,
+                label: metric.label,
+                ts,
+            });
+        }
+        if include_series {
+            let points = metric_series(&state.pool, p.vehicle_id, metric, from, to, bucket).await?;
+            series.push(MetricBatchSeriesResponse {
+                metric: metric.id.to_string(),
+                points: cap_metric_points(points, max_points),
+            });
+        }
+    }
+
+    Ok(Json(MetricBatchResponse {
+        values,
+        series,
+        bucket: bucket.to_string(),
+        max_points,
+    }))
+}
+
+async fn metric_value(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    metric: &MetricDef,
+) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
+    match metric.source {
+        MetricSource::Summary => summary_value(pool, vehicle_id, metric.id).await,
+        MetricSource::Telemetry(column) => latest_telemetry_value(pool, vehicle_id, column).await,
+    }
+}
+
+async fn metric_series(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    metric: &MetricDef,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    bucket: &str,
+) -> Result<Vec<MetricSeriesPoint>, AppError> {
+    match metric.source {
+        MetricSource::Summary => {
+            summary_series(pool, vehicle_id, metric.id, from, to, bucket).await
+        }
+        MetricSource::Telemetry(column) => {
+            telemetry_daily_series(
+                pool,
+                vehicle_id,
+                column,
+                from,
+                to,
+                metric.default_aggregation,
+                bucket,
+            )
+            .await
+        }
+    }
+}
+
+fn cap_metric_points(points: Vec<MetricSeriesPoint>, max_points: usize) -> Vec<MetricSeriesPoint> {
+    if points.len() <= max_points {
+        return points;
+    }
+
+    let last_index = points.len() - 1;
+    (0..max_points)
+        .map(|index| {
+            let source_index = index * last_index / (max_points - 1);
+            points[source_index].clone()
+        })
+        .collect()
 }
 
 fn find_metric(id: &str) -> Result<&'static MetricDef, AppError> {
@@ -809,5 +978,29 @@ mod tests {
         for m in METRICS {
             assert!(seen.insert(m.id), "duplicate metric id: {}", m.id);
         }
+    }
+
+    #[test]
+    fn batch_point_cap_keeps_the_first_and_last_samples() {
+        let start = Utc::now();
+        let points = (0..200)
+            .map(|offset| MetricSeriesPoint {
+                ts: start + chrono::Duration::seconds(offset),
+                value: Some(offset as f64),
+            })
+            .collect();
+
+        let capped = cap_metric_points(points, DASHBOARD_METRIC_MAX_POINTS);
+        assert_eq!(capped.len(), DASHBOARD_METRIC_MAX_POINTS);
+        assert_eq!(capped.first().and_then(|point| point.value), Some(0.0));
+        assert_eq!(capped.last().and_then(|point| point.value), Some(199.0));
+    }
+
+    #[test]
+    fn batch_limit_never_exceeds_the_dashboard_budget() {
+        assert_eq!(
+            128usize.clamp(2, DASHBOARD_METRIC_MAX_POINTS),
+            DASHBOARD_METRIC_MAX_POINTS
+        );
     }
 }

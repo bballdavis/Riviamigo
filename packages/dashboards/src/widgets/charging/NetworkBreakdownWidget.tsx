@@ -175,5 +175,6 @@ registerWidget({
   defaultSize: { w: 4, h: 2 },
   minSize: { w: 3, h: 1 },
   defaultOptions: {},
+  dataRequirements: () => ({ chargingSummary: true }),
   component: NetworkBreakdownWidget,
 });

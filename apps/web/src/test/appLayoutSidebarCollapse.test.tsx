@@ -131,6 +131,7 @@ describe('AppLayout sidebar collapse', () => {
     expect(overview).toHaveAttribute('aria-current', 'page');
     expect(overview).toHaveClass('min-h-14');
     expect(battery).toHaveClass('min-h-14');
+    expect(sheetControls.getByLabelText('Vehicle status: Online').parentElement).toHaveClass('h-12');
     expect(settings).toHaveClass('h-12');
     expect(signOut).toHaveClass('h-12');
 

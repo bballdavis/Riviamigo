@@ -77,6 +77,25 @@ Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
 
 If these return empty arrays while `/v1/vehicles/{id}/status` reports online, inspect the ingestion logs and Timescale rows next.
 
+## Read batched dashboard metrics
+
+Dashboard grids use a compact batch endpoint for metric-chip latest values and sparklines. It validates vehicle ownership and metric IDs once per request, preserves normal timeframe or lifetime behavior, and caps each sparkline at 96 adaptive points. Existing single-metric endpoints remain available for integrations and detail views.
+
+```powershell
+$body = @{
+  vehicle_id = $vehicleId
+  from = $from
+  to = $to
+  metrics = @(
+    @{ metric = "odometer_mi"; include_latest = $true; include_series = $false }
+    @{ metric = "avg_efficiency"; include_latest = $true; include_series = $true }
+  )
+} | ConvertTo-Json -Depth 4
+
+Invoke-RestMethod -Method Post -Headers @{ Authorization = "Bearer $apiKey" } `
+  -ContentType "application/json" -Body $body -Uri "$baseUrl/v1/metrics/batch"
+```
+
 ## Read high-density trip data
 
 Trip map and detail views use bounded payloads so the browser does not need to request every raw telemetry point:

@@ -6,6 +6,11 @@ import { Card } from '@riviamigo/ui/primitives';
 import { cn, formatMiles, formatDuration, formatEfficiency } from '@riviamigo/ui/lib/utils';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
+import {
+  useDashboardDataAvailable,
+  useDashboardDataSelector,
+  useDashboardMetric,
+} from '../../dashboardData';
 import { resolveIconId } from '../../editor/iconMigration';
 import type { SensorIconKey } from '../sensor/sensorDefinitions';
 import type { TripRow } from '@riviamigo/ui/tables';
@@ -55,13 +60,27 @@ function aggregateSeriesForStat(stat: TripStat, series: Array<{ value: number | 
 export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
   const { selectedIds, tripRegistry } = useTripSelection();
-  const { data: value } = useMetricValue(ctx.vehicleId, options.metric);
-  const { data: series = [] } = useMetricSeries(ctx.vehicleId, options.metric, ctx.from, ctx.to);
-  const { data: efficiencySummary } = useEfficiencySummary(
-    options.stat === 'efficiency' ? ctx.vehicleId : null,
+  const dashboardDataAvailable = useDashboardDataAvailable();
+  const dashboardMetric = useDashboardMetric(options.metric);
+  const dashboardEfficiency = useDashboardDataSelector((snapshot) => snapshot.efficiencySummary);
+  const { data: fetchedValue } = useMetricValue(
+    dashboardDataAvailable ? null : ctx.vehicleId,
+    dashboardDataAvailable ? null : options.metric,
+  );
+  const { data: fetchedSeries = [] } = useMetricSeries(
+    dashboardDataAvailable ? null : ctx.vehicleId,
+    dashboardDataAvailable ? null : options.metric,
     ctx.from,
     ctx.to,
   );
+  const { data: fetchedEfficiencySummary } = useEfficiencySummary(
+    !dashboardDataAvailable && options.stat === 'efficiency' ? ctx.vehicleId : null,
+    ctx.from,
+    ctx.to,
+  );
+  const value = dashboardDataAvailable ? dashboardMetric?.value : fetchedValue;
+  const series = dashboardDataAvailable ? dashboardMetric?.series ?? [] : fetchedSeries;
+  const efficiencySummary = dashboardDataAvailable ? dashboardEfficiency : fetchedEfficiencySummary;
 
   React.useEffect(() => {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
@@ -153,6 +172,13 @@ registerWidget({
     fixedSize: true,
     deprecated: true,
     description: 'Legacy fixed-size trip stat chip retained for imported dashboards.',
+  },
+  dataRequirements: (instance) => {
+    const options = readOptions(instance);
+    return {
+      metrics: [{ metric: options.metric, include_latest: true, include_series: true }],
+      ...(options.stat === 'efficiency' ? { efficiencySummary: true } : {}),
+    };
   },
   component: TripStatWidget,
 });

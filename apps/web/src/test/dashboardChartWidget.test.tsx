@@ -224,7 +224,9 @@ describe('DashboardChartWidget mobile viewer', () => {
     renderWidget(viewerInstance());
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand chart' }));
-    expect(screen.getByText('Rotate for a wider chart')).toBeTruthy();
+    const title = screen.getByText('Rotate for a wider chart');
+    expect(title).toBeTruthy();
+    expect(title.closest('.bg-accent.text-fg-on-accent')).toBeTruthy();
     expect(screen.queryByTestId('rich-chart')).toBeNull();
   });
 });
