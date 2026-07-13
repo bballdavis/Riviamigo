@@ -13,6 +13,9 @@ export type { InputProps } from './Input';
 export { ChartPicker } from './ChartPicker';
 export type { ChartPickerOption, ChartPickerProps } from './ChartPicker';
 
+export { SelectPicker } from './SelectPicker';
+export type { SelectPickerOption, SelectPickerProps } from './SelectPicker';
+
 export { Skeleton, ChartSkeleton, StatCardSkeleton } from './Skeleton';
 export type { SkeletonProps } from './Skeleton';
 

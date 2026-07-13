@@ -2,13 +2,12 @@ import { v4 as uuidv4 } from 'uuid';
 import type { DashboardConfig, WidgetInstance, WidgetLayout } from './schema';
 import type { WidgetDef } from './registry';
 import { sanitizeDashboardConfig, sanitizeWidgetInstance, sanitizeWidgetLayout } from './layout';
+import type { DashboardVisibilityState } from './dashboardVisibility';
+import { isWidgetVisible } from './dashboardVisibility';
 
 export const DASHBOARD_GRID_COLUMNS = 12;
 export const DASHBOARD_ROW_HEIGHT = 40;
-export const CHARGING_CONNECTION_VISIBILITY_OPTION = 'chargingConnectionVisibility';
-
 export type DashboardOwnership = 'system-default' | 'user-owned';
-export type ChargingConnectionVisibility = 'plugged' | 'unplugged';
 
 export interface DashboardLayoutPatch {
   i: string;
@@ -114,29 +113,16 @@ export function applyWidgetLayout(
   return changed ? next : widgets;
 }
 
-export function getChargingConnectionVisibility(widget: WidgetInstance) {
-  const value = widget.options?.[CHARGING_CONNECTION_VISIBILITY_OPTION];
-  return value === 'plugged' || value === 'unplugged'
-    ? (value as ChargingConnectionVisibility)
-    : null;
-}
-
-export function hasDashboardVisibilityRules(widgets: readonly WidgetInstance[]) {
-  return widgets.some((widget) => getChargingConnectionVisibility(widget));
-}
-
 export function resolveDashboardViewWidgets(
   widgets: readonly WidgetInstance[],
-  state: { pluggedIn: boolean },
+  state: DashboardVisibilityState,
 ): WidgetInstance[] {
-  const visibleWidgets = widgets.filter((widget) => {
-    const visibility = getChargingConnectionVisibility(widget);
-    if (visibility === 'plugged') return state.pluggedIn;
-    if (visibility === 'unplugged') return !state.pluggedIn;
-    return true;
-  });
+  const visibleWidgets = widgets.filter((widget) => isWidgetVisible(widget, state));
 
-  return expandUnpluggedChargingMixRow(visibleWidgets, state.pluggedIn);
+  return expandUnpluggedChargingMixRow(
+    visibleWidgets,
+    state['vehicle-connection'] === 'plugged',
+  );
 }
 
 function expandUnpluggedChargingMixRow(

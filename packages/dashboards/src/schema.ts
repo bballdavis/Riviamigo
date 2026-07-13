@@ -9,6 +9,13 @@ export const LayoutSchema = z.object({
 
 export const ComponentTypeSchema = z.enum(['custom', 'sensor', 'chart', 'battery', 'charging', 'table']);
 
+export const DashboardVisibilityRuleSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('vehicle-connection'),
+    value: z.enum(['plugged', 'unplugged']),
+  }),
+]);
+
 export const WidgetInstanceSchema = z.object({
   id: z.string().uuid(),
   componentType: ComponentTypeSchema,
@@ -16,6 +23,7 @@ export const WidgetInstanceSchema = z.object({
   title: z.string().optional(),
   layout: LayoutSchema,
   options: z.record(z.unknown()).optional(),
+  visibility: z.array(DashboardVisibilityRuleSchema).optional(),
 });
 
 export const DashboardControlsSchema = z.object({
@@ -37,6 +45,9 @@ export const DashboardConfigSchema = z.object({
 
 export type WidgetLayout = z.infer<typeof LayoutSchema>;
 export type DashboardComponentType = z.infer<typeof ComponentTypeSchema>;
+export type DashboardVisibilityRule = z.infer<typeof DashboardVisibilityRuleSchema>;
+export type DashboardVisibilityRuleType = DashboardVisibilityRule['type'];
+export type VehicleConnectionVisibilityValue = Extract<DashboardVisibilityRule, { type: 'vehicle-connection' }>['value'];
 export type WidgetInstance = z.infer<typeof WidgetInstanceSchema>;
 export type DashboardControls = z.infer<typeof DashboardControlsSchema>;
 export type DashboardConfig = z.infer<typeof DashboardConfigSchema>;

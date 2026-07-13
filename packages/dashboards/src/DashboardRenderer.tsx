@@ -1,14 +1,19 @@
 import React, { Suspense, lazy } from 'react';
 import { useAuth, useCurrentVehicleStatus } from '@riviamigo/hooks';
-import type { VehicleStatus } from '@riviamigo/types';
 import type { DashboardConfig } from './schema';
 import type { WidgetCtx } from './registry';
 import { DashboardGrid } from './DashboardGrid';
 import { DashboardDataProvider, collectDashboardDataRequirements } from './dashboardData';
 import {
-  hasDashboardVisibilityRules,
   resolveDashboardViewWidgets,
 } from './dashboardModel';
+import {
+  DASHBOARD_VISIBILITY_CONDITIONS,
+  dashboardVisibilityStateFromStatus,
+  getDashboardVisibilityRuleTypes,
+  hasDashboardVisibilityRules,
+  type DashboardVisibilityState,
+} from './dashboardVisibility';
 
 const GridEditor = lazy(() => import('./GridEditor'));
 
@@ -28,8 +33,14 @@ export function DashboardRenderer({
   editActions,
 }: DashboardRendererProps) {
   const widgets = Array.isArray(config.widgets) ? config.widgets : [];
-  const viewWidgets = useDashboardViewWidgets(widgets, ctx);
-  const dataWidgets = mode === 'edit' ? widgets : viewWidgets;
+  const {
+    liveWidgets,
+    previewWidgets,
+    previewState,
+    setPreviewValue,
+    visibilityTypes,
+  } = useDashboardViewWidgets(config.id, widgets, ctx, mode);
+  const dataWidgets = mode === 'edit' ? previewWidgets : liveWidgets;
   const requirements = React.useMemo(
     () => collectDashboardDataRequirements(dataWidgets),
     [dataWidgets],
@@ -44,31 +55,121 @@ export function DashboardRenderer({
           ctx={ctx}
           onConfigChange={onConfigChange}
           editActions={editActions}
+          visibleWidgetIds={previewWidgets.map((widget) => widget.id)}
+          visibilityState={previewState}
+          onVisibilityStateChange={setPreviewValue}
+          previewControls={visibilityTypes.length > 0 ? (
+            <DashboardVisibilityPreview
+              types={visibilityTypes}
+              state={previewState}
+              onChange={setPreviewValue}
+            />
+          ) : undefined}
         />
       </Suspense>
-      ) : <DashboardGrid widgets={viewWidgets} ctx={ctx} />}
+      ) : <DashboardGrid widgets={liveWidgets} ctx={ctx} />}
     </DashboardDataProvider>
   );
 }
 
-function useDashboardViewWidgets(widgets: DashboardConfig['widgets'], ctx: WidgetCtx) {
+function useDashboardViewWidgets(
+  dashboardId: string,
+  widgets: DashboardConfig['widgets'],
+  ctx: WidgetCtx,
+  mode: 'view' | 'edit',
+) {
   const hasVisibilityRules = hasDashboardVisibilityRules(widgets);
+  const visibilityTypes = React.useMemo(
+    () => getDashboardVisibilityRuleTypes(widgets),
+    [widgets],
+  );
   const { defaultVehicleId } = useAuth();
   const vehicleId = ctx.vehicleId ?? defaultVehicleId;
   const { data: status } = useCurrentVehicleStatus(hasVisibilityRules ? vehicleId : null);
-  const pluggedIn = isPluggedIn(status);
+  const liveState = React.useMemo(
+    () => dashboardVisibilityStateFromStatus(status),
+    [status],
+  );
+  const [previewState, setPreviewState] = React.useState<DashboardVisibilityState>(liveState);
+  const previewTouchedRef = React.useRef(false);
+  const previewKey = `${dashboardId}:${mode}`;
+  const previousPreviewKeyRef = React.useRef(previewKey);
 
-  return hasVisibilityRules
-    ? resolveDashboardViewWidgets(widgets, { pluggedIn })
+  React.useEffect(() => {
+    if (previousPreviewKeyRef.current !== previewKey) {
+      previousPreviewKeyRef.current = previewKey;
+      previewTouchedRef.current = false;
+      setPreviewState(liveState);
+    }
+  }, [liveState, previewKey]);
+
+  React.useEffect(() => {
+    if (!previewTouchedRef.current) setPreviewState(liveState);
+  }, [liveState]);
+
+  const setPreviewValue = React.useCallback((
+    type: 'vehicle-connection',
+    value: DashboardVisibilityState['vehicle-connection'],
+  ) => {
+    previewTouchedRef.current = true;
+    setPreviewState((current) => ({ ...current, [type]: value }));
+  }, []);
+
+  const liveWidgets = hasVisibilityRules
+    ? resolveDashboardViewWidgets(widgets, liveState)
     : widgets;
+  const previewWidgets = hasVisibilityRules
+    ? resolveDashboardViewWidgets(widgets, previewState)
+    : widgets;
+
+  return {
+    liveWidgets,
+    previewWidgets,
+    previewState,
+    setPreviewValue,
+    visibilityTypes,
+  };
 }
 
-function isPluggedIn(status: VehicleStatus | null | undefined) {
-  // Keep in sync with ChargingConnectionWidget.isPluggedIn.
-  // charger_state_ts is intentionally not checked here: a car in standby while
-  // plugged in will not always re-emit charger state events, so timestamp drift
-  // must not be treated as a disconnect signal.
-  const state = status?.charger_state?.toLowerCase();
-  if (state && !['unknown', 'disconnected'].includes(state)) return true;
-  return Boolean(status?.charger_status && status.charger_status !== 'chrgr_sts_not_connected');
+function DashboardVisibilityPreview({
+  types,
+  state,
+  onChange,
+}: {
+  types: Array<'vehicle-connection'>;
+  state: DashboardVisibilityState;
+  onChange: (
+    type: 'vehicle-connection',
+    value: DashboardVisibilityState['vehicle-connection'],
+  ) => void;
+}) {
+  return (
+    <div className="grid gap-2" aria-label="Conditional dashboard preview">
+      {types.map((type) => {
+        const definition = DASHBOARD_VISIBILITY_CONDITIONS[type];
+        return (
+          <div key={type} className="flex items-center justify-between gap-3">
+            <span className="text-[11px] font-medium text-fg-tertiary">Preview</span>
+            <div className="inline-flex rounded-lg border border-border bg-bg p-0.5">
+              {definition.values.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={state[type] === option.value}
+                  onClick={() => onChange(type, option.value)}
+                  className={`min-h-8 rounded-md px-2.5 text-[11px] font-medium transition-colors ${
+                    state[type] === option.value
+                      ? 'bg-accent text-white'
+                      : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

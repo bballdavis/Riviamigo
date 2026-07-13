@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth, useMe, useVehicles } from '@riviamigo/hooks';
-import { PageLayout, DateRangePicker, Tooltip } from '@riviamigo/ui/primitives';
+import { DateRangePicker, PageLayout, SelectPicker, Tooltip } from '@riviamigo/ui/primitives';
 import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
   DashboardRenderer,
@@ -11,6 +11,7 @@ import {
   materializeSystemDashboardDraft,
   materializeUserDashboardDraft,
   useCreateDashboard,
+  useDashboardById,
   useDashboardBySlug,
   useUpdateAdminDashboard,
   useUpdateDashboard,
@@ -55,6 +56,7 @@ export interface DashboardPageShellRenderState {
 export interface DashboardPageShellProps {
   navKey: string;
   slug: string;
+  dashboardId?: string | undefined;
   title?: string | undefined;
   isEditMode?: boolean;
   onEditModeChange?: (isEditMode: boolean) => void;
@@ -159,6 +161,7 @@ export function DashboardPageShell(props: DashboardPageShellProps) {
 function DashboardPageShellContent({
   navKey,
   slug,
+  dashboardId,
   title,
   isEditMode: controlledEditMode,
   onEditModeChange,
@@ -191,11 +194,18 @@ function DashboardPageShellContent({
   const availableVehicles = vehicles ?? [];
   const hasVehicleChoices = availableVehicles.length > 1;
   const effectiveVehicleId = activeVehicleId ?? defaultVehicleId;
-  const { data: apiConfig, isLoading } = useDashboardBySlug(slug);
+  const bySlug = useDashboardBySlug(dashboardId ? null : slug);
+  const byId = useDashboardById(dashboardId ?? null);
+  const apiConfig = dashboardId ? byId.data : bySlug.data;
   const apiConfigForSlug = apiConfig?.slug === slug ? apiConfig : undefined;
   const localDefault = getDefaultBySlug(slug);
-  const savedConfig: DashboardConfig | undefined = apiConfigForSlug ?? localDefault;
-  const dashboardIsLoading = isLoading || Boolean(apiConfig && !apiConfigForSlug);
+  const savedConfig: DashboardConfig | undefined = dashboardId
+    ? apiConfigForSlug
+    : apiConfigForSlug ?? localDefault;
+  const dashboardIsLoading = dashboardId ? byId.isLoading : bySlug.isLoading;
+  const exactDashboardUnavailable = Boolean(
+    dashboardId && !dashboardIsLoading && (byId.isError || !apiConfigForSlug),
+  );
 
   const {
     activeConfig,
@@ -346,21 +356,17 @@ function DashboardPageShellContent({
     />
   ) : null;
   const vehicleAction = hasVehicleChoices && !currentEditMode ? (
-    <label className="inline-flex items-center">
-      <span className="sr-only">Selected vehicle</span>
-      <select
-        className="h-9 min-w-[11rem] rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-        value={effectiveVehicleId ?? ''}
-        onChange={(event) => setSessionVehicleId(event.target.value || null)}
-        aria-label="Select vehicle"
-      >
-        {availableVehicles.map((vehicle) => (
-          <option key={vehicle.id} value={vehicle.id}>
-            {vehicle.display_name || vehicle.model}
-          </option>
-        ))}
-      </select>
-    </label>
+    <SelectPicker
+      className="min-w-[11rem]"
+      value={effectiveVehicleId ?? ''}
+      onChange={(vehicleId) => setSessionVehicleId(vehicleId || null)}
+      aria-label="Select vehicle"
+      options={availableVehicles.map((vehicle) => ({
+        value: vehicle.id,
+        label: vehicle.display_name || vehicle.model,
+        description: vehicle.display_name && vehicle.model !== vehicle.display_name ? vehicle.model : undefined,
+      }))}
+    />
   ) : null;
   const EfficiencyDisplayIcon = efficiencyDisplay === 'distance_per_energy' ? PiSpeedometerFill : PiSpeedometerLight;
   const efficiencyDisplayLabel = efficiencyDisplay === 'distance_per_energy' ? 'mi/kWh' : 'Wh/mi';
@@ -429,7 +435,18 @@ function DashboardPageShellContent({
         titleAction={renderTitleAction?.(shellState) ?? defaultTitleAction}
         actions={pageActions}
       >
-        {!effectiveVehicleId ? (
+        {exactDashboardUnavailable ? (
+          <div role="alert" className="rounded-xl border border-status-danger/30 bg-status-danger/10 p-4 text-sm text-status-danger">
+            <p>This dashboard could not be opened. It may no longer exist or you may not have access to it.</p>
+            <button
+              type="button"
+              onClick={() => window.history.back()}
+              className="mt-3 rounded-lg border border-status-danger/40 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-status-danger/10"
+            >
+              Back to Dashboards
+            </button>
+          </div>
+        ) : !effectiveVehicleId ? (
           <NoVehicleState />
         ) : dashboardIsLoading && !activeConfig ? (
           <div className="text-xs text-fg-tertiary p-4">Loading...</div>

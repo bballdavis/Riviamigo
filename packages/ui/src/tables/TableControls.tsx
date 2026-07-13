@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
+import { SelectPicker } from '../primitives/SelectPicker';
 
 export interface TableControlsProps {
   search: string;
@@ -48,15 +49,14 @@ export function TableControls({
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-2 text-xs text-fg-tertiary shrink-0">
           Rows
-          <select
-            value={rowsPerPage}
-            onChange={(event) => onRowsPerPageChange(Number(event.target.value))}
-            className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
-          >
-            {rowsPerPageOptions.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
+          <SelectPicker
+            className="min-w-[4.5rem]"
+            value={String(rowsPerPage)}
+            onChange={(value) => onRowsPerPageChange(Number(value))}
+            aria-label="Rows per page"
+            size="sm"
+            options={rowsPerPageOptions.map((option) => ({ value: String(option), label: String(option) }))}
+          />
         </label>
 
         <p className="text-xs text-fg-tertiary">
