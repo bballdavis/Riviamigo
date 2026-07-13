@@ -83,6 +83,18 @@ describe('AppLayout sidebar collapse', () => {
     expect(localStorage.getItem('rm-sidebar-collapsed')).toBe('true');
   });
 
+  it('uses the full battery icon for the main battery nav item', () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>,
+    );
+
+    const batteryButton = screen.getByRole('button', { name: 'Battery' });
+
+    expect(batteryButton.querySelector('[data-nav-icon="battery-full"]')).toBeInTheDocument();
+  });
+
   it('shows phantom drain as a battery child item and navigates to it', () => {
     render(
       <AppLayout activeKey="battery.phantom-drain">

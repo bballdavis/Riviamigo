@@ -19,6 +19,7 @@ interface VisibilityConditionDefinition<T extends DashboardVisibilityRuleType, V
   type: T;
   label: string;
   values: readonly VisibilityValueDefinition<V>[];
+  resolve: (status: VehicleStatus | null | undefined) => V;
 }
 
 export const DASHBOARD_VISIBILITY_CONDITIONS = {
@@ -29,6 +30,7 @@ export const DASHBOARD_VISIBILITY_CONDITIONS = {
       { value: 'plugged', label: 'Plugged in' },
       { value: 'unplugged', label: 'Unplugged' },
     ],
+    resolve: (status) => isVehiclePluggedIn(status) ? 'plugged' : 'unplugged',
   } satisfies VisibilityConditionDefinition<'vehicle-connection', VehicleConnectionVisibilityValue>,
 } as const;
 
@@ -40,7 +42,7 @@ export function dashboardVisibilityStateFromStatus(
   status: VehicleStatus | null | undefined,
 ): DashboardVisibilityState {
   return {
-    'vehicle-connection': isVehiclePluggedIn(status) ? 'plugged' : 'unplugged',
+    'vehicle-connection': DASHBOARD_VISIBILITY_CONDITIONS['vehicle-connection'].resolve(status),
   };
 }
 

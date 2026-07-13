@@ -205,4 +205,87 @@ describe('GridEditor overlays', () => {
     expect(screen.queryByTestId('widget-host-22222222-2222-2222-2222-222222222222')).toBeNull();
     expect(screen.getByText('Edit Mode')).toBeInTheDocument();
   });
+
+  it('keeps preview-hidden widgets in the draft when editing the visible state', () => {
+    const onConfigChange = vi.fn();
+
+    render(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={onConfigChange}
+        visibleWidgetIds={[BASE_CONFIG.widgets[0]!.id]}
+      />
+    );
+
+    expect(screen.queryByTestId('widget-host-33333333-3333-3333-3333-333333333333')).toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId('widget-overlay-right-22222222-2222-2222-2222-222222222222'))
+        .getByRole('button', { name: 'Edit widget settings' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove component' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Widget' }));
+
+    const next = onConfigChange.mock.calls.at(-1)?.[0] as DashboardConfig;
+    expect(next.widgets.map((widget) => widget.id)).toEqual([
+      '33333333-3333-3333-3333-333333333333',
+    ]);
+  });
+
+  it('authors visibility rules and switches preview so the selected widget stays visible', () => {
+    const onConfigChange = vi.fn();
+    const onVisibilityStateChange = vi.fn();
+
+    render(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={onConfigChange}
+        visibleWidgetIds={BASE_CONFIG.widgets.map((widget) => widget.id)}
+        visibilityState={{ 'vehicle-connection': 'unplugged' }}
+        onVisibilityStateChange={onVisibilityStateChange}
+      />
+    );
+
+    fireEvent.click(
+      within(screen.getByTestId('widget-overlay-right-22222222-2222-2222-2222-222222222222'))
+        .getByRole('button', { name: 'Edit widget settings' })
+    );
+    fireEvent.click(screen.getByLabelText('Widget visibility'));
+    fireEvent.click(screen.getByText('Vehicle plugged in'));
+
+    const next = onConfigChange.mock.calls.at(-1)?.[0] as DashboardConfig;
+    expect(next.widgets[0]?.visibility).toEqual([
+      { type: 'vehicle-connection', value: 'plugged' },
+    ]);
+    expect(onVisibilityStateChange).toHaveBeenCalledWith('vehicle-connection', 'plugged');
+  });
+
+  it('closes the widget form when a manual preview change hides its selection', () => {
+    const { rerender } = render(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={() => undefined}
+        visibleWidgetIds={BASE_CONFIG.widgets.map((widget) => widget.id)}
+      />
+    );
+
+    fireEvent.click(
+      within(screen.getByTestId('widget-overlay-right-22222222-2222-2222-2222-222222222222'))
+        .getByRole('button', { name: 'Edit widget settings' })
+    );
+    expect(screen.getByRole('button', { name: 'Widget visibility' })).toBeInTheDocument();
+
+    rerender(
+      <GridEditor
+        config={BASE_CONFIG}
+        ctx={BASE_CTX}
+        onConfigChange={() => undefined}
+        visibleWidgetIds={[BASE_CONFIG.widgets[1]!.id]}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Widget visibility' })).toBeNull();
+  });
 });

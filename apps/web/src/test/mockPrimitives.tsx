@@ -118,6 +118,39 @@ export const ChartPicker = ({
   </div>
 );
 
+export const SelectPicker = ({
+  value,
+  options,
+  onChange,
+  id,
+  'aria-label': ariaLabel,
+  disabled,
+  className,
+}: {
+  value: string;
+  options: Array<{ value: string; label: React.ReactNode; disabled?: boolean }>;
+  onChange: (value: string) => void;
+  id?: string;
+  'aria-label'?: string;
+  disabled?: boolean;
+  className?: string;
+}) => (
+  <select
+    id={id}
+    aria-label={ariaLabel}
+    className={className}
+    value={value}
+    disabled={disabled}
+    onChange={(event) => onChange(event.target.value)}
+  >
+    {options.map((option) => (
+      <option key={option.value} value={option.value} disabled={option.disabled}>
+        {option.label}
+      </option>
+    ))}
+  </select>
+);
+
 export const Tooltip = ({ children }: { children: React.ReactNode; content?: React.ReactNode; contentClassName?: string }) => <>{children}</>;
 
 export const DateRangePicker = ({ onChange }: {

@@ -320,7 +320,7 @@ function DashboardSettingsList({
                     {dashboard.slug} &middot; {dashboard.widgets.length} widgets
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 [&>button]:min-h-11 sm:[&>button]:min-h-8">
                   <Button
                     variant="secondary"
                     size="sm"
@@ -401,10 +401,10 @@ function DashboardSettingsList({
                       iconLeft={<Trash2 className="h-3.5 w-3.5" />}
                       loading={deleteDashboard.isPending && deleteDashboard.variables === dashboard.id}
                       onClick={() => {
-                          const message = systemDefault
-                            ? `Reset "${dashboard.name}" to the system default? This removes your personal dashboard copy.`
-                            : `Delete "${dashboard.name}"? This removes your saved dashboard.`;
-                          if (window.confirm(message)) {
+                        const message = systemDefault
+                          ? `Reset "${dashboard.name}" to the system default? This removes your personal dashboard copy.`
+                          : `Delete "${dashboard.name}"? This removes your saved dashboard.`;
+                        if (window.confirm(message)) {
                           deleteDashboard.mutate(dashboard.id);
                         }
                       }}
