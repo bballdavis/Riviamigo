@@ -18,13 +18,25 @@ Riviamigo connects to your Rivian account and turns its telemetry into a dashboa
 
 These are live, redacted views of Riviamigo at desktop and iPhone 17 Pro Max–style mobile sizes.
 
-| Desktop — light | Desktop — dark |
+### Desktop
+
+**Overview**
+
+| Light | Dark |
 | --- | --- |
 | ![Riviamigo overview in light mode on desktop](./docs/assets/readme/overview-desktop-light.png) | ![Riviamigo overview in dark mode on desktop](./docs/assets/readme/overview-desktop-dark.png) |
 
-| Mobile — light | Mobile — dark |
+**Charging**
+
+| Light | Dark |
 | --- | --- |
-| <img src="./docs/assets/readme/overview-mobile-light.png" alt="Riviamigo overview in light mode on mobile" width="260" /> | <img src="./docs/assets/readme/overview-mobile-dark.png" alt="Riviamigo overview in dark mode on mobile" width="260" /> |
+| ![Riviamigo charging dashboard in light mode on desktop](./docs/assets/readme/charging-desktop-light.png) | ![Riviamigo charging dashboard in dark mode on desktop](./docs/assets/readme/charging-desktop-dark.png) |
+
+### Mobile
+
+| Overview — light | Overview — dark | Charging — light | Charging — dark |
+| --- | --- | --- | --- |
+| <img src="./docs/assets/readme/overview-mobile-light.png" alt="Riviamigo overview in light mode on mobile" width="180" /> | <img src="./docs/assets/readme/overview-mobile-dark.png" alt="Riviamigo overview in dark mode on mobile" width="180" /> | <img src="./docs/assets/readme/charging-mobile-light.png" alt="Riviamigo charging dashboard in light mode on mobile" width="180" /> | <img src="./docs/assets/readme/charging-mobile-dark.png" alt="Riviamigo charging dashboard in dark mode on mobile" width="180" /> |
 
 ## What you can do here
 
