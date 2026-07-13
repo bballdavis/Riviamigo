@@ -21,6 +21,7 @@ const metricMocks = vi.hoisted(() => ({
     from: string | null;
     to: string | null;
   }>,
+  metricBatchCalls: [] as Array<{ vehicleId: string | null; from: string | null; to: string | null }>,
   batteryHealth: null as null | {
     usable_now_kwh: number | null;
     usable_new_kwh: number | null;
@@ -75,6 +76,18 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     ) => {
       metricMocks.metricSeriesCalls.push({ vehicleId, metric, from, to });
       return { data: metricMocks.series };
+    },
+    useMetricBatch: (vehicleId: string | null, _metrics: unknown, from: string | null, to: string | null) => {
+      metricMocks.metricBatchCalls.push({ vehicleId, from, to });
+      return {
+        data: {
+          values: [metricMocks.value],
+          series: [{ metric: metricMocks.value.metric, points: metricMocks.series }],
+          bucket: 'day',
+          max_points: 96,
+        },
+        isFetching: false,
+      };
     },
     useEfficiencySummary: () => ({ data: metricMocks.efficiencySummary, isLoading: false }),
     useBatteryHealth: () => ({ data: metricMocks.batteryHealth, isLoading: false }),
@@ -154,6 +167,7 @@ describe('dashboard sensor chips', () => {
     metricMocks.efficiencySummary = { avg: 200, p10: 180, p90: 220, total_miles: 120 };
     metricMocks.vehicleStatus = null;
     metricMocks.metricSeriesCalls = [];
+    metricMocks.metricBatchCalls = [];
   });
 
   it('renders the sprite as a bottom background layer when enabled', () => {
@@ -346,7 +360,7 @@ describe('dashboard sensor chips', () => {
       />
     );
 
-    const call = metricMocks.metricSeriesCalls.at(-1);
+    const call = metricMocks.metricBatchCalls.at(-1);
     expect(call).toEqual({
       vehicleId: 'vehicle-1',
       metric: 'avg_outside_temp_c',

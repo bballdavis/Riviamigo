@@ -427,5 +427,6 @@ registerWidget({
   defaultSize: { w: 12, h: 7 },
   minSize: { w: 8, h: 6 },
   defaultOptions: {},
+  dataRequirements: () => ({ status: true }),
   component: OverviewVehicleWidget,
 });

@@ -409,45 +409,6 @@ export function DashboardChartRenderer({
   presentation?: 'embedded' | 'mobile-viewer';
 }) {
   const definition = getChartDefinition(normalizeChartId(chartId));
-  const source = definition?.source;
-  const needsSoc = source === 'soc_history';
-  const { data: soc = [], isLoading: socLoading } = useSocHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: range = [], isLoading: rangeLoading } = useRangeHistory(needsSoc ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: chargingChartSeries, isLoading: chargingChartSeriesLoading } = useChargingChartSeries(
-    source === 'charging_weekly_energy' || source === 'charging_sessions_energy' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-  );
-  const { data: selectedChargeCurve = [], isLoading: selectedChargeCurveLoading } = useChargeCurve(
-    source === 'charge_session_curve' ? ctx.chargeSessionId ?? null : null,
-    source === 'charge_session_curve' ? ctx.vehicleId : null,
-  );
-  const { data: chargeCurveAnalysis = [], isLoading: chargeCurveAnalysisLoading } = useChargeCurveAnalysis(
-    source === 'charging_curve_analysis' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-  );
-  const { data: trend = [], isLoading: trendLoading } = useEfficiencyTrend(source === 'efficiency_trend' ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: efficiencyByMode = [], isLoading: efficiencyByModeLoading } = useEfficiencyByMode(source === 'efficiency_mode' ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: efficiencyByTemp = [], isLoading: efficiencyByTempLoading } = useEfficiencyVsTemp(source === 'efficiency_temperature' ? ctx.vehicleId : null, ctx.from, ctx.to);
-  const { data: phantomPeriods, isLoading: phantomLoading } = usePhantomDrainPeriods(
-    source === 'phantom_drain' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-    500,
-    6,
-  );
-  const { data: degradation = [], isLoading: degradationLoading } = useDegradation(
-    source === 'battery_degradation' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-  );
-  const { data: mileage = [], isLoading: mileageLoading } = useBatteryMileage(
-    source === 'battery_capacity_mileage' || source === 'projected_range_mileage' ? ctx.vehicleId : null,
-    ctx.from,
-    ctx.to,
-  );
-
   if (!definition) {
     return (
       <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary">
@@ -455,10 +416,144 @@ export function DashboardChartRenderer({
       </div>
     );
   }
+  return (
+    <ActiveDashboardChartSource
+      definition={definition}
+      ctx={ctx}
+      height={height}
+      smoothing={settings?.smoothing ?? smoothing}
+      presentation={presentation}
+      {...(settings ? { settings } : {})}
+    />
+  );
+}
 
-  const dailyChargeSeries = chargingChartSeries?.daily ?? [];
-  const dailyChargeSessions = chargingChartSeries?.daily_sessions ?? [];
-  const mileagePoints = mileage.map((point) => ({
+type ActiveDashboardChartSourceProps = {
+  definition: DashboardChartDefinition;
+  ctx: WidgetCtx;
+  height: number;
+  smoothing: number;
+  settings?: DashboardChartDisplaySettings;
+  presentation: 'embedded' | 'mobile-viewer';
+};
+
+function ActiveDashboardChartSource(props: ActiveDashboardChartSourceProps) {
+  switch (props.definition.source) {
+    case 'soc_history': return <SocHistorySource {...props} />;
+    case 'charging_sessions_energy': return <ChargingSeriesSource {...props} sessions />;
+    case 'charging_weekly_energy': return <ChargingSeriesSource {...props} />;
+    case 'charge_session_curve': return <ChargeSessionCurveSource {...props} />;
+    case 'charging_curve_analysis': return <ChargingCurveAnalysisSource {...props} />;
+    case 'efficiency_trend': return <EfficiencyTrendSource {...props} />;
+    case 'efficiency_temperature': return <EfficiencyTemperatureSource {...props} />;
+    case 'efficiency_mode': return <EfficiencyModeSource {...props} />;
+    case 'phantom_drain': return <PhantomDrainSource {...props} />;
+    case 'battery_degradation': return <BatteryDegradationSource {...props} />;
+    case 'battery_capacity_mileage': return <BatteryMileageSource {...props} />;
+    case 'projected_range_mileage': return <ProjectedRangeMileageSource {...props} />;
+  }
+}
+
+function chartInteractionMode(presentation: ActiveDashboardChartSourceProps['presentation']) {
+  return presentation === 'mobile-viewer' ? 'touch-explore' as const : 'standard' as const;
+}
+
+function sourceAxisRanges(settings?: DashboardChartDisplaySettings) {
+  return {
+    xRange: getManualAxisRange(settings?.axes?.x),
+    yRange: getManualAxisRange(settings?.axes?.y),
+    yRightRange: getManualAxisRange(settings?.axes?.y2),
+  };
+}
+
+function SocHistorySource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data: soc = [], isLoading: socLoading } = useSocHistory(ctx.vehicleId, ctx.from, ctx.to);
+  const { data: range = [], isLoading: rangeLoading } = useRangeHistory(ctx.vehicleId, ctx.from, ctx.to);
+  return renderSocHistoryChart(
+    definition,
+    height,
+    socLoading || rangeLoading,
+    soc.map((point) => ({ ts: point.ts, value: point.value })),
+    range.map((point) => ({ ts: point.ts, value: point.value })),
+    smoothing,
+    sourceAxisRanges(settings).yRange,
+    chartInteractionMode(presentation),
+  );
+}
+
+function ChargingSeriesSource({ definition, ctx, height, settings, sessions }: ActiveDashboardChartSourceProps & { sessions?: boolean }) {
+  const { data, isLoading } = useChargingChartSeries(ctx.vehicleId, ctx.from, ctx.to);
+  const daily = data?.daily ?? [];
+  if (sessions) {
+    return (
+      <ChargingSessionsChart
+        definition={definition}
+        daily={daily}
+        dailySessions={data?.daily_sessions ?? []}
+        loading={isLoading}
+        height={height}
+        selectedDayLocal={ctx.chargeSessionDayLocal ?? null}
+        {...(ctx.setChargeSessionDayLocal ? { onDayClick: ctx.setChargeSessionDayLocal } : {})}
+      />
+    );
+  }
+  const { yRange } = sourceAxisRanges(settings);
+  return <DailyEnergyChart definition={definition} daily={daily} loading={isLoading} height={height} {...(yRange ? { yRange } : {})} />;
+}
+
+function ChargeSessionCurveSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useChargeCurve(ctx.chargeSessionId ?? null, ctx.vehicleId);
+  const { yRange, yRightRange } = sourceAxisRanges(settings);
+  return (
+    <ChargeSessionCurveChart
+      definition={definition}
+      data={data}
+      loading={isLoading}
+      height={height}
+      smoothing={smoothing}
+      startedAt={ctx.from || null}
+      sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
+      interactionMode={chartInteractionMode(presentation)}
+      {...(yRange ? { yRange } : {})}
+      {...(yRightRange ? { yRightRange } : {})}
+    />
+  );
+}
+
+function ChargingCurveAnalysisSource({ definition, ctx, height, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useChargeCurveAnalysis(ctx.vehicleId, ctx.from, ctx.to);
+  const { xRange, yRange } = sourceAxisRanges(settings);
+  return <ChargingCurveAnalysisChart definition={definition} data={data} loading={isLoading} height={height} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
+}
+
+function EfficiencyTrendSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
+  const { yRange } = sourceAxisRanges(settings);
+  return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} smoothing={smoothing} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
+}
+
+function EfficiencyTemperatureSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useEfficiencyVsTemp(ctx.vehicleId, ctx.from, ctx.to);
+  return <EfficiencyTemperatureChart definition={definition} data={data} loading={isLoading} height={height} />;
+}
+
+function EfficiencyModeSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to);
+  return <EfficiencyModeChart definition={definition} data={data} loading={isLoading} height={height} />;
+}
+
+function PhantomDrainSource({ definition, ctx, height, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data, isLoading } = usePhantomDrainPeriods(ctx.vehicleId, ctx.from, ctx.to, 500, 6);
+  return <PhantomDrainChart periods={data?.periods ?? []} loading={isLoading} height={height} emptyTitle={definition.emptyTitle} yUnit={definition.yUnit} yRange={sourceAxisRanges(settings).yRange ?? definition.yRange} interactionMode={chartInteractionMode(presentation)} />;
+}
+
+function BatteryDegradationSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useDegradation(ctx.vehicleId, ctx.from, ctx.to);
+  return renderSingleChart(definition, height, isLoading, data.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), smoothing, sourceAxisRanges(settings).yRange, chartInteractionMode(presentation));
+}
+
+function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data']) {
+  return (data ?? []).map((point) => ({
     ts: point.ts,
     x: point.odometer_mi,
     y: point.usable_kwh,
@@ -466,120 +561,18 @@ export function DashboardChartRenderer({
     projectedMaxRangeMi: point.projected_max_range_mi,
     degradationPct: point.degradation_pct,
   }));
-  const rendererSmoothing = settings?.smoothing ?? smoothing;
-  const xRange = getManualAxisRange(settings?.axes?.x);
-  const yRange = getManualAxisRange(settings?.axes?.y);
-  const yRightRange = getManualAxisRange(settings?.axes?.y2);
-  const interactionMode = presentation === 'mobile-viewer' ? 'touch-explore' as const : 'standard' as const;
+}
 
-  switch (definition.source) {
-    case 'soc_history':
-      return renderSocHistoryChart(
-        definition,
-        height,
-        socLoading || rangeLoading,
-        soc.map((point) => ({ ts: point.ts, value: point.value })),
-        range.map((point) => ({ ts: point.ts, value: point.value })),
-        rendererSmoothing,
-        yRange,
-        interactionMode,
-      );
-    case 'charging_sessions_energy':
-      return (
-        <ChargingSessionsChart
-          definition={definition}
-          daily={dailyChargeSeries}
-          dailySessions={dailyChargeSessions}
-          loading={chargingChartSeriesLoading}
-          height={height}
-          selectedDayLocal={ctx.chargeSessionDayLocal ?? null}
-          {...(ctx.setChargeSessionDayLocal ? { onDayClick: ctx.setChargeSessionDayLocal } : {})}
-        />
-      );
-    case 'charging_weekly_energy':
-      return (
-        <DailyEnergyChart
-          definition={definition}
-          daily={dailyChargeSeries}
-          loading={chargingChartSeriesLoading}
-          height={height}
-          {...(yRange ? { yRange } : {})}
-        />
-      );
-    case 'charge_session_curve':
-      return (
-        <ChargeSessionCurveChart
-          definition={definition}
-          data={selectedChargeCurve}
-          loading={selectedChargeCurveLoading}
-          height={height}
-          smoothing={rendererSmoothing}
-          startedAt={ctx.from || null}
-          sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
-          interactionMode={interactionMode}
-          {...(yRange ? { yRange } : {})}
-          {...(yRightRange ? { yRightRange } : {})}
-        />
-      );
-    case 'charging_curve_analysis':
-      return (
-        <ChargingCurveAnalysisChart
-          definition={definition}
-          data={chargeCurveAnalysis}
-          loading={chargeCurveAnalysisLoading}
-          height={height}
-          interactionMode={interactionMode}
-          {...(xRange ? { xRange } : {})}
-          {...(yRange ? { yRange } : {})}
-        />
-      );
-    case 'efficiency_trend':
-      return <EfficiencyTrendChart definition={definition} trend={trend} loading={trendLoading} height={height} smoothing={rendererSmoothing} interactionMode={interactionMode} {...(yRange ? { yRange } : {})} />;
-    case 'efficiency_temperature':
-      return <EfficiencyTemperatureChart definition={definition} data={efficiencyByTemp} loading={efficiencyByTempLoading} height={height} />;
-    case 'efficiency_mode':
-      return <EfficiencyModeChart definition={definition} data={efficiencyByMode} loading={efficiencyByModeLoading} height={height} />;
-    case 'phantom_drain':
-      return (
-        <PhantomDrainChart
-          periods={phantomPeriods?.periods ?? []}
-          loading={phantomLoading}
-          height={height}
-          emptyTitle={definition.emptyTitle}
-          yUnit={definition.yUnit}
-          yRange={yRange ?? definition.yRange}
-          interactionMode={interactionMode}
-        />
-      );
-    case 'battery_degradation':
-      return renderSingleChart(definition, height, degradationLoading, degradation.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), rendererSmoothing, yRange, interactionMode);
-    case 'battery_capacity_mileage':
-      return (
-        <BatteryCapacityMileageChart
-          definition={definition}
-          loading={mileageLoading}
-          height={height}
-          points={mileagePoints}
-          smoothing={rendererSmoothing}
-          interactionMode={interactionMode}
-          {...(xRange ? { xRange } : {})}
-          {...(yRange ? { yRange } : {})}
-        />
-      );
-    case 'projected_range_mileage':
-      return (
-        <ProjectedRangeMileageChart
-          definition={definition}
-          loading={mileageLoading}
-          height={height}
-          points={mileagePoints}
-          smoothing={rendererSmoothing}
-          interactionMode={interactionMode}
-          {...(yRange ? { yRange } : {})}
-          {...(yRightRange ? { yRightRange } : {})}
-        />
-      );
-  }
+function BatteryMileageSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
+  const { xRange, yRange } = sourceAxisRanges(settings);
+  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} smoothing={smoothing} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
+}
+
+function ProjectedRangeMileageSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+  const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
+  const { yRange, yRightRange } = sourceAxisRanges(settings);
+  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} smoothing={smoothing} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
 }
 
 function renderSocHistoryChart(

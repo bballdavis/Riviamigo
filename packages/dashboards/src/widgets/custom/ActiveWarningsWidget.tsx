@@ -138,5 +138,6 @@ registerWidget({
   defaultSize: { w: 4, h: 4 },
   minSize: { w: 3, h: 3 },
   defaultOptions: {},
+  dataRequirements: () => ({ status: true }),
   component: ActiveWarningsWidget,
 });

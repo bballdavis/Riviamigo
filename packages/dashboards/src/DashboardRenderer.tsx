@@ -4,6 +4,7 @@ import type { VehicleStatus } from '@riviamigo/types';
 import type { DashboardConfig } from './schema';
 import type { WidgetCtx } from './registry';
 import { DashboardGrid } from './DashboardGrid';
+import { DashboardDataProvider, collectDashboardDataRequirements } from './dashboardData';
 import {
   hasDashboardVisibilityRules,
   resolveDashboardViewWidgets,
@@ -28,9 +29,15 @@ export function DashboardRenderer({
 }: DashboardRendererProps) {
   const widgets = Array.isArray(config.widgets) ? config.widgets : [];
   const viewWidgets = useDashboardViewWidgets(widgets, ctx);
+  const dataWidgets = mode === 'edit' ? widgets : viewWidgets;
+  const requirements = React.useMemo(
+    () => collectDashboardDataRequirements(dataWidgets),
+    [dataWidgets],
+  );
 
-  if (mode === 'edit') {
-    return (
+  return (
+    <DashboardDataProvider ctx={ctx} requirements={requirements}>
+      {mode === 'edit' ? (
       <Suspense fallback={<div className="text-xs text-fg-tertiary p-4">Loading editor...</div>}>
         <GridEditor
           config={{ ...config, widgets }}
@@ -39,10 +46,9 @@ export function DashboardRenderer({
           editActions={editActions}
         />
       </Suspense>
-    );
-  }
-
-  return <DashboardGrid widgets={viewWidgets} ctx={ctx} />;
+      ) : <DashboardGrid widgets={viewWidgets} ctx={ctx} />}
+    </DashboardDataProvider>
+  );
 }
 
 function useDashboardViewWidgets(widgets: DashboardConfig['widgets'], ctx: WidgetCtx) {

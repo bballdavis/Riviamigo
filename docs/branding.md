@@ -87,7 +87,7 @@ Common usage:
 - Ordinary quantitative bars use the shared filled-bar treatment from `CHART_BAR_STYLE`: semantic chart colors, quiet gridlines, consistent width/opacity, and rounded tops where the renderer supports them. Outline-only bars are not the default dashboard treatment.
 - Every interactive bar chart must expose the date/category and formatted metric value on hover. Stacked bars must also provide a legend and keep hover/click hit-testing on the full bar rather than individual visual segments.
 - Keep chart geometry semantically appropriate: daily totals may use one filled series, while daily charge-session composition remains a stacked AC/DC/Unknown view.
-- On mobile, dashboard charts expose an on-theme expand control. The expanded viewer uses safe-area-aware fullscreen layout, a compact widget-scoped chart picker, and an explicit rotate prompt before landscape exploration.
+- On mobile, dashboard charts expose an on-theme expand control. The expanded viewer uses safe-area-aware fullscreen layout, a compact widget-scoped chart picker, and a solid accent rotate prompt with large iconography before landscape exploration.
 - Time and numeric charts use touch-first tap, pinch, pan, and reset controls in the viewer. Categorical charts keep full category/value detail and touch-safe selection rather than simulating a meaningless zoom level.
 
 ### Empty, loading, and error states

@@ -39,14 +39,28 @@ If the change crosses more than one row, start from the lowest reusable layer an
 4. Register it via the existing widget barrel and registry.
 5. Keep the widget focused on one concern.
 6. Declare editor capabilities in the widget registry entry.
+7. Declare `dataRequirements(instance)` in the registry entry for every dashboard-wide source or metric chip. Return only the sources the widget actually reads; metric entries should state whether they need a latest value, sparkline series, or both.
 
 A widget should usually:
 
-- call one hook or a small related set of hooks
+- read a dashboard data selector or call one hook or a small related set of hooks when the data is intentionally widget-specific
 - map data into one visual or table
 - avoid knowing about route params beyond the provided widget context
 
 Do not use one widget to coordinate the rest of a page.
+
+### Dashboard Data Requirements
+
+`WidgetDef.dataRequirements` is the declarative request contract for shared dashboard data. `DashboardRenderer` collects it from the visible configuration, deduplicates metrics, and creates one dashboard provider. This applies equally to built-in and user-created dashboards.
+
+```ts
+dataRequirements: (instance) => ({
+  status: true,
+  metrics: [{ metric: 'odometer_mi', include_latest: true, include_series: false }],
+})
+```
+
+Use `useDashboardDataSelector` or `useDashboardMetric` in the widget to read that data. Keep specialized sources—trip geometry, trip detail samples, table paging/search, and active chart sources—outside the generic metric batch. Unknown or older widget definitions safely contribute no requirements and retain their own data behavior.
 
 ### Widget Editor Capabilities
 

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
+import type { MetricBatchMetricRequest } from '@riviamigo/types';
 import { useAuthReady } from './useAuthState';
 
 export type MetricSeriesBucket = 'auto' | 'minute' | '5min' | '15min' | 'hour' | 'day';
@@ -55,5 +56,42 @@ export function useMetricSeries(
     enabled: authReady && !!vehicleId && !!metric,
     staleTime: 2 * 60 * 1000,
     placeholderData: (previous) => previous,
+  });
+}
+
+/**
+ * Fetches the compact metric payload used by dashboard chips in one request.
+ * It intentionally does not persist: the page-level provider already keeps
+ * it warm in memory and a multi-dashboard localStorage cache is counterproductive.
+ */
+export function useMetricBatch(
+  vehicleId: string | null,
+  metrics: readonly MetricBatchMetricRequest[],
+  from: string | null,
+  to: string | null,
+  lifetime = false,
+) {
+  const authReady = useAuthReady();
+  const stableMetrics = metrics.map((metric) => ({
+    metric: metric.metric,
+    include_latest: metric.include_latest !== false,
+    include_series: metric.include_series !== false,
+  }));
+  const metricKey = stableMetrics.map((metric) => `${metric.metric}:${Number(metric.include_latest)}:${Number(metric.include_series)}`).join('|');
+  return useQuery({
+    queryKey: ['metrics', 'batch', vehicleId, from, to, lifetime, metricKey],
+    queryFn: () => api.getMetricBatch({
+      vehicle_id: vehicleId!,
+      metrics: stableMetrics,
+      from,
+      to,
+      lifetime,
+      bucket: 'auto',
+      max_points: 96,
+    }),
+    enabled: authReady && !!vehicleId && stableMetrics.length > 0,
+    staleTime: 2 * 60 * 1000,
+    placeholderData: (previous) => previous,
+    meta: { persist: false },
   });
 }
