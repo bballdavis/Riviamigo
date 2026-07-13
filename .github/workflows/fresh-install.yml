@@ -28,7 +28,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Run isolated acceptance
         run: |
-          cp .env.example fresh-install.env
+          cp compose/.env.example fresh-install.env
           sed -i 's|DATABASE_URL=.*|DATABASE_URL=postgresql://riviamigo:fresh-install-password@timescaledb:5432/riviamigo|' fresh-install.env
           sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=fresh-install-password|' fresh-install.env
           sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=fresh-install-redis-password|' fresh-install.env

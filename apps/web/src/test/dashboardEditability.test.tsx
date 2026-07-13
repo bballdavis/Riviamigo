@@ -7,7 +7,7 @@ import type { DashboardConfig } from '@riviamigo/dashboards';
 const dashboardMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   routeSlug: 'custom-dashboard',
-  routeSearch: {} as { edit?: string },
+  routeSearch: {} as { edit?: 1; dashboardId?: string },
   updateDashboard: vi.fn(),
   createDashboard: vi.fn(),
   updateAdminDashboard: vi.fn(),
@@ -38,6 +38,12 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
+  const connectedStatus = {
+    charger_state: 'Connected',
+    charger_status: 'chrgr_sts_connected_no_chrg',
+    power_state: 'standby',
+  };
+  const emptyMetricBatch = { values: [], series: [] };
   return {
     ...actual,
     useAuth: () => ({
@@ -50,7 +56,14 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     }),
     useMe: () => ({ data: { role: 'user' } }),
     useMetricCatalog: () => ({ data: [] }),
-    useCurrentVehicleStatus: () => ({ data: null }),
+    useMetricBatch: () => ({ data: emptyMetricBatch, isFetching: false }),
+    useCurrentVehicleStatus: () => ({
+      data: connectedStatus,
+      isFetching: false,
+    }),
+    useBatteryHealth: () => ({ data: null, isFetching: false }),
+    useChargingSummary: () => ({ data: null, isFetching: false }),
+    useEfficiencySummary: () => ({ data: null, isFetching: false }),
   };
 });
 
@@ -94,6 +107,10 @@ vi.mock('@riviamigo/dashboards', async () => {
       data: configForSlug(slug),
       isLoading: false,
     }),
+    useDashboardById: (id: string | null) => ({
+      data: id ? customDashboard : undefined,
+      isLoading: false,
+    }),
     useUpdateDashboard: () => ({ mutateAsync: dashboardMocks.updateDashboard, isPending: false }),
     useCreateDashboard: () => ({ mutateAsync: dashboardMocks.createDashboard, isPending: false }),
     useUpdateAdminDashboard: () => ({ mutateAsync: dashboardMocks.updateAdminDashboard, isPending: false }),
@@ -133,6 +150,15 @@ vi.mock('@riviamigo/ui/primitives', () => ({
     </div>
   ),
   DateRangePicker: () => <div data-testid="date-range-picker" />,
+  SelectPicker: ({ value, options, onChange, ...props }: {
+    value: string;
+    options: Array<{ value: string; label: React.ReactNode }>;
+    onChange: (value: string) => void;
+  }) => (
+    <select value={value} onChange={(event) => onChange(event.target.value)} {...props}>
+      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+  ),
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -181,7 +207,7 @@ describe('dashboard editability', () => {
   it.each([
     ['dashboard', 'd1000001-0000-0000-0000-000000000002', 6],
     ['battery', 'd2000002-0000-0000-0000-000000000001', 9],
-    ['charging', 'd4000004-0000-0000-0000-000000000001', 14],
+    ['charging', 'd4000004-0000-0000-0000-000000000001', 9],
     ['efficiency', 'd3000003-0000-0000-0000-000000000001', 5],
     ['trips', 'd5000005-0000-0000-0000-000000000005', 6],
   ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId, widgetCount) => {
@@ -191,7 +217,7 @@ describe('dashboard editability', () => {
   });
 
   it('opens the same edit overlay path for /d/$slug custom dashboards', async () => {
-    dashboardMocks.routeSearch = { edit: '1' };
+    dashboardMocks.routeSearch = { edit: 1 };
 
     render(<RouteComponent />);
 
@@ -214,7 +240,7 @@ describe('dashboard editability', () => {
     expect(dashboardMocks.navigate).toHaveBeenCalledWith({
       to: '/d/$slug',
       params: { slug: 'custom-dashboard' },
-      search: { edit: '1' },
+      search: { edit: 1 },
     });
   });
 

@@ -32,7 +32,7 @@ This document is canonical for the high-level backend flow. Update it when the A
 
 ## Operational Rules
 
-- New env vars must be reflected in `.env.example` and any relevant user-facing docs.
+- New env vars must be reflected in `compose/.env.full.example`, the short Compose template when needed, and any relevant user-facing docs.
 - New routes or route removals must update the relevant developer docs and any public-facing API references.
 - Changes to auth, ingestion, or backup behavior must update runbooks if maintainers will need new recovery steps.
 

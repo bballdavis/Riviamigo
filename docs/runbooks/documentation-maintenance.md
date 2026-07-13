@@ -36,7 +36,7 @@ This document is canonical for the documentation upkeep workflow.
 - `pnpm docs:check` fails on a missing file link
   Fix the link or restore the referenced file.
 - `pnpm docs:check` fails on env vars
-  Add the missing env var to `.env.example` or remove the stale doc reference.
+  Add the missing env var to `compose/.env.full.example` (and the short template when needed) or remove the stale doc reference.
 - `pnpm docs:check` fails on route or API contracts
   Update the contract in `scripts/check-docs.mjs` or bring docs/code back into alignment.
 - `scripts/publish-wiki.sh --validate-only` fails
