@@ -6,7 +6,9 @@ import { api, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks
 import type { ApiAccessLevel, UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
+  materializeUserDashboardDraft,
   useCloneDashboard,
+  useCreateDashboard,
   useDashboards,
   useDeleteDashboard,
   useRestoreAdminDashboardDefault,
@@ -25,7 +27,7 @@ import {
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, ThemeToggle, Tooltip,
+  Button, Badge, SelectPicker, ThemeToggle, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
@@ -168,6 +170,8 @@ function DashboardSettingsSection({
   deleteDashboard,
   setDashboardLock,
   restoreDefaultDashboard,
+  createDashboard,
+  onCustomize,
   onEdit,
 }: {
   dashboards: DashboardConfig[];
@@ -177,10 +181,14 @@ function DashboardSettingsSection({
   deleteDashboard: ReturnType<typeof useDeleteDashboard>;
   setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
   restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
+  createDashboard: ReturnType<typeof useCreateDashboard>;
+  onCustomize: (dashboard: DashboardConfig) => Promise<void>;
   onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
 }) {
   const defaults = dashboards.filter((dashboard) => dashboard.isDefault);
   const userDashboards = dashboards.filter((dashboard) => !dashboard.isDefault);
+  const userBySlug = new Map(userDashboards.map((dashboard) => [dashboard.slug, dashboard]));
+  const defaultBySlug = new Map(defaults.map((dashboard) => [dashboard.slug, dashboard]));
 
   async function duplicate(dashboard: DashboardConfig) {
     const cloned = await cloneDashboard.mutateAsync(dashboard.id);
@@ -195,9 +203,16 @@ function DashboardSettingsSection({
           <Badge variant="info">{dashboards.length} saved</Badge>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div className="rounded-xl border border-border bg-bg-elevated/35 p-3 text-sm text-fg-secondary">
-            Dashboard edits are saved in the database, so backup and restore carries them with the rest of Riviamigo. Use user copies for personal changes; system defaults are admin-managed.
-          </div>
+          <details className="group rounded-xl border border-border bg-bg-elevated/35">
+            <summary className="cursor-pointer list-none px-3 py-3 text-sm font-medium text-fg marker:hidden">
+              How dashboard defaults and personal copies work
+            </summary>
+            <div className="grid gap-2 border-t border-border px-3 py-3 text-sm text-fg-secondary">
+              <p><strong className="text-fg">System defaults</strong> are shared within this Riviamigo installation. Admin edits affect users who have not customized that page.</p>
+              <p><strong className="text-fg">My dashboards</strong> are private to your account. A personal copy with the same page name is active for you and takes precedence without changing the system default.</p>
+              <p><strong className="text-fg">Customize</strong> creates that personal copy. <strong className="text-fg">Reset to default</strong> removes it, while <strong className="text-fg">Restore bundled</strong> returns a system dashboard to the version shipped with Riviamigo.</p>
+            </div>
+          </details>
           {isLoading ? (
             <div className="rounded-xl border border-border bg-bg-elevated/35 p-4 text-sm text-fg-tertiary">
               Loading dashboards...
@@ -212,6 +227,10 @@ function DashboardSettingsSection({
                 deleteDashboard={deleteDashboard}
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
+                createDashboard={createDashboard}
+                userBySlug={userBySlug}
+                defaultBySlug={defaultBySlug}
+                onCustomize={onCustomize}
                 onDuplicate={duplicate}
                 onEdit={onEdit}
               />
@@ -223,6 +242,10 @@ function DashboardSettingsSection({
                 deleteDashboard={deleteDashboard}
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
+                createDashboard={createDashboard}
+                userBySlug={userBySlug}
+                defaultBySlug={defaultBySlug}
+                onCustomize={onCustomize}
                 onDuplicate={duplicate}
                 onEdit={onEdit}
               />
@@ -242,6 +265,10 @@ function DashboardSettingsList({
   deleteDashboard,
   setDashboardLock,
   restoreDefaultDashboard,
+  createDashboard,
+  userBySlug,
+  defaultBySlug,
+  onCustomize,
   onDuplicate,
   onEdit,
 }: {
@@ -252,6 +279,10 @@ function DashboardSettingsList({
   deleteDashboard: ReturnType<typeof useDeleteDashboard>;
   setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
   restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
+  createDashboard: ReturnType<typeof useCreateDashboard>;
+  userBySlug: Map<string, DashboardConfig>;
+  defaultBySlug: Map<string, DashboardConfig>;
+  onCustomize: (dashboard: DashboardConfig) => Promise<void>;
   onDuplicate: (dashboard: DashboardConfig) => void;
   onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
 }) {
@@ -268,6 +299,9 @@ function DashboardSettingsList({
           dashboards.map((dashboard) => {
             const isUserOwned = dashboard.ownerId != null;
             const canEdit = isUserOwned || (dashboard.isDefault && canManageDefaults);
+            const personalCopy = userBySlug.get(dashboard.slug);
+            const systemDefault = defaultBySlug.get(dashboard.slug);
+            const isActive = isUserOwned || !personalCopy;
             return (
               <div
                 key={dashboard.id}
@@ -280,6 +314,7 @@ function DashboardSettingsList({
                       {dashboard.isDefault ? 'Default' : 'User'}
                     </Badge>
                     {dashboard.isLocked ? <Badge variant="warning" size="sm">Locked</Badge> : null}
+                    {isActive ? <Badge variant="success" size="sm">Active for you</Badge> : null}
                   </div>
                   <p className="mt-1 text-xs text-fg-tertiary">
                     {dashboard.slug} &middot; {dashboard.widgets.length} widgets
@@ -292,28 +327,41 @@ function DashboardSettingsList({
                     iconLeft={<ExternalLink className="h-3.5 w-3.5" />}
                     onClick={() => onEdit(dashboard, false)}
                   >
-                    Open
+                    {dashboard.isDefault ? 'Open default' : 'Open'}
                   </Button>
+                  {canEdit ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      iconLeft={<Pencil className="h-3.5 w-3.5" />}
+                      onClick={() => onEdit(dashboard, true)}
+                    >
+                      {dashboard.isDefault ? 'Edit default' : 'Edit'}
+                    </Button>
+                  ) : null}
+                  {dashboard.isDefault ? (
+                    personalCopy ? null : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={createDashboard.isPending}
+                        onClick={() => { void onCustomize(dashboard); }}
+                      >
+                        Customize
+                      </Button>
+                    )
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      loading={cloneDashboard.isPending && cloneDashboard.variables === dashboard.id}
+                      onClick={() => { void onDuplicate(dashboard); }}
+                    >
+                      Duplicate
+                    </Button>
+                  )}
                   <Button
                     variant="secondary"
-                    size="sm"
-                    iconLeft={<Pencil className="h-3.5 w-3.5" />}
-                    disabled={!canEdit}
-                    onClick={() => onEdit(dashboard, true)}
-                    title={canEdit ? 'Edit dashboard' : 'Duplicate this locked default before editing'}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    loading={cloneDashboard.isPending && cloneDashboard.variables === dashboard.id}
-                    onClick={() => { void onDuplicate(dashboard); }}
-                  >
-                    Duplicate
-                  </Button>
-                  <Button
-                    variant="ghost"
                     size="sm"
                     iconLeft={<Download className="h-3.5 w-3.5" />}
                     onClick={() => downloadDashboardYaml(dashboard)}
@@ -342,7 +390,7 @@ function DashboardSettingsList({
                           }
                         }}
                       >
-                        Restore
+                        Restore bundled
                       </Button>
                     </>
                   ) : null}
@@ -353,12 +401,15 @@ function DashboardSettingsList({
                       iconLeft={<Trash2 className="h-3.5 w-3.5" />}
                       loading={deleteDashboard.isPending && deleteDashboard.variables === dashboard.id}
                       onClick={() => {
-                        if (window.confirm(`Reset "${dashboard.name}"? This removes your saved dashboard copy.`)) {
+                          const message = systemDefault
+                            ? `Reset "${dashboard.name}" to the system default? This removes your personal dashboard copy.`
+                            : `Delete "${dashboard.name}"? This removes your saved dashboard.`;
+                          if (window.confirm(message)) {
                           deleteDashboard.mutate(dashboard.id);
                         }
                       }}
                     >
-                      Reset
+                      {systemDefault ? 'Reset to default' : 'Delete'}
                     </Button>
                   ) : null}
                 </div>
@@ -433,10 +484,44 @@ export function SettingsContent() {
   });
 
   const dashboards = useDashboards();
+  const createDashboard = useCreateDashboard();
   const cloneDashboard = useCloneDashboard();
   const deleteDashboard = useDeleteDashboard();
   const setDashboardLock = useSetAdminDashboardLock();
   const restoreDefaultDashboard = useRestoreAdminDashboardDefault();
+
+  const openDashboard = React.useCallback((dashboard: DashboardConfig, edit: boolean) => {
+    navigate({
+      to: '/d/$slug',
+      params: { slug: dashboard.slug },
+      search: {
+        dashboardId: dashboard.id,
+        ...(edit ? { edit: '1' } : {}),
+      },
+    } as never);
+  }, [navigate]);
+
+  const customizeDashboard = React.useCallback(async (dashboard: DashboardConfig) => {
+    const existing = dashboards.data?.find((entry) => (
+      entry.ownerId != null && entry.slug === dashboard.slug
+    ));
+    if (existing) {
+      openDashboard(existing, true);
+      return;
+    }
+
+    try {
+      const created = await createDashboard.mutateAsync(materializeUserDashboardDraft(dashboard));
+      openDashboard(created, true);
+    } catch {
+      const refreshed = await dashboards.refetch();
+      const racedCopy = refreshed.data?.find((entry) => (
+        entry.ownerId != null && entry.slug === dashboard.slug
+      ));
+      if (!racedCopy) throw new Error('Could not create or find the personal dashboard copy');
+      openDashboard(racedCopy, true);
+    }
+  }, [createDashboard, dashboards, openDashboard]);
 
   const unitPreferencesQuery = useQuery({
     queryKey: ['unit-preferences'],
@@ -1008,33 +1093,31 @@ export function SettingsContent() {
                                   {(v.model?.includes('R1') || v.model?.includes('r1')) && (
                                     <label className="grid gap-1">
                                       <span className="text-xs text-fg-tertiary">Generation</span>
-                                      <select
+                                      <SelectPicker
+                                        className="min-w-[6rem]"
                                         value={batteryGen}
-                                        onChange={(e) => {
-                                          setBatteryGen(e.target.value as BatteryGen);
-                                          setBatteryPreset(e.target.value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
+                                        onChange={(value) => {
+                                          setBatteryGen(value as BatteryGen);
+                                          setBatteryPreset(value === 'gen2' ? 'r1_large_g2' : 'r1_large_g1');
                                           setCustomKwh('');
                                         }}
-                                        className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                      >
-                                        <option value="gen1">Gen 1</option>
-                                        <option value="gen2">Gen 2</option>
-                                      </select>
+                                        aria-label="Battery generation"
+                                        options={[{ value: 'gen1', label: 'Gen 1' }, { value: 'gen2', label: 'Gen 2' }]}
+                                      />
                                     </label>
                                   )}
                                   <label className="grid gap-1">
                                     <span className="text-xs text-fg-tertiary">Pack</span>
-                                    <select
+                                    <SelectPicker
+                                      className="min-w-[14rem]"
                                       value={batteryPreset}
-                                      onChange={(e) => setBatteryPreset(e.target.value)}
-                                      className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                                    >
-                                      {(v.model?.includes('R2') || v.model?.includes('r2') ? [R2S_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((p) => (
-                                        <option key={p.key} value={p.key}>
-                                          {p.label}{p.kwh != null ? ` (${p.kwh} kWh)` : ''}
-                                        </option>
-                                      ))}
-                                    </select>
+                                      onChange={setBatteryPreset}
+                                      aria-label="Battery pack"
+                                      options={(v.model?.includes('R2') || v.model?.includes('r2') ? [R2S_PRESET, { key: 'custom', label: 'Custom', kwh: null }] : RIVIAN_BATTERY_PRESETS[batteryGen]).map((preset) => ({
+                                        value: preset.key,
+                                        label: `${preset.label}${preset.kwh != null ? ` (${preset.kwh} kWh)` : ''}`,
+                                      }))}
+                                    />
                                   </label>
                                   {batteryPreset === 'custom' && (
                                     <label className="grid gap-1">
@@ -1102,15 +1185,13 @@ export function SettingsContent() {
                                     placeholder="user@example.com"
                                     className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
                                   />
-                                  <select
+                                  <SelectPicker
+                                    className="w-full"
                                     value={shareRole}
-                                    onChange={(event) => setShareRole(event.target.value as VehicleMember['role'])}
-                                    className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
-                                  >
-                                    <option value="viewer">Viewer</option>
-                                    <option value="manager">Manager</option>
-                                    <option value="owner">Owner</option>
-                                  </select>
+                                    onChange={(value) => setShareRole(value as VehicleMember['role'])}
+                                    aria-label="Vehicle member role"
+                                    options={[{ value: 'viewer', label: 'Viewer' }, { value: 'manager', label: 'Manager' }, { value: 'owner', label: 'Owner' }]}
+                                  />
                                   <Button
                                     size="sm"
                                     className="h-9"
@@ -1163,20 +1244,18 @@ export function SettingsContent() {
                                             Added {new Date(member.created_at).toLocaleDateString()}
                                           </p>
                                         </div>
-                                        <select
+                                        <SelectPicker
+                                          className="min-w-[7rem]"
                                           value={member.role}
-                                          onChange={(event) => updateVehicleMember.mutate({
+                                          onChange={(value) => updateVehicleMember.mutate({
                                             vehicleId: v.id,
                                             userId: member.user_id,
-                                            role: event.target.value as VehicleMember['role'],
+                                            role: value as VehicleMember['role'],
                                           })}
-                                          className="h-9 rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none focus:border-accent"
+                                          aria-label={`Role for ${member.email}`}
                                           disabled={updateVehicleMember.isPending}
-                                        >
-                                          <option value="viewer">Viewer</option>
-                                          <option value="manager">Manager</option>
-                                          <option value="owner">Owner</option>
-                                        </select>
+                                          options={[{ value: 'viewer', label: 'Viewer' }, { value: 'manager', label: 'Manager' }, { value: 'owner', label: 'Owner' }]}
+                                        />
                                         <Button
                                           variant="danger"
                                           size="sm"
@@ -1246,13 +1325,9 @@ export function SettingsContent() {
                 deleteDashboard={deleteDashboard}
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
-                onEdit={(dashboard, edit) => {
-                  navigate({
-                    to: '/d/$slug',
-                    params: { slug: dashboard.slug },
-                    search: edit ? { edit: '1' } : {},
-                  } as never);
-                }}
+                createDashboard={createDashboard}
+                onCustomize={customizeDashboard}
+                onEdit={openDashboard}
               />
             )}
 
@@ -1274,15 +1349,13 @@ export function SettingsContent() {
                       </label>
                       <label className="grid gap-1">
                         <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Vehicle</span>
-                        <select
+                        <SelectPicker
+                          className="w-full"
                           value={apiKeyVehicleId}
-                          onChange={(event) => setApiKeyVehicleId(event.target.value)}
-                          className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                        >
-                          {vehicles?.map((v) => (
-                            <option key={v.id} value={v.id}>{v.display_name}</option>
-                          ))}
-                        </select>
+                          onChange={setApiKeyVehicleId}
+                          aria-label="API key vehicle"
+                          options={vehicles?.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name })) ?? []}
+                        />
                       </label>
                       <label className="grid gap-1">
                         <span className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
@@ -1303,17 +1376,17 @@ export function SettingsContent() {
                             </Tooltip>
                           )}
                         </span>
-                        <select
+                        <SelectPicker
+                          className="w-full"
                           value={apiAccessLevel}
-                          onChange={(event) => setApiAccessLevel(event.target.value as ApiAccessLevel)}
-                          className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                        >
-                          {accessLevels.map((level) => (
-                            <option key={level.value} value={level.value} disabled={level.value === 'admin' && !isAdmin}>
-                              {level.label}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(value) => setApiAccessLevel(value as ApiAccessLevel)}
+                          aria-label="API access level"
+                          options={accessLevels.map((level) => ({
+                            value: level.value,
+                            label: level.label,
+                            disabled: level.value === 'admin' && !isAdmin,
+                          }))}
+                        />
                       </label>
                       <Button
                         size="sm"
@@ -1486,52 +1559,31 @@ export function SettingsContent() {
                       <div className="grid gap-3 md:grid-cols-2">
                         <label className="grid gap-1 text-sm text-fg">
                           <span>Distance / Range</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.distance_unit} onChange={(event) => handleCustomUnitChange('distance_unit', event.target.value as UnitPreferences['distance_unit'])}>
-                            <option value="miles">Miles (mi)</option>
-                            <option value="kilometers">Kilometers (km)</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.distance_unit} onChange={(value) => handleCustomUnitChange('distance_unit', value as UnitPreferences['distance_unit'])} aria-label="Distance and range unit" options={[{ value: 'miles', label: 'Miles (mi)' }, { value: 'kilometers', label: 'Kilometers (km)' }]} />
                         </label>
                         <label className="grid gap-1 text-sm text-fg">
                           <span>Speed</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.speed_unit} onChange={(event) => handleCustomUnitChange('speed_unit', event.target.value as UnitPreferences['speed_unit'])}>
-                            <option value="mph">Miles/hour (mph)</option>
-                            <option value="kmh">Kilometers/hour (km/h)</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.speed_unit} onChange={(value) => handleCustomUnitChange('speed_unit', value as UnitPreferences['speed_unit'])} aria-label="Speed unit" options={[{ value: 'mph', label: 'Miles/hour (mph)' }, { value: 'kmh', label: 'Kilometers/hour (km/h)' }]} />
                         </label>
                         <label className="grid gap-1 text-sm text-fg">
                           <span>Temperature</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.temperature_unit} onChange={(event) => handleCustomUnitChange('temperature_unit', event.target.value as UnitPreferences['temperature_unit'])}>
-                            <option value="fahrenheit">Fahrenheit (F)</option>
-                            <option value="celsius">Celsius (C)</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.temperature_unit} onChange={(value) => handleCustomUnitChange('temperature_unit', value as UnitPreferences['temperature_unit'])} aria-label="Temperature unit" options={[{ value: 'fahrenheit', label: 'Fahrenheit (F)' }, { value: 'celsius', label: 'Celsius (C)' }]} />
                         </label>
                         <label className="grid gap-1 text-sm text-fg">
                           <span>Pressure</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.pressure_unit} onChange={(event) => handleCustomUnitChange('pressure_unit', event.target.value as UnitPreferences['pressure_unit'])}>
-                            <option value="psi">PSI</option>
-                            <option value="kpa">kPa</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.pressure_unit} onChange={(value) => handleCustomUnitChange('pressure_unit', value as UnitPreferences['pressure_unit'])} aria-label="Pressure unit" options={[{ value: 'psi', label: 'PSI' }, { value: 'kpa', label: 'kPa' }]} />
                         </label>
                         <label className="grid gap-1 text-sm text-fg">
                           <span>Altitude</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.altitude_unit} onChange={(event) => handleCustomUnitChange('altitude_unit', event.target.value as UnitPreferences['altitude_unit'])}>
-                            <option value="feet">Feet (ft)</option>
-                            <option value="meters">Meters (m)</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.altitude_unit} onChange={(value) => handleCustomUnitChange('altitude_unit', value as UnitPreferences['altitude_unit'])} aria-label="Altitude unit" options={[{ value: 'feet', label: 'Feet (ft)' }, { value: 'meters', label: 'Meters (m)' }]} />
                         </label>
                         <label className="grid gap-1 text-sm text-fg">
                           <span>Place Radius</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.place_radius_unit} onChange={(event) => handleCustomUnitChange('place_radius_unit', event.target.value as UnitPreferences['place_radius_unit'])}>
-                            <option value="feet">Feet (ft)</option>
-                            <option value="meters">Meters (m)</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.place_radius_unit} onChange={(value) => handleCustomUnitChange('place_radius_unit', value as UnitPreferences['place_radius_unit'])} aria-label="Place radius unit" options={[{ value: 'feet', label: 'Feet (ft)' }, { value: 'meters', label: 'Meters (m)' }]} />
                         </label>
                         <label className="grid gap-1 text-sm text-fg md:col-span-2">
                           <span>Efficiency Display</span>
-                          <select className="h-9 rounded-lg border border-border bg-bg-surface px-2" value={unitPreferences.efficiency_display} onChange={(event) => handleCustomUnitChange('efficiency_display', event.target.value as UnitPreferences['efficiency_display'])}>
-                            <option value="distance_per_energy">Distance per energy (mi/kWh or km/kWh)</option>
-                            <option value="energy_per_distance">Energy per distance (Wh/mi or Wh/km)</option>
-                          </select>
+                          <SelectPicker className="w-full" value={unitPreferences.efficiency_display} onChange={(value) => handleCustomUnitChange('efficiency_display', value as UnitPreferences['efficiency_display'])} aria-label="Efficiency display" options={[{ value: 'distance_per_energy', label: 'Distance per energy (mi/kWh or km/kWh)' }, { value: 'energy_per_distance', label: 'Energy per distance (Wh/mi or Wh/km)' }]} />
                         </label>
                       </div>
                     </div>
@@ -1553,15 +1605,13 @@ export function SettingsContent() {
                   <CardHeader>
                     <CardTitle>Vehicle Stats</CardTitle>
                     <div className="flex items-center gap-2">
-                      <select
+                      <SelectPicker
+                        className="min-w-[11rem]"
                         value={rawVehicleId}
-                        onChange={(event) => setRawVehicleId(event.target.value)}
-                        className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                      >
-                        {vehicles?.map((v) => (
-                          <option key={v.id} value={v.id}>{v.display_name}</option>
-                        ))}
-                      </select>
+                        onChange={setRawVehicleId}
+                        aria-label="Raw telemetry vehicle"
+                        options={vehicles?.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name })) ?? []}
+                      />
                       <Button variant="secondary" size="sm" loading={rawTelemetry.isFetching} onClick={() => rawTelemetry.refetch()}>
                         Refresh
                       </Button>

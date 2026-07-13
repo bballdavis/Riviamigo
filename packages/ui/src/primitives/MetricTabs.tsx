@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
+import { SelectPicker } from './SelectPicker';
 
 export interface MetricTab {
   key: string;
@@ -46,16 +47,13 @@ export function MetricTabs({
         <div className="flex items-center gap-3">
           {/* Tab bar or dropdown */}
           {useDropdown ? (
-            <select
+            <SelectPicker
               value={active}
-              onChange={(e) => onChange(e.target.value)}
-              className="text-xs bg-bg-elevated border border-border rounded-lg px-3 py-1.5 text-fg
-                         focus:outline-none focus:ring-1 focus:ring-accent cursor-pointer"
-            >
-              {tabs.map((t) => (
-                <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </select>
+              onChange={onChange}
+              aria-label={title ?? 'Select metric'}
+              size="sm"
+              options={tabs.map((tab) => ({ value: tab.key, label: tab.label }))}
+            />
           ) : (
             <div className="flex items-center gap-0.5 bg-bg-elevated border border-border rounded-lg p-0.5">
               {tabs.map((t) => (

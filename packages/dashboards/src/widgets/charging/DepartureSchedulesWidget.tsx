@@ -7,7 +7,7 @@ import {
   useDeleteDepartureSchedule,
 } from '@riviamigo/hooks';
 import type { DepartureSchedule, DepartureScheduleInput, DepartureComfortSettings } from '@riviamigo/hooks';
-import { Button } from '@riviamigo/ui/primitives';
+import { Button, SelectPicker } from '@riviamigo/ui/primitives';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 
@@ -336,15 +336,13 @@ function HeatSelect({ label, value, onChange }: { label: string; value: number; 
   return (
     <div className="flex flex-col gap-1">
       <label className="text-xs text-fg-tertiary">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="h-8 w-full rounded-lg border border-border bg-bg-page px-2 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-      >
-        {HEAT_LABELS.map((l, i) => (
-          <option key={l} value={i}>{l}</option>
-        ))}
-      </select>
+      <SelectPicker
+        className="w-full"
+        value={String(value)}
+        onChange={(nextValue) => onChange(Number(nextValue))}
+        aria-label={label}
+        options={HEAT_LABELS.map((heatLabel, index) => ({ value: String(index), label: heatLabel }))}
+      />
     </div>
   );
 }

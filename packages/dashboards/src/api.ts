@@ -3,6 +3,7 @@ import { useAuthReady, api } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
 import { sanitizeDashboardConfig } from './layout';
 import type { DashboardConfig } from './schema';
+import { migrateLegacyWidgetVisibility } from './dashboardVisibility';
 
 const BASE = '/v1/dashboards';
 const DASHBOARD_QUERY_STALE_TIME_MS = 60 * 60 * 1000;
@@ -46,7 +47,15 @@ export function normalizeDashboardConfig(raw: unknown): DashboardConfig {
   const normalized = parsed.slug === 'charging'
     ? normalizeChargingDashboardWidgetHeights(parsed)
     : parsed;
-  return sanitizeDashboardConfig(normalizeLegacyTripStatWidgets(normalized));
+  return sanitizeDashboardConfig(normalizeLegacyDashboardConfig(normalized));
+}
+
+function normalizeLegacyDashboardConfig(config: DashboardConfig): DashboardConfig {
+  const tripsNormalized = normalizeLegacyTripStatWidgets(config);
+  return {
+    ...tripsNormalized,
+    widgets: tripsNormalized.widgets.map(migrateLegacyWidgetVisibility),
+  };
 }
 
 const LEGACY_TRIP_STAT_TO_SENSOR: Record<string, string> = {
@@ -148,6 +157,7 @@ function dashboardMutationBody(config: DashboardConfig) {
 }
 
 function writeDashboardCache(qc: QueryClient, dashboard: DashboardConfig) {
+  qc.setQueryData<DashboardConfig>(['dashboards', 'id', dashboard.id], dashboard);
   qc.setQueryData<DashboardConfig>(['dashboards', 'slug', dashboard.slug], (current) => {
     if (current?.ownerId && !dashboard.ownerId) return current;
     return dashboard;
@@ -164,6 +174,7 @@ function writeDashboardCache(qc: QueryClient, dashboard: DashboardConfig) {
 }
 
 function removeDashboardFromCache(qc: QueryClient, id: string) {
+  qc.removeQueries({ queryKey: ['dashboards', 'id', id], exact: true });
   qc.setQueryData<DashboardConfig[]>(['dashboards'], (current) =>
     current ? current.filter((entry) => entry.id !== id) : current
   );
@@ -198,6 +209,19 @@ export function useDashboardBySlug(slug: string | null) {
     queryKey: ['dashboards', 'slug', slug],
     queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/by-slug/${slug}`)),
     enabled: authReady && !!slug,
+    staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useDashboardById(id: string | null) {
+  const authReady = useAuthReady();
+  return useQuery<DashboardConfig>({
+    queryKey: ['dashboards', 'id', id],
+    queryFn: async () => normalizeDashboardConfig(await api.apiFetch(`GET`, `${BASE}/${id}`)),
+    enabled: authReady && !!id,
     staleTime: DASHBOARD_QUERY_STALE_TIME_MS,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import { HelpCircle, Home, Loader2, Pencil, Plus, Zap, Trash2 } from 'lucide-react';
 
 type PlanType = 'per_kwh' | 'tou';
@@ -381,15 +381,13 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
               <div className="grid gap-3">
                 <label className="grid gap-1">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Place Type</span>
-                  <select
+                  <SelectPicker
+                    className="w-full"
                     value={draft.placeType}
-                    onChange={(event) => updateDraft('placeType', event.target.value as PlaceType)}
-                    className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  >
-                    <option value="poi">Point of Interest</option>
-                    <option value="home">Home</option>
-                    <option value="work">Work</option>
-                  </select>
+                    onChange={(value) => updateDraft('placeType', value as PlaceType)}
+                    aria-label="Place type"
+                    options={[{ value: 'poi', label: 'Point of Interest' }, { value: 'home', label: 'Home' }, { value: 'work', label: 'Work' }]}
+                  />
                 </label>
 
                 <button
@@ -429,14 +427,13 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
                     <label className="grid gap-1 sm:min-w-0">
                       <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Pricing Type</span>
-                      <select
+                      <SelectPicker
+                        className="w-full"
                         value={draft.planType}
-                        onChange={(event) => updateDraft('planType', event.target.value as PlanType)}
-                        className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                      >
-                        <option value="per_kwh">Per kWh</option>
-                        <option value="tou">Time-of-Use</option>
-                      </select>
+                        onChange={(value) => updateDraft('planType', value as PlanType)}
+                        aria-label="Pricing type"
+                        options={[{ value: 'per_kwh', label: 'Per kWh' }, { value: 'tou', label: 'Time-of-Use' }]}
+                      />
                     </label>
                     {draft.planType === 'per_kwh' && (
                       <label className="grid gap-1 sm:min-w-0">

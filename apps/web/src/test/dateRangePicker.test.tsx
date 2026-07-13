@@ -50,19 +50,24 @@ describe('DateRangePicker', () => {
     expect(fromInput).toHaveClass('w-full');
     expect(fromInput).toHaveClass('min-w-0');
 
-    const minuteSelects = screen.getAllByRole('combobox').filter((select) => (select as HTMLSelectElement).options.length === 4);
-    expect(minuteSelects).toHaveLength(2);
-    expect(Array.from((minuteSelects[0] as HTMLSelectElement).options).map((option) => option.textContent)).toEqual(['00', '15', '30', '45']);
+    const minutePickers = [
+      screen.getByRole('button', { name: 'From minute' }),
+      screen.getByRole('button', { name: 'To minute' }),
+    ];
+    expect(minutePickers).toHaveLength(2);
+    await user.click(minutePickers[0]!);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['00', '15', '30', '45']);
+    await user.click(screen.getByRole('option', { name: '00' }));
 
     await user.clear(fromInput);
     await user.type(fromInput, '7/5/26');
 
-    await waitFor(() => expect(screen.getByLabelText('Month')).toHaveValue('6'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July'));
     expect(fromInput).toHaveValue('7/5/26');
 
     await user.clear(toInput);
     await user.type(toInput, '7/8/26');
-    await waitFor(() => expect(screen.getByLabelText('Month')).toHaveValue('6'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July'));
     expect(toInput).toHaveValue('7/8/26');
 
     await user.click(screen.getByRole('button', { name: /apply custom range/i }));

@@ -2,7 +2,7 @@ import React from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
 import type { BackupFrequency, BackupOverview, BackupTargetType, UpdateBackupSettingsBody } from '@riviamigo/types';
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import {
   AlertTriangle,
   Calendar,
@@ -459,29 +459,25 @@ export function BackupSection() {
           <div className="grid gap-3 md:grid-cols-[10rem_10rem_10rem_10rem] md:items-end">
             <label className="grid gap-1">
               <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Frequency</span>
-              <select
+              <SelectPicker
+                className="w-full"
                 value={draft.frequency}
-                onChange={(e) => updateDraft('frequency', e.target.value as BackupFrequency)}
-                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-              >
-                <option value="daily">Every day</option>
-                <option value="weekly">Every week</option>
-                <option value="monthly">Every month</option>
-              </select>
+                onChange={(value) => updateDraft('frequency', value as BackupFrequency)}
+                aria-label="Backup frequency"
+                options={[{ value: 'daily', label: 'Every day' }, { value: 'weekly', label: 'Every week' }, { value: 'monthly', label: 'Every month' }]}
+              />
             </label>
 
             {draft.frequency === 'weekly' && (
               <label className="grid gap-1">
                 <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Weekday</span>
-                <select
-                  value={draft.day_of_week ?? 0}
-                  onChange={(e) => updateDraft('day_of_week', Number.parseInt(e.target.value, 10))}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                >
-                  {WEEKDAYS.map((w) => (
-                    <option key={w.value} value={w.value}>{w.label}</option>
-                  ))}
-                </select>
+                <SelectPicker
+                  className="w-full"
+                  value={String(draft.day_of_week ?? 0)}
+                  onChange={(value) => updateDraft('day_of_week', Number.parseInt(value, 10))}
+                  aria-label="Weekday"
+                  options={WEEKDAYS.map((weekday) => ({ value: String(weekday.value), label: weekday.label }))}
+                />
               </label>
             )}
 
@@ -620,19 +616,17 @@ export function BackupSection() {
             <Badge variant="default">Execution history</Badge>
             <label className="flex items-center gap-2 text-xs text-fg-tertiary">
               Rows
-              <select
-                value={recentRunsPerPage}
-                onChange={(event) => {
-                  setRecentRunsPerPage(Number(event.target.value));
+              <SelectPicker
+                className="min-w-[4.5rem]"
+                value={String(recentRunsPerPage)}
+                onChange={(value) => {
+                  setRecentRunsPerPage(Number(value));
                   setRecentRunsPage(1);
                 }}
-                className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
-              >
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
+                aria-label="Recent backup runs per page"
+                size="sm"
+                options={[10, 25, 50, 100].map((option) => ({ value: String(option), label: String(option) }))}
+              />
             </label>
           </div>
         </CardHeader>

@@ -6,7 +6,7 @@ import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { api, useTrips, useTripMapRoutes, useDocumentTheme } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
-import { Badge } from '@riviamigo/ui/primitives';
+import { Badge, SelectPicker } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
 import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
@@ -291,20 +291,19 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
           {!isMobile && (
             <label className="flex items-center gap-2 text-xs text-fg-tertiary">
               Rows
-              <select
-                value={pageSize}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
+              <SelectPicker
+                className="min-w-[4.5rem]"
+                value={String(pageSize)}
+                onChange={(value) => {
+                  const next = Number(value);
                   if (ROWS_PER_PAGE_OPTIONS.includes(next as (typeof ROWS_PER_PAGE_OPTIONS)[number])) {
                     setTripTablePageSize(next);
                   }
                 }}
-                className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
-              >
-                {ROWS_PER_PAGE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
+                aria-label="Trips per page"
+                size="sm"
+                options={ROWS_PER_PAGE_OPTIONS.map((option) => ({ value: String(option), label: String(option) }))}
+              />
             </label>
           )}
         </div>

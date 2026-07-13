@@ -40,6 +40,7 @@ import {
   CardHeader,
   CardTitle,
   PageLayout,
+  SelectPicker,
   Skeleton,
   Tooltip,
   type BadgeProps,
@@ -160,21 +161,17 @@ function VehicleHealthContent() {
         className="pt-10 lg:pt-0"
         actions={
           hasVehicleChoices ? (
-            <label className="inline-flex items-center">
-              <span className="sr-only">Selected vehicle</span>
-              <select
-                className="h-9 min-w-[11rem] rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-                value={effectiveVehicleId ?? ''}
-                onChange={(event) => setSessionVehicleId(event.target.value || null)}
-                aria-label="Select vehicle"
-              >
-                {availableVehicles.map((vehicle) => (
-                  <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.display_name || vehicle.model}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectPicker
+              className="min-w-[11rem]"
+              value={effectiveVehicleId ?? ''}
+              onChange={(vehicleId) => setSessionVehicleId(vehicleId || null)}
+              aria-label="Select vehicle"
+              options={availableVehicles.map((vehicle) => ({
+                value: vehicle.id,
+                label: vehicle.display_name || vehicle.model,
+                description: vehicle.display_name && vehicle.model !== vehicle.display_name ? vehicle.model : undefined,
+              }))}
+            />
           ) : null
         }
       >

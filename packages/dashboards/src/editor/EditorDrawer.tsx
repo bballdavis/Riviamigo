@@ -8,6 +8,7 @@ interface EditorDrawerProps {
   paletteContent: React.ReactNode;
   editContent: React.ReactNode | null;
   editActions?: React.ReactNode;
+  previewControls?: React.ReactNode;
 }
 
 export function EditorDrawer({
@@ -16,6 +17,7 @@ export function EditorDrawer({
   paletteContent,
   editContent,
   editActions,
+  previewControls,
 }: EditorDrawerProps) {
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -90,6 +92,12 @@ export function EditorDrawer({
             <div className="ml-auto flex items-center gap-2">{editActions}</div>
           ) : null}
         </header>
+
+        {previewControls ? (
+          <div className="shrink-0 border-b border-border px-3 py-2.5">
+            {previewControls}
+          </div>
+        ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {mode === 'edit' && editContent ? editContent : paletteContent}

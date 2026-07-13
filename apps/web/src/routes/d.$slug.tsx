@@ -11,7 +11,10 @@ import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { Copy, Download, Upload } from 'lucide-react';
 import { DashboardPageShell } from '../components/dashboard/DashboardPageShell';
 
-const searchSchema = z.object({ edit: z.string().optional() });
+const searchSchema = z.object({
+  edit: z.string().optional(),
+  dashboardId: z.string().uuid().optional(),
+});
 
 export const userDashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -36,12 +39,15 @@ function UserDashboardPage() {
     <DashboardPageShell
       navKey="dashboard"
       slug={slug}
+      dashboardId={search.dashboardId}
       isEditMode={isEditMode}
       onEditModeChange={(next) => {
         navigate({
           to: '/d/$slug',
           params: { slug },
-          search: next ? { edit: '1' } : {},
+          search: next
+            ? { edit: '1', ...(search.dashboardId ? { dashboardId: search.dashboardId } : {}) }
+            : search.dashboardId ? { dashboardId: search.dashboardId } : {},
         });
       }}
       renderActions={(state) => {
@@ -50,7 +56,11 @@ function UserDashboardPage() {
         async function handleClone() {
           if (!activeConfig) return;
           const cloned = await cloneDashboard.mutateAsync(activeConfig.id);
-          navigate({ to: '/d/$slug', params: { slug: cloned.slug }, search: { edit: '1' } });
+          navigate({
+            to: '/d/$slug',
+            params: { slug: cloned.slug },
+            search: { edit: '1', dashboardId: cloned.id },
+          });
         }
 
         async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {

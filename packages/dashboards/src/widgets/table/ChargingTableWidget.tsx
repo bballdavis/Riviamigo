@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useChargeSessions } from '@riviamigo/hooks';
 import { DataTable, chargingColumns, type ChargeSessionRow } from '@riviamigo/ui/tables';
-import { Badge } from '@riviamigo/ui/primitives';
+import { Badge, SelectPicker } from '@riviamigo/ui/primitives';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '@riviamigo/ui/lib/utils';
 import { format, parseISO } from 'date-fns';
 import { registerWidget } from '../../registry';
@@ -187,16 +187,14 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
         {!isMobile && (
           <label className="flex items-center gap-2 text-xs text-fg-tertiary shrink-0">
             Rows
-            <select
-              value={pageSize}
-              onChange={(event) => setPageSize(Number(event.target.value))}
-              className="rounded-lg border border-border bg-bg-surface px-2 py-1.5 text-xs text-fg outline-none focus:border-accent"
-            >
-              <option value={15}>15</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-            </select>
+            <SelectPicker
+              className="min-w-[4.5rem]"
+              value={String(pageSize)}
+              onChange={(value) => setPageSize(Number(value))}
+              aria-label="Charging sessions per page"
+              size="sm"
+              options={[15, 25, 50, 100].map((option) => ({ value: String(option), label: String(option) }))}
+            />
           </label>
         )}
       </div>
