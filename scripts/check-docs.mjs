@@ -238,7 +238,7 @@ function checkProductionDeploymentContract() {
   const nginxConfig = readFile("infra/nginx/nginx.conf");
 
   for (const requiredSnippet of [
-    '"127.0.0.1:8080:8080"',
+    '"127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "JWT_SECRET: ${JWT_SECRET}",
     "JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}",
     "AGE_ENCRYPTION_KEY: ${AGE_ENCRYPTION_KEY}",
