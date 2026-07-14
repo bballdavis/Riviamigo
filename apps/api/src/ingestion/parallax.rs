@@ -8,13 +8,17 @@ use chrono::{DateTime, TimeZone, Utc};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc};
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error as WsError, Message};
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest, protocol::CloseFrame, Error as WsError, Message,
+};
 use uuid::Uuid;
 
 use crate::ingestion::session_store::RivianTokenBundle;
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const GRAPHQL_PROTOCOL: &str = "graphql-transport-ws";
+const RIVIAN_CONNECTION_TTL_EXPIRED_CODE: u16 = 4420;
+const RIVIAN_CONNECTION_TTL_EXPIRED_REASON: &str = "Connection TTL expired";
 
 /// Read-only topics selected for the initial capture pass. These are kept
 /// explicit because the server may reject an unknown topic in the whole
@@ -40,6 +44,12 @@ pub struct ParallaxEvent {
     pub payload_b64: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParallaxConnectionEnd {
+    Shutdown,
+    ConnectionTtlExpired,
+}
+
 /// Keep a Parallax connection alive and reconnect it using the same bounded
 /// backoff policy as the legacy collector. The task exits only on shutdown.
 pub async fn run_loop(
@@ -51,11 +61,21 @@ pub async fn run_loop(
     reconnect_initial_seconds: u64,
     reconnect_max_seconds: u64,
 ) {
-    let mut backoff_seconds = reconnect_initial_seconds.max(1);
+    let initial_backoff_seconds = reconnect_initial_seconds.max(1);
+    let max_backoff_seconds = reconnect_max_seconds.max(initial_backoff_seconds);
+    let mut backoff_seconds = initial_backoff_seconds;
 
     loop {
-        match run_connection(&rivian_vehicle_id, &tokens, &tx, &mut shutdown).await {
-            Ok(()) => return,
+        match run_connection(vehicle_id, &rivian_vehicle_id, &tokens, &tx, &mut shutdown).await {
+            Ok(ParallaxConnectionEnd::Shutdown) => return,
+            Ok(ParallaxConnectionEnd::ConnectionTtlExpired) => {
+                tracing::info!(
+                    vehicle_id = %vehicle_id,
+                    "Parallax connection TTL expired; renewing subscription"
+                );
+                backoff_seconds = initial_backoff_seconds;
+                continue;
+            }
             Err(error) => {
                 tracing::warn!(
                     vehicle_id = %vehicle_id,
@@ -70,18 +90,17 @@ pub async fn run_loop(
             _ = shutdown.recv() => return,
             _ = tokio::time::sleep(std::time::Duration::from_secs(backoff_seconds)) => {}
         }
-        backoff_seconds = backoff_seconds
-            .saturating_mul(2)
-            .min(reconnect_max_seconds.max(1));
+        backoff_seconds = backoff_seconds.saturating_mul(2).min(max_backoff_seconds);
     }
 }
 
 async fn run_connection(
+    vehicle_id: Uuid,
     rivian_vehicle_id: &str,
     tokens: &RivianTokenBundle,
     tx: &mpsc::Sender<ParallaxEvent>,
     shutdown: &mut broadcast::Receiver<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ParallaxConnectionEnd> {
     let mut request = WS_URL.into_client_request()?;
     request
         .headers_mut()
@@ -119,7 +138,7 @@ async fn run_connection(
 
     loop {
         tokio::select! {
-            _ = shutdown.recv() => return Ok(()),
+            _ = shutdown.recv() => return Ok(ParallaxConnectionEnd::Shutdown),
             message = ws.next() => {
                 match message {
                     Some(Ok(Message::Text(text))) => {
@@ -133,6 +152,9 @@ async fn run_connection(
                     }
                     Some(Ok(Message::Ping(data))) => ws.send(Message::Pong(data)).await?,
                     Some(Ok(Message::Close(frame))) => {
+                        if is_connection_ttl_expired(frame.as_ref()) {
+                            return Ok(ParallaxConnectionEnd::ConnectionTtlExpired);
+                        }
                         anyhow::bail!("Parallax WebSocket closed: {:?}", frame);
                     }
                     Some(Ok(_)) => {}
@@ -145,10 +167,15 @@ async fn run_connection(
 
     ws.send(Message::Text(subscription_message(rivian_vehicle_id)))
         .await?;
+    tracing::info!(
+        vehicle_id = %vehicle_id,
+        rvm_count = CAPTURE_RVMS.len(),
+        "Parallax subscription acknowledged and submitted"
+    );
 
     loop {
         tokio::select! {
-            _ = shutdown.recv() => return Ok(()),
+            _ = shutdown.recv() => return Ok(ParallaxConnectionEnd::Shutdown),
             message = ws.next() => {
                 match message {
                     Some(Ok(Message::Text(text))) => {
@@ -166,7 +193,12 @@ async fn run_connection(
                         }
                     }
                     Some(Ok(Message::Ping(data))) => ws.send(Message::Pong(data)).await?,
-                    Some(Ok(Message::Close(frame))) => anyhow::bail!("Parallax WebSocket closed: {:?}", frame),
+                    Some(Ok(Message::Close(frame))) => {
+                        if is_connection_ttl_expired(frame.as_ref()) {
+                            return Ok(ParallaxConnectionEnd::ConnectionTtlExpired);
+                        }
+                        anyhow::bail!("Parallax WebSocket closed: {:?}", frame);
+                    }
                     Some(Ok(_)) => {}
                     Some(Err(error)) => return Err(error.into()),
                     None => anyhow::bail!("Parallax WebSocket closed"),
@@ -174,6 +206,13 @@ async fn run_connection(
             }
         }
     }
+}
+
+fn is_connection_ttl_expired(frame: Option<&CloseFrame<'_>>) -> bool {
+    frame.is_some_and(|frame| {
+        u16::from(frame.code) == RIVIAN_CONNECTION_TTL_EXPIRED_CODE
+            && frame.reason.as_ref() == RIVIAN_CONNECTION_TTL_EXPIRED_REASON
+    })
 }
 
 fn insert_header(
@@ -293,5 +332,28 @@ mod tests {
 
         let event = parse_next_message(&value, Utc::now()).unwrap().unwrap();
         assert!(event.payload_b64.is_empty());
+    }
+
+    #[test]
+    fn classifies_rivian_ttl_close_as_renewable() {
+        let frame = CloseFrame {
+            code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Library(
+                RIVIAN_CONNECTION_TTL_EXPIRED_CODE,
+            ),
+            reason: RIVIAN_CONNECTION_TTL_EXPIRED_REASON.into(),
+        };
+
+        assert!(is_connection_ttl_expired(Some(&frame)));
+    }
+
+    #[test]
+    fn does_not_classify_other_close_as_ttl() {
+        let frame = CloseFrame {
+            code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Library(4410),
+            reason: "Socket with no active subscriptions, disconnecting".into(),
+        };
+
+        assert!(!is_connection_ttl_expired(Some(&frame)));
+        assert!(!is_connection_ttl_expired(None));
     }
 }
