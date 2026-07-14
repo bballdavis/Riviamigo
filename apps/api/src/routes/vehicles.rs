@@ -3517,6 +3517,15 @@ async fn cache_vehicle_images(
     vehicle_id: Uuid,
     tokens: &crate::ingestion::session_store::RivianTokenBundle,
 ) {
+    if crate::services::external_connections::require_enabled(
+        pool,
+        crate::services::external_connections::RIVIAN_ARTWORK,
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -3575,6 +3584,15 @@ async fn ensure_vehicle_images_cached(
     vehicle_id: Uuid,
     age_key: &str,
 ) {
+    if crate::services::external_connections::require_enabled(
+        pool,
+        crate::services::external_connections::RIVIAN_ARTWORK,
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
     let rows = sqlx::query_as::<_, VehicleImageRow>(
         "SELECT placement, design, size, resolution, url, overlays, metadata
          FROM riviamigo.vehicle_images
@@ -3774,6 +3792,15 @@ async fn mirror_vehicle_images(
     config: &crate::config::Config,
     vehicle_id: Uuid,
 ) {
+    if crate::services::external_connections::require_enabled(
+        pool,
+        crate::services::external_connections::RIVIAN_ARTWORK,
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
     let rows = match sqlx::query_as::<_, VehicleImageRow>(
         "SELECT placement, design, size, resolution, url, overlays, metadata
          FROM riviamigo.vehicle_images
@@ -3816,7 +3843,7 @@ async fn mirror_vehicle_images(
                 .await;
             }
             Err(error) => {
-                warn!(vehicle_id = %vehicle_id, url = %row.url, error = %error, "vehicle.images.mirror_failed");
+                warn!(vehicle_id = %vehicle_id, error = %error, "vehicle.images.mirror_failed");
                 let merged = merge_metadata(
                     row.metadata.clone(),
                     serde_json::json!({
@@ -3858,15 +3885,15 @@ fn metadata_has_local_mirror(config: &crate::config::Config, metadata: &serde_js
 fn resolved_image_url(
     config: &crate::config::Config,
     vehicle_id: Uuid,
-    original_url: &str,
+    _original_url: &str,
     metadata: &serde_json::Value,
-) -> String {
+) -> Option<String> {
     if let Some(key) = metadata.get("mirror_key").and_then(|value| value.as_str()) {
         if metadata_has_local_mirror(config, metadata) {
-            return format!("/v1/vehicle-image-cache/{vehicle_id}/{key}");
+            return Some(format!("/v1/vehicle-image-cache/{vehicle_id}/{key}"));
         }
     }
-    original_url.to_string()
+    None
 }
 
 fn resolved_overlays(
@@ -3875,25 +3902,29 @@ fn resolved_overlays(
     row_overlays: &serde_json::Value,
     metadata: &serde_json::Value,
 ) -> serde_json::Value {
-    let mut overlays = overlay_entries_from_value(row_overlays);
+    let overlays = overlay_entries_from_value(row_overlays);
     let Some(mirrors) = metadata
         .get("overlay_mirrors")
         .and_then(|value| value.as_array())
     else {
-        return serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]));
+        return serde_json::json!([]);
     };
 
-    for overlay in &mut overlays {
-        if let Some(mirror) = mirrors.iter().find(|entry| {
+    let overlays: Vec<_> = overlays
+        .into_iter()
+        .filter_map(|mut overlay| {
+            let mirror = mirrors.iter().find(|entry| {
             entry.get("source_url").and_then(|value| value.as_str()) == Some(overlay.url.as_str())
-        }) {
+            })?;
             if let Some(key) = mirror.get("mirror_key").and_then(|value| value.as_str()) {
                 if metadata_has_local_mirror(config, mirror) {
                     overlay.url = format!("/v1/vehicle-image-cache/{vehicle_id}/{key}");
+                    return Some(overlay);
                 }
             }
-        }
-    }
+            None
+        })
+        .collect();
 
     serde_json::to_value(overlays).unwrap_or_else(|_| serde_json::json!([]))
 }
@@ -3953,11 +3984,11 @@ async fn fetch_vehicle_images_json(
 
     let all: Vec<_> = rows
         .iter()
-        .map(|row| {
-            let resolved_url = resolved_image_url(config, vehicle_id, &row.url, &row.metadata);
+        .filter_map(|row| {
+            let resolved_url = resolved_image_url(config, vehicle_id, &row.url, &row.metadata)?;
             let resolved_overlays =
                 resolved_overlays(config, vehicle_id, &row.overlays, &row.metadata);
-            serde_json::json!({
+            Some(serde_json::json!({
                 "placement": row.placement,
                 "design": row.design,
                 "size": row.size,
@@ -3965,7 +3996,7 @@ async fn fetch_vehicle_images_json(
                 "url": resolved_url,
                 "overlays": resolved_overlays,
                 "metadata": row.metadata,
-            })
+            }))
         })
         .collect();
 
@@ -3979,7 +4010,7 @@ async fn fetch_vehicle_images_json(
                 rows.iter()
                     .find(|row| normalize_image_placement(&row.placement) == placement)
             })
-            .map(|row| resolved_image_url(config, vehicle_id, &row.url, &row.metadata))
+            .and_then(|row| resolved_image_url(config, vehicle_id, &row.url, &row.metadata))
     };
 
     Ok(serde_json::json!({
@@ -4782,7 +4813,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_image_url_falls_back_to_remote_when_local_file_is_missing() {
+    fn resolved_image_url_does_not_fall_back_to_remote_when_local_file_is_missing() {
         let config = crate::config::Config {
             database_url: "postgres://localhost/test".into(),
             redis_url: "redis://localhost".into(),
@@ -4827,7 +4858,7 @@ mod tests {
             &metadata,
         );
 
-        assert_eq!(url, "https://rivian.com/mobile/static/img/example.webp");
+        assert_eq!(url, None);
     }
 
     #[tokio::test]

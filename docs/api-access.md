@@ -1,13 +1,15 @@
 # Riviamigo integration API
 
 Riviamigo integration keys are read-only, bearer tokens scoped to one vehicle.
-Create and revoke them in **Settings > Integrations**. The secret is shown once;
+Create and revoke them in **Settings > API Access**. The secret is shown once;
 store it in the integration's secret store rather than in a dashboard or source
 file.
 
 The API is intentionally not an automation or dashboard-management API.
 Connecting a Rivian account, changing vehicle settings, creating dashboards,
 and every administrative operation require a signed-in browser session.
+
+External provider policy follows that same boundary. Signed-in users can read `GET /v1/settings/external-connections`; administrator or super-user sessions are required for `PUT /v1/settings/external-connections/{id}`, `POST /v1/settings/external-connections/{id}/test`, and `POST /v1/settings/external-connections/disable-optional`. Provider secrets are accepted on writes but never returned.
 
 ## Authentication and scope
 

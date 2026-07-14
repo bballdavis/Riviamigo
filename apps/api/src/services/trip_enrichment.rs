@@ -12,14 +12,11 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     services::{
         geofences::match_geofence,
-        nominatim::{self, NominatimLane},
-        weather::fetch_ambient_temp_c,
+        nominatim,
     },
 };
 
-const OUTSIDE_TEMP_DELAY_MS: u64 = 100;
 const ADDRESS_CACHE_RADIUS_METERS: f64 = 100.0;
-const REVERSE_GEOCODE_USER_AGENT: &str = "riviamigo-api/0.1 (contact: support@riviamigo.com)";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BackfillStats {
@@ -107,15 +104,15 @@ pub async fn enrich_trip_history_for_vehicle(
     client: &Client,
     vehicle_id: Uuid,
 ) -> Result<TripEnrichmentReport> {
-    enrich_trip_history_for_vehicle_with_lookup(
-        pool,
-        client,
-        vehicle_id,
-        |lat, lng, started_at| async move {
-            lookup_trip_outside_temp_c(client, lat, lng, started_at).await
-        },
-    )
-    .await
+    let geofence_matches = backfill_trip_geofence_matches(pool, Some(vehicle_id)).await?;
+    let address_matches = backfill_trip_addresses(pool, client, Some(vehicle_id)).await?;
+    let outside_temps = enqueue_trip_weather_enrichment(pool, Some(vehicle_id)).await?;
+
+    Ok(TripEnrichmentReport {
+        geofence_matches,
+        address_matches,
+        outside_temps,
+    })
 }
 
 pub async fn enrich_trip_history_for_vehicle_with_lookup<F, Fut>(
@@ -273,15 +270,6 @@ pub async fn resolve_address_id(
     }
 
     reverse_geocode_and_store(pool, client, lat, lon).await
-}
-
-pub async fn lookup_trip_outside_temp_c(
-    client: &Client,
-    lat: f64,
-    lng: f64,
-    started_at: DateTime<Utc>,
-) -> Option<f64> {
-    fetch_ambient_temp_c(client, lat, lng, started_at).await
 }
 
 pub async fn backfill_trip_geofence_matches(
@@ -703,18 +691,60 @@ pub async fn backfill_charge_session_addresses(
 
 pub async fn backfill_trip_outside_temps(
     pool: &PgPool,
-    client: &Client,
+    _client: &Client,
     vehicle_id: Option<Uuid>,
 ) -> Result<BackfillStats> {
-    backfill_trip_outside_temps_with_lookup(
-        pool,
-        vehicle_id,
-        |lat, lng, started_at| async move {
-            lookup_trip_outside_temp_c(client, lat, lng, started_at).await
-        },
-        Some(Duration::from_millis(OUTSIDE_TEMP_DELAY_MS)),
+    enqueue_trip_weather_enrichment(pool, vehicle_id).await
+}
+
+pub async fn enqueue_trip_weather_enrichment(
+    pool: &PgPool,
+    vehicle_id: Option<Uuid>,
+) -> Result<BackfillStats> {
+    let trip_ids = sqlx::query_scalar::<_, Uuid>(
+        r#"SELECT id
+           FROM riviamigo.trips
+           WHERE ($1::uuid IS NULL OR vehicle_id = $1)
+             AND started_at IS NOT NULL
+             AND ended_at IS NOT NULL
+           ORDER BY started_at DESC"#,
     )
-    .await
+    .bind(vehicle_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut stats = BackfillStats {
+        scanned: trip_ids.len(),
+        ..BackfillStats::default()
+    };
+    for trip_id in trip_ids {
+        let result = sqlx::query(
+            r#"INSERT INTO riviamigo.weather_enrichment_jobs
+                 (trip_id, status, attempts, next_attempt_at, last_error, updated_at, completed_at)
+               VALUES ($1, 'pending', 0, now(), NULL, now(), NULL)
+               ON CONFLICT (trip_id) DO UPDATE SET
+                 status = 'pending', attempts = 0, next_attempt_at = now(),
+                 last_error = NULL, updated_at = now(), completed_at = NULL
+               WHERE riviamigo.weather_enrichment_jobs.status IN ('failed', 'unavailable')"#,
+        )
+        .bind(trip_id)
+        .execute(pool)
+        .await?;
+        if result.rows_affected() > 0 {
+            stats.filled += 1;
+        } else {
+            stats.skipped += 1;
+        }
+    }
+
+    info!(
+        vehicle_id = ?vehicle_id,
+        scanned = stats.scanned,
+        queued = stats.filled,
+        skipped = stats.skipped,
+        "trip_enrichment.weather_jobs.queued"
+    );
+    Ok(stats)
 }
 
 pub async fn backfill_trip_outside_temps_with_lookup<F, Fut>(
@@ -827,53 +857,12 @@ async fn reverse_geocode_and_store(
     lat: f64,
     lon: f64,
 ) -> Option<Uuid> {
-    let slot = nominatim::acquire_slot(NominatimLane::BackgroundReverseGeocode).await;
-    let lat_string = lat.to_string();
-    let lon_string = lon.to_string();
-
-    let response = match client
-        .get("https://nominatim.openstreetmap.org/reverse")
-        .header(reqwest::header::USER_AGENT, REVERSE_GEOCODE_USER_AGENT)
-        .query(&[
-            ("format", "jsonv2"),
-            ("addressdetails", "1"),
-            ("lat", lat_string.as_str()),
-            ("lon", lon_string.as_str()),
-        ])
-        .send()
-        .await
-    {
-        Ok(response) => response,
+    let raw = match nominatim::reverse(pool, client, lat, lon).await {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return None,
+        Err(crate::errors::AppError::ExternalConnectionDisabled(_)) => return None,
         Err(err) => {
-            nominatim::report_outcome(None, None).await;
-            warn!(error = %err, lat, lon, "trip_enrichment.address.request_failed");
-            return None;
-        }
-    };
-
-    let status = response.status();
-    let retry_after = nominatim::retry_after_from_headers(response.headers());
-    nominatim::report_outcome(Some(status.as_u16()), retry_after).await;
-
-    if !status.is_success() {
-        warn!(
-            status = %status,
-            lat,
-            lon,
-            lane = ?slot.lane,
-            queued_ms = slot.queued_ms,
-            gate_wait_ms = slot.gate_wait_ms,
-            scheduled_interval_ms = slot.effective_interval_ms,
-            retry_after_s = retry_after.map(|duration| duration.as_secs()),
-            "trip_enrichment.address.http_error"
-        );
-        return None;
-    }
-
-    let raw: serde_json::Value = match response.json().await {
-        Ok(raw) => raw,
-        Err(err) => {
-            warn!(error = %err, lat, lon, "trip_enrichment.address.decode_failed");
+            warn!(error = %err, "trip_enrichment.address.request_failed");
             return None;
         }
     };

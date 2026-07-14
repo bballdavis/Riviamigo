@@ -4,7 +4,7 @@ import { api } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
-import { HelpCircle, Home, Loader2, Pencil, Plus, Zap, Trash2 } from 'lucide-react';
+import { HelpCircle, Home, Loader2, Pencil, Plus, Search, Zap, Trash2 } from 'lucide-react';
 
 type PlanType = 'per_kwh' | 'tou';
 type PlaceType = 'home' | 'work' | 'poi';
@@ -110,9 +110,20 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   const [draft, setDraft] = React.useState<PlaceDraft>(() => emptyDraft(unitSystem));
   const [editingPlaceId, setEditingPlaceId] = React.useState<string | null>(null);
   const [addressQuery, setAddressQuery] = React.useState('');
+  const [submittedAddressQuery, setSubmittedAddressQuery] = React.useState('');
+  const [autocompleteAddressQuery, setAutocompleteAddressQuery] = React.useState('');
   const [savedPlacesQuery, setSavedPlacesQuery] = React.useState('');
   const [selectedAddress, setSelectedAddress] = React.useState<PlaceAddress | null>(null);
-  const deferredAddressQuery = React.useDeferredValue(addressQuery.trim());
+  const connectionPolicy = useQuery({
+    queryKey: ['external-connections'],
+    queryFn: () => api.getExternalConnections(),
+    staleTime: 30_000,
+  });
+  const nominatimPolicy = connectionPolicy.data?.connections.find((connection) => connection.id === 'nominatim');
+  const customAutocomplete = nominatimPolicy?.mode === 'custom' && nominatimPolicy.custom_autocomplete;
+  const deferredAddressQuery = React.useDeferredValue(
+    (customAutocomplete ? autocompleteAddressQuery : submittedAddressQuery).trim(),
+  );
   const deferredSavedPlacesQuery = React.useDeferredValue(savedPlacesQuery.trim().toLowerCase());
   const previousUnitSystem = React.useRef(unitSystem);
 
@@ -139,6 +150,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       setDraft(emptyDraft(unitSystem));
       setSelectedAddress(null);
       setAddressQuery('');
+      setSubmittedAddressQuery('');
       queryClient.invalidateQueries({ queryKey: ['places'] });
     },
   });
@@ -147,6 +159,15 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     mutationFn: (id: string) => api.deletePlace(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['places'] }),
   });
+
+  React.useEffect(() => {
+    if (!customAutocomplete) {
+      setAutocompleteAddressQuery('');
+      return;
+    }
+    const handle = window.setTimeout(() => setAutocompleteAddressQuery(addressQuery.trim()), 350);
+    return () => window.clearTimeout(handle);
+  }, [addressQuery, customAutocomplete]);
 
   React.useEffect(() => {
     if (previousUnitSystem.current === unitSystem) return;
@@ -190,7 +211,9 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     && !addressChangedFromSelection
     && chargeRateValid();
 
-  const shouldSearchSuggestions = deferredAddressQuery.length >= 3 && (!selectedAddress || addressChangedFromSelection);
+  const shouldSearchSuggestions = deferredAddressQuery.length >= 3
+    && addressQuery.trim() === deferredAddressQuery
+    && (!selectedAddress || addressChangedFromSelection);
   const placeSuggestions = shouldSearchSuggestions
     ? (addressSearch.data ?? [])
     : [];
@@ -242,12 +265,14 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
     setDraft(emptyDraft(unitSystem));
     setSelectedAddress(null);
     setAddressQuery('');
+    setSubmittedAddressQuery('');
   }
 
   function startEditing(place: Place) {
     setEditingPlaceId(place.id);
     setSelectedAddress(place.address);
     setAddressQuery(place.address?.display_name ?? '');
+    setSubmittedAddressQuery('');
     const placeType = place.is_home ? 'home' : place.is_work ? 'work' : 'poi';
     setDraft({
       name: place.name,
@@ -272,6 +297,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
   function handleAddressSelect(address: PlaceSearchSuggestion) {
     setSelectedAddress(address);
     setAddressQuery(address.display_name);
+    setSubmittedAddressQuery('');
   }
 
   async function handleSave() {
@@ -313,7 +339,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                 />
               </label>
 
-              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,8.5rem)]">
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,8.5rem)] sm:items-end">
                 <label className="grid min-w-0 gap-1">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Address Search</span>
                   <input
@@ -324,10 +350,26 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                         setSelectedAddress(null);
                       }
                     }}
-                    placeholder="Start typing an address"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && addressQuery.trim().length >= 3) {
+                        event.preventDefault();
+                        setSubmittedAddressQuery(addressQuery.trim());
+                      }
+                    }}
+                    placeholder="Enter an address"
                     className="h-9 w-full min-w-0 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
                   />
                 </label>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-9"
+                  disabled={addressQuery.trim().length < 3}
+                  onClick={() => setSubmittedAddressQuery(addressQuery.trim())}
+                >
+                  <Search className="h-4 w-4" />
+                  Search
+                </Button>
                 <label className="grid gap-1 sm:min-w-0">
                   <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{radiusInputLabel(unitSystem)}</span>
                   <input
@@ -338,6 +380,12 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
                   />
                 </label>
               </div>
+
+              <p className="-mt-2 text-xs text-fg-tertiary">
+                {customAutocomplete
+                  ? 'This self-hosted provider allows address suggestions while you type.'
+                  : 'Address text is sent to the configured provider only when you choose Search.'}
+              </p>
 
               {(shouldSearchSuggestions && (isSearchingSuggestions || placeSuggestions.length > 0 || hasNoSuggestions)) && (
                 <div className="rounded-lg border border-border bg-bg-elevated/50 p-2">

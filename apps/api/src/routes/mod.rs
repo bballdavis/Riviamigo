@@ -34,6 +34,7 @@ pub mod cost_profiles;
 pub mod dashboards;
 pub mod efficiency;
 pub mod efficiency_math;
+pub mod external_connections;
 pub mod grafana;
 pub mod health;
 pub mod idle_drain;
@@ -248,6 +249,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(trips::router())
         .merge(charging::router())
         .merge(efficiency::router())
+        .merge(external_connections::router())
         .merge(metrics::router())
         .merge(dashboards::router())
         .merge(cost_profiles::router())
@@ -335,7 +337,7 @@ pub fn build_router(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::overriding(
             CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
-                "default-src 'self'; img-src 'self' data: https://*.basemaps.cartocdn.com; \
+                "default-src 'self'; img-src 'self' data:; \
                  style-src 'self' 'unsafe-inline'; script-src 'self'; \
                  connect-src 'self' wss:; font-src 'self' data:; frame-ancestors 'none'",
             ),

@@ -79,6 +79,8 @@ async fn main() -> anyhow::Result<()> {
         supervisor,
     };
     let _backup_scheduler = services::backups::start_backup_scheduler(pool.clone(), config.clone());
+    let _weather_enrichment_worker =
+        services::weather_enrichment::start_worker(pool.clone(), age_key.clone());
 
     let app = routes::build_router(state);
 

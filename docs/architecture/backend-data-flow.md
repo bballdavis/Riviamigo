@@ -16,6 +16,9 @@ This document is canonical for the high-level backend flow. Update it when the A
 4. Parsed telemetry updates a canonical `vehicle_latest_status` row using per-field Rivian timestamps so older partial payloads cannot overwrite fresher SoC, range, charge-state, or odometer values.
 5. Supporting poll flows reconcile completed charging sessions and live charge-curve data into canonical `charge_sessions`, preserving telemetry-backed windows as the public session timeline while storing Rivian aliases and API-only history as enrichment evidence.
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
+7. Completed trips enqueue an idempotent weather-enrichment job. The worker samples the exact route at endpoints and 15-minute intervals, derives rounded provider cells, batches Open-Meteo requests, stores `trip_weather_samples`, and updates the time-weighted `trips.outside_temp_c` summary used by trip and efficiency APIs.
+
+Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
 The API can also run an experimental, read-only Parallax capture alongside the
 legacy vehicle-state WebSocket. Raw Parallax events are stored separately in

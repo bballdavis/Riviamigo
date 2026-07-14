@@ -43,7 +43,7 @@ export const SENSOR_DEFINITIONS: SensorDefinition[] = [
   { id: 'avg_efficiency', title: 'Avg Consumption', metric: 'avg_efficiency', icon: 'lucide:gauge', chartType: 'line', valueMode: 'latest', helpText: 'Total estimated battery energy used ÷ miles driven, distance-weighted for the selected range.' },
   { id: 'avg_gross_efficiency', title: 'Avg Consumption (gross)', metric: 'avg_gross_efficiency', icon: 'lucide:zap', chartType: 'line', valueMode: 'latest' },
   { id: 'efficiency_coverage', title: 'Consumption Data Coverage', dataSource: 'efficiencySummary', valuePath: 'coverage_percent', unit: '%', inlineSecondaryTemplate: '[efficiency_miles:mi] / [total_miles:mi]', icon: 'lucide:database-zap', chartType: 'none', valueMode: 'latest', valueColor: 'default', helpText: 'Share of miles in this range with enough battery data to calculate average consumption. Trips without a consumption estimate are excluded from that average.' },
-  { id: 'avg_outside_temp_c', title: 'Avg Outside Temp', metric: 'avg_outside_temp_c', icon: 'lucide:thermometer', chartType: 'line', valueMode: 'latest' },
+  { id: 'avg_outside_temp_c', title: 'Avg Outside (estimated)', metric: 'avg_outside_temp_c', icon: 'lucide:thermometer', chartType: 'line', valueMode: 'latest' },
   { id: 'trip_miles', title: 'Miles Driven', metric: 'trip_miles', icon: 'lucide:map', chartType: 'line', valueMode: 'latest', accent: true },
   { id: 'avg_trip_duration', title: 'Avg Duration', metric: 'avg_trip_duration', icon: 'lucide:clock-3', chartType: 'bar', valueMode: 'latest' },
   { id: 'battery_level', title: 'Current SOC', metric: 'battery_level', icon: 'lucide:battery', chartType: 'area', valueMode: 'latest', accent: true },

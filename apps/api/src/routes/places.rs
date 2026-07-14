@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -148,7 +148,6 @@ async fn search_places(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<Vec<AddressRecord>>, AppError> {
-    let total_start = std::time::Instant::now();
     let query = params.q.trim().to_lowercase();
     if query.len() < 3 {
         return Ok(Json(Vec::new()));
@@ -165,93 +164,36 @@ async fn search_places(
                     .iter()
                     .filter_map(|v| value_to_address_record(v.clone()))
                     .collect();
-                debug!(
-                    query = %query,
-                    cache_hit = true,
-                    suggestion_count = suggestions.len(),
-                    total_ms = total_start.elapsed().as_millis() as u64,
-                    "places.address_search_completed"
-                );
+                debug!(cache_hit = true, suggestion_count = suggestions.len(), "places.address_search_completed");
                 return Ok(Json(suggestions));
             }
         }
     }
-
-    let slot = crate::services::nominatim::acquire_slot(
-        crate::services::nominatim::NominatimLane::InteractiveSearch,
-    )
-    .await;
-
-    // --- Nominatim request -----------------------------------------------
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| {
             AppError::Internal(anyhow!("address search client build failed: {error}"))
         })?;
-
-    let limit = params.limit.unwrap_or(5).clamp(1, 10).to_string();
-    let upstream_start = std::time::Instant::now();
-    let response = match client
-        .get("https://nominatim.openstreetmap.org/search")
-        .header(
-            reqwest::header::USER_AGENT,
-            "riviamigo-api/0.1 (contact: support@riviamigo.com)",
-        )
-        .query(&[
-            ("format", "jsonv2"),
-            ("addressdetails", "1"),
-            ("limit", &limit),
-            ("q", params.q.trim()),
-        ])
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(error) => {
-            crate::services::nominatim::report_outcome(None, None).await;
-            warn!(error = %error, query = %query, "places.address_search_request_failed");
-            return Ok(Json(Vec::new()));
-        }
-    };
-    let upstream_ms = upstream_start.elapsed().as_millis() as u64;
-    let status = response.status();
-    let retry_after = crate::services::nominatim::retry_after_from_headers(response.headers());
-    crate::services::nominatim::report_outcome(Some(status.as_u16()), retry_after).await;
-
-    if !status.is_success() {
-        let adaptive_extra_ms = crate::services::nominatim::adaptive_extra_ms().await;
-        warn!(
-            query = %query,
-            status = %status,
-            lane = ?slot.lane,
-            queued_ms = slot.queued_ms,
-            gate_wait_ms = slot.gate_wait_ms,
-            scheduled_interval_ms = slot.effective_interval_ms,
-            adaptive_extra_ms,
-            upstream_ms,
-            retry_after_s = retry_after.map(|duration| duration.as_secs()),
-            total_ms = total_start.elapsed().as_millis() as u64,
-            "places.address_search_http_error"
-        );
-        return Ok(Json(Vec::new()));
-    }
-
-    let decode_start = std::time::Instant::now();
-    let rows: Vec<Value> = match response.json().await {
-        Ok(r) => r,
-        Err(error) => {
-            warn!(error = %error, query = %query, "places.address_search_decode_failed");
-            return Ok(Json(Vec::new()));
-        }
-    };
-    let decode_ms = decode_start.elapsed().as_millis() as u64;
+    let rows = crate::services::nominatim::search(
+        &state.pool,
+        &client,
+        params.q.trim(),
+        params.limit.unwrap_or(5),
+    )
+    .await?;
 
     // --- populate cache --------------------------------------------------
     {
         let mut cache = state.nominatim_cache.write().await;
         // Evict expired entries to keep memory bounded
         cache.retain(|_, (cached_at, _)| cached_at.elapsed() < Duration::from_secs(3600));
+        if cache.len() >= 500 {
+            if let Some(oldest) = cache.iter().min_by_key(|(_, (cached_at, _))| *cached_at).map(|(key, _)| key.clone()) {
+                cache.remove(&oldest);
+            }
+        }
         cache.insert(
             query.clone(),
             (
@@ -261,26 +203,12 @@ async fn search_places(
         );
     }
 
-    let suggestions = rows
+    let suggestions: Vec<AddressRecord> = rows
         .into_iter()
         .filter_map(value_to_address_record)
         .collect();
 
-    let adaptive_extra_ms = crate::services::nominatim::adaptive_extra_ms().await;
-
-    debug!(
-        query = %query,
-        cache_hit = false,
-        lane = ?slot.lane,
-        queued_ms = slot.queued_ms,
-        gate_wait_ms = slot.gate_wait_ms,
-        scheduled_interval_ms = slot.effective_interval_ms,
-        adaptive_extra_ms,
-        upstream_ms,
-        decode_ms,
-        total_ms = total_start.elapsed().as_millis() as u64,
-        "places.address_search_completed"
-    );
+    debug!(cache_hit = false, suggestion_count = suggestions.len(), "places.address_search_completed");
 
     Ok(Json(suggestions))
 }

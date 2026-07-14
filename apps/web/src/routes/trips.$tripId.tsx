@@ -128,6 +128,11 @@ export function TripDetailContent() {
   const pressureFactor = unitPreferences.pressure_unit === 'kpa' ? 6.89476 : 1;
   const temperatureUnitLabel = unitPreferences.temperature_unit === 'fahrenheit' ? '°F' : '°C';
   const pressureUnitLabel = unitPreferences.pressure_unit === 'kpa' ? 'kPa' : 'psi';
+  const outsideTemperatureLabel = detailData?.outside_temperature.source === 'open_meteo'
+    ? 'Outside (estimated)'
+    : detailData?.outside_temperature.source === 'mixed'
+      ? 'Outside (mixed)'
+      : 'Outside';
   const chartSeries = React.useMemo(() => ({
     drive: [
       { key: 'power', label: 'Power', color: CHART_COLORS.accent, values: timeline.map((point) => point.power_kw) },
@@ -135,7 +140,7 @@ export function TripDetailContent() {
       { key: 'speed', label: 'Speed', color: CHART_COLORS.sky, yScale: 'y2' as const, values: timeline.map((point) => point.speed_mph) },
     ],
     temperature: [
-      { key: 'outside', label: 'Outside', color: CHART_COLORS.sky, values: timeline.map((point) => point.outside_temp_c == null ? null : point.outside_temp_c * temperatureFactor + temperatureOffset) },
+      { key: 'outside', label: outsideTemperatureLabel, color: CHART_COLORS.sky, values: timeline.map((point) => point.outside_temp_c == null ? null : point.outside_temp_c * temperatureFactor + temperatureOffset) },
       { key: 'cabin', label: 'Cabin', color: CHART_COLORS.emerald, values: timeline.map((point) => point.cabin_temp_c == null ? null : point.cabin_temp_c * temperatureFactor + temperatureOffset) },
       { key: 'driver', label: 'Driver setpoint', color: CHART_COLORS.warning, values: timeline.map((point) => point.driver_temp_c == null ? null : point.driver_temp_c * temperatureFactor + temperatureOffset) },
     ],
@@ -148,7 +153,7 @@ export function TripDetailContent() {
       { key: 'tire_rl', label: 'Rear Left', color: CHART_COLORS.success, values: timeline.map((point) => point.tire_rl_psi == null ? null : point.tire_rl_psi * pressureFactor) },
       { key: 'tire_rr', label: 'Rear Right', color: CHART_COLORS.warning, values: timeline.map((point) => point.tire_rr_psi == null ? null : point.tire_rr_psi * pressureFactor) },
     ],
-  }), [pressureFactor, temperatureFactor, temperatureOffset, timeline]);
+  }), [outsideTemperatureLabel, pressureFactor, temperatureFactor, temperatureOffset, timeline]);
 
   const metricCoverage = React.useMemo(() => {
     let powerSamples = 0;
@@ -315,6 +320,19 @@ export function TripDetailContent() {
                     connectGaps
                     emptyTitle="No temperature data for this trip."
                   />
+                  {detailData?.outside_temperature.attribution && (
+                    <p className="mt-2 text-xs text-fg-tertiary">
+                      Estimated exterior temperature: {' '}
+                      <a
+                        className="text-accent hover:underline"
+                        href={detailData.outside_temperature.attribution.url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {detailData.outside_temperature.attribution.name}
+                      </a>
+                    </p>
+                  )}
                 </div>
               </div>
 
