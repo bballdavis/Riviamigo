@@ -21,8 +21,17 @@ Sources:
 | Battery | current SoC, estimated range, phantom drain, capacity health, SoC/range/drain/degradation charts | latest telemetry plus validated parked periods from the idle-drain route | Phantom Drain rate is duration-weighted from validated parked periods; current SoC/range use latest vehicle status; capacity falls back to latest usable kWh. |
 | Efficiency | avg Wh/mi, best/worst bands, efficiency by mode, trend, temp bins, average outside temperature | completed trips plus route-aware trip weather samples | Outside temperature is a time-weighted vehicle/Open-Meteo summary shared with the trip timeline. |
 | Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; daily totals and stacked session composition share the filled charging-bar visual; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
-| Trips | trip list, route map, synchronized detail charts, speed, elevation | completed trip detector, persisted route previews, adaptive telemetry samples | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Raw compatibility endpoints remain available. |
-| Settings Raw Data | searchable normalized telemetry, per-field coverage, selected-record inspection, and owner/manager-only retained inbound events | raw Timescale telemetry plus short-lived Rivian websocket payload retention | Use this to verify ingestion before wiring new dashboard cards; original payloads are troubleshooting evidence, not a stable dashboard contract. |
+| Trips | trip list, route map, synchronized detail charts, speed, elevation, signed net power | completed trip detector, persisted route previews, adaptive telemetry samples, SoC/capacity telemetry | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Drive power uses direct fields when available, otherwise a bounded SoC-derived estimate with provenance and coverage metadata. |
+| Settings Raw Data | bounded telemetry lanes, searchable normalized records, per-field coverage, selected-record inspection, and owner/manager-only retained inbound events | bucketed Timescale telemetry for dense views, compatibility raw records for detail, plus short-lived Rivian websocket payload retention | Use lanes for history visualization and the normalized record path for search/detail; original payloads are troubleshooting evidence, not a stable dashboard contract. |
+
+## High-density telemetry rule
+
+Vehicle history should follow the map and trip-detail pattern: one bounded
+server-owned time window, a typed response with an explicit point budget, and
+detail requests only after the user selects a time or record. The telemetry
+lane endpoint is the preferred visualization contract. The compatibility raw
+record endpoint remains searchable and inspectable, but pages should not build
+large dashboard views by composing raw JSON records or arbitrary field blobs.
 
 ## TeslaMate parity targets
 
@@ -39,7 +48,7 @@ TeslaMate-style dashboards generally cover these data families:
 | Live battery | SoC, rated/estimated range, charge limit, usable capacity | `batteryLevel`, `distanceToEmpty`, `batteryLimit`, `batteryCapacity` | Captured and surfaced. |
 | Location and motion | latitude, longitude, speed, altitude, heading, odometer | `gnssLocation`, `gnssSpeed`, `gnssAltitude`, `gnssBearing`, `vehicleMileage` | Captured; odometer converted from meters to miles. |
 | Charging | plugged/charging state, charge status, time remaining, sessions, rate | `chargerState`, `chargerStatus`, `timeToEndOfCharge`, live charge endpoints | Basic status captured; session aggregation needs more real data. |
-| Drive efficiency | trip distance, Wh/mi, drive mode, elevation, cabin/setpoint temperature, estimated exterior temperature | `driveMode`, telemetry deltas, `cabinClimateInteriorTemperature`, trip points, `trip_weather_samples` | Exterior samples are estimated because Rivian rejects the subscription field; provenance is explicit. |
+| Drive efficiency | trip distance, Wh/mi, drive mode, elevation, cabin/setpoint temperature, estimated exterior temperature, signed net power | `driveMode`, telemetry deltas, `batteryLevel`, `batteryCapacity`, `cabinClimateInteriorTemperature`, trip points, `trip_weather_samples` | Exterior samples are estimated because Rivian rejects the subscription field; power is direct only when Rivian supplies it, otherwise averaged between SoC updates with explicit provenance. |
 | Climate | cabin temp, driver setpoint, preconditioning, pet mode, defrost, seat heat/vent | climate and seat fields in `vehicleState` | Cabin/driver temp captured; advanced climate fields not yet stored. |
 | Closures and locks | doors, windows, frunk/liftgate/tailgate, side bins, tonneau, locked/unlocked | HASS `LOCK_STATE_ENTITIES`, `DOOR_STATE_ENTITIES`, `CLOSURE_STATE_ENTITIES` | Door/frunk/liftgate/tailgate basics stored; side bins, tonneau, and windows are next parity gaps. |
 | Tires and maintenance | TPMS pressure, TPMS status/validity, 12V health, brake/wiper warnings | `tirePressure*` values are BAR in HASS, plus `tirePressureStatus*` and `tirePressureStatusValid*` | Numeric tire pressure converted to PSI on ingest; status stored; validity still a gap. |

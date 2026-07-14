@@ -72,6 +72,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/status", get(vehicle_status))
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
+        .route("/vehicles/:id/telemetry/lanes", get(telemetry_lanes))
         .route("/vehicles/:id/raw-events", get(raw_vehicle_events))
         .route("/vehicles/:id/raw-events/:event_id", get(raw_vehicle_event))
         .route("/vehicles/:id/settings", put(update_vehicle_settings))
@@ -89,6 +90,15 @@ struct RawDataParams {
     search: Option<String>,
     fields: Option<String>,
     populated_only: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct TelemetryLaneParams {
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+    lanes: Option<String>,
+    resolution: Option<String>,
+    max_points: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1049,6 +1059,61 @@ struct RawVehicleCoverageRow {
     tire_pressure_samples: i64,
     lock_samples: i64,
     software_samples: i64,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct RawTelemetryFieldCoverageRow {
+    field: String,
+    sample_count: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TelemetryLaneRow {
+    bucket: chrono::DateTime<chrono::Utc>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    altitude_m: Option<f64>,
+    speed_mph: Option<f64>,
+    battery_level: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    distance_to_empty_mi: Option<f64>,
+    battery_limit: Option<f64>,
+    time_to_end_of_charge_min: Option<f64>,
+    cabin_temp_c: Option<f64>,
+    driver_temp_c: Option<f64>,
+    outside_temp_c: Option<f64>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+    heading_deg: Option<f64>,
+    odometer_miles: Option<f64>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct TelemetryLaneWindow {
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    resolution_seconds: i64,
+    approximate: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct TelemetryLane {
+    numeric: BTreeMap<String, Vec<Option<f64>>>,
+    coverage: BTreeMap<String, i64>,
+    source: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct TelemetryLaneFrame {
+    vehicle_id: Uuid,
+    window: TelemetryLaneWindow,
+    spine: Vec<chrono::DateTime<chrono::Utc>>,
+    lanes: BTreeMap<String, TelemetryLane>,
+    truncated: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -3671,7 +3736,10 @@ fn build_cached_vehicle_image_metadata(
     // A stable first-party key lets the UI render a local restoring placeholder
     // even before an initial mirror has completed. Successful mirrors replace
     // it with a checksum-revisioned immutable key.
-    let pending_key = format!("{}.webp", hex::encode(Sha256::digest(source_url.as_bytes())));
+    let pending_key = format!(
+        "{}.webp",
+        hex::encode(Sha256::digest(source_url.as_bytes()))
+    );
     merge_metadata(
         base,
         serde_json::json!({
@@ -4224,10 +4292,7 @@ async fn vehicle_image_cache_asset(
         queue_vehicle_artwork_repair(&state, vehicle_id).await;
         return Ok(vehicle_artwork_restoring_response());
     };
-    let Some(expected_sha256) = metadata
-        .get("sha256")
-        .and_then(|value| value.as_str())
-    else {
+    let Some(expected_sha256) = metadata.get("sha256").and_then(|value| value.as_str()) else {
         return Ok(vehicle_artwork_placeholder_response());
     };
     if hex::encode(Sha256::digest(&bytes)) != expected_sha256 {
@@ -4292,7 +4357,8 @@ async fn admin_purge_vehicle_artwork_cache(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    let _ = tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string())).await;
+    let _ = tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string()))
+        .await;
     sqlx::query(
         "UPDATE riviamigo.vehicle_images
          SET metadata = jsonb_set(metadata, '{mirror_status}', '\"pending\"'::jsonb, true), updated_at = now()
@@ -4302,7 +4368,9 @@ async fn admin_purge_vehicle_artwork_cache(
     .execute(&state.pool)
     .await?;
     refresh_vehicle_artwork_cache_state(&state.pool, &state.config, vehicle_id, None).await;
-    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vehicle_id })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
+    ))
 }
 
 async fn vehicle_artwork_cache_complete(
@@ -4374,7 +4442,8 @@ async fn repair_vehicle_artwork(
     force_manifest_refresh: bool,
 ) {
     for attempt in 0..3 {
-        ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key, force_manifest_refresh).await;
+        ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key, force_manifest_refresh)
+            .await;
         if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
             refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, None).await;
             return;
@@ -4416,7 +4485,14 @@ pub fn start_vehicle_artwork_repair_worker(
                 continue;
             }
 
-            repair_vehicle_artwork(pool.clone(), config.clone(), age_key.clone(), vehicle_id, false).await;
+            repair_vehicle_artwork(
+                pool.clone(),
+                config.clone(),
+                age_key.clone(),
+                vehicle_id,
+                false,
+            )
+            .await;
         }
     });
 }
@@ -4476,6 +4552,215 @@ fn open_closures_json(closures: &[(&str, Option<bool>)]) -> serde_json::Value {
             })
             .collect(),
     )
+}
+
+const TELEMETRY_LANES: &[&str] = &["battery", "drive", "location", "climate", "charging", "health"];
+
+const TELEMETRY_LANES_QUERY: &str = r#"
+        SELECT date_bin(make_interval(secs => $4::double precision), t.ts, $2) AS bucket,
+               AVG(t.latitude) AS latitude,
+               AVG(t.longitude) AS longitude,
+               AVG(t.altitude_m) AS altitude_m,
+               AVG(t.speed_mph) AS speed_mph,
+               AVG(t.battery_level) AS battery_level,
+               AVG(t.battery_capacity_wh) AS battery_capacity_wh,
+               AVG(t.distance_to_empty_mi) AS distance_to_empty_mi,
+               AVG(t.battery_limit) AS battery_limit,
+               AVG(t.time_to_end_of_charge_min)::double precision AS time_to_end_of_charge_min,
+               AVG(t.cabin_temp_c) AS cabin_temp_c,
+               AVG(t.driver_temp_c) AS driver_temp_c,
+               AVG(t.outside_temp_c) AS outside_temp_c,
+               AVG(t.power_kw) AS power_kw,
+               AVG(t.regen_power_kw) AS regen_power_kw,
+               AVG(t.heading_deg) AS heading_deg,
+               AVG(t.odometer_miles) AS odometer_miles,
+               AVG(t.tire_fl_psi) AS tire_fl_psi,
+               AVG(t.tire_fr_psi) AS tire_fr_psi,
+               AVG(t.tire_rl_psi) AS tire_rl_psi,
+               AVG(t.tire_rr_psi) AS tire_rr_psi
+        FROM timeseries.telemetry t
+        WHERE t.vehicle_id = $1 AND t.ts >= $2 AND t.ts <= $3
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT $5
+        "#;
+
+async fn telemetry_lanes(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Query(params): Query<TelemetryLaneParams>,
+) -> Result<Json<TelemetryLaneFrame>, AppError> {
+    require_vehicle_access(&auth, vid)?;
+    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+
+    let requested_lanes = parse_telemetry_lanes(params.lanes.as_deref())?;
+    let to = params.to.unwrap_or_else(chrono::Utc::now);
+    let from = params
+        .from
+        .unwrap_or_else(|| to - chrono::Duration::hours(24));
+    validate_raw_time_bounds(Some(from), Some(to))?;
+    if to - from > chrono::Duration::days(90) {
+        return Err(AppError::Validation(
+            "telemetry lane windows cannot exceed 90 days".into(),
+        ));
+    }
+
+    let max_points = params.max_points.unwrap_or(256).clamp(64, 512);
+    let resolution_seconds = resolve_telemetry_resolution(
+        params.resolution.as_deref(),
+        from,
+        to,
+        max_points,
+    )?;
+    let rows = sqlx::query_as::<_, TelemetryLaneRow>(TELEMETRY_LANES_QUERY)
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .bind(resolution_seconds as f64)
+    .bind(max_points)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut lanes = BTreeMap::new();
+    for lane in requested_lanes {
+        let data = match lane {
+            "battery" => telemetry_lane(
+                &rows,
+                &[
+                    ("battery_level", |row| row.battery_level),
+                    ("battery_capacity_wh", |row| row.battery_capacity_wh),
+                    ("distance_to_empty_mi", |row| row.distance_to_empty_mi),
+                    ("battery_limit", |row| row.battery_limit),
+                ],
+            ),
+            "drive" => telemetry_lane(
+                &rows,
+                &[
+                    ("speed_mph", |row| row.speed_mph),
+                    ("odometer_miles", |row| row.odometer_miles),
+                    ("power_kw", |row| row.power_kw),
+                    ("regen_power_kw", |row| row.regen_power_kw),
+                ],
+            ),
+            "location" => telemetry_lane(
+                &rows,
+                &[
+                    ("latitude", |row| row.latitude),
+                    ("longitude", |row| row.longitude),
+                    ("altitude_m", |row| row.altitude_m),
+                    ("heading_deg", |row| row.heading_deg),
+                ],
+            ),
+            "climate" => telemetry_lane(
+                &rows,
+                &[
+                    ("cabin_temp_c", |row| row.cabin_temp_c),
+                    ("driver_temp_c", |row| row.driver_temp_c),
+                    ("outside_temp_c", |row| row.outside_temp_c),
+                ],
+            ),
+            "charging" => telemetry_lane(
+                &rows,
+                &[
+                    ("time_to_end_of_charge_min", |row| row.time_to_end_of_charge_min),
+                    ("power_kw", |row| row.power_kw),
+                    ("regen_power_kw", |row| row.regen_power_kw),
+                ],
+            ),
+            "health" => telemetry_lane(
+                &rows,
+                &[
+                    ("tire_fl_psi", |row| row.tire_fl_psi),
+                    ("tire_fr_psi", |row| row.tire_fr_psi),
+                    ("tire_rl_psi", |row| row.tire_rl_psi),
+                    ("tire_rr_psi", |row| row.tire_rr_psi),
+                ],
+            ),
+            _ => unreachable!("lane names are validated before querying"),
+        };
+        lanes.insert(lane.to_string(), data);
+    }
+
+    Ok(Json(TelemetryLaneFrame {
+        vehicle_id: vid,
+        window: TelemetryLaneWindow {
+            from,
+            to,
+            resolution_seconds,
+            approximate: resolution_seconds > 1,
+        },
+        spine: rows.iter().map(|row| row.bucket).collect(),
+        lanes,
+        truncated: rows.len() >= max_points as usize,
+    }))
+}
+
+fn parse_telemetry_lanes(value: Option<&str>) -> Result<Vec<&'static str>, AppError> {
+    let requested = value.unwrap_or("battery,drive");
+    let mut lanes = Vec::new();
+    for lane in requested.split(',').map(str::trim).filter(|lane| !lane.is_empty()) {
+        let Some(&known) = TELEMETRY_LANES.iter().find(|known| **known == lane) else {
+            return Err(AppError::Validation(format!("unknown telemetry lane: {lane}")));
+        };
+        if !lanes.contains(&known) {
+            lanes.push(known);
+        }
+    }
+    if lanes.is_empty() || lanes.len() > 4 {
+        return Err(AppError::Validation(
+            "select between 1 and 4 telemetry lanes".into(),
+        ));
+    }
+    Ok(lanes)
+}
+
+fn resolve_telemetry_resolution(
+    value: Option<&str>,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+    max_points: i64,
+) -> Result<i64, AppError> {
+    match value.unwrap_or("auto") {
+        "auto" => Ok(((to - from).num_seconds().max(1) as f64 / max_points as f64)
+            .ceil()
+            .max(1.0) as i64),
+        "1m" => Ok(60),
+        "5m" => Ok(300),
+        "1h" => Ok(3600),
+        other => Err(AppError::Validation(format!(
+            "unsupported telemetry resolution: {other}"
+        ))),
+    }
+}
+
+fn telemetry_lane(
+    rows: &[TelemetryLaneRow],
+    fields: &[(&str, fn(&TelemetryLaneRow) -> Option<f64>)],
+) -> TelemetryLane {
+    let numeric = fields
+        .iter()
+        .map(|(name, value)| {
+            (
+                (*name).to_string(),
+                rows.iter().map(value).collect::<Vec<Option<f64>>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let coverage = numeric
+        .iter()
+        .map(|(name, values)| {
+            (
+                name.clone(),
+                values.iter().filter(|value| value.is_some()).count() as i64,
+            )
+        })
+        .collect();
+    TelemetryLane {
+        numeric,
+        coverage,
+        source: "bucketed_normalized_telemetry",
+    }
 }
 
 async fn raw_vehicle_data(
@@ -4568,19 +4853,14 @@ async fn raw_vehicle_data(
     .fetch_one(&state.pool)
     .await?;
 
-    let field_coverage_projection = RAW_TELEMETRY_FIELDS
-        .iter()
-        .map(|field| format!("'{field}', COUNT(t.{field})"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let field_coverage: serde_json::Value = sqlx::query_scalar(&format!(
-        "SELECT jsonb_build_object({field_coverage_projection}) FROM timeseries.telemetry t WHERE {where_clause}",
-    ))
+    let field_coverage = sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(
+        &raw_field_coverage_query(&where_clause),
+    )
     .bind(vid)
     .bind(params.from.clone())
     .bind(params.to.clone())
     .bind(search)
-    .fetch_one(&state.pool)
+    .fetch_all(&state.pool)
     .await?;
 
     Ok(Json(serde_json::json!({
@@ -4790,6 +5070,25 @@ fn raw_telemetry_where_clause(selected_fields: &[&str], populated_only: bool) ->
     clauses.join(" AND ")
 }
 
+fn raw_field_coverage_query(where_clause: &str) -> String {
+    let field_names = RAW_TELEMETRY_FIELDS
+        .iter()
+        .map(|field| format!("'{field}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let field_counts = RAW_TELEMETRY_FIELDS
+        .iter()
+        .map(|field| format!("COUNT(t.{field})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "SELECT unnest(ARRAY[{field_names}]::text[]) AS field, \
+                unnest(ARRAY[{field_counts}]::bigint[]) AS sample_count \
+         FROM timeseries.telemetry t WHERE {where_clause}"
+    )
+}
+
 fn raw_sample_json(r: RawVehicleSampleRow) -> serde_json::Value {
     serde_json::json!({
         "ts": r.ts,
@@ -4862,8 +5161,10 @@ fn raw_event_summary_json(row: RawEventSummaryRow) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_otp, load_encrypted_redis, parse_raw_fields, raw_telemetry_where_clause,
+        connect_otp, load_encrypted_redis, parse_raw_fields, parse_telemetry_lanes,
+        raw_field_coverage_query, raw_telemetry_where_clause, resolve_telemetry_resolution,
         store_encrypted_redis, validate_raw_time_bounds, OtpBody, PendingOtpChallenge,
+        RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
     };
     use axum::body::Body;
     use axum::extract::State;
@@ -5141,6 +5442,59 @@ mod tests {
         let clause = raw_telemetry_where_clause(&fields, false);
         assert!(clause.contains("t.battery_level IS NOT NULL OR t.tire_fl_psi IS NOT NULL"));
         assert!(clause.contains("to_jsonb(t)::text ILIKE"));
+    }
+
+    #[test]
+    fn raw_telemetry_field_coverage_uses_typed_rows_not_wide_json() {
+        let query = raw_field_coverage_query("t.vehicle_id = $1");
+
+        assert_eq!(RAW_TELEMETRY_FIELDS.len(), 52);
+        assert!(query.contains("unnest(ARRAY["));
+        assert!(query.contains("AS field"));
+        assert!(query.contains("AS sample_count"));
+        assert!(!query.contains("jsonb_build_object"));
+    }
+
+    #[test]
+    fn telemetry_lane_queries_are_bounded_and_allowlisted() {
+        let lanes = parse_telemetry_lanes(Some("battery,drive,battery")).expect("known lanes");
+        assert_eq!(lanes, vec!["battery", "drive"]);
+        assert!(parse_telemetry_lanes(Some("raw_payload")).is_err());
+
+        let from = "2026-07-14T00:00:00Z".parse().expect("valid timestamp");
+        let to = "2026-07-14T01:00:00Z".parse().expect("valid timestamp");
+        assert_eq!(resolve_telemetry_resolution(Some("5m"), from, to, 256).unwrap(), 300);
+    }
+
+    #[test]
+    fn telemetry_lane_runtime_query_aliases_every_row_field() {
+        for field in [
+            "latitude",
+            "longitude",
+            "altitude_m",
+            "speed_mph",
+            "battery_level",
+            "battery_capacity_wh",
+            "distance_to_empty_mi",
+            "battery_limit",
+            "time_to_end_of_charge_min",
+            "cabin_temp_c",
+            "driver_temp_c",
+            "outside_temp_c",
+            "power_kw",
+            "regen_power_kw",
+            "heading_deg",
+            "odometer_miles",
+            "tire_fl_psi",
+            "tire_fr_psi",
+            "tire_rl_psi",
+            "tire_rr_psi",
+        ] {
+            assert!(
+                TELEMETRY_LANES_QUERY.contains(&format!("AS {field}")),
+                "telemetry lane query must alias {field}"
+            );
+        }
     }
 
     #[test]

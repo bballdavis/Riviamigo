@@ -159,6 +159,18 @@ export interface TripPowerPoint {
   regen_power_kw: number | null;
   speed_mph: number | null;
   battery_level: number | null;
+  estimated_net_power_kw?: number | null;
+  power_source?: TripPowerSource;
+}
+
+export type TripPowerSource = 'direct' | 'estimated_soc' | 'unavailable';
+
+export interface TripPowerMetadata {
+  source: TripPowerSource;
+  sample_count: number;
+  median_interval_seconds: number | null;
+  p90_interval_seconds: number | null;
+  coverage_percent: number | null;
 }
 
 export interface TripDetailSeriesPoint {
@@ -175,6 +187,8 @@ export interface TripDetailSeriesPoint {
   tire_fr_psi: number | null;
   tire_rl_psi: number | null;
   tire_rr_psi: number | null;
+  estimated_net_power_kw?: number | null;
+  power_source?: TripPowerSource;
 }
 
 export type TripRouteCoordinate = [lng: number, lat: number];
@@ -201,6 +215,7 @@ export interface TripDetailSamples {
   speed_mph: Array<number | null>;
   power_kw: Array<number | null>;
   regen_power_kw: Array<number | null>;
+  estimated_net_power_kw?: Array<number | null>;
   battery_level: Array<number | null>;
   outside_temp_c: Array<number | null>;
   cabin_temp_c: Array<number | null>;
@@ -216,6 +231,7 @@ export interface TripDetailResponse {
   trip: Trip;
   sample_interval_seconds: number;
   samples: TripDetailSamples;
+  power?: TripPowerMetadata;
   outside_temperature: OutsideTemperatureSeries;
 }
 
@@ -827,13 +843,15 @@ export interface UnitPreferences {
   efficiency_display: EfficiencyDisplay;
 }
 
-export type ApiAccessLevel = 'read';
+export type ApiAccessLevel = 'read' | 'view' | 'edit' | 'admin' | (string & {});
+export type ApiAccessLevelState = 'supported' | 'legacy_unmigrated' | 'unknown';
 
 export interface ApiKeyRecord {
   id: string;
   vehicle_id: string;
   name: string;
   access_level: ApiAccessLevel;
+  access_level_state?: ApiAccessLevelState;
   created_at: string;
   last_used_at: string | null;
   expires_at: string | null;
@@ -1029,7 +1047,8 @@ export interface RawTelemetryQuery {
 }
 
 export interface RawTelemetryFieldCoverage {
-  [field: string]: number;
+  field: keyof RawTelemetrySample | string;
+  sample_count: number;
 }
 
 export interface RawTelemetryResponse {
@@ -1055,7 +1074,36 @@ export interface RawTelemetryResponse {
   page?: number;
   per_page?: number;
   selected_fields?: string[];
-  field_coverage?: RawTelemetryFieldCoverage;
+  field_coverage?: RawTelemetryFieldCoverage[];
+}
+
+export type TelemetryLaneName = 'battery' | 'drive' | 'location' | 'climate' | 'charging' | 'health';
+
+export interface TelemetryLaneQuery {
+  from?: string;
+  to?: string;
+  lanes?: TelemetryLaneName[];
+  resolution?: 'auto' | '1m' | '5m' | '1h';
+  max_points?: number;
+}
+
+export interface TelemetryLane {
+  numeric: Record<string, Array<number | null>>;
+  coverage: Record<string, number>;
+  source: string;
+}
+
+export interface TelemetryLaneFrame {
+  vehicle_id: string;
+  window: {
+    from: string;
+    to: string;
+    resolution_seconds: number;
+    approximate: boolean;
+  };
+  spine: string[];
+  lanes: Record<TelemetryLaneName, TelemetryLane>;
+  truncated: boolean;
 }
 
 export interface RawEventQuery {

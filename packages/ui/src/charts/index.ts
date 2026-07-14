@@ -14,7 +14,7 @@ export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
 export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
 export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatChartNumber, clampExplorationRange } from './RichTimeSeriesChart';
-export { MiniSparkline } from './MiniSparkline';
+export { DEFAULT_CURVE_SMOOTHING, MiniSparkline, normalizeCurveSmoothing } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
 export { ChargeCurveChart } from './ChargeCurveChart';
 export type { ChargeCurveChartProps, ChargeCurvePoint } from './ChargeCurveChart';

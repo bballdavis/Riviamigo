@@ -65,6 +65,8 @@ Used to ensure full parity with the best-in-class EV trackers.
 | Route map (GPS track) | path | Per trip | Lat/lng polyline |
 | Speed profile | mph over time | Per trip | For speed-over-elapsed chart |
 | Altitude profile | ft over dist | Per trip | Elevation vs distance |
+| Signed net power (estimated) | kW over time | Per trip | Derived from bounded SoC changes and median battery capacity when direct power is unavailable; positive = pack discharge, negative = net regeneration |
+| Direct traction / regen power | kW over time | Per trip | Nullable upstream fields; used when at least two valid direct samples are present |
 | Regen braking % | % of energy | Per trip | regen_kWh / total_kWh |
 | Trips per week | count | Aggregate | |
 | Miles per week | mi | Aggregate | |
@@ -150,8 +152,9 @@ Used to ensure full parity with the best-in-class EV trackers.
 - `heading_deg` FLOAT8
 - Raw `outside_temp_c` acquisition remains unavailable from the current Rivian subscription; the normalized column is retained so vehicle readings can supersede estimates if upstream support appears.
 - `hvac_active` BOOLEAN
-- `regen_power_kw` FLOAT8
-- `power_kw` FLOAT8 (net traction power, positive = consuming, negative = regen)
+- `regen_power_kw` FLOAT8 (direct upstream field when available)
+- `power_kw` FLOAT8 (direct net traction power when available; positive = consuming, negative = regen)
+- Signed net power is also derived at read time from SoC deltas when direct fields are absent; it is not written back into telemetry.
 - `elevation_gain_m` FLOAT8 (per-event or derived from altitude delta)
 - `tire_pressure_fl_psi` FLOAT8
 - `tire_pressure_fr_psi` FLOAT8

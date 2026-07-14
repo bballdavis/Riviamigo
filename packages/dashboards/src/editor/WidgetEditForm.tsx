@@ -1,7 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
-import { CHART_COLOR_OPTIONS, getChartColor, type ChartColorKey } from '@riviamigo/ui/charts';
+import {
+  CHART_COLOR_OPTIONS,
+  DEFAULT_CURVE_SMOOTHING,
+  getChartColor,
+  normalizeCurveSmoothing,
+  type ChartColorKey,
+} from '@riviamigo/ui/charts';
 import { SelectPicker } from '@riviamigo/ui/primitives';
 import { getWidgetForInstance } from '../registry';
 import type { WidgetInstance } from '../schema';
@@ -19,7 +25,6 @@ import {
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
-const DEFAULT_CURVE_SMOOTHING = 0.45;
 const MIN_CURVE_SMOOTHING = 0.05;
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -54,8 +59,11 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
   const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
   const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
-  const curveSmoothing = normalizeCurveSmoothing(options.curveSmoothing, chartType);
   const curveSmoothingSupported = supportsCurveSmoothing(chartType);
+  const curveSmoothing = normalizeCurveSmoothing(
+    options.curveSmoothing,
+    curveSmoothingSupported ? DEFAULT_CURVE_SMOOTHING : 0,
+  );
   const curveSmoothingOn = curveSmoothingSupported && curveSmoothing > 0;
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
   const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
@@ -741,11 +749,4 @@ function isSensorValueColor(value: unknown): value is SensorValueColor {
 
 function supportsCurveSmoothing(chartType: string) {
   return chartType === 'line' || chartType === 'area';
-}
-
-function normalizeCurveSmoothing(value: unknown, chartType: string) {
-  const fallback = supportsCurveSmoothing(chartType) ? DEFAULT_CURVE_SMOOTHING : 0;
-  if (typeof value === 'boolean') return value ? fallback : 0;
-  if (typeof value === 'number' && Number.isFinite(value)) return Math.min(1, Math.max(0, value));
-  return fallback;
 }

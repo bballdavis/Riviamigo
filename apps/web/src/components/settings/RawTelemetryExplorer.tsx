@@ -6,6 +6,7 @@ import {
 import { api } from '@riviamigo/hooks';
 import type { RawEventDetail, RawTelemetrySample, Vehicle } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
+import { CHART_COLORS, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 
 type FieldGroup = 'Battery & charging' | 'Drive & location' | 'Climate' | 'Tires' | 'Closures & locks' | 'Software & health';
 
@@ -115,6 +116,16 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
     }),
     enabled: !!vehicleId,
   });
+  const laneQuery = useQuery({
+    queryKey: ['raw-telemetry-lanes', vehicleId, bounds.from, bounds.to],
+    queryFn: () => api.getTelemetryLanes(vehicleId, {
+      ...bounds,
+      lanes: ['battery', 'drive', 'location'],
+      resolution: 'auto',
+      max_points: 256,
+    }),
+    enabled: !!vehicleId && timeframe !== 'all',
+  });
   const eventQuery = useQuery({
     queryKey: ['raw-events', vehicleId, bounds.from, bounds.to, eventType],
     queryFn: () => api.getRawEvents(vehicleId, { ...bounds, per_page: 25, ...(eventType ? { event_type: eventType } : {}) }),
@@ -135,7 +146,20 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
   const selectedSample = samples.find((sample) => sample.ts === selectedSampleTime) ?? samples[0] ?? null;
   const total = query.data?.total ?? query.data?.coverage.sample_count ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / (query.data?.per_page ?? 25)));
-  const populatedFieldCount = Object.values(query.data?.field_coverage ?? {}).filter((count) => count > 0).length;
+  const fieldCoverage = React.useMemo(
+    () => new Map((query.data?.field_coverage ?? []).map((item) => [item.field, item.sample_count])),
+    [query.data?.field_coverage],
+  );
+  const populatedFieldCount = [...fieldCoverage.values()].filter((count) => count > 0).length;
+  const lanePoints = laneQuery.data?.spine.map((ts) => ({ ts })) ?? [];
+  const laneSeries = React.useMemo(() => {
+    const frame = laneQuery.data;
+    return [
+      { key: 'battery_level', label: 'State of charge', color: CHART_COLORS.emerald, values: frame?.lanes.battery?.numeric.battery_level ?? [], yScale: 'y' as const },
+      { key: 'speed_mph', label: 'Speed', color: CHART_COLORS.sky, values: frame?.lanes.drive?.numeric.speed_mph ?? [], yScale: 'y2' as const },
+      { key: 'power_kw', label: 'Power', color: CHART_COLORS.violet, values: frame?.lanes.drive?.numeric.power_kw ?? [], yScale: 'y2' as const },
+    ].filter((series) => series.values.some((value) => value !== null));
+  }, [laneQuery.data]);
 
   function resetPage() {
     setPage(1);
@@ -193,6 +217,24 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
       <Card>
         <CardHeader>
           <div>
+            <CardTitle>Telemetry density</CardTitle>
+            <p className="mt-1 text-sm text-fg-tertiary">Bucketed lanes keep long history bounded for charts; select a record below for normalized field detail.</p>
+          </div>
+          {laneQuery.data ? <Badge variant="info">{laneQuery.data.window.resolution_seconds}s resolution</Badge> : null}
+        </CardHeader>
+        <CardContent>
+          {timeframe === 'all' ? <p className="rounded-xl border border-dashed border-border p-4 text-sm text-fg-tertiary">Choose a bounded timeframe to visualize dense telemetry history.</p> : null}
+          {timeframe !== 'all' && laneQuery.isLoading ? <p className="rounded-xl border border-border p-4 text-sm text-fg-tertiary">Loading bucketed telemetry lanes…</p> : null}
+          {timeframe !== 'all' && !laneQuery.isLoading && lanePoints.length > 0 && laneSeries.length > 0 ? (
+            <RichTimeSeriesChart points={lanePoints} series={laneSeries} height={260} xTime yUnit="%" yRightUnit="mixed" emptyTitle="No bucketed telemetry" cursorSyncKey="settings-raw-telemetry" />
+          ) : null}
+          {timeframe !== 'all' && !laneQuery.isLoading && lanePoints.length === 0 ? <p className="rounded-xl border border-dashed border-border p-4 text-sm text-fg-tertiary">No bucketed telemetry is available for this timeframe.</p> : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div>
             <CardTitle>Field coverage</CardTitle>
             <p className="mt-1 text-sm text-fg-tertiary">Select a field to inspect records where Rivian supplied it.</p>
           </div>
@@ -204,7 +246,7 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">{group}</p>
               <div className="grid gap-1">
                 {FIELD_DEFINITIONS.filter((field) => field.group === group).map((field) => {
-                  const count = query.data?.field_coverage?.[field.key] ?? 0;
+                  const count = fieldCoverage.get(field.key) ?? 0;
                   const active = selectedField === field.key;
                   return (
                     <button key={field.key} type="button" onClick={() => { setSelectedField(active ? '' : field.key); resetPage(); }} className={[

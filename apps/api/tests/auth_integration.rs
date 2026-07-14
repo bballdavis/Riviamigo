@@ -697,10 +697,13 @@ async fn admin_vehicle_options_require_an_admin_role_and_return_picker_safe_fiel
         .await;
     assert_eq!(denied.status, StatusCode::FORBIDDEN);
 
-    sqlx::query!("UPDATE riviamigo.users SET role = 'admin' WHERE id = $1", user_id)
-        .execute(&app.pool)
-        .await
-        .expect("promote to admin");
+    sqlx::query!(
+        "UPDATE riviamigo.users SET role = 'admin' WHERE id = $1",
+        user_id
+    )
+    .execute(&app.pool)
+    .await
+    .expect("promote to admin");
 
     let allowed = app
         .request(
@@ -712,7 +715,9 @@ async fn admin_vehicle_options_require_an_admin_role_and_return_picker_safe_fiel
         )
         .await;
     assert_eq!(allowed.status, StatusCode::OK);
-    let vehicles = allowed.body["vehicles"].as_array().expect("vehicle options");
+    let vehicles = allowed.body["vehicles"]
+        .as_array()
+        .expect("vehicle options");
     let option = vehicles
         .iter()
         .find(|option| option["id"] == serde_json::json!(vehicle_id))
