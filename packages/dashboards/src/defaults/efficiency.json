@@ -8,9 +8,9 @@
   "ownerId": null,
   "controls": { "dateRange": true },
   "widgets": [
-    { "id": "d3000003-0000-0000-0000-000000000001", "componentType": "sensor", "definitionId": "avg_efficiency", "title": "Avg Consumption (net)", "options": { "metric": "avg_efficiency", "icon": "gauge", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false, "accentBorder": true }, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d3000003-0000-0000-0000-000000000001", "componentType": "sensor", "definitionId": "avg_efficiency", "title": "Avg Consumption", "options": { "metric": "avg_efficiency", "icon": "gauge", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false, "accentBorder": true }, "layout": { "x": 0, "y": 0, "w": 3, "h": 2 } },
     { "id": "d3000003-0000-0000-0000-000000000002", "componentType": "sensor", "definitionId": "trip_miles", "title": "Miles Driven", "options": { "metric": "trip_miles", "icon": "map", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false }, "layout": { "x": 3, "y": 0, "w": 3, "h": 2 } },
-    { "id": "d3000003-0000-0000-0000-000000000003", "componentType": "sensor", "definitionId": "avg_gross_efficiency", "title": "Avg Consumption (gross)", "options": { "metric": "avg_gross_efficiency", "icon": "zap", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false }, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
+    { "id": "d3000003-0000-0000-0000-000000000003", "componentType": "sensor", "definitionId": "efficiency_coverage", "title": "Consumption Data Coverage", "options": { "dataSource": "efficiencySummary", "icon": "database-zap", "chartType": "none", "valueSize": "md", "showSprite": false, "showSubtitle": false }, "layout": { "x": 6, "y": 0, "w": 3, "h": 2 } },
     { "id": "d3000003-0000-0000-0000-000000000004", "componentType": "sensor", "definitionId": "avg_outside_temp_c", "title": "Avg Outside Temp", "options": { "metric": "avg_outside_temp_c", "icon": "thermometer", "chartType": "line", "valueSize": "md", "showSprite": true, "showSubtitle": false }, "layout": { "x": 9, "y": 0, "w": 3, "h": 2 } },
     {
       "id": "d3000003-0000-0000-0000-000000000005",

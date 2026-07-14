@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::cost::recompute_charge_session_cost,
 };
 
@@ -299,6 +299,7 @@ struct ChartSeriesSessionSourceRow {
     #[sqlx(default)]
     session_day_local: Option<String>,
     energy_kwh: Option<f64>,
+    cost_usd: Option<f64>,
     location_name: Option<String>,
     charger_type: Option<String>,
     network_vendor: Option<String>,
@@ -312,6 +313,7 @@ struct ChargeChartSeriesSession {
     day_start: DateTime<Utc>,
     started_at: DateTime<Utc>,
     energy_added_kwh: Option<f64>,
+    cost_usd: Option<f64>,
     charger_type: Option<String>,
     location_name: Option<String>,
 }
@@ -346,6 +348,7 @@ async fn list_sessions(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vehicle_id)?;
     list_sessions_response(&state, auth.user_id, vehicle_id, p).await
 }
 
@@ -358,6 +361,7 @@ async fn get_session(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vehicle_id)?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -370,6 +374,7 @@ async fn get_session_curve(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     get_session_curve_response(&state, auth.user_id, vid, id).await
 }
 
@@ -474,6 +479,7 @@ async fn list_sessions_path(
     Path(vehicle_id): Path<Uuid>,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     list_sessions_response(&state, auth.user_id, vehicle_id, p).await
 }
 
@@ -482,6 +488,7 @@ async fn get_session_path(
     auth: AuthUser,
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -490,6 +497,7 @@ async fn get_session_curve_path(
     auth: AuthUser,
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     get_session_curve_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -499,6 +507,7 @@ async fn get_summary_path(
     Path(vehicle_id): Path<Uuid>,
     Query(p): Query<SessionListParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     get_summary_response(&state, auth.user_id, vehicle_id, p).await
 }
 
@@ -510,6 +519,7 @@ async fn get_summary(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vehicle_id)?;
     get_summary_response(&state, auth.user_id, vehicle_id, p).await
 }
 
@@ -521,6 +531,7 @@ async fn get_chart_series(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vehicle_id)?;
     get_chart_series_response(&state, auth.user_id, vehicle_id, p).await
 }
 
@@ -532,6 +543,7 @@ async fn get_curve_analysis(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
@@ -724,6 +736,7 @@ async fn get_chart_series_response(
             cs.started_at,
             TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local,
             COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS energy_kwh,
+            cs.cost_usd,
             COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name,
             cs.charger_type,
             cs.network_vendor,
@@ -762,6 +775,7 @@ async fn get_chart_series_response(
             "day_start": session.day_start,
             "started_at": session.started_at,
             "energy_added_kwh": session.energy_added_kwh,
+            "cost_usd": session.cost_usd,
             "charger_type": session.charger_type,
             "location_name": session.location_name,
         })).collect::<Vec<_>>(),
@@ -783,6 +797,7 @@ fn build_charge_chart_series(
                 day_local,
                 started_at: row.started_at,
                 energy_added_kwh: row.energy_kwh,
+                cost_usd: row.cost_usd,
                 charger_type: normalize_chart_charger_type(
                     row.charger_type.as_deref(),
                     row.network_vendor.as_deref(),
@@ -1330,6 +1345,7 @@ mod tests {
                 started_at: Utc.with_ymd_and_hms(2026, 6, 20, 18, 0, 0).unwrap(),
                 session_day_local: Some("2026-06-20".into()),
                 energy_kwh: Some(18.5),
+                cost_usd: Some(2.25),
                 location_name: Some("Home".into()),
                 charger_type: Some("ac".into()),
                 network_vendor: None,
@@ -1340,6 +1356,7 @@ mod tests {
                 started_at: Utc.with_ymd_and_hms(2026, 6, 20, 22, 30, 0).unwrap(),
                 session_day_local: Some("2026-06-20".into()),
                 energy_kwh: Some(24.0),
+                cost_usd: Some(6.50),
                 location_name: Some("Office".into()),
                 charger_type: Some("dc".into()),
                 network_vendor: None,
@@ -1354,6 +1371,8 @@ mod tests {
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, first);
         assert_eq!(sessions[1].session_id, second);
+        assert_eq!(sessions[0].cost_usd, Some(2.25));
+        assert_eq!(sessions[1].cost_usd, Some(6.50));
     }
 
     #[test]
@@ -1364,6 +1383,7 @@ mod tests {
             started_at: Utc.with_ymd_and_hms(2026, 6, 21, 6, 0, 0).unwrap(),
             session_day_local: Some("2026-06-20".into()),
             energy_kwh: Some(12.0),
+            cost_usd: None,
             location_name: Some("Road Trip".into()),
             charger_type: None,
             network_vendor: Some("tesla".into()),
@@ -1385,6 +1405,7 @@ mod tests {
                     .unwrap(),
                 session_day_local: Some(format!("2026-06-{:02}", 1 + (index / 10))),
                 energy_kwh: Some(1.0),
+                cost_usd: None,
                 location_name: None,
                 charger_type: Some("ac".into()),
                 network_vendor: None,

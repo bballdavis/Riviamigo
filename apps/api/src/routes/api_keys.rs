@@ -28,17 +28,13 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ApiAccessLevel {
-    View,
-    Edit,
-    Admin,
+    Read,
 }
 
 impl ApiAccessLevel {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::View => "view",
-            Self::Edit => "edit",
-            Self::Admin => "admin",
+            Self::Read => "read",
         }
     }
 }
@@ -48,12 +44,8 @@ impl TryFrom<&str> for ApiAccessLevel {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "view" => Ok(Self::View),
-            "edit" => Ok(Self::Edit),
-            "admin" => Ok(Self::Admin),
-            _ => Err(AppError::Validation(
-                "access_level must be view, edit, or admin".into(),
-            )),
+            "read" => Ok(Self::Read),
+            _ => Err(AppError::Validation("access_level must be read".into())),
         }
     }
 }
@@ -74,7 +66,6 @@ struct ApiKeyRecord {
 struct CreateApiKeyBody {
     vehicle_id: Uuid,
     name: String,
-    access_level: ApiAccessLevel,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,23 +76,16 @@ struct CreateApiKeyResponse {
 
 #[derive(Debug, Serialize)]
 struct ApiCatalogResponse {
-    access_levels: Vec<ApiAccessLevelDoc>,
+    version: &'static str,
+    authentication: &'static str,
     endpoints: Vec<ApiEndpointDoc>,
-}
-
-#[derive(Debug, Serialize)]
-struct ApiAccessLevelDoc {
-    level: &'static str,
-    description: &'static str,
-    allows: Vec<&'static str>,
-    restricts: Vec<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
 struct ApiEndpointDoc {
     method: &'static str,
     path: &'static str,
-    minimum_access: &'static str,
+    vehicle_scoped: bool,
     purpose: &'static str,
 }
 
@@ -165,10 +149,6 @@ async fn create_api_key(
         return Err(AppError::Validation("API key name is required".into()));
     }
 
-    if body.access_level == ApiAccessLevel::Admin {
-        require_user_admin(&state, auth.user_id).await?;
-    }
-
     let secret = generate_api_key();
     let key_hash = hash_api_key(&secret);
 
@@ -184,7 +164,7 @@ async fn create_api_key(
     .bind(body.vehicle_id)
     .bind(key_hash.as_slice())
     .bind(body.name.trim())
-    .bind(body.access_level.as_str())
+    .bind(ApiAccessLevel::Read.as_str())
     .fetch_one(&state.pool)
     .await?;
 
@@ -238,151 +218,234 @@ async fn revoke_api_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn api_catalog() -> Json<ApiCatalogResponse> {
-    Json(catalog(false))
+async fn api_catalog(_auth: AuthUser) -> Json<ApiCatalogResponse> {
+    Json(catalog())
 }
 
 async fn admin_api_catalog(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<ApiCatalogResponse>, AppError> {
+    require_session_auth(&auth)?;
     require_user_admin(&state, auth.user_id).await?;
-    Ok(Json(catalog(true)))
+    Ok(Json(catalog()))
 }
 
-fn catalog(include_admin: bool) -> ApiCatalogResponse {
-    let mut endpoints = vec![
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/vehicles",
-            minimum_access: "view",
-            purpose: "List connected vehicles and identifiers.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/vehicles/{id}/status",
-            minimum_access: "view",
-            purpose: "Read current runtime status for a vehicle.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/vehicles/{id}/raw-data",
-            minimum_access: "view",
-            purpose: "Inspect raw telemetry samples and field coverage for dashboard debugging.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/battery/soc",
-            minimum_access: "view",
-            purpose: "Read state-of-charge time series.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/battery/range",
-            minimum_access: "view",
-            purpose: "Read range time series.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/stats/summary",
-            minimum_access: "view",
-            purpose: "Read lifetime summary metrics.",
-        },
-        ApiEndpointDoc {
-            method: "POST",
-            path: "/v1/metrics/batch",
-            minimum_access: "view",
-            purpose: "Read deduplicated dashboard metric values and bounded sparklines.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/trips",
-            minimum_access: "view",
-            purpose: "Read trip summaries.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/trips/map",
-            minimum_access: "view",
-            purpose: "Read compact route previews for all trips in a timeframe.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/trips/{id}/detail",
-            minimum_access: "view",
-            purpose: "Read one adaptive, synchronized trip telemetry payload.",
-        },
-        ApiEndpointDoc {
-            method: "GET",
-            path: "/v1/charging",
-            minimum_access: "view",
-            purpose: "Read charging session summaries.",
-        },
-        ApiEndpointDoc {
-            method: "POST",
-            path: "/v1/dashboards",
-            minimum_access: "edit",
-            purpose: "Create a user dashboard.",
-        },
-        ApiEndpointDoc {
-            method: "PUT",
-            path: "/v1/dashboards/{id}",
-            minimum_access: "edit",
-            purpose: "Update a user dashboard.",
-        },
-        ApiEndpointDoc {
-            method: "DELETE",
-            path: "/v1/dashboards/{id}",
-            minimum_access: "edit",
-            purpose: "Delete a user dashboard.",
-        },
+fn catalog() -> ApiCatalogResponse {
+    let endpoints = vec![
+        endpoint(
+            "GET",
+            "/v1/vehicles",
+            false,
+            "List the vehicle allowed by this integration key.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/status",
+            true,
+            "Read current runtime status.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/images",
+            true,
+            "Read cached vehicle imagery.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/raw-data",
+            true,
+            "Read bounded raw telemetry samples and coverage.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/health",
+            true,
+            "Read tire, closure, thermal, and software health.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/idle-drain",
+            true,
+            "Read validated parked-session drain history.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/state-timeline",
+            true,
+            "Read derived vehicle state periods.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/locations",
+            true,
+            "Read time-bucketed location history.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/live-session",
+            true,
+            "Read the latest live vehicle session.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/charging-schedule",
+            true,
+            "Read charging schedule configuration.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/departure-schedules",
+            true,
+            "Read departure schedules.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/wallboxes",
+            true,
+            "Read known wallbox details.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/ota-details",
+            true,
+            "Read OTA details.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/battery/{series}",
+            true,
+            "Read state of charge, range, capacity, health, mileage, degradation, or drain series.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/metrics/catalog",
+            false,
+            "List stable metric identifiers and units.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/metrics/value",
+            true,
+            "Read one latest metric value.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/metrics/series",
+            true,
+            "Read one metric time series.",
+        ),
+        endpoint(
+            "POST",
+            "/v1/metrics/batch",
+            true,
+            "Read deduplicated values and bounded sparklines.",
+        ),
+        endpoint("GET", "/v1/trips", true, "Read trip summaries."),
+        endpoint(
+            "GET",
+            "/v1/trips/map",
+            true,
+            "Read compact trip-route previews.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/trips/{id}",
+            true,
+            "Read a trip and detail, track, speed, elevation, power, or series data.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/drives/{trip_id}/power",
+            true,
+            "Read a trip power profile with the vehicle ID in the path.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/charging",
+            true,
+            "Read sessions, summaries, chart series, curves, and analysis.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/charging-sessions",
+            true,
+            "Read charging sessions with the vehicle ID in the path.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/costs",
+            true,
+            "Read charging cost summaries with the vehicle ID in the path.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/efficiency/{view}",
+            true,
+            "Read efficiency summaries, trends, and temperature analysis.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/dashboard/overview/{vehicle_id}",
+            true,
+            "Read the combined dashboard overview.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/grafana",
+            false,
+            "Check the Grafana compatibility datasource.",
+        ),
+        endpoint(
+            "POST",
+            "/v1/grafana/search",
+            false,
+            "List Grafana metric names.",
+        ),
+        endpoint(
+            "POST",
+            "/v1/grafana/query",
+            true,
+            "Use the legacy Grafana compatibility datasource.",
+        ),
+        endpoint(
+            "POST",
+            "/v1/grafana/annotations",
+            false,
+            "Read Grafana annotations (currently empty).",
+        ),
+        endpoint(
+            "POST",
+            "/v1/grafana/tag-keys",
+            false,
+            "Read Grafana tag keys (currently empty).",
+        ),
+        endpoint(
+            "POST",
+            "/v1/grafana/tag-values",
+            false,
+            "Read Grafana tag values (currently empty).",
+        ),
     ];
 
-    if include_admin {
-        endpoints.extend([
-            ApiEndpointDoc {
-                method: "PUT",
-                path: "/v1/admin/dashboards/{id}",
-                minimum_access: "admin",
-                purpose: "Update a system or user dashboard as an admin.",
-            },
-            ApiEndpointDoc {
-                method: "POST",
-                path: "/v1/admin/dashboards/{id}/lock",
-                minimum_access: "admin",
-                purpose: "Lock or unlock a dashboard.",
-            },
-            ApiEndpointDoc {
-                method: "GET",
-                path: "/v1/admin/api/catalog",
-                minimum_access: "admin",
-                purpose: "Read admin endpoint catalog entries.",
-            },
-        ]);
-    }
-
     ApiCatalogResponse {
-        access_levels: vec![
-            ApiAccessLevelDoc {
-                level: "view",
-                description: "Read-only diagnostics and dashboard data access.",
-                allows: vec!["GET requests to vehicle, battery, stats, trip, charging, live, and dashboard data."],
-                restricts: vec!["POST, PUT, PATCH, and DELETE requests.", "Admin endpoints."],
-            },
-            ApiAccessLevelDoc {
-                level: "edit",
-                description: "Read access plus user-owned dashboard and configuration updates.",
-                allows: vec!["All view permissions.", "Non-admin POST, PUT, PATCH, and DELETE routes for owned resources."],
-                restricts: vec!["Admin endpoints.", "Resources owned by other users."],
-            },
-            ApiAccessLevelDoc {
-                level: "admin",
-                description: "Administrative access for users with the admin role.",
-                allows: vec!["All edit permissions.", "Admin catalog and admin dashboard routes."],
-                restricts: vec!["Creation is limited to users with role=admin.", "Vehicle ownership checks still apply."],
-            },
-        ],
+        version: "v1",
+        authentication: "Bearer integration key; read-only and scoped to one vehicle.",
         endpoints,
+    }
+}
+
+fn endpoint(
+    method: &'static str,
+    path: &'static str,
+    vehicle_scoped: bool,
+    purpose: &'static str,
+) -> ApiEndpointDoc {
+    ApiEndpointDoc {
+        method,
+        path,
+        vehicle_scoped,
+        purpose,
     }
 }
 
@@ -414,4 +477,30 @@ fn require_session_auth(auth: &AuthUser) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integration_catalog_contains_only_read_operations() {
+        let catalog = catalog();
+
+        assert!(catalog
+            .endpoints
+            .iter()
+            .all(|endpoint| matches!(endpoint.method, "GET" | "POST")));
+        assert!(catalog
+            .endpoints
+            .iter()
+            .any(|endpoint| { endpoint.method == "POST" && endpoint.path == "/v1/metrics/batch" }));
+        assert!(catalog.endpoints.iter().any(|endpoint| {
+            endpoint.method == "GET" && endpoint.path == "/v1/vehicles/{id}/live-session"
+        }));
+        assert!(!catalog
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.path == "/v1/vehicles/live"));
+    }
 }

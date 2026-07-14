@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
 };
 
@@ -80,6 +80,9 @@ struct CatalogParams {}
 struct ValueParams {
     vehicle_id: Option<Uuid>,
     metric: String,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    lifetime: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -421,13 +424,12 @@ async fn get_value(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let metric = find_metric(&p.metric)?;
 
-    let (value, ts) = match metric.source {
-        MetricSource::Summary => summary_value(&state.pool, vid, metric.id).await?,
-        MetricSource::Telemetry(column) => latest_telemetry_value(&state.pool, vid, column).await?,
-    };
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
+    let (value, ts) = metric_value(&state.pool, vid, metric, from, to).await?;
 
     Ok(Json(MetricValueResponse {
         metric: metric.id.to_string(),
@@ -446,6 +448,7 @@ async fn get_series(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let metric = find_metric(&p.metric)?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
@@ -505,6 +508,7 @@ async fn get_batch(
         }
     }
 
+    require_vehicle_access(&auth, p.vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, p.vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
@@ -517,7 +521,7 @@ async fn get_batch(
     let mut series = Vec::new();
     for (metric, include_latest, include_series) in requested {
         if include_latest {
-            let (value, ts) = metric_value(&state.pool, p.vehicle_id, metric).await?;
+            let (value, ts) = metric_value(&state.pool, p.vehicle_id, metric, from, to).await?;
             values.push(MetricValueResponse {
                 metric: metric.id.to_string(),
                 value,
@@ -547,9 +551,11 @@ async fn metric_value(
     pool: &sqlx::PgPool,
     vehicle_id: Uuid,
     metric: &MetricDef,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
     match metric.source {
-        MetricSource::Summary => summary_value(pool, vehicle_id, metric.id).await,
+        MetricSource::Summary => summary_value(pool, vehicle_id, metric.id, from, to).await,
         MetricSource::Telemetry(column) => latest_telemetry_value(pool, vehicle_id, column).await,
     }
 }
@@ -640,78 +646,91 @@ async fn summary_value(
     pool: &sqlx::PgPool,
     vid: Uuid,
     metric: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
-    let latest_ts: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT max(ts) FROM timeseries.telemetry WHERE vehicle_id = $1")
-            .bind(vid)
-            .fetch_optional(pool)
-            .await?
-            .flatten();
-
     let value = match metric {
         "total_miles" => sqlx::query_scalar(
-            "SELECT od.odometer_end::float8 \
-             FROM timeseries.odometer_daily od \
-             WHERE od.vehicle_id = $1 \
-               ORDER BY od.day DESC LIMIT 1",
+            "SELECT COALESCE(SUM(distance_miles), 0)::float8
+             FROM riviamigo.trips
+             WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3
+               AND distance_miles > 0",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "total_trips" => sqlx::query_scalar(
-            "SELECT COUNT(*)::float8 FROM riviamigo.trips WHERE vehicle_id=$1",
+            "SELECT COUNT(*)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "trip_miles" => sqlx::query_scalar(
-            "SELECT COALESCE(SUM(distance_miles), 0)::float8 FROM riviamigo.trips WHERE vehicle_id=$1",
+            "SELECT COALESCE(SUM(distance_miles), 0)::float8 FROM riviamigo.trips
+             WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3
+               AND distance_miles > 0",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "energy_charged" => sqlx::query_scalar(
-            "SELECT COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)), 0)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+            "SELECT COALESCE(SUM(COALESCE(kwh_added, energy_added_wh / 1000.0)), 0)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "charging_sessions" => sqlx::query_scalar(
-            "SELECT COUNT(*)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+            "SELECT COUNT(*)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "total_cost" => sqlx::query_scalar(
-            "SELECT COALESCE(SUM(cost_usd), 0)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+            "SELECT COALESCE(SUM(cost_usd), 0)::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "avg_session_energy" => sqlx::query_scalar(
-            "SELECT AVG(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
+            "SELECT AVG(COALESCE(kwh_added, energy_added_wh / 1000.0))::float8 FROM riviamigo.charge_sessions WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "avg_efficiency" => sqlx::query_as::<_, WeightedEfficiencyRow>(
             "SELECT
-                now() AS ts,
+                $3 AS ts,
                 SUM(distance_miles)::float8 AS total_distance_miles,
                 SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi
              FROM riviamigo.trips
-             WHERE vehicle_id=$1
+              WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3
                AND efficiency_wh_per_mile IS NOT NULL
                AND distance_miles > 0",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .and_then(|row| {
@@ -721,30 +740,41 @@ async fn summary_value(
             )
         }),
         "avg_gross_efficiency" => sqlx::query_scalar(
-            "SELECT CASE WHEN SUM(distance_miles) > 0 THEN SUM(energy_wh + COALESCE(regen_wh, 0)) / SUM(distance_miles) ELSE NULL END FROM riviamigo.trips WHERE vehicle_id=$1 AND energy_wh IS NOT NULL AND distance_miles > 0",
+            "SELECT CASE WHEN SUM(distance_miles) > 0 THEN SUM(energy_wh + COALESCE(regen_wh, 0)) / SUM(distance_miles) ELSE NULL END FROM riviamigo.trips WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3 AND energy_wh IS NOT NULL AND distance_miles > 0",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "avg_outside_temp_c" => sqlx::query_scalar(
-            "SELECT AVG(outside_temp_c)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND outside_temp_c IS NOT NULL",
+            "SELECT CASE WHEN SUM(duration_seconds) > 0
+                    THEN SUM(outside_temp_c * duration_seconds) / SUM(duration_seconds)
+                    ELSE NULL END::float8
+             FROM riviamigo.trips
+             WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3
+               AND outside_temp_c IS NOT NULL AND duration_seconds > 0",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         "avg_trip_duration" => sqlx::query_scalar(
-            "SELECT AVG(duration_seconds / 60.0)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND duration_seconds IS NOT NULL",
+            "SELECT AVG(duration_seconds / 60.0)::float8 FROM riviamigo.trips WHERE vehicle_id=$1 AND started_at >= $2 AND started_at <= $3 AND duration_seconds IS NOT NULL",
         )
         .bind(vid)
+        .bind(from)
+        .bind(to)
         .fetch_optional(pool)
         .await?
         .flatten(),
         _ => None,
     };
 
-    Ok((value, latest_ts))
+    Ok((value, Some(to)))
 }
 
 async fn summary_series(
@@ -835,10 +865,13 @@ async fn summary_series(
              GROUP BY 1 ORDER BY 1"
         ),
         "avg_outside_temp_c" => format!(
-            "SELECT {summary_bucket_expr} AS ts, AVG(outside_temp_c)::float8 AS value
+            "SELECT {summary_bucket_expr} AS ts,
+                    CASE WHEN SUM(duration_seconds) > 0
+                         THEN SUM(outside_temp_c * duration_seconds) / SUM(duration_seconds)
+                         ELSE NULL END::float8 AS value
              FROM riviamigo.trips
              WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
-             AND outside_temp_c IS NOT NULL
+             AND outside_temp_c IS NOT NULL AND duration_seconds > 0
              GROUP BY 1 ORDER BY 1"
         ),
         "avg_trip_duration" => format!(

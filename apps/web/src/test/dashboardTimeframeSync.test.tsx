@@ -141,6 +141,12 @@ vi.mock('@riviamigo/dashboards', () => ({
     isLoading: dashboardQuery.isLoading,
     isFetching: dashboardQuery.isFetching,
   }),
+  useDashboardById: () => ({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+  }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
