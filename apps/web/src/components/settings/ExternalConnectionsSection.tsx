@@ -37,7 +37,7 @@ export function ExternalConnectionsSection() {
     <div className="flex flex-col gap-5">
       <Card>
         <CardHeader className="items-start">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <CardTitle>External Connections</CardTitle>
               <p className="mt-1 max-w-3xl text-sm text-fg-tertiary">
@@ -197,7 +197,7 @@ function ConnectionCard({
   return (
     <Card className="min-w-0">
       <CardHeader className="items-start">
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex w-full items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle>{connection.name}</CardTitle>

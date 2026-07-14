@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
-import { api, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
+import { api, AuthenticatedVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
 import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
@@ -132,8 +132,8 @@ function ThemeVehicleImage({
 
   return (
     <>
-      {light && <img src={light} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />}
-      {dark && <img src={dark} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />}
+      {light && <AuthenticatedVehicleArtwork source={light} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />}
+      {dark && <AuthenticatedVehicleArtwork source={dark} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />}
     </>
   );
 }
@@ -574,6 +574,14 @@ export function SettingsContent() {
     },
   });
 
+  const purgeVehicleArtworkCache = useMutation({
+    mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
+    },
+  });
+
   const setDefaultVehicle = useMutation({
     mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
     onSuccess: (result) => {
@@ -921,7 +929,7 @@ export function SettingsContent() {
                                     size="sm"
                                     title={v.images.cache.last_error ?? undefined}
                                   >
-                                    Artwork {v.images.cache.ready_asset_count}/{v.images.cache.asset_count}
+                                    {v.images.cache.status === 'ready' ? 'Artwork' : 'Artwork restoring'} {v.images.cache.ready_asset_count}/{v.images.cache.asset_count}
                                   </Badge>
                                 )}
                               </div>
@@ -979,6 +987,20 @@ export function SettingsContent() {
                                     onClick={() => navigate({ to: '/connect', search: { mode: 'refresh', vehicle_id: v.id } })}
                                   >
                                     <RefreshCw className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
+                              {isAdmin && (
+                                <Tooltip content="Clear local artwork cache; the next artwork view restores it">
+                                  <Button
+                                    aria-label={`Clear local artwork cache for ${v.display_name}`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="h-8 w-8 px-0"
+                                    loading={purgeVehicleArtworkCache.isPending && purgeVehicleArtworkCache.variables === v.id}
+                                    onClick={() => purgeVehicleArtworkCache.mutate(v.id)}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
                                 </Tooltip>
                               )}

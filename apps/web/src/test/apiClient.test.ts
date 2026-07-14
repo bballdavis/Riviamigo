@@ -308,6 +308,35 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
   });
 
+  it('purges only the local vehicle artwork cache through the first-party vehicle route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, vehicle_id: 'vehicle-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await api.purgeVehicleArtworkCache('vehicle-1');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/admin/vehicles/vehicle-1/images/cache/purge');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
+  });
+
+  it('loads protected artwork with the existing bearer session rather than a cookie or URL token', async () => {
+    api.setToken('session-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<svg />', { status: 200, headers: { 'Content-Type': 'image/svg+xml' } }) as Response,
+    );
+
+    await api.authenticatedAsset('/v1/vehicle-image-cache/vehicle-1/artwork.webp');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/vehicle-image-cache/vehicle-1/artwork.webp');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: 'GET',
+      headers: expect.objectContaining({ Authorization: 'Bearer session-token' }),
+    });
+  });
+
   it('preserves login 401 responses instead of rewriting them as auth-expired', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({

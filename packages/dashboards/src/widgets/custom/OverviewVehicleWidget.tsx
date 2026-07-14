@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { useAuth, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
@@ -290,6 +290,7 @@ function VehicleArtFrame({
   widthPx: number;
   children: React.ReactNode;
 }) {
+  const artwork = useVehicleArtwork(source);
   const [rotatedAspectRatio, setRotatedAspectRatio] = useState(2.25);
   useEffect(() => {
     const image = new Image();
@@ -298,8 +299,8 @@ function VehicleArtFrame({
         setRotatedAspectRatio(image.naturalHeight / image.naturalWidth);
       }
     };
-    image.src = source;
-  }, [source]);
+    if (artwork.src) image.src = artwork.src;
+  }, [artwork.src]);
   const maxHeight = heightPx > 0 ? Math.max(120, (heightPx - 34) / 1.12) : 216;
   const maxWidth = widthPx > 0 ? Math.max(260, (widthPx - 34) / 1.04) : 520;
   const frameHeight = Math.round(Math.min(maxHeight, maxWidth / rotatedAspectRatio));
@@ -317,7 +318,7 @@ function VehicleArtFrame({
         '--vehicle-frame-width': `${frameWidth}px`,
       } as React.CSSProperties}
     >
-      {children}
+      {artwork.src ? children : null}
     </div>
   );
 }
@@ -330,8 +331,8 @@ function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: {
   } as React.CSSProperties;
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
-      <img src={base} alt={vehicleName ?? 'Rivian vehicle'} className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
-      {overlays.map((overlayUrl) => <img key={overlayUrl} src={overlayUrl} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />)}
+      <AuthenticatedVehicleArtwork source={base} alt={vehicleName ?? 'Rivian vehicle'} className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
+      {overlays.map((overlayUrl) => <AuthenticatedVehicleArtwork key={overlayUrl} source={overlayUrl} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />)}
     </div>
   );
 }
