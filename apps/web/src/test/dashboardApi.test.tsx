@@ -172,8 +172,18 @@ describe('dashboard API wiring', () => {
       wrapper: wrapper(),
     });
 
+    const savedConfig = {
+      ...dashboardConfig,
+      widgets: [
+        {
+          ...dashboardConfig.widgets[0]!,
+          options: { chartType: 'line', curveSmoothing: 0.65 },
+        },
+      ],
+    };
+
     await act(async () => {
-      await result.current.mutateAsync(dashboardConfig);
+      await result.current.mutateAsync(savedConfig);
     });
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
@@ -183,9 +193,10 @@ describe('dashboard API wiring', () => {
       name: 'Battery',
       slug: 'battery',
       config: {
-        widgets: dashboardConfig.widgets,
+        widgets: savedConfig.widgets,
       },
     });
     expect(body.config.widgets).toHaveLength(1);
+    expect(body.config.widgets[0].options.curveSmoothing).toBe(0.65);
   });
 });

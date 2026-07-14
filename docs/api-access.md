@@ -5,9 +5,19 @@ Create and revoke them in **Settings > API Access**. The secret is shown once;
 store it in the integration's secret store rather than in a dashboard or source
 file.
 
+The Settings inventory preserves legacy `view`, `edit`, or `admin` values as
+`legacy_unmigrated` compatibility state while the database catches up. Those
+values are never treated as read access; restart the current API build so its
+pending migrations can normalize them, or rotate the affected key.
+
 The API is intentionally not an automation or dashboard-management API.
 Connecting a Rivian account, changing vehicle settings, creating dashboards,
 and every administrative operation require a signed-in browser session.
+
+Integration keys use the same bounded-feed philosophy as the dashboard data
+paths: a small typed inventory, explicit vehicle scope, server-side time and
+point limits, and specialized responses for dense history. They do not imply
+access to arbitrary JSON paths or retained inbound Rivian payloads.
 
 External provider policy follows that same boundary. Signed-in users can read `GET /v1/settings/external-connections`; administrator or super-user sessions are required for `PUT /v1/settings/external-connections/{id}`, `POST /v1/settings/external-connections/{id}/test`, and `POST /v1/settings/external-connections/disable-optional`. Provider secrets are accepted on writes but never returned.
 
@@ -43,7 +53,7 @@ routes.
 
 | Group | Endpoints |
 |---|---|
-| Vehicle | `GET /v1/vehicles`; `/v1/vehicles/{id}/status`, `/images`, `/raw-data`, `/health`, `/idle-drain`, `/state-timeline`, `/locations`, `/live-session`, `/charging-schedule`, `/departure-schedules`, `/wallboxes`, `/ota-details`, and `/backfill-status` |
+| Vehicle | `GET /v1/vehicles`; `/v1/vehicles/{id}/status`, `/images`, `/raw-data`, `/telemetry/lanes`, `/health`, `/idle-drain`, `/state-timeline`, `/locations`, `/live-session`, `/charging-schedule`, `/departure-schedules`, `/wallboxes`, `/ota-details`, and `/backfill-status` |
 | Battery | `GET /v1/battery/soc`, `/range`, `/capacity`, `/health`, `/mileage`, `/phantom-drain`, `/degradation` |
 | Metrics | `GET /v1/metrics/catalog`, `/value`, `/series`; `POST /v1/metrics/batch` |
 | Trips | `GET /v1/trips`, `/trips/map`, and `/trips/{id}` with `/detail`, `/track`, `/speed`, `/elevation`, `/power`, or `/series`; `GET /v1/vehicles/{id}/drives/{trip_id}/power` is the path-scoped power alias |
@@ -52,9 +62,31 @@ routes.
 | Overview | `GET /v1/dashboard/overview/{vehicle_id}` and `GET /v1/vehicles/{id}/live-session` |
 | Grafana compatibility | `GET /v1/grafana`; `POST /v1/grafana/search`, `/query`, `/annotations`, `/tag-keys`, `/tag-values` |
 
+Trip detail responses include a `power` metadata object. Its `source` is
+`direct`, `estimated_soc`, or `unavailable`; estimated samples are signed net
+pack power in kW (positive discharge, negative net regeneration) and include
+the median/p90 SoC interval plus estimated coverage. The `/power` and `/series`
+responses carry the same provenance per point through `estimated_net_power_kw`
+and `power_source`. Estimated values are averaged between SoC updates and do
+not represent short acceleration or braking peaks.
+
 ## Raw telemetry explorer
 
-`GET /v1/vehicles/{id}/raw-data` remains an API-key-safe normalized telemetry surface. It keeps the compatibility `samples` array and now supports `from`, `to`, `page`, `per_page` (or legacy `limit`), `search`, comma-separated `fields`, and `populated_only=true`. Responses also include paging metadata and per-field coverage so clients can distinguish missing upstream data from an empty dashboard aggregation.
+`GET /v1/vehicles/{id}/telemetry/lanes` is the preferred high-density history
+surface. It returns a bounded, server-bucketed time spine plus explicitly
+allowlisted numeric lanes (`battery`, `drive`, `location`, `climate`,
+`charging`, and `health`). Select up to four lanes with `lanes`, choose
+`resolution=auto|1m|5m|1h`, and cap the response with `max_points` (64-512).
+The response is designed for charts and map-adjacent views; it is approximate
+when bucketed and preserves sparse values as nulls.
+
+`GET /v1/vehicles/{id}/raw-data` remains the compatibility and detail surface.
+It keeps the normalized `samples` array and supports `from`, `to`, `page`,
+`per_page` (or legacy `limit`), `search`, comma-separated `fields`, and
+`populated_only=true`. Its `field_coverage` response is a typed array of
+`{ field, sample_count }` records, not a wide dynamically constructed JSON
+object. Pages should use the lane surface for dense visualization and this
+surface for searchable records or selected-record inspection.
 
 The exact inbound Rivian websocket stream is intentionally separate: signed-in vehicle owners and managers can list retained event metadata at `GET /v1/vehicles/{id}/raw-events` and fetch a single payload at `GET /v1/vehicles/{id}/raw-events/{event_id}`. These session-only routes are excluded from integration-key access and expose their configured retention period in the list response.
 

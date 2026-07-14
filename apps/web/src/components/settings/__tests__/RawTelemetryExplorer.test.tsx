@@ -7,6 +7,7 @@ import { RawTelemetryExplorer } from '../RawTelemetryExplorer';
 
 const api = vi.hoisted(() => ({
   getRawTelemetry: vi.fn(),
+  getTelemetryLanes: vi.fn(),
   getRawEvents: vi.fn(),
   getRawEvent: vi.fn(),
   getRivianStewardship: vi.fn(),
@@ -21,6 +22,10 @@ vi.mock('@riviamigo/ui/primitives', () => ({
   CardHeader: ({ children }: { children: React.ReactNode }) => <header>{children}</header>,
   CardTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
   SelectPicker: ({ value, options, onChange, 'aria-label': ariaLabel }: { value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void; 'aria-label': string }) => <select aria-label={ariaLabel} value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>,
+}));
+vi.mock('@riviamigo/ui/charts', () => ({
+  CHART_COLORS: { emerald: 'emerald', sky: 'sky', violet: 'violet' },
+  RichTimeSeriesChart: () => <div data-testid="telemetry-lane-chart" />,
 }));
 
 const sample = {
@@ -42,7 +47,12 @@ function response(samples = [sample]) {
     page: 1,
     per_page: 25,
     samples,
-    field_coverage: { battery_level: 31, distance_to_empty_mi: 31, power_kw: 31, tire_fl_psi: 31 },
+    field_coverage: [
+      { field: 'battery_level', sample_count: 31 },
+      { field: 'distance_to_empty_mi', sample_count: 31 },
+      { field: 'power_kw', sample_count: 31 },
+      { field: 'tire_fl_psi', sample_count: 31 },
+    ],
   };
 }
 
@@ -55,6 +65,17 @@ describe('RawTelemetryExplorer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getRawTelemetry.mockResolvedValue(response());
+    api.getTelemetryLanes.mockResolvedValue({
+      vehicle_id: 'vehicle-1',
+      window: { from: '2026-07-13T00:00:00Z', to: sample.ts, resolution_seconds: 300, approximate: true },
+      spine: [sample.ts],
+      lanes: {
+        battery: { numeric: { battery_level: [78] }, coverage: { battery_level: 1 }, source: 'bucketed_normalized_telemetry' },
+        drive: { numeric: { speed_mph: [32], power_kw: [-4.5] }, coverage: { speed_mph: 1, power_kw: 1 }, source: 'bucketed_normalized_telemetry' },
+        location: { numeric: {}, coverage: {}, source: 'bucketed_normalized_telemetry' },
+      },
+      truncated: false,
+    });
     api.getRawEvents.mockResolvedValue({ vehicle_id: 'vehicle-1', retention_days: 7, total: 1, page: 1, per_page: 25, items: [{ id: 'event-1', received_at: sample.ts, event_type: 'vehicleState', message_type: 'data', has_json: true, has_payload: true }] });
     api.getRawEvent.mockResolvedValue({ id: 'event-1', received_at: sample.ts, event_type: 'vehicleState', message_type: 'data', has_json: true, has_payload: true, payload_format: 'json', payload: { batteryLevel: 78 } });
     api.getRivianStewardship.mockResolvedValue({});

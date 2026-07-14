@@ -102,6 +102,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 });
 
 import { DashboardRenderer } from '@riviamigo/dashboards';
+import { MiniSparkline } from '@riviamigo/ui/charts';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const defaultCtx = {
@@ -203,6 +204,57 @@ describe('dashboard sensor chips', () => {
     const path = layer.querySelector('path');
     expect(layer.querySelector('[data-sparkline-curve="straight"]')).not.toBeNull();
     expect(path?.getAttribute('d')).not.toContain('C');
+  });
+
+  it('changes the rendered curve geometry when the smoothing amount changes', () => {
+    const { unmount } = render(
+      <MiniSparkline
+        data={metricMocks.series}
+        type="line"
+        curveSmoothing={0.05}
+        height={36}
+      />
+    );
+
+    const lowSmoothing = document.querySelector('[data-sparkline-state="series"]');
+    const lowPath = lowSmoothing?.querySelector('path')?.getAttribute('d');
+    expect(lowSmoothing).toHaveAttribute('data-sparkline-curve', 'smooth');
+    expect(lowSmoothing).toHaveAttribute('data-sparkline-smoothing', '0.05');
+
+    unmount();
+
+    render(
+      <MiniSparkline
+        data={metricMocks.series}
+        type="line"
+        curveSmoothing={1}
+        height={36}
+      />
+    );
+
+    const highSmoothing = document.querySelector('[data-sparkline-state="series"]');
+    const highPath = highSmoothing?.querySelector('path')?.getAttribute('d');
+    expect(highSmoothing).toHaveAttribute('data-sparkline-curve', 'smooth');
+    expect(highSmoothing).toHaveAttribute('data-sparkline-smoothing', '1.00');
+    expect(highPath).not.toBe(lowPath);
+  });
+
+  it('reports sparse line data as straight when smoothing cannot change the path', () => {
+    render(
+      <MiniSparkline
+        data={[
+          { ts: '2026-05-01T00:00:00Z', value: 10 },
+          { ts: '2026-05-02T00:00:00Z', value: 18 },
+        ]}
+        type="line"
+        curveSmoothing={1}
+        height={36}
+      />
+    );
+
+    const sparkline = document.querySelector('[data-sparkline-state="series"]');
+    expect(sparkline).toHaveAttribute('data-sparkline-curve', 'straight');
+    expect(sparkline?.querySelector('path')?.getAttribute('d')).not.toContain('C');
   });
 
   it('applies the configured curve color', () => {

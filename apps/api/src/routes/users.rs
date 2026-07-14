@@ -21,8 +21,14 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/users", get(list_users))
         .route("/admin/vehicles", get(list_admin_vehicle_options))
-        .route("/admin/account-invitations", get(list_account_invitations).post(create_account_invitation))
-        .route("/admin/account-invitations/:id", axum::routing::delete(revoke_account_invitation))
+        .route(
+            "/admin/account-invitations",
+            get(list_account_invitations).post(create_account_invitation),
+        )
+        .route(
+            "/admin/account-invitations/:id",
+            axum::routing::delete(revoke_account_invitation),
+        )
         .route("/admin/users/:id", patch(update_user).delete(delete_user))
         .route("/admin/users/:id/detail", get(get_user_detail))
         .route(
@@ -158,16 +164,19 @@ async fn create_account_invitation(
     if email.is_empty() || !email.contains('@') {
         return Err(AppError::Validation("valid email required".into()));
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE lower(email) = $1)")
-        .bind(&email)
-        .fetch_one(&state.pool)
-        .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users WHERE lower(email) = $1)")
+            .bind(&email)
+            .fetch_one(&state.pool)
+            .await?;
     if exists {
         return Err(AppError::Validation("email already registered".into()));
     }
     let days = body.expires_in_days.unwrap_or(7);
     if !(1..=30).contains(&days) {
-        return Err(AppError::Validation("expires_in_days must be between 1 and 30".into()));
+        return Err(AppError::Validation(
+            "expires_in_days must be between 1 and 30".into(),
+        ));
     }
     let token = random_invitation_token();
     let token_hash = hash_token(&token);
@@ -188,34 +197,53 @@ async fn create_account_invitation(
         }
         other => AppError::Database(other),
     })?;
-    audit_log(&state.pool, "account_invitation_created", auth.user_id, format!("invite_id={id} email={email}"));
-    Ok(Json(serde_json::json!({ "id": id, "invitee_email": email, "expires_at": expires_at, "activation_token": token })))
+    audit_log(
+        &state.pool,
+        "account_invitation_created",
+        auth.user_id,
+        format!("invite_id={id} email={email}"),
+    );
+    Ok(Json(
+        serde_json::json!({ "id": id, "invitee_email": email, "expires_at": expires_at, "activation_token": token }),
+    ))
 }
 
 async fn list_account_invitations(
-    State(state): State<AppState>, auth: AuthUser,
+    State(state): State<AppState>,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     let invitations = sqlx::query_as::<_, AccountInvitationPayload>(
         "SELECT id, invitee_email, expires_at, accepted_at, revoked_at, created_at
          FROM riviamigo.account_invitations ORDER BY created_at DESC",
-    ).fetch_all(&state.pool).await?;
+    )
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(serde_json::json!({ "invitations": invitations })))
 }
 
 async fn revoke_account_invitation(
-    State(state): State<AppState>, auth: AuthUser, Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     sqlx::query("UPDATE riviamigo.account_invitations SET revoked_at = now(), updated_at = now() WHERE id = $1 AND accepted_at IS NULL")
         .bind(id).execute(&state.pool).await?;
-    audit_log(&state.pool, "account_invitation_revoked", auth.user_id, format!("invite_id={id}"));
+    audit_log(
+        &state.pool,
+        "account_invitation_revoked",
+        auth.user_id,
+        format!("invite_id={id}"),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 fn random_invitation_token() -> String {
     use rand::Rng;
-    (0..48).map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char).collect()
+    (0..48)
+        .map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char)
+        .collect()
 }
 
 fn hash_token(token: &str) -> Vec<u8> {

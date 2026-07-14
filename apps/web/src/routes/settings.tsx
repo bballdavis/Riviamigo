@@ -1405,7 +1405,9 @@ export function SettingsContent() {
                           <div>
                             <div className="flex items-center gap-2">
                               <p className="text-sm font-medium text-fg">{key.name}</p>
-                              <Badge variant={key.revoked_at ? 'default' : 'success'}>{key.revoked_at ? 'revoked' : key.access_level}</Badge>
+                              <Badge variant={key.revoked_at ? 'default' : key.access_level_state === 'legacy_unmigrated' ? 'warning' : 'success'}>
+                                {key.revoked_at ? 'revoked' : key.access_level_state === 'legacy_unmigrated' ? `${key.access_level} · migrate` : key.access_level}
+                              </Badge>
                             </div>
                             <p className="mt-1 font-mono text-xs text-fg-tertiary">{key.id}</p>
                             <p className="mt-1 text-xs text-fg-tertiary">

@@ -150,6 +150,61 @@ struct PowerProfileRow {
     battery_level: Option<f64>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct TripPowerTelemetryRow {
+    ts: DateTime<Utc>,
+    battery_level: Option<f64>,
+    battery_capacity_wh: Option<f64>,
+    power_kw: Option<f64>,
+    regen_power_kw: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TripPowerSource {
+    Direct,
+    EstimatedSoc,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TripPowerMetadata {
+    source: TripPowerSource,
+    sample_count: usize,
+    median_interval_seconds: Option<f64>,
+    p90_interval_seconds: Option<f64>,
+    coverage_percent: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct TripPowerInterval {
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    net_power_kw: f64,
+}
+
+#[derive(Debug, Clone)]
+struct TripPowerData {
+    metadata: TripPowerMetadata,
+    intervals: Vec<TripPowerInterval>,
+}
+
+impl TripPowerData {
+    fn estimated_at(&self, ts: DateTime<Utc>) -> Option<f64> {
+        if !matches!(self.metadata.source, TripPowerSource::EstimatedSoc) {
+            return None;
+        }
+        self.intervals
+            .iter()
+            .find(|interval| ts >= interval.started_at && ts < interval.ended_at)
+            .map(|interval| interval.net_power_kw)
+    }
+
+    fn source(&self) -> TripPowerSource {
+        self.metadata.source
+    }
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct TripSeriesRow {
     ts: DateTime<Utc>,
@@ -176,6 +231,7 @@ struct TripDetailSamples {
     speed_mph: Vec<Option<f64>>,
     power_kw: Vec<Option<f64>>,
     regen_power_kw: Vec<Option<f64>>,
+    estimated_net_power_kw: Vec<Option<f64>>,
     battery_level: Vec<Option<f64>>,
     outside_temp_c: Vec<Option<f64>>,
     cabin_temp_c: Vec<Option<f64>>,
@@ -192,7 +248,14 @@ struct TripDetailResponse {
     trip: TripRow,
     sample_interval_seconds: i32,
     samples: TripDetailSamples,
+    power: TripPowerMetadata,
     outside_temperature: OutsideTemperatureResponse,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TripDetailCachePayload {
+    samples: TripDetailSamples,
+    power: TripPowerMetadata,
 }
 
 #[derive(Debug, Serialize)]
@@ -241,6 +304,7 @@ struct TripMapResponse {
 
 #[derive(Debug, sqlx::FromRow)]
 struct DetailSampleRow {
+    bucket_ts: DateTime<Utc>,
     elapsed_s: i32,
     lat: Option<f64>,
     lng: Option<f64>,
@@ -264,6 +328,171 @@ struct RouteTelemetryRow {
     trip_id: Uuid,
     lat: f64,
     lng: f64,
+}
+
+fn finite_value(value: Option<f64>) -> Option<f64> {
+    value.filter(|candidate| candidate.is_finite())
+}
+
+fn normalize_capacity_wh(value: Option<f64>) -> Option<f64> {
+    let value = finite_value(value)?;
+    if (40.0..=250.0).contains(&value) {
+        Some(value * 1_000.0)
+    } else if (40_000.0..=250_000.0).contains(&value) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn percentile(values: &[f64], percentile: f64) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    if sorted.len() == 1 {
+        return sorted.first().copied();
+    }
+    let position = percentile.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    if lower == upper {
+        return sorted.get(lower).copied();
+    }
+    let fraction = position - lower as f64;
+    Some(sorted[lower] + (sorted[upper] - sorted[lower]) * fraction)
+}
+
+fn derive_soc_power(rows: &[TripPowerTelemetryRow], trip_duration_seconds: i32) -> TripPowerData {
+    let direct_sample_count = rows
+        .iter()
+        .filter(|row| {
+            finite_value(row.power_kw).is_some() || finite_value(row.regen_power_kw).is_some()
+        })
+        .count();
+    if direct_sample_count >= 2 {
+        return TripPowerData {
+            metadata: TripPowerMetadata {
+                source: TripPowerSource::Direct,
+                sample_count: direct_sample_count,
+                median_interval_seconds: None,
+                p90_interval_seconds: None,
+                coverage_percent: None,
+            },
+            intervals: Vec::new(),
+        };
+    }
+
+    let capacity_wh = percentile(
+        &rows
+            .iter()
+            .filter_map(|row| normalize_capacity_wh(row.battery_capacity_wh))
+            .collect::<Vec<_>>(),
+        0.5,
+    );
+    let Some(capacity_wh) = capacity_wh else {
+        return TripPowerData {
+            metadata: TripPowerMetadata {
+                source: TripPowerSource::Unavailable,
+                sample_count: 0,
+                median_interval_seconds: None,
+                p90_interval_seconds: None,
+                coverage_percent: None,
+            },
+            intervals: Vec::new(),
+        };
+    };
+
+    let mut soc_points = Vec::<(DateTime<Utc>, f64)>::new();
+    for row in rows {
+        let Some(soc) =
+            finite_value(row.battery_level).filter(|value| (0.0..=100.0).contains(value))
+        else {
+            continue;
+        };
+        if soc_points
+            .last()
+            .map(|(_, previous)| (soc - *previous).abs() > 1e-6)
+            .unwrap_or(true)
+        {
+            soc_points.push((row.ts, soc));
+        }
+    }
+
+    let mut intervals = Vec::new();
+    let mut interval_seconds = Vec::new();
+    for pair in soc_points.windows(2) {
+        let (started_at, start_soc) = pair[0];
+        let (ended_at, end_soc) = pair[1];
+        let elapsed_seconds = (ended_at - started_at).num_milliseconds() as f64 / 1_000.0;
+        let soc_delta = start_soc - end_soc;
+        if !(2.0..=300.0).contains(&elapsed_seconds) || !(0.05..=0.5).contains(&soc_delta.abs()) {
+            continue;
+        }
+        let net_power_kw =
+            (soc_delta / 100.0 * capacity_wh) / (elapsed_seconds / 3_600.0) / 1_000.0;
+        if !net_power_kw.is_finite() || net_power_kw.abs() > 750.0 {
+            continue;
+        }
+        intervals.push(TripPowerInterval {
+            started_at,
+            ended_at,
+            net_power_kw,
+        });
+        interval_seconds.push(elapsed_seconds);
+    }
+
+    if intervals.is_empty() {
+        return TripPowerData {
+            metadata: TripPowerMetadata {
+                source: TripPowerSource::Unavailable,
+                sample_count: 0,
+                median_interval_seconds: None,
+                p90_interval_seconds: None,
+                coverage_percent: None,
+            },
+            intervals,
+        };
+    }
+
+    let covered_seconds = interval_seconds.iter().sum::<f64>();
+    let duration_seconds = f64::from(trip_duration_seconds.max(1));
+    TripPowerData {
+        metadata: TripPowerMetadata {
+            source: TripPowerSource::EstimatedSoc,
+            sample_count: intervals.len(),
+            median_interval_seconds: percentile(&interval_seconds, 0.5),
+            p90_interval_seconds: percentile(&interval_seconds, 0.9),
+            coverage_percent: Some((covered_seconds / duration_seconds * 100.0).clamp(0.0, 100.0)),
+        },
+        intervals,
+    }
+}
+
+async fn load_trip_power_data(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    trip_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    duration_seconds: i32,
+) -> Result<TripPowerData, AppError> {
+    let rows = sqlx::query_as::<_, TripPowerTelemetryRow>(
+        r#"SELECT ts, battery_level, battery_capacity_wh, power_kw, regen_power_kw
+           FROM timeseries.telemetry
+           WHERE vehicle_id=$1 AND ts>=$3 AND ts<=$4
+             AND (trip_id=$2 OR trip_id IS NULL)
+           ORDER BY ts"#,
+    )
+    .bind(vehicle_id)
+    .bind(trip_id)
+    .bind(started_at)
+    .bind(ended_at)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(derive_soc_power(&rows, duration_seconds))
 }
 
 async fn list_trips(
@@ -596,20 +825,23 @@ async fn get_trip_detail(
     .bind(id)
     .fetch_all(&state.pool)
     .await?;
-    let cache_key = format!("trips:detail:v2:{vid}:{id}:{sample_interval_seconds}");
+    let cache_key = format!("trips:detail:v3:{vid}:{id}:{sample_interval_seconds}");
     let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
     if let Some(conn) = redis_conn.as_mut() {
         let cached: Option<String> = conn.get(&cache_key).await.ok();
         if let Some(payload) = cached {
-            if let Ok(mut samples) = serde_json::from_str::<TripDetailSamples>(&payload) {
+            if let Ok(cached) = serde_json::from_str::<TripDetailCachePayload>(&payload) {
+                let mut samples = cached.samples;
                 let raw_elapsed = raw_outside_elapsed(&samples);
                 merge_weather_samples(&mut samples, &weather_rows);
-                let outside_temperature = build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
+                let outside_temperature =
+                    build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
                 debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.detail_cache");
                 return Ok(Json(TripDetailResponse {
                     trip,
                     sample_interval_seconds,
                     samples,
+                    power: cached.power,
                     outside_temperature,
                 }));
             }
@@ -617,7 +849,8 @@ async fn get_trip_detail(
     }
 
     let rows = sqlx::query_as::<_, DetailSampleRow>(
-        r#"SELECT EXTRACT(EPOCH FROM (time_bucket(make_interval(secs => $5), ts) - $3))::int AS elapsed_s,
+        r#"SELECT time_bucket(make_interval(secs => $5), ts) AS bucket_ts,
+                  EXTRACT(EPOCH FROM (time_bucket(make_interval(secs => $5), ts) - $3))::int AS elapsed_s,
                   last(latitude, ts) FILTER (WHERE latitude IS NOT NULL AND latitude <> 0) AS lat,
                   last(longitude, ts) FILTER (WHERE longitude IS NOT NULL AND longitude <> 0) AS lng,
                   last(altitude_m, ts) AS altitude_m,
@@ -648,6 +881,15 @@ async fn get_trip_detail(
     .fetch_all(&state.pool)
     .await?;
 
+    let power_data = load_trip_power_data(
+        &state.pool,
+        vid,
+        id,
+        trip.started_at,
+        trip.ended_at,
+        duration_seconds,
+    )
+    .await?;
     let mut samples = TripDetailSamples::default();
     for row in rows {
         samples.elapsed_s.push(row.elapsed_s);
@@ -657,6 +899,9 @@ async fn get_trip_detail(
         samples.speed_mph.push(row.speed_mph);
         samples.power_kw.push(row.power_kw);
         samples.regen_power_kw.push(row.regen_power_kw);
+        samples
+            .estimated_net_power_kw
+            .push(power_data.estimated_at(row.bucket_ts));
         samples.battery_level.push(row.battery_level);
         samples.outside_temp_c.push(row.outside_temp_c);
         samples.cabin_temp_c.push(row.cabin_temp_c);
@@ -670,10 +915,15 @@ async fn get_trip_detail(
 
     let raw_elapsed = raw_outside_elapsed(&samples);
     merge_weather_samples(&mut samples, &weather_rows);
-    let outside_temperature = build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
+    let outside_temperature =
+        build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
 
     if let Some(conn) = redis_conn.as_mut() {
-        if let Ok(payload) = serde_json::to_string(&samples) {
+        let payload = TripDetailCachePayload {
+            samples: samples.clone(),
+            power: power_data.metadata.clone(),
+        };
+        if let Ok(payload) = serde_json::to_string(&payload) {
             let _: Result<(), redis::RedisError> =
                 conn.set_ex(&cache_key, payload, 24 * 60 * 60).await;
         }
@@ -692,22 +942,44 @@ async fn get_trip_detail(
         trip,
         sample_interval_seconds,
         samples,
+        power: power_data.metadata,
         outside_temperature,
     }))
 }
 
 fn raw_outside_elapsed(samples: &TripDetailSamples) -> std::collections::HashSet<i32> {
-    samples.elapsed_s.iter().copied().zip(samples.outside_temp_c.iter())
-        .filter_map(|(elapsed, value)| value.map(|_| elapsed)).collect()
+    samples
+        .elapsed_s
+        .iter()
+        .copied()
+        .zip(samples.outside_temp_c.iter())
+        .filter_map(|(elapsed, value)| value.map(|_| elapsed))
+        .collect()
 }
 
 fn merge_weather_samples(samples: &mut TripDetailSamples, weather_rows: &[TripWeatherRow]) {
-    if samples.elapsed_s.is_empty() { return; }
+    if samples.elapsed_s.is_empty() {
+        return;
+    }
     for weather in weather_rows {
-        let Some((index, _)) = samples.elapsed_s.iter().enumerate()
-            .min_by_key(|(_, elapsed)| (**elapsed - weather.elapsed_seconds).abs()) else { continue; };
-        if samples.outside_temp_c.get(index).copied().flatten().is_none() {
-            if let Some(value) = samples.outside_temp_c.get_mut(index) { *value = Some(weather.temperature_c); }
+        let Some((index, _)) = samples
+            .elapsed_s
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, elapsed)| (**elapsed - weather.elapsed_seconds).abs())
+        else {
+            continue;
+        };
+        if samples
+            .outside_temp_c
+            .get(index)
+            .copied()
+            .flatten()
+            .is_none()
+        {
+            if let Some(value) = samples.outside_temp_c.get_mut(index) {
+                *value = Some(weather.temperature_c);
+            }
         }
     }
 }
@@ -719,25 +991,52 @@ fn build_outside_temperature(
     raw_elapsed: &std::collections::HashSet<i32>,
 ) -> OutsideTemperatureResponse {
     let source = trip.outside_temp_source.clone().unwrap_or_else(|| {
-        if !raw_elapsed.is_empty() && !weather_rows.is_empty() { "mixed".into() }
-        else if !raw_elapsed.is_empty() { "vehicle".into() }
-        else if !weather_rows.is_empty() { "open_meteo".into() }
-        else { "unavailable".into() }
+        if !raw_elapsed.is_empty() && !weather_rows.is_empty() {
+            "mixed".into()
+        } else if !raw_elapsed.is_empty() {
+            "vehicle".into()
+        } else if !weather_rows.is_empty() {
+            "open_meteo".into()
+        } else {
+            "unavailable".into()
+        }
     });
-    let timeline_samples = samples.elapsed_s.iter().enumerate().filter_map(|(index, elapsed)| {
-        let temperature_c = samples.outside_temp_c.get(index).copied().flatten()?;
-        let matched_weather = weather_rows.iter().min_by_key(|row| (row.elapsed_seconds - *elapsed).abs())
-            .filter(|row| (row.elapsed_seconds - *elapsed).abs() <= 30);
-        let sample_source = if raw_elapsed.contains(elapsed) { "vehicle" } else if matched_weather.is_some() { "open_meteo" } else { "vehicle" };
-        Some(OutsideTemperatureSample {
-            elapsed_s: *elapsed,
-            ts: matched_weather.map(|row| row.sampled_at).unwrap_or_else(|| trip.started_at + chrono::Duration::seconds(i64::from(*elapsed))),
-            temperature_c,
-            source: sample_source,
+    let timeline_samples = samples
+        .elapsed_s
+        .iter()
+        .enumerate()
+        .filter_map(|(index, elapsed)| {
+            let temperature_c = samples.outside_temp_c.get(index).copied().flatten()?;
+            let matched_weather = weather_rows
+                .iter()
+                .min_by_key(|row| (row.elapsed_seconds - *elapsed).abs())
+                .filter(|row| (row.elapsed_seconds - *elapsed).abs() <= 30);
+            let sample_source = if raw_elapsed.contains(elapsed) {
+                "vehicle"
+            } else if matched_weather.is_some() {
+                "open_meteo"
+            } else {
+                "vehicle"
+            };
+            Some(OutsideTemperatureSample {
+                elapsed_s: *elapsed,
+                ts: matched_weather
+                    .map(|row| row.sampled_at)
+                    .unwrap_or_else(|| {
+                        trip.started_at + chrono::Duration::seconds(i64::from(*elapsed))
+                    }),
+                temperature_c,
+                source: sample_source,
+            })
         })
-    }).collect();
+        .collect();
     OutsideTemperatureResponse {
-        attribution: matches!(source.as_str(), "open_meteo" | "mixed").then_some(OutsideTemperatureAttribution { name: "Open-Meteo", url: "https://open-meteo.com/" }),
+        attribution: matches!(source.as_str(), "open_meteo" | "mixed").then_some(
+            OutsideTemperatureAttribution {
+                name: "Open-Meteo",
+                url: "https://open-meteo.com/",
+            },
+        ),
         source,
         samples: timeline_samples,
     }
@@ -990,6 +1289,30 @@ async fn power_profile_response(
     .fetch_all(&state.pool)
     .await?;
 
+    let power_data = load_trip_power_data(
+        &state.pool,
+        vehicle_id,
+        trip_id,
+        trip.started_at,
+        trip.ended_at,
+        (trip.ended_at - trip.started_at).num_seconds().max(1) as i32,
+    )
+    .await?;
+    let points = points
+        .into_iter()
+        .map(|point| {
+            serde_json::json!({
+                "ts": point.ts,
+                "power_kw": point.power_kw,
+                "regen_power_kw": point.regen_power_kw,
+                "speed_mph": point.speed_mph,
+                "battery_level": point.battery_level,
+                "estimated_net_power_kw": power_data.estimated_at(point.ts),
+                "power_source": power_data.source(),
+            })
+        })
+        .collect::<Vec<_>>();
+
     Ok(Json(serde_json::json!(points)))
 }
 
@@ -1037,7 +1360,102 @@ async fn trip_series_response(
     .fetch_all(&state.pool)
     .await?;
 
+    let power_data = load_trip_power_data(
+        &state.pool,
+        vehicle_id,
+        trip_id,
+        trip.started_at,
+        trip.ended_at,
+        (trip.ended_at - trip.started_at).num_seconds().max(1) as i32,
+    )
+    .await?;
+    let points = points
+        .into_iter()
+        .map(|point| {
+            serde_json::json!({
+                "ts": point.ts,
+                "speed_mph": point.speed_mph,
+                "power_kw": point.power_kw,
+                "regen_power_kw": point.regen_power_kw,
+                "battery_level": point.battery_level,
+                "outside_temp_c": point.outside_temp_c,
+                "cabin_temp_c": point.cabin_temp_c,
+                "driver_temp_c": point.driver_temp_c,
+                "hvac_active": point.hvac_active,
+                "tire_fl_psi": point.tire_fl_psi,
+                "tire_fr_psi": point.tire_fr_psi,
+                "tire_rl_psi": point.tire_rl_psi,
+                "tire_rr_psi": point.tire_rr_psi,
+                "estimated_net_power_kw": power_data.estimated_at(point.ts),
+                "power_source": power_data.source(),
+            })
+        })
+        .collect::<Vec<_>>();
+
     Ok(Json(serde_json::json!(points)))
+}
+
+#[cfg(test)]
+mod trip_power_tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+
+    fn row(offset_seconds: i64, soc: f64) -> TripPowerTelemetryRow {
+        TripPowerTelemetryRow {
+            ts: Utc.timestamp_opt(offset_seconds, 0).single().unwrap(),
+            battery_level: Some(soc),
+            battery_capacity_wh: Some(111_500.0),
+            power_kw: None,
+            regen_power_kw: None,
+        }
+    }
+
+    #[test]
+    fn derives_signed_net_power_from_soc_change() {
+        let rows = vec![row(0, 80.0), row(30, 79.5), row(60, 79.8)];
+        let data = derive_soc_power(&rows, 60);
+
+        assert!(matches!(
+            data.metadata.source,
+            TripPowerSource::EstimatedSoc
+        ));
+        assert_eq!(data.metadata.sample_count, 2);
+        assert!(data.intervals[0].net_power_kw > 0.0);
+        assert!(data.intervals[1].net_power_kw < 0.0);
+        assert_eq!(data.metadata.median_interval_seconds, Some(30.0));
+        assert_eq!(data.metadata.coverage_percent, Some(100.0));
+    }
+
+    #[test]
+    fn rejects_sparse_or_large_soc_jumps() {
+        let rows = vec![row(0, 80.0), row(301, 79.0), row(302, 78.0)];
+        let data = derive_soc_power(&rows, 302);
+
+        assert!(matches!(data.metadata.source, TripPowerSource::Unavailable));
+        assert!(data.intervals.is_empty());
+    }
+
+    #[test]
+    fn direct_power_wins_when_multiple_samples_exist() {
+        let mut first = row(0, 80.0);
+        first.power_kw = Some(42.0);
+        let mut second = row(10, 80.0);
+        second.regen_power_kw = Some(8.0);
+
+        let data = derive_soc_power(&[first, second], 10);
+        assert!(matches!(data.metadata.source, TripPowerSource::Direct));
+        assert_eq!(data.metadata.sample_count, 2);
+        assert!(data.intervals.is_empty());
+    }
+
+    #[test]
+    fn estimated_at_uses_half_open_intervals() {
+        let rows = vec![row(0, 80.0), row(30, 79.5)];
+        let data = derive_soc_power(&rows, 30);
+        let start = Utc.timestamp_opt(0, 0).single().unwrap();
+        assert!(data.estimated_at(start).is_some());
+        assert!(data.estimated_at(start + Duration::seconds(30)).is_none());
+    }
 }
 
 #[cfg(test)]

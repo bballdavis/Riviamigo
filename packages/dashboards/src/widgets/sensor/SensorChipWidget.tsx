@@ -10,8 +10,10 @@ import {
   useMetricValue,
 } from '@riviamigo/hooks';
 import {
+  DEFAULT_CURVE_SMOOTHING,
   getChartColor,
   MiniSparkline,
+  normalizeCurveSmoothing,
   type ChartColorKey,
   type MiniSparklineType,
 } from '@riviamigo/ui/charts';
@@ -86,7 +88,6 @@ interface SensorChipOptions {
   tripSelectionAware?: boolean;
 }
 
-const DEFAULT_CURVE_SMOOTHING = 0.45;
 const DEFAULT_WINDOW_DAYS = 30;
 
 function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
@@ -123,10 +124,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     curveColor: options.curveColor ?? 'accent',
     timeframeScope: options.timeframeScope ?? definition.timeframeScope ?? 'range',
     tripSelectionAware: options.tripSelectionAware ?? false,
-    curveSmoothing: normalizeCurveSmoothing(
-      options.curveSmoothing,
-      defaultCurveSmoothing(chartType)
-    ),
+    curveSmoothing: normalizeCurveSmoothing(options.curveSmoothing, defaultCurveSmoothing(chartType)),
     windowDays:
       typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
         ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
@@ -658,14 +656,6 @@ function statusToneClass(tone: StatusTone) {
 
 function defaultCurveSmoothing(chartType: SensorChartType | 'none') {
   return chartType === 'line' || chartType === 'area' ? DEFAULT_CURVE_SMOOTHING : 0;
-}
-
-function normalizeCurveSmoothing(value: number | boolean | undefined, fallback: number) {
-  if (typeof value === 'boolean') return value ? fallback : 0;
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.min(1, Math.max(0, value));
-  }
-  return fallback;
 }
 
 function sensorDataRequirements(instance: WidgetInstance): DashboardDataRequirements {

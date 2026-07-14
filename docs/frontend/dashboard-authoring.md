@@ -49,6 +49,21 @@ A widget should usually:
 
 Do not use one widget to coordinate the rest of a page.
 
+### Sensor Background Graphs
+
+Sensor widgets can render a compact background graph through `options.chartType`.
+Use `line` or `area` for curve interpolation and store the amount in
+`options.curveSmoothing` as a number from `0` to `1`:
+
+- `0` renders straight segments.
+- A positive value renders a cubic curve when at least three finite data points are available.
+- One- or two-point series render straight because there are not enough neighboring points to define a curve.
+- `bar` and `daily_delta` renderers do not use curve smoothing.
+
+This setting changes the visual path between samples; it is not a moving-average
+or other data-smoothing operation. Keep the option on the shared sensor widget
+contract so edited, imported, and saved dashboards behave consistently.
+
 ### Dashboard Data Requirements
 
 `WidgetDef.dataRequirements` is the declarative request contract for shared dashboard data. `DashboardRenderer` collects it from the visible configuration, deduplicates metrics, and creates one dashboard provider. This applies equally to built-in and user-created dashboards.

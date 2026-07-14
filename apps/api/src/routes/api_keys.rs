@@ -55,7 +55,8 @@ struct ApiKeyRecord {
     id: Uuid,
     vehicle_id: Uuid,
     name: String,
-    access_level: ApiAccessLevel,
+    access_level: String,
+    access_level_state: &'static str,
     created_at: chrono::DateTime<chrono::Utc>,
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -89,21 +90,28 @@ struct ApiEndpointDoc {
     purpose: &'static str,
 }
 
+const LIST_API_KEYS_QUERY: &str = r#"
+        SELECT k.id, k.vehicle_id, COALESCE(k.name, k.label, 'API key') AS name,
+               k.access_level, k.created_at, k.last_used_at, k.expires_at, k.revoked_at
+        FROM riviamigo.api_keys k
+        WHERE k.user_id = $1
+        ORDER BY k.created_at DESC
+        "#;
+
+const CREATE_API_KEY_QUERY: &str = r#"
+        INSERT INTO riviamigo.api_keys (user_id, vehicle_id, key_hash, label, name, access_level)
+        VALUES ($1, $2, $3, $4, $4, $5)
+        RETURNING id, vehicle_id, COALESCE(name, label, 'API key') AS name,
+                  access_level, created_at, last_used_at, expires_at, revoked_at
+        "#;
+
 async fn list_api_keys(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<ApiKeyRecord>>, AppError> {
     require_session_auth(&auth)?;
 
-    let rows = sqlx::query(
-        r#"
-        SELECT k.id, k.vehicle_id, COALESCE(k.name, k.label, 'API key') AS "name!",
-               k.access_level, k.created_at, k.last_used_at, k.expires_at, k.revoked_at
-        FROM riviamigo.api_keys k
-        WHERE k.user_id = $1
-        ORDER BY k.created_at DESC
-        "#,
-    )
+    let rows = sqlx::query(LIST_API_KEYS_QUERY)
     .bind(auth.user_id)
     .fetch_all(&state.pool)
     .await?;
@@ -111,15 +119,15 @@ async fn list_api_keys(
     let records = rows
         .into_iter()
         .map(|r| {
+            let access_level: String = r.try_get("access_level")?;
             Ok(ApiKeyRecord {
                 id: r.try_get("id")?,
                 vehicle_id: r.try_get::<Option<Uuid>, _>("vehicle_id")?.ok_or_else(|| {
                     AppError::Validation("vehicle-scoped API key missing vehicle_id".into())
                 })?,
                 name: r.try_get("name")?,
-                access_level: ApiAccessLevel::try_from(
-                    r.try_get::<String, _>("access_level")?.as_str(),
-                )?,
+                access_level_state: api_access_level_state(&access_level),
+                access_level,
                 created_at: r.try_get("created_at")?,
                 last_used_at: r.try_get("last_used_at")?,
                 expires_at: r.try_get("expires_at")?,
@@ -152,14 +160,7 @@ async fn create_api_key(
     let secret = generate_api_key();
     let key_hash = hash_api_key(&secret);
 
-    let row = sqlx::query(
-        r#"
-        INSERT INTO riviamigo.api_keys (user_id, vehicle_id, key_hash, label, name, access_level)
-        VALUES ($1, $2, $3, $4, $4, $5)
-        RETURNING id, vehicle_id, COALESCE(name, label, 'API key') AS "name!",
-                  access_level, created_at, last_used_at, expires_at, revoked_at
-        "#,
-    )
+    let row = sqlx::query(CREATE_API_KEY_QUERY)
     .bind(auth.user_id)
     .bind(body.vehicle_id)
     .bind(key_hash.as_slice())
@@ -174,7 +175,8 @@ async fn create_api_key(
             .try_get::<Option<Uuid>, _>("vehicle_id")?
             .ok_or_else(|| AppError::Validation("created API key missing vehicle_id".into()))?,
         name: row.try_get("name")?,
-        access_level: ApiAccessLevel::try_from(row.try_get::<String, _>("access_level")?.as_str())?,
+        access_level: row.try_get::<String, _>("access_level")?,
+        access_level_state: "supported",
         created_at: row.try_get("created_at")?,
         last_used_at: row.try_get("last_used_at")?,
         expires_at: row.try_get("expires_at")?,
@@ -256,6 +258,12 @@ fn catalog() -> ApiCatalogResponse {
             "/v1/vehicles/{id}/raw-data",
             true,
             "Read bounded raw telemetry samples and coverage.",
+        ),
+        endpoint(
+            "GET",
+            "/v1/vehicles/{id}/telemetry/lanes",
+            true,
+            "Read bounded, bucketed telemetry lanes for dense visualizations.",
         ),
         endpoint(
             "GET",
@@ -435,6 +443,14 @@ fn catalog() -> ApiCatalogResponse {
     }
 }
 
+fn api_access_level_state(value: &str) -> &'static str {
+    match value {
+        "read" => "supported",
+        "view" | "edit" | "admin" => "legacy_unmigrated",
+        _ => "unknown",
+    }
+}
+
 fn endpoint(
     method: &'static str,
     path: &'static str,
@@ -502,5 +518,22 @@ mod tests {
             .endpoints
             .iter()
             .any(|endpoint| endpoint.path == "/v1/vehicles/live"));
+    }
+
+    #[test]
+    fn legacy_api_key_access_levels_are_reported_without_becoming_read_capabilities() {
+        assert_eq!(api_access_level_state("view"), "legacy_unmigrated");
+        assert_eq!(api_access_level_state("edit"), "legacy_unmigrated");
+        assert_eq!(api_access_level_state("admin"), "legacy_unmigrated");
+        assert_eq!(api_access_level_state("read"), "supported");
+        assert_eq!(api_access_level_state("future"), "unknown");
+    }
+
+    #[test]
+    fn api_key_runtime_queries_use_plain_row_column_aliases() {
+        assert!(LIST_API_KEYS_QUERY.contains("AS name"));
+        assert!(CREATE_API_KEY_QUERY.contains("AS name"));
+        assert!(!LIST_API_KEYS_QUERY.contains("name!"));
+        assert!(!CREATE_API_KEY_QUERY.contains("name!"));
     }
 }
