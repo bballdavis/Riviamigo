@@ -8,9 +8,6 @@ import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
-const CHARGING_SIDE_LIGHT_IMAGE_URL =
-  '/vehicle-images/fixtures/r1s/r1s_2021_adventure_ext_el-cap-granite_20ad1-brit-at_side-charging_light_large_hdpi.webp';
-
 type ChargingCropFamily = 'R1T' | 'R1S' | 'default';
 
 interface ChargingCropConfig {
@@ -75,8 +72,7 @@ function ChargingConnectionWidget({
   const snapshot = summary as ChargingSummarySnapshot | undefined;
   const chargingSideLight =
     findSideChargingImage(activeVehicle?.images?.all, 'light') ??
-    findBestChargingSideOverlay(activeVehicle?.images?.all, 'light') ??
-    CHARGING_SIDE_LIGHT_IMAGE_URL;
+    findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');
   const chargingSideDark =
     findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
@@ -129,8 +125,8 @@ function ChargingConnectionWidget({
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        <VehicleSideImage source={displaySideLight} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} />
-        <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} />
+        {displaySideLight ? <VehicleSideImage source={displaySideLight} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
+        {displaySideDark ? <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/88 to-transparent" />

@@ -29,6 +29,8 @@ export interface TripMapChartProps {
   height?: number;
   className?: string;
   mapStyle?: MapStyleMode;
+  /** Bearer token used only for Riviamigo's same-origin basemap proxy. */
+  accessToken?: string | null;
   mapLoader?: typeof loadMapLibre;
 }
 
@@ -62,12 +64,12 @@ const ROUTE_SOURCE_ID = 'trip-routes';
 const ROUTE_LAYER_ID = 'trip-routes-line';
 const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 
-const DEFAULT_BASEMAP: BasemapConfig = {
-  enabled: true,
-  dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
-  light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
-  attribution: 'OpenStreetMap contributors and CARTO',
-  attribution_url: 'https://carto.com/attributions',
+const NEUTRAL_BASEMAP: BasemapConfig = {
+  enabled: false,
+  dark_url: '',
+  light_url: '',
+  attribution: null,
+  attribution_url: null,
 };
 
 function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
@@ -96,6 +98,10 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
   };
 }
 
+function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode) {
+  return `${mode}|${basemap.enabled}|${basemap.light_url}|${basemap.dark_url}`;
+}
+
 export async function loadMapLibre() {
   const maplibregl = await import('maplibre-gl');
   await import('maplibre-gl/dist/maplibre-gl.css');
@@ -115,6 +121,7 @@ export function TripMapChart({
   height = 320,
   className,
   mapStyle = 'dark',
+  accessToken = null,
   mapLoader = loadMapLibre,
 }: TripMapChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -128,19 +135,41 @@ export function TripMapChart({
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
-  const [basemap, setBasemap] = React.useState<BasemapConfig>(DEFAULT_BASEMAP);
+  const accessTokenRef = React.useRef<string | null>(accessToken);
+  const basemapRef = React.useRef<BasemapConfig>(NEUTRAL_BASEMAP);
+  const appliedBasemapSignatureRef = React.useRef('');
+  const [basemap, setBasemap] = React.useState<BasemapConfig>(NEUTRAL_BASEMAP);
+  const [mapError, setMapError] = React.useState<string | null>(null);
+  const [configRetry, setConfigRetry] = React.useState(0);
+
+  React.useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+
+  React.useEffect(() => {
+    basemapRef.current = basemap;
+  }, [basemap]);
 
   React.useEffect(() => {
     if (typeof fetch !== 'function') return;
     let cancelled = false;
-    fetch('/v1/external/basemap/config', { credentials: 'include' })
+    const requestInit: RequestInit = accessToken
+      ? { credentials: 'same-origin', headers: { Authorization: `Bearer ${accessToken}` } }
+      : { credentials: 'same-origin' };
+    setMapError(null);
+    fetch('/v1/external/basemap/config', requestInit)
       .then((response) => response.ok
         ? response.json() as Promise<BasemapConfig>
         : Promise.reject(new Error('Basemap configuration unavailable')))
       .then((config) => { if (!cancelled) setBasemap(config); })
-      .catch(() => { if (!cancelled) setBasemap(DEFAULT_BASEMAP); });
+      .catch(() => {
+        if (!cancelled) {
+          setBasemap(NEUTRAL_BASEMAP);
+          setMapError('Map tiles unavailable');
+        }
+      });
     return () => { cancelled = true; };
-  }, []);
+  }, [accessToken, configRetry]);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -199,17 +228,35 @@ export function TripMapChart({
       const firstPoint = routeList[0]?.track[0];
       if (!firstPoint) return;
 
+      const initialBasemap = basemapRef.current;
+      appliedBasemapSignatureRef.current = basemapSignature(initialBasemap, mapStyle);
       const map = new maplibregl.Map({
         container: containerRef.current!,
-        style: buildMapLibreStyle(mapStyle, basemap),
+        style: buildMapLibreStyle(mapStyle, initialBasemap),
         center: [firstPoint.lng, firstPoint.lat],
         zoom: 12,
         attributionControl: false,
+        transformRequest: (url: string) => {
+          try {
+            const requestUrl = new URL(url, window.location.origin);
+            if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/v1/external/basemap/')) {
+              const token = accessTokenRef.current;
+              return token ? { url, headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin' } : { url, credentials: 'same-origin' };
+            }
+          } catch {
+            // MapLibre will surface malformed source URLs through its normal error event.
+          }
+          return { url };
+        },
         // Keep more tiles in the GPU cache to survive style swaps.
         maxTileCacheSize: 512,
       }) as MapApi;
 
       mapRef.current = map;
+
+      map.on('error', () => {
+        if (basemapRef.current.enabled) setMapError('Map tiles unavailable');
+      });
 
       map.on('load', () => {
         if (!mapRef.current) return;
@@ -224,6 +271,27 @@ export function TripMapChart({
           latestVisibleRouteSignatureRef.current,
         );
         syncActivePoint(mapRef.current, latestActivePointRef.current, lastActivePointRef);
+        // Configuration can arrive after the map is constructed but before
+        // its initial style loads. Reapply it after route sync; the regular
+        // style-load handler below restores the route source after the swap.
+        const currentSignature = basemapSignature(basemapRef.current, mapStyle);
+        if (currentSignature !== appliedBasemapSignatureRef.current) {
+          appliedBasemapSignatureRef.current = currentSignature;
+          const restoreAfterInitialSwap = () => {
+            map.off('style.load', restoreAfterInitialSwap);
+            lastRouteSignatureRef.current = '';
+            syncRoutes(
+              map,
+              latestRoutesRef.current,
+              latestSelectedRouteIdsRef.current,
+              onRouteClickRef,
+              latestVisibleRouteSignatureRef.current,
+            );
+            syncActivePoint(map, latestActivePointRef.current, lastActivePointRef);
+          };
+          map.on('style.load', restoreAfterInitialSwap);
+          map.setStyle(buildMapLibreStyle(mapStyle, basemapRef.current));
+        }
         requestAnimationFrame(() => {
           mapRef.current?.resize();
         });
@@ -267,6 +335,7 @@ export function TripMapChart({
     }
 
     map.on('style.load', onStyleLoad);
+    appliedBasemapSignatureRef.current = basemapSignature(basemap, mapStyle);
     map.setStyle(buildMapLibreStyle(mapStyle, basemap));
 
     return () => {
@@ -407,6 +476,14 @@ export function TripMapChart({
           ) : (
             <span className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary">{basemap.attribution}</span>
           )
+        ) : null}
+        {mapError ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-bg/70 p-4 text-center">
+            <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-secondary shadow-lg">
+              <p>{mapError}</p>
+              <button type="button" onClick={() => setConfigRetry((value) => value + 1)} className="mt-1 font-medium text-accent hover:underline">Retry</button>
+            </div>
+          </div>
         ) : null}
       </div>
     )

@@ -16,7 +16,7 @@ import type {
   AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
   AdminUserRecord, AdminVehicleOption, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
   AccountInvitation, AccountInvitationPreview, AuthSetupResponse,
-  ExternalConnectionsResponse, UpdateExternalConnectionBody, TestExternalConnectionResponse,
+  ExternalConnectionsResponse, UpdateExternalConnectionBody, TestExternalConnectionResponse, PurgeExternalConnectionCacheResponse,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -221,6 +221,31 @@ class ApiClient {
     return h;
   }
 
+  /**
+   * Fetch a first-party browser proxy without ever copying credentials to an
+   * upstream URL. MapLibre and Iconify own their transport, so they cannot use
+   * the normal typed request method directly.
+   */
+  proxyFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const origin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
+    let firstPartyProxy = false;
+    try {
+      const url = new URL(rawUrl, origin);
+      firstPartyProxy = url.origin === origin && /^\/v1\/external\/(basemap|iconify)(?:\/|$)/.test(url.pathname);
+    } catch {
+      // Let fetch report an invalid URL; it is not a connection proxy request.
+    }
+
+    if (!firstPartyProxy || !this.accessToken) {
+      return fetch(input, init);
+    }
+
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${this.accessToken}`);
+    return fetch(input, { ...init, credentials: 'same-origin', headers });
+  }
+
   private assertRateLimitCooldown(method: string, path: string) {
     const limiterClass = inferClientRateLimitClass(method, path);
     const cooldownUntil = this.rateLimitCooldowns.get(limiterClass);
@@ -401,6 +426,10 @@ class ApiClient {
 
   async vehicleImages(vehicleId: string): Promise<VehicleImages> {
     return this.request('GET', `/v1/vehicles/${vehicleId}/images`);
+  }
+
+  async refreshVehicleArtwork(vehicleId: string): Promise<{ ok: boolean; vehicle_id: string }> {
+    return this.request('POST', `/v1/admin/vehicles/${vehicleId}/images/remirror`);
   }
 
   async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {
@@ -608,6 +637,10 @@ class ApiClient {
 
   async testExternalConnection(id: string, body: UpdateExternalConnectionBody): Promise<TestExternalConnectionResponse> {
     return this.request('POST', `/v1/settings/external-connections/${encodeURIComponent(id)}/test`, body);
+  }
+
+  async purgeExternalConnectionCache(id: string): Promise<PurgeExternalConnectionCacheResponse> {
+    return this.request<PurgeExternalConnectionCacheResponse>('POST', `/v1/settings/external-connections/${encodeURIComponent(id)}/cache/purge`);
   }
 
   async disableOptionalExternalConnections(): Promise<ExternalConnectionsResponse> {

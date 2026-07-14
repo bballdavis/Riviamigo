@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useTrips, useTripMapRoutes, useDocumentTheme } from '@riviamigo/hooks';
+import { api, useAuth, useTrips, useTripMapRoutes, useDocumentTheme } from '@riviamigo/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { Badge, SelectPicker } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
@@ -119,6 +119,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const { selectedIds } = useTripSelection();
   const { search } = useTripTableState();
   const isDark = useDocumentTheme();
+  const accessToken = useAuth((state) => state.accessToken);
   const mapStyle: MapStyleMode = isDark ? 'dark' : 'light';
   const [mapStyleOverride, setMapStyleOverride] = React.useState<MapStyleMode | null>(null);
   const effectiveMapStyle: MapStyleMode = mapStyleOverride ?? mapStyle;
@@ -158,6 +159,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
               height={height}
               mapStyle={effectiveMapStyle}
               className="h-full w-full"
+              accessToken={accessToken}
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-bg-elevated text-sm text-fg-tertiary">

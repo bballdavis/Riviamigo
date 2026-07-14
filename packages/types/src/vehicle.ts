@@ -62,10 +62,21 @@ export interface VehicleMember {
 
 export interface VehicleImages {
   all: VehicleImage[];
+  cache?: VehicleArtworkCacheState;
   side?: VehicleImagePair | null;
   overhead?: VehicleImagePair | null;
   front?: VehicleImagePair | null;
   rear?: VehicleImagePair | null;
+}
+
+export interface VehicleArtworkCacheState {
+  status: 'pending' | 'repairing' | 'ready' | 'failed';
+  asset_count: number;
+  ready_asset_count: number;
+  attempts?: number;
+  last_repair_attempt_at?: string | null;
+  last_repair_success_at?: string | null;
+  last_error?: string | null;
 }
 
 export interface VehicleImagePair {

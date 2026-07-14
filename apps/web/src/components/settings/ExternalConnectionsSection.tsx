@@ -7,7 +7,7 @@ import type {
   UpdateExternalConnectionBody,
 } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
-import { ExternalLink, Globe2, RefreshCw, Save, ShieldOff } from 'lucide-react';
+import { ExternalLink, RefreshCw, Save, ShieldOff } from 'lucide-react';
 
 const CONNECTION_QUERY_KEY = ['external-connections'] as const;
 
@@ -26,16 +26,22 @@ export function ExternalConnectionsSection() {
 
   const canManage = connections.data?.can_manage ?? false;
   const items = connections.data?.connections ?? [];
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const selected = items.find((connection) => connection.id === selectedId) ?? items[0];
+
+  React.useEffect(() => {
+    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
+  }, [selected, selectedId]);
 
   return (
     <div className="flex flex-col gap-5">
       <Card>
-        <CardHeader>
+        <CardHeader className="items-start">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <CardTitle>External Connections</CardTitle>
               <p className="mt-1 max-w-3xl text-sm text-fg-tertiary">
-                See exactly what leaves this Riviamigo installation, choose hosted or self-hosted providers, and understand what stops when a connection is disabled.
+                See exactly what leaves this Riviamigo installation, choose remote or self-hosted providers, and understand what stops when a connection is disabled.
               </p>
             </div>
             {canManage ? (
@@ -44,8 +50,9 @@ export function ExternalConnectionsSection() {
                 size="sm"
                 iconLeft={<ShieldOff className="h-3.5 w-3.5" />}
                 loading={disableOptional.isPending}
+                className="shrink-0"
                 onClick={() => {
-                  if (window.confirm('Disable every optional external connection? Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, Iconify, and new vehicle artwork requests will stop.')) {
+                  if (window.confirm('Disable every optional external connection? Rivian vehicle connectivity remains configured, but weather, geocoding, basemaps, and Iconify will stop.')) {
                     disableOptional.mutate();
                   }
                 }}
@@ -81,11 +88,31 @@ export function ExternalConnectionsSection() {
         </Card>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        {items.map((connection) => (
-          <ConnectionCard key={connection.id} connection={connection} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} />
-        ))}
-      </div>
+      {items.length > 0 ? (
+        <div className="grid gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
+          <nav aria-label="External connections" className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+            {items.map((connection) => {
+              const active = connection.enabled && connection.mode !== 'disabled';
+              const selectedConnection = connection.id === selected?.id;
+              return (
+                <button
+                  key={connection.id}
+                  type="button"
+                  onClick={() => setSelectedId(connection.id)}
+                  className={`min-w-44 rounded-xl border px-3 py-2.5 text-left transition lg:min-w-0 ${selectedConnection ? 'border-accent bg-accent/10' : 'border-border bg-bg-elevated/30 hover:bg-bg-elevated/60'}`}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium text-fg">{connection.name}</span>
+                    <Badge variant={active ? 'success' : 'default'}>{active ? 'Enabled' : 'Disabled'}</Badge>
+                  </span>
+                  <span className="mt-1 block truncate text-xs text-fg-tertiary">{connection.mode === 'remote' ? 'Remote service' : connection.mode === 'custom' ? 'Custom endpoint' : 'No outbound requests'}</span>
+                </button>
+              );
+            })}
+          </nav>
+          {selected ? <ConnectionCard connection={selected} canManage={canManage} onUpdated={(data) => queryClient.setQueryData(CONNECTION_QUERY_KEY, data)} /> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -101,9 +128,11 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
 
 function ConnectionCard({
   connection,
+  canManage,
   onUpdated,
 }: {
   connection: ExternalConnectionRecord;
+  canManage: boolean;
   onUpdated: (data: Awaited<ReturnType<typeof api.getExternalConnections>>) => void;
 }) {
   const [draft, setDraft] = React.useState<UpdateExternalConnectionBody>(() => toDraft(connection));
@@ -111,6 +140,7 @@ function ConnectionCard({
   const [bearerToken, setBearerToken] = React.useState('');
   const [message, setMessage] = React.useState<string | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   React.useEffect(() => {
     setDraft(toDraft(connection));
@@ -130,10 +160,18 @@ function ConnectionCard({
   const test = useMutation({
     mutationFn: (body: UpdateExternalConnectionBody) => api.testExternalConnection(connection.id, body),
     onSuccess: (result) => {
-      setMessage(result.message);
+      setMessage(result.checks.map((check) => `${check.label}: ${check.message}`).join(' '));
       setPreviewDataUrl(result.preview_data_url);
     },
     onError: (error) => setMessage(error instanceof Error ? error.message : 'Connection test failed.'),
+  });
+  const purgeCache = useMutation({
+    mutationFn: () => api.purgeExternalConnectionCache(connection.id),
+    onSuccess: (result) => {
+      setMessage(`${result.message} ${result.purged_entries.toLocaleString()} entries removed.`);
+      queryClient.invalidateQueries({ queryKey: CONNECTION_QUERY_KEY });
+    },
+    onError: (error) => setMessage(error instanceof Error ? error.message : 'Could not purge cache.'),
   });
 
   const active = draft.enabled && draft.mode !== 'disabled';
@@ -158,17 +196,16 @@ function ConnectionCard({
 
   return (
     <Card className="min-w-0">
-      <CardHeader>
+      <CardHeader className="items-start">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle>{connection.name}</CardTitle>
-              <Badge variant={active ? 'success' : 'default'}>{active ? 'Enabled' : 'Disabled'}</Badge>
               {connection.endpoint_is_private ? <Badge variant="default">Local/private</Badge> : null}
             </div>
             <p className="mt-1 text-sm text-fg-tertiary">{connection.purpose}</p>
           </div>
-          <Globe2 className="h-5 w-5 shrink-0 text-fg-tertiary" />
+          <Badge className="shrink-0" variant={active ? 'success' : 'default'}>{active ? 'Enabled' : 'Disabled'}</Badge>
         </div>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -178,6 +215,7 @@ function ConnectionCard({
           <Info label="Endpoint" value={connection.endpoint ?? 'Managed elsewhere'} mono />
           <Info label="Last attempt" value={connection.last_attempt_at ? new Date(connection.last_attempt_at).toLocaleString() : 'No recorded request'} />
           <Info label="Last success" value={connection.last_success_at ? new Date(connection.last_success_at).toLocaleString() : 'No recorded request'} />
+          <Info label="Last verification" value={connection.last_test_at ? `${connection.last_test_ok ? 'Passed' : 'Failed'} ${new Date(connection.last_test_at).toLocaleString()}` : 'Not verified'} />
           {connection.id === 'open_meteo' ? <Info label="Sampling / budget" value={`${connection.request_count_today.toLocaleString()} / 8,000 requests today; 15-minute samples`} /> : null}
         </div>
 
@@ -188,6 +226,31 @@ function ConnectionCard({
           </ul>
           <p className="mt-3 text-xs text-fg-tertiary"><span className="font-medium text-fg">If disabled:</span> {connection.disabled_effect}</p>
         </div>
+
+        {connection.cache ? (
+          <div className="rounded-xl border border-border bg-bg-elevated/30 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Local cache</p>
+                <p className="mt-1 text-sm text-fg">{connection.cache.entries.toLocaleString()} entries · {formatBytes(connection.cache.bytes)}</p>
+                <p className="mt-1 max-w-2xl text-xs text-fg-tertiary">{connection.cache.description}</p>
+              </div>
+              {canManage && connection.cache.purgeable ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={purgeCache.isPending}
+                  onClick={() => {
+                    if (window.confirm(`Purge the ${connection.name} cache? The next matching request may contact the provider again.`)) purgeCache.mutate();
+                  }}
+                >
+                  Purge cache
+                </Button>
+              ) : null}
+            </div>
+            <p className="mt-2 text-xs text-fg-tertiary">{connection.cache.persistent ? 'Persistent across normal restarts.' : 'In-memory only.'}</p>
+          </div>
+        ) : null}
 
         {connection.editable ? (
           <div className="grid gap-3 rounded-xl border border-border p-3">
@@ -229,7 +292,15 @@ function ConnectionCard({
           </div>
         ) : null}
 
-        {connection.last_error ? <p className="rounded-lg border border-status-danger/30 bg-status-danger/10 p-2 text-xs text-fg">Last error: {connection.last_error}</p> : null}
+        {!connection.editable && canManage && active ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-3">
+            <p className="mr-auto text-xs text-fg-tertiary">Verify this managed connection with a safe, non-mutating check.</p>
+            <Button variant="secondary" size="sm" loading={test.isPending} onClick={testDraft}>Verify connection</Button>
+          </div>
+        ) : null}
+
+        {connection.last_error ? <p className="rounded-lg border border-status-danger/30 bg-status-danger/10 p-2 text-xs text-fg">Last runtime error: {connection.last_error}</p> : null}
+        {connection.last_test_error ? <p className="rounded-lg border border-status-danger/30 bg-status-danger/10 p-2 text-xs text-fg">Last verification error: {connection.last_test_error}</p> : null}
         {message ? <p className="text-xs text-fg-tertiary" role="status">{message}</p> : null}
         <div className="flex flex-wrap gap-3 text-xs">
           {connection.privacy_url ? <ExternalAnchor href={connection.privacy_url}>Privacy</ExternalAnchor> : null}
@@ -250,6 +321,7 @@ function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerTo
   bearerToken: string;
   setBearerToken: (value: string) => void;
 }) {
+  const [preset, setPreset] = React.useState('generic');
   const usesHttp = [draft.forecast_url, draft.archive_url, draft.base_url, draft.light_url_template, draft.dark_url_template]
     .some((value) => typeof value === 'string' && value.trim().toLowerCase().startsWith('http://'));
   const textField = (key: keyof UpdateExternalConnectionBody, label: string, placeholder = '') => (
@@ -260,6 +332,21 @@ function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerTo
 
   return (
     <div className="grid gap-3">
+      {connection.id === 'open_meteo' || connection.id === 'nominatim' || connection.id === 'basemap' ? (
+        <Field label="Compatible preset">
+          <SelectPicker
+            className="w-full"
+            value={preset}
+            onChange={(value) => {
+              setPreset(value);
+              const values = customPreset(connection.id, value);
+              if (values) setDraft((current) => ({ ...current, ...values }));
+            }}
+            aria-label={`${connection.name} custom endpoint preset`}
+            options={presetOptions(connection.id)}
+          />
+        </Field>
+      ) : null}
       {connection.id === 'open_meteo' ? <>
         {textField('forecast_url', 'Forecast URL')}
         {textField('archive_url', 'Archive URL')}
@@ -299,6 +386,12 @@ function ExternalAnchor({ href, children }: { href: string; children: React.Reac
   return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-accent hover:underline">{children}<ExternalLink className="h-3 w-3" /></a>;
 }
 
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function toDraft(connection: ExternalConnectionRecord): UpdateExternalConnectionBody {
   return {
     enabled: connection.enabled,
@@ -318,8 +411,26 @@ function toDraft(connection: ExternalConnectionRecord): UpdateExternalConnection
 }
 
 function modeOptions(id: string) {
-  if (id === 'basemap') return [{ value: 'hosted', label: 'CARTO' }, { value: 'custom', label: 'Custom XYZ' }, { value: 'disabled', label: 'None' }];
-  if (id === 'nominatim') return [{ value: 'hosted', label: 'Public OpenStreetMap' }, { value: 'custom', label: 'Custom / self-hosted' }, { value: 'disabled', label: 'Disabled' }];
-  if (id === 'open_meteo') return [{ value: 'hosted', label: 'Hosted Open-Meteo' }, { value: 'custom', label: 'Custom / self-hosted' }, { value: 'disabled', label: 'Disabled' }];
-  return [{ value: 'hosted', label: 'Hosted' }, { value: 'disabled', label: 'Disabled' }];
+  if (id === 'basemap') return [{ value: 'remote', label: 'Remote CARTO' }, { value: 'custom', label: 'Custom XYZ' }, { value: 'disabled', label: 'None' }];
+  if (id === 'nominatim') return [{ value: 'remote', label: 'Remote OpenStreetMap' }, { value: 'custom', label: 'Custom / self-hosted' }, { value: 'disabled', label: 'Disabled' }];
+  if (id === 'open_meteo') return [{ value: 'remote', label: 'Remote Open-Meteo' }, { value: 'custom', label: 'Custom / self-hosted' }, { value: 'disabled', label: 'Disabled' }];
+  return [{ value: 'remote', label: 'Remote service' }, { value: 'disabled', label: 'Disabled' }];
+}
+
+function presetOptions(id: string) {
+  if (id === 'open_meteo') return [{ value: 'generic', label: 'Open-Meteo compatible' }];
+  if (id === 'nominatim') return [{ value: 'generic', label: 'Nominatim compatible' }, { value: 'nominatim-local', label: 'Local Nominatim (http://localhost:8080)' }];
+  return [{ value: 'generic', label: 'Generic XYZ template' }, { value: 'tileserver-gl', label: 'TileServer GL raster (http://localhost:8080)' }];
+}
+
+function customPreset(id: string, preset: string): Partial<UpdateExternalConnectionBody> | null {
+  if (id === 'nominatim' && preset === 'nominatim-local') return { base_url: 'http://localhost:8080', allow_private_network: true };
+  if (id === 'basemap' && preset === 'tileserver-gl') return {
+    light_url_template: 'http://localhost:8080/styles/osm-bright/{z}/{x}/{y}.png',
+    dark_url_template: '',
+    attribution: '© OpenStreetMap contributors',
+    attribution_url: 'https://www.openstreetmap.org/copyright',
+    allow_private_network: true,
+  };
+  return null;
 }

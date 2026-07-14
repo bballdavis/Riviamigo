@@ -22,6 +22,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
     ports:
       - "${DEV_REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -73,6 +76,7 @@ services:
       COOKIE_INSECURE: "1"
       RIVIAMIGO_ENV: development
       RUST_LOG: riviamigo_api=info,tower_http=info
+      VEHICLE_IMAGE_CACHE_DIR: /data/vehicle-image-cache
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -81,6 +85,8 @@ services:
       garage:
         condition: service_healthy
     restart: unless-stopped
+    volumes:
+      - vehicle_image_cache_dev:/data/vehicle-image-cache
     deploy:
       resources:
         limits:
@@ -89,5 +95,7 @@ services:
 
 volumes:
   timescaledb_data:
+  redis_data:
   garage_meta:
   garage_data:
+  vehicle_image_cache_dev:

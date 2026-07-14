@@ -9,11 +9,9 @@ pub const OPEN_METEO: &str = "open_meteo";
 pub const NOMINATIM: &str = "nominatim";
 pub const BASEMAP: &str = "basemap";
 pub const ICONIFY: &str = "iconify";
-pub const RIVIAN_ARTWORK: &str = "rivian_artwork";
 pub const S3_BACKUP: &str = "s3_backup";
 
-pub const OPTIONAL_CONNECTIONS: &[&str] =
-    &[OPEN_METEO, NOMINATIM, BASEMAP, ICONIFY, RIVIAN_ARTWORK];
+pub const OPTIONAL_CONNECTIONS: &[&str] = &[OPEN_METEO, NOMINATIM, BASEMAP, ICONIFY];
 
 #[derive(Debug, Clone, FromRow)]
 pub struct ConnectionSettingsRow {
@@ -49,6 +47,9 @@ pub struct ConnectionActivityRow {
     pub last_error: Option<String>,
     pub usage_date: NaiveDate,
     pub request_count: i32,
+    pub last_test_at: Option<DateTime<Utc>>,
+    pub last_test_ok: Option<bool>,
+    pub last_test_error: Option<String>,
 }
 
 pub async fn load(pool: &PgPool, id: &str) -> Result<ConnectionSettingsRow, AppError> {
@@ -94,6 +95,9 @@ pub async fn list(
         last_error: Option<String>,
         usage_date: NaiveDate,
         request_count: i32,
+        last_test_at: Option<DateTime<Utc>>,
+        last_test_ok: Option<bool>,
+        last_test_error: Option<String>,
     }
 
     let rows = sqlx::query_as::<_, JoinedRow>(
@@ -103,6 +107,7 @@ pub async fn list(
                   s.custom_autocomplete, s.allow_private_network, s.api_key_encrypted,
                   s.bearer_token_encrypted, s.updated_at,
                   a.last_attempt_at, a.last_success_at, a.last_error,
+                  a.last_test_at, a.last_test_ok, a.last_test_error,
                   COALESCE(a.usage_date, CURRENT_DATE) AS usage_date,
                   COALESCE(a.request_count, 0) AS request_count
            FROM riviamigo.external_connection_settings s
@@ -110,7 +115,7 @@ pub async fn list(
            ORDER BY CASE s.id
              WHEN 'rivian_account' THEN 1 WHEN 'open_meteo' THEN 2
              WHEN 'nominatim' THEN 3 WHEN 'basemap' THEN 4
-             WHEN 'iconify' THEN 5 WHEN 'rivian_artwork' THEN 6 ELSE 7 END"#,
+             WHEN 'iconify' THEN 5 ELSE 6 END"#,
     )
     .fetch_all(pool)
     .await?;
@@ -144,6 +149,9 @@ pub async fn list(
                     last_error: row.last_error,
                     usage_date: row.usage_date,
                     request_count: row.request_count,
+                    last_test_at: row.last_test_at,
+                    last_test_ok: row.last_test_ok,
+                    last_test_error: row.last_test_error,
                 },
             )
         })
@@ -193,6 +201,17 @@ pub async fn record_failure(pool: &PgPool, id: &str, message: &str) {
     )
     .bind(id)
     .bind(sanitized)
+    .execute(pool)
+    .await;
+}
+
+pub async fn record_test(pool: &PgPool, id: &str, ok: bool, message: Option<&str>) {
+    let _ = sqlx::query(
+        "UPDATE riviamigo.external_connection_activity SET last_test_at = now(), last_test_ok = $2, last_test_error = $3 WHERE connection_id = $1",
+    )
+    .bind(id)
+    .bind(ok)
+    .bind(message.map(sanitize_error))
     .execute(pool)
     .await;
 }

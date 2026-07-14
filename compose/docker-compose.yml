@@ -16,7 +16,9 @@ services:
       BACKUP_DRIVER: ${BACKUP_DRIVER:-pg_dump}
       BACKUP_ARTIFACT_DIR: ${BACKUP_ARTIFACT_DIR:-/tmp/riviamigo-backups}
       BACKUP_POLL_INTERVAL_SECONDS: ${BACKUP_POLL_INTERVAL_SECONDS:-60}
-      VEHICLE_IMAGE_CACHE_DIR: ${VEHICLE_IMAGE_CACHE_DIR:-/tmp/riviamigo-vehicle-image-cache}
+      # Managed persistent storage for Rivian artwork mirrors. The API root is
+      # read-only, so this must never be under /tmp.
+      VEHICLE_IMAGE_CACHE_DIR: /data/vehicle-image-cache
       RIVIAN_WS_RECONNECT_INITIAL_SECONDS: ${RIVIAN_WS_RECONNECT_INITIAL_SECONDS:-10}
       RIVIAN_WS_RECONNECT_MAX_SECONDS: ${RIVIAN_WS_RECONNECT_MAX_SECONDS:-900}
       RIVIAN_RAW_EVENT_RETENTION_DAYS: ${RIVIAN_RAW_EVENT_RETENTION_DAYS:-7}
@@ -57,6 +59,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - vehicle_image_cache:/data/vehicle-image-cache
     deploy:
       resources:
         limits:
@@ -92,7 +96,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     networks:
@@ -142,6 +148,8 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
+  vehicle_image_cache:
 
 networks:
   internal:

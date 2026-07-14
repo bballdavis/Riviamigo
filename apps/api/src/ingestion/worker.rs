@@ -1207,6 +1207,18 @@ async fn handle_inbound_accounting(
     match inbound.message_type.as_deref() {
         Some("connection_open") => {
             batch.increment("ws_connections_opened");
+            // The account card reflects a successful authenticated Rivian
+            // session, rather than only the time credentials were saved.
+            crate::services::external_connections::record_attempt(
+                pool,
+                crate::services::external_connections::RIVIAN_ACCOUNT,
+            )
+            .await;
+            crate::services::external_connections::record_success(
+                pool,
+                crate::services::external_connections::RIVIAN_ACCOUNT,
+            )
+            .await;
         }
         Some("reconnect") => batch.increment("ws_reconnects"),
         Some("connection_init" | "subscribe") => {
@@ -1215,6 +1227,17 @@ async fn handle_inbound_accounting(
         _ => {}
     }
     if let Some(update) = runtime_health_update_for_ws_control(inbound) {
+        if matches!(
+            inbound.message_type.as_deref(),
+            Some("ws_handshake_rejected" | "ws_schema_rejected")
+        ) {
+            crate::services::external_connections::record_failure(
+                pool,
+                crate::services::external_connections::RIVIAN_ACCOUNT,
+                &update.worker_health_msg,
+            )
+            .await;
+        }
         upsert_health(
             pool,
             vehicle_id,

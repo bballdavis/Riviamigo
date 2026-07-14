@@ -35,6 +35,10 @@ pub fn router() -> Router<AppState> {
             "/settings/external-connections/:id/test",
             post(test_connection),
         )
+        .route(
+            "/settings/external-connections/:id/cache/purge",
+            post(purge_connection_cache),
+        )
         .route("/external/basemap/:style/:z/:x/:y", get(proxy_basemap_tile))
         .route("/external/basemap/config", get(basemap_config))
         .route("/external/iconify/search", get(proxy_iconify_search))
@@ -80,6 +84,19 @@ struct ConnectionResponse {
     last_success_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
     request_count_today: i32,
+    last_test_at: Option<DateTime<Utc>>,
+    last_test_ok: Option<bool>,
+    last_test_error: Option<String>,
+    cache: Option<ConnectionCacheResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConnectionCacheResponse {
+    entries: u64,
+    bytes: u64,
+    persistent: bool,
+    purgeable: bool,
+    description: &'static str,
 }
 
 struct ConnectionDefinition {
@@ -95,12 +112,11 @@ struct ConnectionDefinition {
 }
 
 const DEFINITIONS: &[ConnectionDefinition] = &[
-    ConnectionDefinition { id: connections::RIVIAN_ACCOUNT, name: "Rivian account", purpose: "Vehicle telemetry, history, and remote operations.", data_shared: &["Rivian account tokens", "Vehicle identifiers", "Telemetry queries and commands"], disabled_effect: "Disconnecting a vehicle stops telemetry, history import, and remote operations.", execution: "Server", privacy_url: Some("https://rivian.com/legal/privacy"), terms_url: Some("https://rivian.com/legal/terms"), editable: false },
+    ConnectionDefinition { id: connections::RIVIAN_ACCOUNT, name: "Rivian account", purpose: "Vehicle telemetry, history, remote operations, and locally mirrored vehicle artwork.", data_shared: &["Rivian account tokens", "Vehicle identifiers", "Telemetry, command, and artwork queries"], disabled_effect: "Disconnecting a vehicle stops telemetry, history import, remote operations, and future artwork retrieval. Existing local artwork remains.", execution: "Server", privacy_url: Some("https://rivian.com/legal/privacy"), terms_url: Some("https://rivian.com/legal/terms"), editable: false },
     ConnectionDefinition { id: connections::OPEN_METEO, name: "Open-Meteo weather", purpose: "Estimated outside temperature along completed drives.", data_shared: &["Rounded drive coordinates by default", "Drive date", "Temperature variable request"], disabled_effect: "New drives will not receive estimated outside temperatures or temperature-based efficiency data. Existing values remain.", execution: "Server", privacy_url: Some("https://open-meteo.com/en/terms"), terms_url: Some("https://open-meteo.com/en/terms"), editable: true },
     ConnectionDefinition { id: connections::NOMINATIM, name: "OpenStreetMap Nominatim", purpose: "Address search and readable trip endpoint labels.", data_shared: &["Exact coordinate for reverse geocoding", "Search text after explicit submit"], disabled_effect: "Address search and new automatic trip labels stop. Coordinates, saved places, and cached labels remain.", execution: "Server", privacy_url: Some("https://osmfoundation.org/wiki/Privacy_Policy"), terms_url: Some("https://operations.osmfoundation.org/policies/nominatim/"), editable: true },
     ConnectionDefinition { id: connections::BASEMAP, name: "Map basemap", purpose: "Street and geographic context behind exact trip routes.", data_shared: &["Requested map tile coordinates", "Riviamigo server IP"], disabled_effect: "Routes remain visible on a neutral background, without streets or place context.", execution: "Server proxy", privacy_url: Some("https://carto.com/privacy/"), terms_url: Some("https://carto.com/legal/"), editable: true },
     ConnectionDefinition { id: connections::ICONIFY, name: "Iconify catalog", purpose: "Search and load dashboard icons not bundled locally.", data_shared: &["Icon names", "Explicit icon search text"], disabled_effect: "Remote icon search stops; bundled icons and local fallbacks remain.", execution: "Server proxy", privacy_url: Some("https://iconify.design/privacy/"), terms_url: Some("https://iconify.design/terms/"), editable: true },
-    ConnectionDefinition { id: connections::RIVIAN_ARTWORK, name: "Rivian vehicle artwork", purpose: "Mirror vehicle artwork into Riviamigo.", data_shared: &["Rivian vehicle configuration and image request"], disabled_effect: "Cached artwork remains; uncached vehicles use the local placeholder.", execution: "Server", privacy_url: Some("https://rivian.com/legal/privacy"), terms_url: None, editable: true },
     ConnectionDefinition { id: connections::S3_BACKUP, name: "S3-compatible backups", purpose: "Optional off-site backup storage managed in Backups.", data_shared: &["Backup artifact", "Configured object-store credentials"], disabled_effect: "New off-site backups stop; local backup behavior and existing objects remain.", execution: "Server", privacy_url: None, terms_url: None, editable: false },
 ];
 
@@ -138,6 +154,7 @@ async fn build_response(
                 active_endpoint(&settings),
             )
         };
+        let cache = cache_summary(state, &settings.id).await;
         result.push(ConnectionResponse {
             id: settings.id.clone(),
             name: definition.name,
@@ -178,12 +195,161 @@ async fn build_response(
             } else {
                 0
             },
+            last_test_at: activity.last_test_at,
+            last_test_ok: activity.last_test_ok,
+            last_test_error: activity.last_test_error,
+            cache,
         });
     }
     Ok(ExternalConnectionsResponse {
         can_manage,
         connections: result,
     })
+}
+
+async fn cache_summary(state: &AppState, id: &str) -> Option<ConnectionCacheResponse> {
+    match id {
+        connections::BASEMAP => {
+            let (entries, bytes) = redis_cache_metrics(state, "external:basemap:*").await;
+            Some(ConnectionCacheResponse {
+                entries,
+                bytes,
+                persistent: true,
+                purgeable: true,
+                description: "Persistent map tiles. Retained until manually purged or the basemap configuration changes.",
+            })
+        }
+        connections::NOMINATIM => {
+            let (search_entries, search_bytes) =
+                redis_cache_metrics(state, "external:nominatim:search:*").await;
+            let (address_entries, address_bytes) = sqlx::query_as::<_, (i64, i64)>(
+                "SELECT COUNT(*), pg_total_relation_size('riviamigo.addresses')",
+            )
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or((0, 0));
+            Some(ConnectionCacheResponse {
+                entries: search_entries.saturating_add(address_entries.max(0) as u64),
+                bytes: search_bytes.saturating_add(address_bytes.max(0) as u64),
+                persistent: true,
+                purgeable: true,
+                description: "Persistent address search results and reverse-geocoded addresses. Purging keeps addresses used by trips, charging sessions, or saved places.",
+            })
+        }
+        _ => None,
+    }
+}
+
+async fn redis_cache_metrics(state: &AppState, pattern: &str) -> (u64, u64) {
+    let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await else {
+        return (0, 0);
+    };
+    let mut cursor = 0_u64;
+    let mut entries = 0_u64;
+    let mut bytes = 0_u64;
+    loop {
+        let result: redis::RedisResult<(u64, Vec<String>)> = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(500)
+            .query_async(&mut redis)
+            .await;
+        let Ok((next, keys)) = result else { break };
+        for key in keys {
+            if key.ends_with(":content-type") || key.ends_with(":max-age") {
+                continue;
+            }
+            let length: u64 = redis::cmd("STRLEN")
+                .arg(&key)
+                .query_async(&mut redis)
+                .await
+                .unwrap_or(0);
+            entries = entries.saturating_add(1);
+            bytes = bytes.saturating_add(length);
+        }
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    (entries, bytes)
+}
+
+#[derive(Debug, Serialize)]
+struct PurgeConnectionCacheResponse {
+    purged_entries: u64,
+    message: &'static str,
+}
+
+async fn purge_connection_cache(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<PurgeConnectionCacheResponse>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    let purged_entries = match id.as_str() {
+        connections::BASEMAP => purge_redis_cache(&state, "external:basemap:*").await,
+        connections::NOMINATIM => {
+            let search_entries = purge_redis_cache(&state, "external:nominatim:search:*").await;
+            state.nominatim_cache.write().await.clear();
+            let address_entries: i64 = sqlx::query_scalar::<_, i64>(
+                r#"DELETE FROM riviamigo.addresses a
+                   WHERE NOT EXISTS (SELECT 1 FROM riviamigo.geofences g WHERE g.address_id = a.id)
+                     AND NOT EXISTS (SELECT 1 FROM riviamigo.trips t WHERE t.start_address_id = a.id OR t.end_address_id = a.id)
+                     AND NOT EXISTS (SELECT 1 FROM riviamigo.trip_user_annotations tua WHERE tua.start_address_id = a.id OR tua.end_address_id = a.id)
+                     AND NOT EXISTS (SELECT 1 FROM riviamigo.charge_sessions cs WHERE cs.address_id = a.id)
+                     AND NOT EXISTS (SELECT 1 FROM riviamigo.charge_session_user_annotations csua WHERE csua.address_id = a.id)
+                   RETURNING 1"#,
+            )
+            .fetch_all(&state.pool)
+            .await?
+            .len() as i64;
+            search_entries.saturating_add(address_entries.max(0) as u64)
+        }
+        _ => {
+            return Err(AppError::Validation(
+                "this connection does not have a purgeable persistent cache".into(),
+            ));
+        }
+    };
+    Ok(Json(PurgeConnectionCacheResponse {
+        purged_entries,
+        message: "Persistent cache purged. Existing trip labels and saved places were retained.",
+    }))
+}
+
+async fn purge_redis_cache(state: &AppState, pattern: &str) -> u64 {
+    let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await else {
+        return 0;
+    };
+    let mut cursor = 0_u64;
+    let mut deleted = 0_u64;
+    loop {
+        let result: redis::RedisResult<(u64, Vec<String>)> = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(500)
+            .query_async(&mut redis)
+            .await;
+        let Ok((next, keys)) = result else { break };
+        if !keys.is_empty() {
+            let removed: u64 = redis::cmd("UNLINK")
+                .arg(keys)
+                .query_async(&mut redis)
+                .await
+                .unwrap_or(0);
+            deleted = deleted.saturating_add(removed);
+        }
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    deleted
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,8 +391,14 @@ async fn update_connection(
 
     let api_key_encrypted = encrypt_secret(&state.age_key, body.api_key.as_deref())?;
     let bearer_token_encrypted = encrypt_secret(&state.age_key, body.bearer_token.as_deref())?;
+    // Accept the short-lived legacy value from older browsers, but never write
+    // it back after the database policy renamed "hosted" to "remote".
     let mode = if body.enabled {
-        body.mode.as_str()
+        if body.mode == "hosted" {
+            "remote"
+        } else {
+            body.mode.as_str()
+        }
     } else {
         "disabled"
     };
@@ -240,7 +412,7 @@ async fn update_connection(
 
     // Hosted mode is a named policy, not merely a label over the last custom
     // values. Restore Riviamigo's audited defaults when an admin switches back.
-    if mode == "hosted" {
+    if mode == "remote" {
         match id.as_str() {
             connections::OPEN_METEO => {
                 forecast_url = Some("https://api.open-meteo.com/v1/forecast".into());
@@ -306,6 +478,20 @@ async fn update_connection(
     .execute(&state.pool)
     .await?;
 
+    // Endpoint/style changes must never reuse a response from the prior
+    // provider. Address labels remain durable; only lookup-result cache keys
+    // are invalidated here.
+    match id.as_str() {
+        connections::BASEMAP => {
+            purge_redis_cache(&state, "external:basemap:*").await;
+        }
+        connections::NOMINATIM => {
+            purge_redis_cache(&state, "external:nominatim:search:*").await;
+            state.nominatim_cache.write().await.clear();
+        }
+        _ => {}
+    }
+
     Ok(Json(build_response(&state, true).await?))
 }
 
@@ -327,8 +513,16 @@ async fn disable_optional(
 #[derive(Debug, Serialize)]
 struct TestConnectionResponse {
     ok: bool,
-    message: String,
+    tested_at: DateTime<Utc>,
+    checks: Vec<TestConnectionCheck>,
     preview_data_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TestConnectionCheck {
+    label: String,
+    ok: bool,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -450,11 +644,18 @@ async fn test_connection(
                 .await
         }
         _ => {
+            let checks = vec![TestConnectionCheck {
+                label: "Configuration".into(),
+                ok: true,
+                message: "This connection is managed by its owning settings surface.".into(),
+            }];
+            connections::record_test(&state.pool, &id, true, None).await;
             return Ok(Json(TestConnectionResponse {
                 ok: true,
-                message: "Connection is managed by its owning settings surface.".into(),
+                tested_at: Utc::now(),
+                checks,
                 preview_data_url: None,
-            }))
+            }));
         }
     };
 
@@ -482,27 +683,42 @@ async fn test_connection(
             } else {
                 None
             };
-            connections::record_success(&state.pool, &id).await;
+            connections::record_test(&state.pool, &id, true, None).await;
             Ok(Json(TestConnectionResponse {
                 ok: true,
-                message: "Connection succeeded with synthetic test data.".into(),
+                tested_at: Utc::now(),
+                checks: vec![TestConnectionCheck {
+                    label: "Synthetic request".into(),
+                    ok: true,
+                    message: "Connection succeeded with synthetic test data.".into(),
+                }],
                 preview_data_url,
             }))
         }
         Ok(response) => {
             let message = format!("Provider returned HTTP {}", response.status());
-            connections::record_failure(&state.pool, &id, &message).await;
+            connections::record_test(&state.pool, &id, false, Some(&message)).await;
             Ok(Json(TestConnectionResponse {
                 ok: false,
-                message,
+                tested_at: Utc::now(),
+                checks: vec![TestConnectionCheck {
+                    label: "Synthetic request".into(),
+                    ok: false,
+                    message,
+                }],
                 preview_data_url: None,
             }))
         }
         Err(error) => {
-            connections::record_failure(&state.pool, &id, &error.to_string()).await;
+            connections::record_test(&state.pool, &id, false, Some(&error.to_string())).await;
             Ok(Json(TestConnectionResponse {
                 ok: false,
-                message: "Connection failed; no trip data was sent.".into(),
+                tested_at: Utc::now(),
+                checks: vec![TestConnectionCheck {
+                    label: "Synthetic request".into(),
+                    ok: false,
+                    message: "Connection failed; no trip data was sent.".into(),
+                }],
                 preview_data_url: None,
             }))
         }
@@ -614,14 +830,14 @@ async fn proxy_basemap_tile(
             "Basemap tile exceeded the response limit".into(),
         ));
     }
-    if cache_ttl > 0 {
-        if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
-            let _: Result<(), _> = redis.set_ex(&cache_key, &bytes, cache_ttl).await;
-            let _: Result<(), _> = redis
-                .set_ex(&content_type_key, &content_type, cache_ttl)
-                .await;
-            let _: Result<(), _> = redis.set_ex(&max_age_key, cache_ttl, cache_ttl).await;
-        }
+    // The server-side copy is persistent and keyed by the provider/style
+    // configuration. Upstream cache-control still governs browser re-use, but
+    // repeated viewers never cause another upstream tile request until an
+    // administrator purges the cache or changes the basemap configuration.
+    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
+        let _: Result<(), _> = redis.set(&cache_key, &bytes).await;
+        let _: Result<(), _> = redis.set(&content_type_key, &content_type).await;
+        let _: Result<(), _> = redis.set(&max_age_key, cache_ttl).await;
     }
     connections::record_success(&state.pool, connections::BASEMAP).await;
     tile_response(bytes, &content_type, cache_ttl)
@@ -747,9 +963,12 @@ fn upstream_cache_ttl(headers: &axum::http::HeaderMap) -> u64 {
 }
 
 async fn validate_update(id: &str, body: &UpdateConnectionBody) -> Result<(), AppError> {
-    if !matches!(body.mode.as_str(), "hosted" | "custom" | "disabled") {
+    if !matches!(
+        body.mode.as_str(),
+        "remote" | "hosted" | "custom" | "disabled"
+    ) {
         return Err(AppError::Validation(
-            "mode must be hosted, custom, or disabled".into(),
+            "mode must be remote, custom, or disabled".into(),
         ));
     }
     if body.mode == "custom"

@@ -566,6 +566,14 @@ export function SettingsContent() {
     },
   });
 
+  const refreshVehicleArtwork = useMutation({
+    mutationFn: (vehicleId: string) => api.refreshVehicleArtwork(vehicleId),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
+    },
+  });
+
   const setDefaultVehicle = useMutation({
     mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
     onSuccess: (result) => {
@@ -907,6 +915,15 @@ export function SettingsContent() {
                                 {needsReauth && (
                                   <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
                                 )}
+                                {isAdmin && v.images?.cache && (
+                                  <Badge
+                                    variant={v.images.cache.status === 'ready' ? 'success' : v.images.cache.status === 'failed' ? 'warning' : 'default'}
+                                    size="sm"
+                                    title={v.images.cache.last_error ?? undefined}
+                                  >
+                                    Artwork {v.images.cache.ready_asset_count}/{v.images.cache.asset_count}
+                                  </Badge>
+                                )}
                               </div>
                               <div className="mt-auto grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-0.5 text-sm">
                                 <span className="text-fg-tertiary">Model</span>
@@ -960,6 +977,20 @@ export function SettingsContent() {
                                         : '',
                                     ].join(' ')}
                                     onClick={() => navigate({ to: '/connect', search: { mode: 'refresh', vehicle_id: v.id } })}
+                                  >
+                                    <RefreshCw className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
+                              {isAdmin && (
+                                <Tooltip content="Refresh vehicle artwork from Rivian">
+                                  <Button
+                                    aria-label={`Refresh vehicle artwork for ${v.display_name}`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="h-8 w-8 px-0"
+                                    loading={refreshVehicleArtwork.isPending && refreshVehicleArtwork.variables === v.id}
+                                    onClick={() => refreshVehicleArtwork.mutate(v.id)}
                                   >
                                     <RefreshCw className="h-3.5 w-3.5" />
                                   </Button>

@@ -6,6 +6,8 @@ import { vi } from 'vitest';
 vi.mock('@iconify/react', () => ({
   Icon: () => null,
   InlineIcon: () => null,
+  addAPIProvider: vi.fn(),
+  _api: { setFetch: vi.fn() },
 }));
 
 // Stub canvas context so uPlot doesn't throw in jsdom

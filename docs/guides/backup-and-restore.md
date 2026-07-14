@@ -37,3 +37,5 @@ Use the same PostgreSQL and TimescaleDB major versions as the source where possi
 Riviamigo can run its backup task with `BACKUP_DRIVER=pg_dump` (the default) when `pg_dump` is available in the API runtime, or `BACKUP_DRIVER=json` for a manifest-only fallback. `BACKUP_ARTIFACT_DIR` controls where those artifacts are written. The production API uses a temporary filesystem by default, so arrange persistent, protected storage if you enable scheduled artifacts.
 
 S3-compatible endpoints are only used when you configure their `S3_*` values. They become another third party with access to your backup data; see [privacy](../privacy.md).
+
+After changing an off-site target, open **Settings > Backups** and **Settings > External Connections**, run the non-destructive verification, and confirm the last verification result before enabling scheduled uploads. The probe must not create or delete backup objects; credentials remain write-only.
