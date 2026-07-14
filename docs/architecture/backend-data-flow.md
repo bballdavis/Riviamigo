@@ -17,6 +17,15 @@ This document is canonical for the high-level backend flow. Update it when the A
 5. Supporting poll flows reconcile completed charging sessions and live charge-curve data into canonical `charge_sessions`, preserving telemetry-backed windows as the public session timeline while storing Rivian aliases and API-only history as enrichment evidence.
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
 
+The API can also run an experimental, read-only Parallax capture alongside the
+legacy vehicle-state WebSocket. Raw Parallax events are stored separately in
+`riviamigo.rivian_parallax_events` with the RVM topic, server/receive
+timestamps, base64 protobuf payload, and the active trip or charge-session ID
+when one is available. This is a discovery store, not part of the typed
+telemetry contract; `RIVIAN_PARALLAX_CAPTURE_ENABLED` controls it and the
+normal raw-event retention setting removes old rows. Decode and analyze these
+payloads offline before promoting any field into production telemetry.
+
 ## Major Backend Areas
 
 - `apps/api/src/routes`

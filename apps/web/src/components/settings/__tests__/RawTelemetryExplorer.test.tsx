@@ -2,6 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RawTelemetrySample } from '@riviamigo/types';
 import { RawTelemetryExplorer } from '../RawTelemetryExplorer';
 
 const api = vi.hoisted(() => ({
@@ -31,7 +32,7 @@ const sample = {
   is_online: true,
   tire_fl_psi: 48,
   tire_fr_psi: 48,
-} as never;
+} as RawTelemetrySample;
 
 function response(samples = [sample]) {
   return {

@@ -1056,17 +1056,58 @@ struct RawEventDetailRow {
 }
 
 const RAW_TELEMETRY_FIELDS: &[&str] = &[
-    "latitude", "longitude", "altitude_m", "speed_mph", "battery_level", "battery_capacity_wh",
-    "distance_to_empty_mi", "battery_limit", "power_state", "charger_state", "charger_status",
-    "time_to_end_of_charge_min", "drive_mode", "gear_status", "cabin_temp_c", "driver_temp_c",
-    "outside_temp_c", "hvac_active", "power_kw", "regen_power_kw", "heading_deg", "odometer_miles",
-    "tire_fl_psi", "tire_fr_psi", "tire_rl_psi", "tire_rr_psi", "tire_fl_status", "tire_fr_status",
-    "tire_rl_status", "tire_rr_status", "tire_fl_valid", "tire_fr_valid", "tire_rl_valid",
-    "tire_rr_valid", "door_front_left_locked", "door_front_right_locked", "door_rear_left_locked",
-    "door_rear_right_locked", "door_front_left_closed", "door_front_right_closed", "door_rear_left_closed",
-    "door_rear_right_closed", "closure_frunk_closed", "closure_liftgate_closed", "closure_tailgate_closed",
-    "ota_current_version", "ota_available_version", "ota_status", "ota_current_status", "hv_thermal_event",
-    "twelve_volt_health", "is_online",
+    "latitude",
+    "longitude",
+    "altitude_m",
+    "speed_mph",
+    "battery_level",
+    "battery_capacity_wh",
+    "distance_to_empty_mi",
+    "battery_limit",
+    "power_state",
+    "charger_state",
+    "charger_status",
+    "time_to_end_of_charge_min",
+    "drive_mode",
+    "gear_status",
+    "cabin_temp_c",
+    "driver_temp_c",
+    "outside_temp_c",
+    "hvac_active",
+    "power_kw",
+    "regen_power_kw",
+    "heading_deg",
+    "odometer_miles",
+    "tire_fl_psi",
+    "tire_fr_psi",
+    "tire_rl_psi",
+    "tire_rr_psi",
+    "tire_fl_status",
+    "tire_fr_status",
+    "tire_rl_status",
+    "tire_rr_status",
+    "tire_fl_valid",
+    "tire_fr_valid",
+    "tire_rl_valid",
+    "tire_rr_valid",
+    "door_front_left_locked",
+    "door_front_right_locked",
+    "door_rear_left_locked",
+    "door_rear_right_locked",
+    "door_front_left_closed",
+    "door_front_right_closed",
+    "door_rear_left_closed",
+    "door_rear_right_closed",
+    "closure_frunk_closed",
+    "closure_liftgate_closed",
+    "closure_tailgate_closed",
+    "ota_current_version",
+    "ota_available_version",
+    "ota_status",
+    "ota_current_status",
+    "hv_thermal_event",
+    "twelve_volt_health",
+    "is_online",
 ];
 
 #[derive(Serialize)]
@@ -4078,12 +4119,20 @@ async fn raw_vehicle_data(
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     validate_raw_time_bounds(params.from.clone(), params.to.clone())?;
     let selected_fields = parse_raw_fields(params.fields.as_deref())?;
-    let selected_fields_csv = selected_fields.iter().map(|field| (*field).to_string()).collect::<Vec<_>>();
+    let selected_fields_csv = selected_fields
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect::<Vec<_>>();
     let per_page = params.per_page.or(params.limit).unwrap_or(25).clamp(1, 200);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1).saturating_mul(per_page);
-    let search = params.search.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let where_clause = raw_telemetry_where_clause(&selected_fields, params.populated_only.unwrap_or(false));
+    let search = params
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let where_clause =
+        raw_telemetry_where_clause(&selected_fields, params.populated_only.unwrap_or(false));
 
     let samples = sqlx::query_as::<_, RawVehicleSampleRow>(
         &format!(r#"
@@ -4115,8 +4164,8 @@ async fn raw_vehicle_data(
     .fetch_all(&state.pool)
     .await?;
 
-    let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(
-        &format!(r#"
+    let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(&format!(
+        r#"
         SELECT min(ts) AS first_event_at,
                max(ts) AS last_event_at,
                count(*) AS sample_count,
@@ -4131,8 +4180,8 @@ async fn raw_vehicle_data(
                count(ota_status) AS software_samples
         FROM timeseries.telemetry t
         WHERE {where_clause}
-        "#),
-    )
+        "#
+    ))
     .bind(vid)
     .bind(params.from.clone())
     .bind(params.to.clone())
@@ -4203,8 +4252,16 @@ async fn raw_vehicle_events(
     let per_page = params.per_page.unwrap_or(25).clamp(1, 100);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1).saturating_mul(per_page);
-    let event_type = params.event_type.as_deref().map(str::trim).filter(|value| !value.is_empty());
-    let message_type = params.message_type.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let event_type = params
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let message_type = params
+        .message_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let items = sqlx::query_as::<_, RawEventSummaryRow>(
         r#"
@@ -4296,7 +4353,11 @@ async fn raw_vehicle_event(
     })))
 }
 
-async fn require_raw_event_access(state: &AppState, auth: &AuthUser, vehicle_id: Uuid) -> Result<(), AppError> {
+async fn require_raw_event_access(
+    state: &AppState,
+    auth: &AuthUser,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
     if auth.api_access_level.is_some() {
         return Err(AppError::Forbidden);
     }
@@ -4318,9 +4379,15 @@ fn parse_raw_fields(fields: Option<&str>) -> Result<Vec<&'static str>, AppError>
         return Ok(Vec::new());
     };
     let mut selected = Vec::new();
-    for field in fields.split(',').map(str::trim).filter(|field| !field.is_empty()) {
+    for field in fields
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
         let Some(&known) = RAW_TELEMETRY_FIELDS.iter().find(|known| **known == field) else {
-            return Err(AppError::Validation(format!("unknown telemetry field: {field}")));
+            return Err(AppError::Validation(format!(
+                "unknown telemetry field: {field}"
+            )));
         };
         if !selected.contains(&known) {
             selected.push(known);
@@ -4336,11 +4403,19 @@ fn raw_telemetry_where_clause(selected_fields: &[&str], populated_only: bool) ->
         "($3::timestamptz IS NULL OR t.ts <= $3)".to_string(),
         "($4::text IS NULL OR to_jsonb(t)::text ILIKE '%' || $4 || '%')".to_string(),
     ];
-    let fields = if selected_fields.is_empty() { RAW_TELEMETRY_FIELDS } else { selected_fields };
+    let fields = if selected_fields.is_empty() {
+        RAW_TELEMETRY_FIELDS
+    } else {
+        selected_fields
+    };
     if populated_only || !selected_fields.is_empty() {
         clauses.push(format!(
             "({})",
-            fields.iter().map(|field| format!("t.{field} IS NOT NULL")).collect::<Vec<_>>().join(" OR "),
+            fields
+                .iter()
+                .map(|field| format!("t.{field} IS NOT NULL"))
+                .collect::<Vec<_>>()
+                .join(" OR "),
         ));
     }
     clauses.join(" AND ")
@@ -4418,7 +4493,8 @@ fn raw_event_summary_json(row: RawEventSummaryRow) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_otp, load_encrypted_redis, store_encrypted_redis, OtpBody, PendingOtpChallenge,
+        connect_otp, load_encrypted_redis, parse_raw_fields, raw_telemetry_where_clause,
+        store_encrypted_redis, validate_raw_time_bounds, OtpBody, PendingOtpChallenge,
     };
     use axum::body::Body;
     use axum::extract::State;
@@ -4470,6 +4546,7 @@ mod tests {
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: true,
+            rivian_parallax_capture_enabled: true,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
@@ -4541,6 +4618,7 @@ mod tests {
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: true,
+            rivian_parallax_capture_enabled: true,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
@@ -4681,6 +4759,29 @@ mod tests {
     }
 
     #[test]
+    fn raw_telemetry_rejects_unknown_field_filters() {
+        assert!(parse_raw_fields(Some("battery_level,not_a_telemetry_field")).is_err());
+    }
+
+    #[test]
+    fn raw_telemetry_selected_fields_are_bounded_to_known_columns() {
+        let fields = parse_raw_fields(Some("battery_level,tire_fl_psi,battery_level"))
+            .expect("known fields should parse");
+        assert_eq!(fields, vec!["battery_level", "tire_fl_psi"]);
+
+        let clause = raw_telemetry_where_clause(&fields, false);
+        assert!(clause.contains("t.battery_level IS NOT NULL OR t.tire_fl_psi IS NOT NULL"));
+        assert!(clause.contains("to_jsonb(t)::text ILIKE"));
+    }
+
+    #[test]
+    fn raw_telemetry_rejects_inverted_time_bounds() {
+        let from = "2026-07-14T00:00:00Z".parse().expect("valid timestamp");
+        let to = "2026-07-13T00:00:00Z".parse().expect("valid timestamp");
+        assert!(validate_raw_time_bounds(Some(from), Some(to)).is_err());
+    }
+
+    #[test]
     fn resolved_image_url_falls_back_to_remote_when_local_file_is_missing() {
         let config = crate::config::Config {
             database_url: "postgres://localhost/test".into(),
@@ -4707,6 +4808,7 @@ mod tests {
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: true,
+            rivian_parallax_capture_enabled: true,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,

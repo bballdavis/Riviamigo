@@ -11,6 +11,7 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ActiveChargeSessionSnapshot, ChargeDetectorState, ChargeEvent},
+        parallax::{self, ParallaxEvent},
         rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
@@ -141,6 +142,7 @@ pub async fn run_vehicle_worker(
     .await;
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
+    let (parallax_tx, mut parallax_rx) = mpsc::channel::<ParallaxEvent>(256);
 
     // Get rivian_vehicle_id
     let riv_id: Option<String> =
@@ -189,6 +191,29 @@ pub async fn run_vehicle_worker(
         })
     };
     let mut ws_handle = spawn_ws_loop();
+
+    let mut parallax_capture_enabled = config.rivian_parallax_capture_enabled;
+    let parallax_handle = if parallax_capture_enabled {
+        let parallax_shutdown = shutdown.resubscribe();
+        let parallax_vehicle_id = rivian_vehicle_id.clone();
+        let parallax_tokens = tokens.clone();
+        let reconnect_initial = config.rivian_ws_reconnect_initial_seconds;
+        let reconnect_max = config.rivian_ws_reconnect_max_seconds;
+        Some(tokio::spawn(async move {
+            parallax::run_loop(
+                vehicle_id,
+                parallax_vehicle_id,
+                parallax_tokens,
+                parallax_tx,
+                parallax_shutdown,
+                reconnect_initial,
+                reconnect_max,
+            )
+            .await;
+        }))
+    } else {
+        None
+    };
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -302,6 +327,31 @@ pub async fn run_vehicle_worker(
             msg = ev_rx.recv() => match msg {
                 Some(ev) => ev,
                 None => break,
+            },
+            parallax_event = parallax_rx.recv(), if parallax_capture_enabled => {
+                match parallax_event {
+                    Some(event) => {
+                        let trip_id = trip_det.active_trip_id();
+                        let charge_session_id = charge_det.active_session_id();
+                        if persist_parallax_event(&pool, vehicle_id, &event, trip_id, charge_session_id).await {
+                            counter_batch.increment("parallax_events_persisted");
+                        }
+                        raw_cleanup_tick += 1;
+                        counter_flush_tick += 1;
+                        if raw_cleanup_tick % 500 == 0 {
+                            cleanup_raw_events(&pool, config.rivian_raw_event_retention_days).await;
+                        }
+                        if counter_flush_tick % 50 == 0 {
+                            counter_batch.flush(&pool).await;
+                        }
+                        continue;
+                    }
+                    None => {
+                        parallax_capture_enabled = false;
+                        tracing::warn!(vehicle_id=%vehicle_id, "Parallax capture task stopped; disabling capture for this worker");
+                        continue;
+                    }
+                }
             },
             // Monitor the WS task; log if it exits unexpectedly.
             result = &mut ws_handle => {
@@ -498,6 +548,10 @@ pub async fn run_vehicle_worker(
     counter_batch.flush(&pool).await;
     ws_handle.abort();
     let _ = (&mut ws_handle).await;
+    if let Some(mut handle) = parallax_handle {
+        handle.abort();
+        let _ = (&mut handle).await;
+    }
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
 }
 
@@ -1283,6 +1337,32 @@ async fn persist_raw_event(
     }
 }
 
+async fn persist_parallax_event(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    event: &ParallaxEvent,
+    trip_id: Option<Uuid>,
+    charge_session_id: Option<Uuid>,
+) -> bool {
+    sqlx::query(
+        r#"
+        INSERT INTO riviamigo.rivian_parallax_events
+          (vehicle_id, trip_id, charge_session_id, received_at, server_timestamp, rvm, payload_b64)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind(vehicle_id)
+    .bind(trip_id)
+    .bind(charge_session_id)
+    .bind(event.received_at)
+    .bind(event.server_timestamp)
+    .bind(&event.rvm)
+    .bind(&event.payload_b64)
+    .execute(pool)
+    .await
+    .is_ok()
+}
+
 async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
     // Use a non-blocking advisory lock (id 0x726d_5241 = "rmRA") so that
     // concurrent workers skip the DELETE rather than pile up on the same rows.
@@ -1296,6 +1376,13 @@ async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
 
     let _ = sqlx::query(
         "DELETE FROM riviamigo.rivian_ws_raw_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
+    )
+    .bind(retention_days.max(1) as i32)
+    .execute(pool)
+    .await;
+
+    let _ = sqlx::query(
+        "DELETE FROM riviamigo.rivian_parallax_events WHERE received_at < now() - ($1::int * INTERVAL '1 day')",
     )
     .bind(retention_days.max(1) as i32)
     .execute(pool)
@@ -1337,6 +1424,7 @@ fn stewardship_counter_column(column: &str) -> Option<&'static str> {
         "telemetry_suppressed_threshold" => Some("telemetry_suppressed_threshold"),
         "collector_lock_skips" => Some("collector_lock_skips"),
         "raw_events_persisted" => Some("raw_events_persisted"),
+        "parallax_events_persisted" => Some("parallax_events_persisted"),
         _ => None,
     }
 }
