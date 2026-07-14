@@ -30,6 +30,8 @@ import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@riviamigo/
 import { format, parseISO } from 'date-fns';
 import { ArrowLeft } from 'lucide-react';
 
+const TRIP_PRIMARY_CHART_HEIGHT = 360;
+
 export const tripDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/trips/$tripId',
@@ -248,7 +250,7 @@ export function TripDetailContent() {
                     <TripMapChart
                       track={mapTrack}
                       activePoint={activeMapPoint}
-                      height={360}
+                      height={TRIP_PRIMARY_CHART_HEIGHT}
                       mapStyle={mapStyle}
                     />
                   )}
@@ -267,7 +269,7 @@ export function TripDetailContent() {
                     points={chartPoints}
                     series={chartSeries.drive}
                     loading={chartLoading}
-                    height={280}
+                    height={TRIP_PRIMARY_CHART_HEIGHT}
                     xTime={false}
                     xUnit="s"
                     xValueFormatter={(value) => formatElapsed(value)}
