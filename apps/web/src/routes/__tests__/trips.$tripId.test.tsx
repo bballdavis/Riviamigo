@@ -19,7 +19,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/ui/charts', () => ({
   TripMapChart:           () => <div data-testid="trip-map-chart">map</div>,
-  RichTimeSeriesChart:    ({ series }: { series: Array<{ label: string }> }) => <div data-testid="trip-drive-chart">{series.map((item) => item.label).join(', ')}</div>,
+  RichTimeSeriesChart:    ({ series, height }: { series: Array<{ label: string }>; height?: number }) => <div data-testid="trip-drive-chart" data-height={height}>{series.map((item) => item.label).join(', ')}</div>,
   CHART_COLORS:           { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },
   SpeedHistogramChart:    () => <div data-testid="speed-histogram-chart" />,
 }));
@@ -96,6 +96,12 @@ describe('Trip Detail page', () => {
     expect(screen.getByText('Tire Pressure')).toBeInTheDocument();
     expect(screen.getByText(/Outside \(estimated\)/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open-Meteo' })).toHaveAttribute('href', 'https://open-meteo.com/');
+  });
+
+  it('matches the drive chart height to the route map', () => {
+    render(<TripDetailContent />);
+
+    expect(screen.getAllByTestId('trip-drive-chart')[0]).toHaveAttribute('data-height', '360');
   });
 
   it('renders back icon button', () => {
