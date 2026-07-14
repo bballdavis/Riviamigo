@@ -38,6 +38,16 @@ ORDER BY COALESCE(server_timestamp, received_at), received_at;
 The payload is intentionally kept as base64 so it can be exported or decoded
 offline without changing the production telemetry schema.
 
+## Connection lifecycle
+
+Rivian closes long-lived GraphQL sockets with close code `4420` and reason
+`Connection TTL expired`. This is expected; the collector renews the
+subscription immediately and resets its retry backoff. The
+`Parallax subscription acknowledged and submitted` log confirms that the
+server accepted the connection and subscription. If that appears but the table
+stays empty after several minutes, investigate RVM availability or feature
+gating rather than waiting for a drive.
+
 ## Stop or remove the experiment
 
 Set `RIVIAN_PARALLAX_CAPTURE_ENABLED=false` and restart the API. Existing rows
