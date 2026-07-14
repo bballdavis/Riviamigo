@@ -16,6 +16,7 @@ import type {
   AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
   AdminUserRecord, AdminVehicleOption, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
   AccountInvitation, AccountInvitationPreview, AuthSetupResponse,
+  ExternalConnectionsResponse, UpdateExternalConnectionBody, TestExternalConnectionResponse,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -595,6 +596,22 @@ class ApiClient {
         ...(options.perPage !== undefined ? { per_page: options.perPage } : {}),
       } : undefined,
     );
+  }
+
+  async getExternalConnections(): Promise<ExternalConnectionsResponse> {
+    return this.request('GET', '/v1/settings/external-connections');
+  }
+
+  async updateExternalConnection(id: string, body: UpdateExternalConnectionBody): Promise<ExternalConnectionsResponse> {
+    return this.request('PUT', `/v1/settings/external-connections/${encodeURIComponent(id)}`, body);
+  }
+
+  async testExternalConnection(id: string, body: UpdateExternalConnectionBody): Promise<TestExternalConnectionResponse> {
+    return this.request('POST', `/v1/settings/external-connections/${encodeURIComponent(id)}/test`, body);
+  }
+
+  async disableOptionalExternalConnections(): Promise<ExternalConnectionsResponse> {
+    return this.request('POST', '/v1/settings/external-connections/disable-optional');
   }
 
   async updateBackupSettings(body: UpdateBackupSettingsBody) {

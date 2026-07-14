@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Icon } from '@iconify/react';
+import { Icon, addAPIProvider } from '@iconify/react';
 import { Search, X } from 'lucide-react';
 import { resolveIconId } from './iconMigration';
 
@@ -19,6 +19,10 @@ const COLLECTIONS = [
   { id: 'ph', label: 'Phosphor' },
   { id: 'tabler', label: 'Tabler' },
 ];
+
+// Keep both catalog searches and runtime icon loads on Riviamigo's authenticated
+// same-origin proxy. The API owns the provider policy and strips browser identity.
+addAPIProvider('', { resources: ['/v1/external/iconify'], path: '/' });
 
 function loadRecent(): string[] {
   if (typeof window === 'undefined') return [];
@@ -106,7 +110,7 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
       try {
         const params = new URLSearchParams({ query: q, limit: '40' });
         if (collection) params.set('prefix', collection);
-        const res = await fetch(`https://api.iconify.design/search?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(`/v1/external/iconify/search?${params.toString()}`, { signal: controller.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as { icons?: string[] };
         if (!cancelled) setResults(Array.isArray(data.icons) ? data.icons : []);

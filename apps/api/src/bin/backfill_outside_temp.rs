@@ -1,9 +1,6 @@
-//! Backfill `outside_temp_c` on trips that have no value yet by fetching the
-//! ambient temperature from Open-Meteo at the trip's start location and time.
+//! Queue idempotent route-aware weather enrichment for existing trips.
 //!
-//! Safe to re-run: only touches rows where `outside_temp_c IS NULL`.
-//! Skips trips with no usable start lat/lng because weather lookup requires a
-//! recoverable trip origin.
+//! Safe to re-run: completed or already-pending jobs are left untouched.
 //!
 //! Usage:
 //!   DATABASE_URL=... cargo run --bin backfill_outside_temp -- [--vehicle <uuid>]
@@ -38,7 +35,7 @@ async fn main() -> Result<()> {
     info!(
         vehicle_id = ?args.vehicle_id,
         scanned = stats.scanned,
-        filled = stats.filled,
+        queued = stats.filled,
         failed = stats.failed,
         skipped = stats.skipped,
         "trip outside temp backfill complete"

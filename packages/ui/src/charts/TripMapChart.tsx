@@ -10,6 +10,14 @@ export interface TripMapRoute {
 
 export type MapStyleMode = 'dark' | 'light';
 
+interface BasemapConfig {
+  enabled: boolean;
+  light_url: string;
+  dark_url: string;
+  attribution: string | null;
+  attribution_url: string | null;
+}
+
 export interface TripMapChartProps {
   track: LatLng[];
   routes?: TripMapRoute[];
@@ -54,20 +62,34 @@ const ROUTE_SOURCE_ID = 'trip-routes';
 const ROUTE_LAYER_ID = 'trip-routes-line';
 const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 
-const TILE_URLS: Record<MapStyleMode, string> = {
-  dark: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-  light: 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+const DEFAULT_BASEMAP: BasemapConfig = {
+  enabled: true,
+  dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+  light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
+  attribution: 'OpenStreetMap contributors and CARTO',
+  attribution_url: 'https://carto.com/attributions',
 };
 
-function buildMapLibreStyle(mode: MapStyleMode) {
+function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
+  if (!basemap.enabled) {
+    return {
+      version: 8 as const,
+      sources: {},
+      layers: [{
+        id: 'neutral-background',
+        type: 'background' as const,
+        paint: { 'background-color': getCssColor('--rm-bg-elevated', '#111827') },
+      }],
+    };
+  }
   return {
     version: 8 as const,
     sources: {
       'carto-base': {
         type: 'raster' as const,
-        tiles: [TILE_URLS[mode]],
+        tiles: [mode === 'dark' ? basemap.dark_url : basemap.light_url],
         tileSize: 256,
-        attribution: '© OpenStreetMap © CARTO',
+        attribution: basemap.attribution ?? '',
       },
     },
     layers: [{ id: 'background', type: 'raster' as const, source: 'carto-base' }],
@@ -106,6 +128,19 @@ export function TripMapChart({
   const latestVisibleRouteSignatureRef = React.useRef<string>('');
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
+  const [basemap, setBasemap] = React.useState<BasemapConfig>(DEFAULT_BASEMAP);
+
+  React.useEffect(() => {
+    if (typeof fetch !== 'function') return;
+    let cancelled = false;
+    fetch('/v1/external/basemap/config', { credentials: 'include' })
+      .then((response) => response.ok
+        ? response.json() as Promise<BasemapConfig>
+        : Promise.reject(new Error('Basemap configuration unavailable')))
+      .then((config) => { if (!cancelled) setBasemap(config); })
+      .catch(() => { if (!cancelled) setBasemap(DEFAULT_BASEMAP); });
+    return () => { cancelled = true; };
+  }, []);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -166,7 +201,7 @@ export function TripMapChart({
 
       const map = new maplibregl.Map({
         container: containerRef.current!,
-        style: buildMapLibreStyle(mapStyle),
+        style: buildMapLibreStyle(mapStyle, basemap),
         center: [firstPoint.lng, firstPoint.lat],
         zoom: 12,
         attributionControl: false,
@@ -232,12 +267,12 @@ export function TripMapChart({
     }
 
     map.on('style.load', onStyleLoad);
-    map.setStyle(buildMapLibreStyle(mapStyle));
+    map.setStyle(buildMapLibreStyle(mapStyle, basemap));
 
     return () => {
       map.off('style.load', onStyleLoad);
     };
-  }, [mapStyle]);
+  }, [basemap, mapStyle]);
 
   // Sync routes whenever routes or selection changes
   React.useEffect(() => {
@@ -358,11 +393,22 @@ export function TripMapChart({
         No route points in this period
       </div>
     ) : (
-      <div
-        ref={containerRef}
-        style={{ height }}
-        className={className ?? 'w-full rounded-xl overflow-hidden'}
-      />
+      <div className="relative">
+        <div
+          ref={containerRef}
+          style={{ height }}
+          className={className ?? 'w-full rounded-xl overflow-hidden'}
+        />
+        {basemap.enabled && basemap.attribution ? (
+          basemap.attribution_url ? (
+            <a href={basemap.attribution_url} target="_blank" rel="noopener noreferrer" className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary hover:text-fg">
+              {basemap.attribution}
+            </a>
+          ) : (
+            <span className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary">{basemap.attribution}</span>
+          )
+        ) : null}
+      </div>
     )
   );
 }

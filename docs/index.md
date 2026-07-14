@@ -51,6 +51,7 @@ This is the routing hub for repo documentation. Repo docs are canonical; the Git
 |---|---|---|---|---|
 | [`docs/guides/README.md`](./guides/README.md) | self-hosters and end users | repo, mirrored to GitHub Wiki | user-visible setup, operations, or product behavior changes | curated user-facing subset |
 | [`docs/guides/dashboard-customization.md`](./guides/dashboard-customization.md) | dashboard users and administrators | repo, mirrored to GitHub Wiki | dashboard ownership, precedence, or editing behavior changes | customization and recovery |
+| [`docs/guides/external-connections.md`](./guides/external-connections.md) | self-hosters, users, and administrators | repo, mirrored to GitHub Wiki | external provider, proxy, privacy, or weather-enrichment behavior changes | connection controls and disclosures |
 | [`docs/privacy.md`](./privacy.md) | self-hosters and users | repo | data-flow or third-party request behavior changes | user guides, security |
 
 ## Documentation Rules

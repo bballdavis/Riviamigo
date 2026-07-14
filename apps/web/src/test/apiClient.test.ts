@@ -156,6 +156,27 @@ describe('api client dashboard contracts', () => {
     expect(result.coverage.sample_count).toBe(0);
   });
 
+  it('sends unsaved external connection settings to the synthetic test route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, message: 'ok', preview_data_url: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+    const draft = {
+      enabled: true,
+      mode: 'custom' as const,
+      forecast_url: 'https://weather.example/v1/forecast',
+      archive_url: 'https://weather.example/v1/archive',
+      weather_precision: 'approximate' as const,
+    };
+
+    await api.testExternalConnection('open_meteo', draft);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/settings/external-connections/open_meteo/test');
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify(draft) }));
+  });
+
   it('uses the admin backup routes exposed by the settings page', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({

@@ -26,8 +26,9 @@ use crate::{
     services::{
         cost::recompute_charge_session_cost,
         geofences::match_geofence,
-        trip_enrichment::{lookup_trip_outside_temp_c, resolve_trip_location, MatchedLocation},
+        trip_enrichment::{resolve_trip_location, MatchedLocation},
         trip_routes::build_route_preview,
+        weather_enrichment,
     },
 };
 
@@ -2337,13 +2338,6 @@ async fn persist_trip(
     let start = trip.points.first();
     let end = trip.points.last();
 
-    // Fetch ambient temperature from Open-Meteo using trip start location/time.
-    // Falls back to None gracefully if the request fails.
-    let outside_temp_c = match start {
-        Some(pt) => lookup_trip_outside_temp_c(http_client, pt.lat, pt.lng, trip.started_at).await,
-        None => None,
-    };
-
     let owner_id = get_vehicle_owner_id(pool, trip.vehicle_id).await?;
     let start_match = match (owner_id, start) {
         (Some(user_id), Some(point)) => {
@@ -2414,13 +2408,15 @@ async fn persist_trip(
         .bind(trip.elevation_gain_m)
         .bind(trip.elevation_loss_m)
         .bind(trip.inside_temp_avg_c)
-        .bind(outside_temp_c)
+        .bind(Option::<f64>::None)
         .bind(trip.regen_wh)
         .bind(energy_wh)
         .bind(energy_strategy.as_deref())
         .bind(route_preview)
         .execute(pool)
         .await?;
+
+    weather_enrichment::enqueue(pool, trip.trip_id).await?;
 
     if let Some(user_id) = owner_id {
         sqlx::query(

@@ -29,12 +29,13 @@ import {
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { BackupSection } from '../components/settings/BackupSection';
+import { ExternalConnectionsSection } from '../components/settings/ExternalConnectionsSection';
 import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import { RawTelemetryExplorer } from '../components/settings/RawTelemetryExplorer';
 import { canManageSystemDashboards } from '../components/dashboard/DashboardPage';
 import {
-  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, ShieldCheck, Star, Trash2, Unlock, Users, X,
+  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, ShieldCheck, Star, Trash2, Unlock, Users, X,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -63,14 +64,15 @@ export const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
-type SettingsSection = 'vehicles' | 'dashboards' | 'units' | 'places' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'dashboards' | 'units' | 'places' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
   { id: 'dashboards', label: 'Dashboards', icon: Clipboard },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
-  { id: 'api', label: 'Integrations', icon: KeyRound },
+  { id: 'external', label: 'External Connections', icon: Globe2 },
+  { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'jobs', label: 'Jobs', icon: ListChecks },
   { id: 'raw', label: 'Raw Data', icon: Database },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
@@ -431,7 +433,7 @@ export function SettingsContent() {
   const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const sections = React.useMemo(
     () => canManageBackups
-      ? [...baseSections.slice(0, 5), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(5)]
+      ? [...baseSections.slice(0, 6), { id: 'backup' as const, label: 'Backups', icon: DatabaseBackup }, ...baseSections.slice(6)]
       : baseSections,
     [canManageBackups],
   );
@@ -1482,6 +1484,8 @@ export function SettingsContent() {
             )}
 
             {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}
+
+            {activeSection === 'external' && <ExternalConnectionsSection />}
 
             {activeSection === 'backup' && canManageBackups && <BackupSection />}
 

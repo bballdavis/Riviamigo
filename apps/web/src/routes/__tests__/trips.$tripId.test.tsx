@@ -19,7 +19,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/ui/charts', () => ({
   TripMapChart:           () => <div data-testid="trip-map-chart">map</div>,
-  RichTimeSeriesChart:    () => <div data-testid="trip-drive-chart" />,
+  RichTimeSeriesChart:    ({ series }: { series: Array<{ label: string }> }) => <div data-testid="trip-drive-chart">{series.map((item) => item.label).join(', ')}</div>,
   CHART_COLORS:           { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },
   SpeedHistogramChart:    () => <div data-testid="speed-histogram-chart" />,
 }));
@@ -43,6 +43,11 @@ vi.mock('@riviamigo/hooks', () => ({
       samples: {
         elapsed_s: [300], lat: [1], lng: [2], altitude_m: [10], speed_mph: [42], power_kw: [38], regen_power_kw: [0], battery_level: [68],
         outside_temp_c: [10], cabin_temp_c: [18], driver_temp_c: [18], hvac_active: [false], tire_fl_psi: [48], tire_fr_psi: [48], tire_rl_psi: [49], tire_rr_psi: [49],
+      },
+      outside_temperature: {
+        source: 'open_meteo',
+        samples: [{ elapsed_s: 300, ts: '2024-03-15T10:35:00Z', temperature_c: 10, source: 'open_meteo' }],
+        attribution: { name: 'Open-Meteo', url: 'https://open-meteo.com/' },
       },
     },
   }),
@@ -89,6 +94,8 @@ describe('Trip Detail page', () => {
     expect(screen.getByText('Speed Histogram')).toBeInTheDocument();
     expect(screen.getByText('Temperature')).toBeInTheDocument();
     expect(screen.getByText('Tire Pressure')).toBeInTheDocument();
+    expect(screen.getByText(/Outside \(estimated\)/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open-Meteo' })).toHaveAttribute('href', 'https://open-meteo.com/');
   });
 
   it('renders back icon button', () => {

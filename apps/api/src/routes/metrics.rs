@@ -277,7 +277,7 @@ const METRICS: &[MetricDef] = &[
     },
     MetricDef {
         id: "avg_outside_temp_c",
-        label: "Avg Outside Temp",
+        label: "Avg Outside (estimated)",
         unit: Some("C"),
         kind: "temperature",
         source_label: "trips",
