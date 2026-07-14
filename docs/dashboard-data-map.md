@@ -44,7 +44,7 @@ TeslaMate-style dashboards generally cover these data families:
 | Closures and locks | doors, windows, frunk/liftgate/tailgate, side bins, tonneau, locked/unlocked | HASS `LOCK_STATE_ENTITIES`, `DOOR_STATE_ENTITIES`, `CLOSURE_STATE_ENTITIES` | Door/frunk/liftgate/tailgate basics stored; side bins, tonneau, and windows are next parity gaps. |
 | Tires and maintenance | TPMS pressure, TPMS status/validity, 12V health, brake/wiper warnings | `tirePressure*` values are BAR in HASS, plus `tirePressureStatus*` and `tirePressureStatusValid*` | Numeric tire pressure converted to PSI on ingest; status stored; validity still a gap. |
 | Software | current version, available version, install status/progress/readiness | `otaCurrentVersion*`, `otaAvailableVersion*`, `otaStatus`, `otaInstallProgress`, `otaInstallReady` | Core versions/status stored; week/year/number/progress/readiness are next parity gaps. |
-| Media/images | configured vehicle images, style variants | HASS `VehicleImageCoordinator`; cel style uses vehicle version `3`, photo style uses version `2`, `resolution="@3x"` | Cached on add/backfill through the same GraphQL shape; UI consumes side/overhead/front/rear normalized placements. |
+| Media/images | configured vehicle images, style variants | HASS `VehicleImageCoordinator`; cel style uses vehicle version `3`, photo style uses version `2`, `resolution="@3x"` | Every Rivian-provided variant and overlay is mirrored through the existing account session to persistent local storage. UI consumes only first-party normalized side/overhead/front/rear URLs; missing blobs repair in the background. |
 
 ## Home Assistant reference map
 

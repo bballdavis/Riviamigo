@@ -158,7 +158,12 @@ describe('api client dashboard contracts', () => {
 
   it('sends unsaved external connection settings to the synthetic test route', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, message: 'ok', preview_data_url: null }), {
+      new Response(JSON.stringify({
+        ok: true,
+        tested_at: '2026-07-14T12:00:00Z',
+        checks: [{ label: 'Synthetic request', ok: true, message: 'ok' }],
+        preview_data_url: null,
+      }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }) as Response,
@@ -171,10 +176,11 @@ describe('api client dashboard contracts', () => {
       weather_precision: 'approximate' as const,
     };
 
-    await api.testExternalConnection('open_meteo', draft);
+    const result = await api.testExternalConnection('open_meteo', draft);
 
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/settings/external-connections/open_meteo/test');
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify(draft) }));
+    expect(result.checks).toEqual([{ label: 'Synthetic request', ok: true, message: 'ok' }]);
   });
 
   it('uses the admin backup routes exposed by the settings page', async () => {
@@ -286,6 +292,20 @@ describe('api client dashboard contracts', () => {
 
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/vehicles/vehicle-1/settings');
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' });
+  });
+
+  it('requests an administrator artwork refresh through the first-party vehicle route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, vehicle_id: 'vehicle-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await api.refreshVehicleArtwork('vehicle-1');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/admin/vehicles/vehicle-1/images/remirror');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
   });
 
   it('preserves login 401 responses instead of rewriting them as auth-expired', async () => {

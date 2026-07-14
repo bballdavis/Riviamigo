@@ -234,11 +234,19 @@ export interface OutsideTemperatureSeries {
   samples: OutsideTemperatureSample[];
 }
 
-export type ExternalConnectionMode = 'hosted' | 'custom' | 'disabled';
+export type ExternalConnectionMode = 'remote' | 'custom' | 'disabled';
 export type WeatherLocationPrecision = 'approximate' | 'exact';
 
+export interface ExternalConnectionCacheSummary {
+  entries: number;
+  bytes: number;
+  persistent: boolean;
+  purgeable: boolean;
+  description: string;
+}
+
 export interface ExternalConnectionRecord {
-  id: 'rivian_account' | 'open_meteo' | 'nominatim' | 'basemap' | 'iconify' | 'rivian_artwork' | 's3_backup';
+  id: 'rivian_account' | 'open_meteo' | 'nominatim' | 'basemap' | 'iconify' | 's3_backup';
   name: string;
   purpose: string;
   data_shared: string[];
@@ -269,6 +277,10 @@ export interface ExternalConnectionRecord {
   last_success_at: string | null;
   last_error: string | null;
   request_count_today: number;
+  last_test_at: string | null;
+  last_test_ok: boolean | null;
+  last_test_error: string | null;
+  cache: ExternalConnectionCacheSummary | null;
 }
 
 export interface ExternalConnectionsResponse {
@@ -298,8 +310,14 @@ export interface UpdateExternalConnectionBody {
 
 export interface TestExternalConnectionResponse {
   ok: boolean;
-  message: string;
+  tested_at: string;
+  checks: Array<{ label: string; ok: boolean; message: string }>;
   preview_data_url: string | null;
+}
+
+export interface PurgeExternalConnectionCacheResponse {
+  purged_entries: number;
+  message: string;
 }
 
 export interface ChargeSession {
