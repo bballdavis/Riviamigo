@@ -120,6 +120,10 @@ export const useAuth = create<AuthState>()(
           });
           return true;
         } catch {
+          // A failed bootstrap must finish the loading state so AuthGuard can
+          // report the real session outcome rather than leaving a hard refresh
+          // in a brittle half-authenticated state.
+          set({ isBootstrapping: false });
           return false;
         }
       },

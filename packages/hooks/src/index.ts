@@ -23,5 +23,6 @@ export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } fro
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
 export { useDocumentTheme } from './useDocumentTheme';
+export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
 
 

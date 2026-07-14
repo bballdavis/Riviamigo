@@ -12,7 +12,7 @@ Your host, reverse proxy, identity provider, and backup provider have their own 
 
 Riviamigo still needs to communicate with services that make its features work:
 
-- **Rivian:** account authentication, vehicle telemetry, and vehicle-artwork requests. Artwork is retrieved through the same encrypted account session, mirrored onto persistent local storage, and then served only from Riviamigo cache URLs or a local placeholder.
+- **Rivian:** account authentication, vehicle telemetry, and vehicle-artwork requests. Artwork is retrieved through the same encrypted account session, mirrored onto persistent local storage, and then served only from Riviamigo cache URLs or a local placeholder. The browser retrieves cache bytes through the existing authenticated Riviamigo API and never contacts Rivian artwork hosts directly.
 - **Open-Meteo:** completed-drive weather enrichment. Riviamigo selects exact local route samples, then rounds provider coordinates to roughly 1 km by default, deduplicates them, randomizes their batch order, and sends the drive's UTC date span. Exact weather coordinates are an administrator option.
 - **OpenStreetMap Nominatim:** explicitly submitted search text or exact reverse-geocoding coordinates. Accuracy requires exact input. Requests are sent by the Riviamigo server, cached, and throttled; public mode does not autocomplete.
 - **CARTO basemap tiles:** exact tile coordinates reveal the requested map area. Tiles are fetched by an authenticated Riviamigo server proxy, so CARTO sees the server connection rather than each viewer's browser identity.

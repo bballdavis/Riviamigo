@@ -101,6 +101,9 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       : getCompactBatteryIcon(compactBatteryLevel)
     : undefined;
   const collapsedFooterRow = '-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[24px_24px] items-center justify-between';
+  const collapsedStatusRow = compactBatteryIcon
+    ? collapsedFooterRow
+    : 'flex w-full items-center justify-center';
   const collapsedFooterCell = 'flex h-8 w-6 items-center justify-center';
   const sidebarItems = React.useMemo<NavItem[]>(() => {
     const firstVehicleModel = vehicles[0]?.model?.toUpperCase() ?? '';
@@ -191,7 +194,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
             </div>
           ) : collapsed ? (
             <div className="flex w-full flex-col gap-2">
-              <div className={collapsedFooterRow}>
+              <div className={collapsedStatusRow} data-collapsed-status-row>
                 <div
                   className={collapsedFooterCell}
                   title={`Vehicle status: ${
