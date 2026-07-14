@@ -34,7 +34,8 @@ async fn stewardship(
           COALESCE(SUM(telemetry_suppressed_empty), 0)::BIGINT AS telemetry_suppressed_empty,
           COALESCE(SUM(telemetry_suppressed_threshold), 0)::BIGINT AS telemetry_suppressed_threshold,
           COALESCE(SUM(collector_lock_skips), 0)::BIGINT AS collector_lock_skips,
-          COALESCE(SUM(raw_events_persisted), 0)::BIGINT AS raw_events_persisted
+          COALESCE(SUM(raw_events_persisted), 0)::BIGINT AS raw_events_persisted,
+          COALESCE(SUM(parallax_events_persisted), 0)::BIGINT AS parallax_events_persisted
         FROM riviamigo.rivian_stewardship_counters
         WHERE day >= CURRENT_DATE - 1
         "#,
@@ -55,6 +56,13 @@ async fn stewardship(
 
     let raw_events_retained: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*)::BIGINT FROM riviamigo.rivian_ws_raw_events WHERE received_at >= now() - ($1::int * INTERVAL '1 day')",
+    )
+    .bind(state.config.rivian_raw_event_retention_days.max(1) as i32)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let parallax_events_retained: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM riviamigo.rivian_parallax_events WHERE received_at >= now() - ($1::int * INTERVAL '1 day')",
     )
     .bind(state.config.rivian_raw_event_retention_days.max(1) as i32)
     .fetch_one(&state.pool)
@@ -115,9 +123,11 @@ async fn stewardship(
         "generated_at": chrono::Utc::now(),
         "retention_days": state.config.rivian_raw_event_retention_days,
         "raw_event_persistence_enabled": state.config.rivian_persist_raw_events,
+        "parallax_capture_enabled": state.config.rivian_parallax_capture_enabled,
         "duplicate_suppression_enabled": state.config.rivian_suppress_duplicate_telemetry,
         "active_collectors": active_collectors,
         "raw_events_retained": raw_events_retained,
+        "parallax_events_retained": parallax_events_retained,
         "totals_24h": {
             "ws_messages_received": totals.try_get::<i64, _>("ws_messages_received").unwrap_or(0),
             "ws_heartbeats_received": totals.try_get::<i64, _>("ws_heartbeats_received").unwrap_or(0),
@@ -134,6 +144,7 @@ async fn stewardship(
             "telemetry_suppressed_threshold": totals.try_get::<i64, _>("telemetry_suppressed_threshold").unwrap_or(0),
             "collector_lock_skips": totals.try_get::<i64, _>("collector_lock_skips").unwrap_or(0),
             "raw_events_persisted": totals.try_get::<i64, _>("raw_events_persisted").unwrap_or(0),
+            "parallax_events_persisted": totals.try_get::<i64, _>("parallax_events_persisted").unwrap_or(0),
         },
         "vehicles": vehicles,
     })))
