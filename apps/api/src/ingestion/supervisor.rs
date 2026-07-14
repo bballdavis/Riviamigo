@@ -44,6 +44,7 @@ mod tests {
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: false,
+            rivian_parallax_capture_enabled: false,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: Some("1".into()),

@@ -1,5 +1,6 @@
 pub mod charge_detector;
 pub mod location;
+pub mod parallax;
 pub mod parser;
 pub mod poller;
 pub mod rivian_auth;
