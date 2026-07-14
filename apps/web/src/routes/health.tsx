@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import {
   api,
+  AuthenticatedVehicleArtwork,
   useAuth,
   useAuthReady,
   useCurrentVehicleStatus,
@@ -213,8 +214,8 @@ function VehicleHealthContent() {
                     </div>
                     {heroImageUrl ? (
                       <div className="relative h-56 w-[24rem] shrink-0 overflow-hidden lg:h-64 lg:w-[30rem]">
-                        <img
-                          src={heroImageUrl}
+                        <AuthenticatedVehicleArtwork
+                          source={heroImageUrl}
                           alt="Vehicle three-quarter view"
                           className="absolute -right-2 -top-3 h-[110%] w-[110%] object-contain object-right-bottom lg:-right-3 lg:-top-4"
                         />

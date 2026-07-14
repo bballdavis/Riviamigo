@@ -95,6 +95,21 @@ describe('AppLayout sidebar collapse', () => {
     expect(batteryButton.querySelector('[data-nav-icon="battery-full"]')).toBeInTheDocument();
   });
 
+  it('centers the collapsed vehicle status when the battery indicator is unavailable', () => {
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>,
+    );
+
+    fireEvent.click(screen.getByLabelText('Collapse sidebar'));
+
+    const statusRow = document.querySelector('[data-collapsed-status-row]');
+
+    expect(statusRow).toHaveClass('justify-center');
+    expect(statusRow).not.toHaveClass('grid-cols-[24px_24px]');
+  });
+
   it('shows phantom drain as a battery child item and navigates to it', () => {
     render(
       <AppLayout activeKey="battery.phantom-drain">

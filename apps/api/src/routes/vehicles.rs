@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderValue},
+    http::{header, HeaderName, HeaderValue},
     response::Response,
     routing::{delete, get, post, put},
     Json, Router,
@@ -39,6 +39,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/vehicles/:id/images/remirror",
             post(admin_remirror_vehicle_images),
+        )
+        .route(
+            "/admin/vehicles/:id/images/cache/purge",
+            post(admin_purge_vehicle_artwork_cache),
         )
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
         .route("/vehicles/:id", delete(delete_vehicle))
@@ -2229,6 +2233,7 @@ async fn list_vehicles(
 
     let mut vehicles = Vec::with_capacity(rows.len());
     for r in rows {
+        queue_vehicle_artwork_repair(&state, r.id).await;
         let images = fetch_vehicle_images_json(&state.pool, &state.config, r.id)
             .await
             .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
@@ -2459,6 +2464,7 @@ async fn vehicle_status(
 ) -> Result<Json<VehicleStatusResponse>, AppError> {
     require_vehicle_access(&auth, vid)?;
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    queue_vehicle_artwork_repair(&state, vid).await;
 
     let vehicle = sqlx::query_scalar::<_, Option<f64>>(
         "SELECT battery_capacity_wh FROM riviamigo.vehicles WHERE id = $1",
@@ -3662,10 +3668,15 @@ fn build_cached_vehicle_image_metadata(
     source_url: &str,
     base: serde_json::Value,
 ) -> serde_json::Value {
+    // A stable first-party key lets the UI render a local restoring placeholder
+    // even before an initial mirror has completed. Successful mirrors replace
+    // it with a checksum-revisioned immutable key.
+    let pending_key = format!("{}.webp", hex::encode(Sha256::digest(source_url.as_bytes())));
     merge_metadata(
         base,
         serde_json::json!({
             "source_url": source_url,
+            "mirror_key": pending_key,
             "mirror_status": "pending"
         }),
     )
@@ -4033,15 +4044,13 @@ async fn vehicle_artwork_cache_state_json(
 }
 
 fn resolved_image_url(
-    config: &crate::config::Config,
+    _config: &crate::config::Config,
     vehicle_id: Uuid,
     _original_url: &str,
     metadata: &serde_json::Value,
 ) -> Option<String> {
     if let Some(key) = metadata.get("mirror_key").and_then(|value| value.as_str()) {
-        if metadata_has_local_mirror(config, metadata) {
-            return Some(format!("/v1/vehicle-image-cache/{vehicle_id}/{key}"));
-        }
+        return Some(format!("/v1/vehicle-image-cache/{vehicle_id}/{key}"));
     }
     None
 }
@@ -4203,7 +4212,8 @@ async fn vehicle_image_cache_asset(
         .get("mirror_relpath")
         .and_then(|value| value.as_str())
     else {
-        return Ok(vehicle_artwork_placeholder_response());
+        queue_vehicle_artwork_repair(&state, vehicle_id).await;
+        return Ok(vehicle_artwork_restoring_response());
     };
     let mime_type = metadata
         .get("mime_type")
@@ -4211,7 +4221,8 @@ async fn vehicle_image_cache_asset(
         .unwrap_or("application/octet-stream");
     let path = mirror_file_path(&state.config, relpath);
     let Ok(bytes) = tokio::fs::read(path).await else {
-        return Ok(vehicle_artwork_placeholder_response());
+        queue_vehicle_artwork_repair(&state, vehicle_id).await;
+        return Ok(vehicle_artwork_restoring_response());
     };
     let Some(expected_sha256) = metadata
         .get("sha256")
@@ -4220,7 +4231,8 @@ async fn vehicle_image_cache_asset(
         return Ok(vehicle_artwork_placeholder_response());
     };
     if hex::encode(Sha256::digest(&bytes)) != expected_sha256 {
-        return Ok(vehicle_artwork_placeholder_response());
+        queue_vehicle_artwork_repair(&state, vehicle_id).await;
+        return Ok(vehicle_artwork_restoring_response());
     }
 
     let mut response = Response::new(Body::from(bytes));
@@ -4252,17 +4264,45 @@ fn vehicle_artwork_placeholder_response() -> Response {
     response
 }
 
+fn vehicle_artwork_restoring_response() -> Response {
+    let mut response = vehicle_artwork_placeholder_response();
+    *response.status_mut() = axum::http::StatusCode::ACCEPTED;
+    response.headers_mut().insert(
+        HeaderName::from_static("x-riviamigo-artwork-state"),
+        HeaderValue::from_static("restoring"),
+    );
+    response
+}
+
 async fn admin_remirror_vehicle_images(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
-    ensure_vehicle_images_cached(&state.pool, &state.config, vehicle_id, &state.age_key, true)
-        .await;
+    queue_vehicle_artwork_repair_with_mode(&state, vehicle_id, true).await;
     Ok(Json(
-        serde_json::json!({ "ok": true, "vehicle_id": vehicle_id }),
+        serde_json::json!({ "ok": true, "queued": true, "vehicle_id": vehicle_id }),
     ))
+}
+
+async fn admin_purge_vehicle_artwork_cache(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    let _ = tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string())).await;
+    sqlx::query(
+        "UPDATE riviamigo.vehicle_images
+         SET metadata = jsonb_set(metadata, '{mirror_status}', '\"pending\"'::jsonb, true), updated_at = now()
+         WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .execute(&state.pool)
+    .await?;
+    refresh_vehicle_artwork_cache_state(&state.pool, &state.config, vehicle_id, None).await;
+    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vehicle_id })))
 }
 
 async fn vehicle_artwork_cache_complete(
@@ -4301,6 +4341,57 @@ async fn claim_vehicle_artwork_repair(pool: &sqlx::PgPool, vehicle_id: Uuid) -> 
     .is_some()
 }
 
+async fn queue_vehicle_artwork_repair(state: &AppState, vehicle_id: Uuid) {
+    queue_vehicle_artwork_repair_with_mode(state, vehicle_id, false).await;
+}
+
+async fn queue_vehicle_artwork_repair_with_mode(
+    state: &AppState,
+    vehicle_id: Uuid,
+    force_manifest_refresh: bool,
+) {
+    if !force_manifest_refresh
+        && vehicle_artwork_cache_complete(&state.pool, &state.config, vehicle_id).await
+    {
+        return;
+    }
+    if !claim_vehicle_artwork_repair(&state.pool, vehicle_id).await {
+        return;
+    }
+    let pool = state.pool.clone();
+    let config = state.config.clone();
+    let age_key = state.age_key.clone();
+    tokio::spawn(async move {
+        repair_vehicle_artwork(pool, config, age_key, vehicle_id, force_manifest_refresh).await;
+    });
+}
+
+async fn repair_vehicle_artwork(
+    pool: sqlx::PgPool,
+    config: crate::config::Config,
+    age_key: String,
+    vehicle_id: Uuid,
+    force_manifest_refresh: bool,
+) {
+    for attempt in 0..3 {
+        ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key, force_manifest_refresh).await;
+        if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
+            refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, None).await;
+            return;
+        }
+        if attempt < 2 {
+            tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
+        }
+    }
+    refresh_vehicle_artwork_cache_state(
+        &pool,
+        &config,
+        vehicle_id,
+        Some("Artwork cache is incomplete."),
+    )
+    .await;
+}
+
 /// Starts a bounded repair pass after the API has loaded its encrypted vehicle
 /// credentials. Browser requests only read local files; they never trigger this.
 pub fn start_vehicle_artwork_repair_worker(
@@ -4325,27 +4416,7 @@ pub fn start_vehicle_artwork_repair_worker(
                 continue;
             }
 
-            let mut repaired = false;
-            for attempt in 0..3 {
-                ensure_vehicle_images_cached(&pool, &config, vehicle_id, &age_key, false).await;
-                if vehicle_artwork_cache_complete(&pool, &config, vehicle_id).await {
-                    refresh_vehicle_artwork_cache_state(&pool, &config, vehicle_id, None).await;
-                    repaired = true;
-                    break;
-                }
-                if attempt < 2 {
-                    tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
-                }
-            }
-            if !repaired {
-                refresh_vehicle_artwork_cache_state(
-                    &pool,
-                    &config,
-                    vehicle_id,
-                    Some("Artwork cache is incomplete."),
-                )
-                .await;
-            }
+            repair_vehicle_artwork(pool.clone(), config.clone(), age_key.clone(), vehicle_id, false).await;
         }
     });
 }
@@ -5080,7 +5151,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_image_url_does_not_fall_back_to_remote_when_local_file_is_missing() {
+    fn resolved_image_url_keeps_a_first_party_path_when_local_file_is_missing() {
         let config = crate::config::Config {
             database_url: "postgres://localhost/test".into(),
             redis_url: "redis://localhost".into(),
@@ -5125,11 +5196,14 @@ mod tests {
             &metadata,
         );
 
-        assert_eq!(url, None);
+        assert_eq!(
+            url,
+            Some("/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/abc.webp".into())
+        );
     }
 
     #[tokio::test]
-    async fn resolved_image_url_requires_a_matching_local_checksum() {
+    async fn resolved_image_url_keeps_a_first_party_path_for_a_corrupt_local_file() {
         use sha2::{Digest, Sha256};
 
         let vehicle_id = Uuid::new_v4();
@@ -5167,7 +5241,7 @@ mod tests {
                 "https://rivian.com/artwork.webp",
                 &metadata
             ),
-            None
+            Some(format!("/v1/vehicle-image-cache/{vehicle_id}/artwork.webp"))
         );
         let _ = std::fs::remove_dir_all(&config.vehicle_image_cache_dir);
     }

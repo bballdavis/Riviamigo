@@ -246,6 +246,17 @@ class ApiClient {
     return fetch(input, { ...init, credentials: 'same-origin', headers });
   }
 
+  /**
+   * Retrieve a first-party protected asset with the normal session bearer
+   * token. This deliberately keeps credentials out of browser image URLs.
+   */
+  async authenticatedAsset(path: string): Promise<Response> {
+    if (!path.startsWith('/v1/vehicle-image-cache/')) {
+      throw new Error('authenticatedAsset only accepts first-party vehicle artwork paths');
+    }
+    return this.requestResponse('GET', path, undefined, undefined, true, false);
+  }
+
   private assertRateLimitCooldown(method: string, path: string) {
     const limiterClass = inferClientRateLimitClass(method, path);
     const cooldownUntil = this.rateLimitCooldowns.get(limiterClass);
@@ -430,6 +441,10 @@ class ApiClient {
 
   async refreshVehicleArtwork(vehicleId: string): Promise<{ ok: boolean; vehicle_id: string }> {
     return this.request('POST', `/v1/admin/vehicles/${vehicleId}/images/remirror`);
+  }
+
+  async purgeVehicleArtworkCache(vehicleId: string): Promise<{ ok: boolean; vehicle_id: string }> {
+    return this.request('POST', `/v1/admin/vehicles/${vehicleId}/images/cache/purge`);
   }
 
   async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {

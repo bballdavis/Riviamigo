@@ -1,6 +1,6 @@
 import React from 'react';
 import { Zap } from 'lucide-react';
-import { useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -277,8 +277,8 @@ function VehicleSideImage({
       : `translate(${cropConfig.translateX}%, ${translateY}%) scale(${cropConfig.scale})`;
   return (
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
-      <img
-        src={source}
+      <AuthenticatedVehicleArtwork
+        source={source}
         alt="Vehicle side view showing charging port location"
         data-testid="charging-side-image"
         data-image-mode="charging"
