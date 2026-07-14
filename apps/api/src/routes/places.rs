@@ -4,8 +4,10 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tracing::debug;
 use uuid::Uuid;
@@ -153,7 +155,33 @@ async fn search_places(
         return Ok(Json(Vec::new()));
     }
 
-    // --- cache check (1 hr TTL) ------------------------------------------
+    let limit = params.limit.unwrap_or(5);
+    let persistent_cache_key = search_cache_key(&query, limit);
+
+    // The persistent key contains only a digest, never the address query.
+    // Redis is backed by an AOF volume in normal deployment and is cleared
+    // explicitly from External Connections.
+    if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
+        if let Ok(Some(payload)) = redis.get::<_, Option<String>>(&persistent_cache_key).await {
+            if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+                let suggestions: Vec<AddressRecord> = value
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .filter_map(|v| value_to_address_record(v.clone()))
+                    .collect();
+                debug!(
+                    cache_hit = true,
+                    cache = "persistent",
+                    suggestion_count = suggestions.len(),
+                    "places.address_search_completed"
+                );
+                return Ok(Json(suggestions));
+            }
+        }
+    }
+
+    // --- in-process fallback cache (1 hour) ------------------------------
     {
         let cache = state.nominatim_cache.read().await;
         if let Some((cached_at, value)) = cache.get(&query) {
@@ -164,7 +192,11 @@ async fn search_places(
                     .iter()
                     .filter_map(|v| value_to_address_record(v.clone()))
                     .collect();
-                debug!(cache_hit = true, suggestion_count = suggestions.len(), "places.address_search_completed");
+                debug!(
+                    cache_hit = true,
+                    suggestion_count = suggestions.len(),
+                    "places.address_search_completed"
+                );
                 return Ok(Json(suggestions));
             }
         }
@@ -176,13 +208,8 @@ async fn search_places(
         .map_err(|error| {
             AppError::Internal(anyhow!("address search client build failed: {error}"))
         })?;
-    let rows = crate::services::nominatim::search(
-        &state.pool,
-        &client,
-        params.q.trim(),
-        params.limit.unwrap_or(5),
-    )
-    .await?;
+    let rows =
+        crate::services::nominatim::search(&state.pool, &client, params.q.trim(), limit).await?;
 
     // --- populate cache --------------------------------------------------
     {
@@ -190,7 +217,11 @@ async fn search_places(
         // Evict expired entries to keep memory bounded
         cache.retain(|_, (cached_at, _)| cached_at.elapsed() < Duration::from_secs(3600));
         if cache.len() >= 500 {
-            if let Some(oldest) = cache.iter().min_by_key(|(_, (cached_at, _))| *cached_at).map(|(key, _)| key.clone()) {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, (cached_at, _))| *cached_at)
+                .map(|(key, _)| key.clone())
+            {
                 cache.remove(&oldest);
             }
         }
@@ -203,14 +234,35 @@ async fn search_places(
         );
     }
 
+    if let Ok(payload) = serde_json::to_string(&rows) {
+        if let Ok(mut redis) = state.redis.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = redis.set(&persistent_cache_key, payload).await;
+        }
+    }
+
     let suggestions: Vec<AddressRecord> = rows
         .into_iter()
         .filter_map(value_to_address_record)
         .collect();
 
-    debug!(cache_hit = false, suggestion_count = suggestions.len(), "places.address_search_completed");
+    debug!(
+        cache_hit = false,
+        suggestion_count = suggestions.len(),
+        "places.address_search_completed"
+    );
 
     Ok(Json(suggestions))
+}
+
+fn search_cache_key(query: &str, limit: u8) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(query.as_bytes());
+    hasher.update([0]);
+    hasher.update(limit.to_le_bytes());
+    format!(
+        "external:nominatim:search:{}",
+        hex::encode(hasher.finalize())
+    )
 }
 
 async fn create_place(
@@ -682,4 +734,17 @@ fn value_to_address_record(raw: Value) -> Option<AddressRecord> {
             .map(str::to_string),
         raw: Some(raw),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_cache_key;
+
+    #[test]
+    fn persistent_search_key_does_not_contain_address_text() {
+        let key = search_cache_key("123 Main Street, Austin", 5);
+        assert!(key.starts_with("external:nominatim:search:"));
+        assert!(!key.contains("Main"));
+        assert_ne!(key, search_cache_key("124 Main Street, Austin", 5));
+    }
 }

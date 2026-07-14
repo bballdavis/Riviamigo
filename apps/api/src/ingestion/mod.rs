@@ -20,7 +20,8 @@ pub async fn start_workers(
     age_key: String,
     config: Config,
 ) -> anyhow::Result<supervisor::SupervisorHandle> {
-    let handle = supervisor::WorkerSupervisor::start(pool.clone(), redis, age_key, config);
+    let handle =
+        supervisor::WorkerSupervisor::start(pool.clone(), redis, age_key.clone(), config.clone());
 
     let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM riviamigo.vehicles v \
@@ -34,6 +35,8 @@ pub async fn start_workers(
             .send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid })
             .await;
     }
+
+    crate::routes::vehicles::start_vehicle_artwork_repair_worker(pool, config, age_key);
 
     Ok(handle)
 }

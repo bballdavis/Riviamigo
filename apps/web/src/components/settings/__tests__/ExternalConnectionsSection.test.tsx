@@ -7,6 +7,7 @@ const apiMocks = vi.hoisted(() => ({
   getExternalConnections: vi.fn(),
   updateExternalConnection: vi.fn(),
   testExternalConnection: vi.fn(),
+  purgeExternalConnectionCache: vi.fn(),
   disableOptionalExternalConnections: vi.fn(),
 }));
 
@@ -28,7 +29,7 @@ function response(canManage: boolean) {
       terms_url: 'https://open-meteo.com/en/terms',
       editable: canManage,
       enabled: true,
-      mode: 'hosted',
+      mode: 'remote',
       endpoint: 'https://api.open-meteo.com/v1/forecast',
       endpoint_is_private: false,
       weather_precision: 'approximate',
@@ -48,6 +49,16 @@ function response(canManage: boolean) {
       last_attempt_at: null,
       last_success_at: null,
       last_error: null,
+      last_test_at: null,
+      last_test_ok: null,
+      last_test_error: null,
+      cache: {
+        entries: 24,
+        bytes: 4096,
+        persistent: true,
+        purgeable: true,
+        description: 'Persistent address search results and reverse-geocoded addresses.',
+      },
       request_count_today: 12,
     }],
   };
@@ -67,7 +78,7 @@ describe('ExternalConnectionsSection', () => {
     apiMocks.getExternalConnections.mockResolvedValue(response(false));
     renderSection();
 
-    expect(await screen.findByText('Open-Meteo weather')).toBeInTheDocument();
+    expect((await screen.findAllByText('Open-Meteo weather')).length).toBeGreaterThan(0);
     expect(screen.getByText(/Rounded drive coordinates by default/)).toBeInTheDocument();
     expect(screen.getByText(/No new estimated exterior temperatures/)).toBeInTheDocument();
     expect(screen.getByText(/administrator controls the installation policy/)).toBeInTheDocument();
@@ -84,5 +95,20 @@ describe('ExternalConnectionsSection', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disable optional' }));
     await waitFor(() => expect(apiMocks.disableOptionalExternalConnections).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows persistent cache usage and lets administrators purge it', async () => {
+    const data = response(true);
+    const connection = data.connections[0]!;
+    connection.id = 'nominatim';
+    connection.name = 'OpenStreetMap Nominatim';
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.purgeExternalConnectionCache.mockResolvedValue({ purged_entries: 24, message: 'Persistent cache purged.' });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderSection();
+
+    expect(await screen.findByText(/24 entries/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Purge cache' }));
+    await waitFor(() => expect(apiMocks.purgeExternalConnectionCache).toHaveBeenCalledWith('nominatim'));
   });
 });

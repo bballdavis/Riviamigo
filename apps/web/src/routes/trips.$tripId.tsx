@@ -43,7 +43,7 @@ function TripDetailPage() {
 }
 
 export function TripDetailContent() {
-  const { defaultVehicleId } = useAuth();
+  const { defaultVehicleId, accessToken } = useAuth();
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
   const [activeIndex, setActiveIndex] = React.useState<number | null>(null);
@@ -252,6 +252,7 @@ export function TripDetailContent() {
                       activePoint={activeMapPoint}
                       height={TRIP_PRIMARY_CHART_HEIGHT}
                       mapStyle={mapStyle}
+                      accessToken={accessToken}
                     />
                   )}
                 </div>
