@@ -5,16 +5,25 @@ import '../../../../packages/dashboards/src/widgets/sensor/SensorChipWidget';
 import '../../../../packages/dashboards/src/widgets/table/TripStatWidget';
 import { DashboardGrid } from '../../../../packages/dashboards/src/DashboardGrid';
 import GridEditor from '../../../../packages/dashboards/src/GridEditor';
+import { WidgetEditForm } from '../../../../packages/dashboards/src/editor/WidgetEditForm';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
-vi.mock('@riviamigo/hooks', () => ({
-  useMetricCatalog: () => ({ data: [] }),
-}));
+vi.mock('@riviamigo/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
+  return {
+    ...actual,
+    useMetricCatalog: () => ({ data: [] }),
+  };
+});
 
 vi.mock('../../../../packages/dashboards/src/WidgetHost', () => ({
   WidgetHost: ({ instance }: { instance: { id: string; definitionId: string } }) => (
     <div data-testid={`widget-host-${instance.id}`}>{instance.definitionId}</div>
   ),
+}));
+
+vi.mock('../../../../packages/dashboards/src/editor/IconPicker', () => ({
+  IconPicker: () => null,
 }));
 
 const BASE_CTX = {
@@ -59,6 +68,40 @@ function getEditorStyles() {
 }
 
 describe('GridEditor overlays', () => {
+  it('writes sensor curve smoothing changes back through the widget options contract', () => {
+    const onChange = vi.fn();
+    const widget = {
+      ...BASE_CONFIG.widgets[0]!,
+      options: {
+        chartType: 'line',
+        curveSmoothing: 0.45,
+      },
+    };
+
+    render(
+      <WidgetEditForm
+        widget={widget}
+        onChange={onChange}
+        onClose={() => undefined}
+      />
+    );
+
+    const slider = screen.getByRole('slider');
+    fireEvent.change(slider, { target: { value: '1' } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ curveSmoothing: 1 }),
+      })
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Smooth curves' }));
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ curveSmoothing: 0 }),
+      })
+    );
+  });
+
   it('keeps edit-only overlays out of the view grid chrome', () => {
     render(<DashboardGrid widgets={BASE_CONFIG.widgets} ctx={BASE_CTX} />);
 

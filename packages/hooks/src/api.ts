@@ -4,11 +4,11 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripDetailSeriesPoint, TripMapResponse, TripDetailResponse, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
+  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripPowerSource, TripDetailSeriesPoint, TripMapResponse, TripDetailResponse, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, ChargingChartSeries, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   CreateDemoVehicleBody, CreateDemoVehicleResult,
-  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse, RawTelemetryQuery, RawEventDetail, RawEventListResponse, RawEventQuery,
+  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse, RawTelemetryQuery, TelemetryLaneFrame, TelemetryLaneQuery, RawEventDetail, RawEventListResponse, RawEventQuery,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, MetricBatchRequest, MetricBatchResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
@@ -843,13 +843,18 @@ class ApiClient {
     );
 
     return rows
-      .map((row) => ({
-        ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
-        power_kw: finiteNumber(row.power_kw) ?? null,
-        regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
-        speed_mph: finiteNumber(row.speed_mph) ?? null,
-        battery_level: finiteNumber(row.battery_level) ?? null,
-      }))
+      .map((row) => {
+        const powerSource = tripPowerSource(row.power_source);
+        return {
+          ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
+          power_kw: finiteNumber(row.power_kw) ?? null,
+          regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
+          speed_mph: finiteNumber(row.speed_mph) ?? null,
+          battery_level: finiteNumber(row.battery_level) ?? null,
+          estimated_net_power_kw: finiteNumber(row.estimated_net_power_kw) ?? null,
+          ...(powerSource ? { power_source: powerSource } : {}),
+        };
+      })
       .filter((row) => typeof row.ts === 'string') satisfies TripPowerPoint[];
   }
 
@@ -859,21 +864,26 @@ class ApiClient {
     );
 
     return rows
-      .map((row) => ({
-        ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
-        speed_mph: finiteNumber(row.speed_mph) ?? null,
-        power_kw: finiteNumber(row.power_kw) ?? null,
-        regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
-        battery_level: finiteNumber(row.battery_level) ?? null,
-        outside_temp_c: finiteNumber(row.outside_temp_c) ?? null,
-        cabin_temp_c: finiteNumber(row.cabin_temp_c) ?? null,
-        driver_temp_c: finiteNumber(row.driver_temp_c) ?? null,
-        hvac_active: typeof row.hvac_active === 'boolean' ? row.hvac_active : null,
-        tire_fl_psi: finiteNumber(row.tire_fl_psi) ?? null,
-        tire_fr_psi: finiteNumber(row.tire_fr_psi) ?? null,
-        tire_rl_psi: finiteNumber(row.tire_rl_psi) ?? null,
-        tire_rr_psi: finiteNumber(row.tire_rr_psi) ?? null,
-      }))
+      .map((row) => {
+        const powerSource = tripPowerSource(row.power_source);
+        return {
+          ts: typeof row.ts === 'string' ? row.ts : new Date().toISOString(),
+          speed_mph: finiteNumber(row.speed_mph) ?? null,
+          power_kw: finiteNumber(row.power_kw) ?? null,
+          regen_power_kw: finiteNumber(row.regen_power_kw) ?? null,
+          battery_level: finiteNumber(row.battery_level) ?? null,
+          outside_temp_c: finiteNumber(row.outside_temp_c) ?? null,
+          cabin_temp_c: finiteNumber(row.cabin_temp_c) ?? null,
+          driver_temp_c: finiteNumber(row.driver_temp_c) ?? null,
+          hvac_active: typeof row.hvac_active === 'boolean' ? row.hvac_active : null,
+          tire_fl_psi: finiteNumber(row.tire_fl_psi) ?? null,
+          tire_fr_psi: finiteNumber(row.tire_fr_psi) ?? null,
+          tire_rl_psi: finiteNumber(row.tire_rl_psi) ?? null,
+          tire_rr_psi: finiteNumber(row.tire_rr_psi) ?? null,
+          estimated_net_power_kw: finiteNumber(row.estimated_net_power_kw) ?? null,
+          ...(powerSource ? { power_source: powerSource } : {}),
+        };
+      })
       .filter((row) => typeof row.ts === 'string') satisfies TripDetailSeriesPoint[];
   }
 
@@ -1208,6 +1218,16 @@ class ApiClient {
     });
   }
 
+  async getTelemetryLanes(vehicleId: string, query: TelemetryLaneQuery = {}) {
+    return this.request<TelemetryLaneFrame>('GET', `/v1/vehicles/${vehicleId}/telemetry/lanes`, undefined, {
+      ...(query.from ? { from: query.from } : {}),
+      ...(query.to ? { to: query.to } : {}),
+      ...(query.lanes?.length ? { lanes: query.lanes.join(',') } : {}),
+      ...(query.resolution ? { resolution: query.resolution } : {}),
+      ...(query.max_points ? { max_points: query.max_points } : {}),
+    });
+  }
+
   async getRawEvents(vehicleId: string, query: RawEventQuery = {}) {
     return this.request<RawEventListResponse>('GET', `/v1/vehicles/${vehicleId}/raw-events`, undefined, {
       ...(query.from ? { from: query.from } : {}),
@@ -1499,6 +1519,12 @@ function finiteNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function tripPowerSource(value: unknown): TripPowerSource | undefined {
+  return value === 'direct' || value === 'estimated_soc' || value === 'unavailable'
+    ? value
+    : undefined;
 }
 
 function formatApiError(detail: ApiFailureDetail) {

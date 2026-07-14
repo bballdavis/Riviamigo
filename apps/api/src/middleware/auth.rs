@@ -225,6 +225,7 @@ fn is_scoped_vehicle_read_path(path: &str) -> bool {
         ["status"]
             | ["images"]
             | ["raw-data"]
+            | ["telemetry", "lanes"]
             | ["health"]
             | ["idle-drain"]
             | ["state-timeline"]

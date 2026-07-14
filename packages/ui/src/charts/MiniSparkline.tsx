@@ -11,7 +11,16 @@ export interface MiniSparklineProps {
   curveSmoothing?: number | boolean;
 }
 
-const DEFAULT_CURVE_SMOOTHING = 0.45;
+export const DEFAULT_CURVE_SMOOTHING = 0.45;
+
+/** Normalize the shared sensor-graph curve interpolation setting. */
+export function normalizeCurveSmoothing(value: unknown, fallback = DEFAULT_CURVE_SMOOTHING) {
+  if (typeof value === 'boolean') return value ? fallback : 0;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.min(1, Math.max(0, value));
+  }
+  return fallback;
+}
 
 export function MiniSparkline({
   data,
@@ -94,7 +103,8 @@ function LineSparkline({
       style={{ height, width: '100%' }}
       className="overflow-hidden"
       data-sparkline-state={data.length === 1 ? 'single' : 'series'}
-      data-sparkline-curve={curveSmoothing > 0 ? 'smooth' : 'straight'}
+      data-sparkline-curve={curveSmoothing > 0 && data.length >= 3 ? 'smooth' : 'straight'}
+      data-sparkline-smoothing={curveSmoothing.toFixed(2)}
     >
       <svg
         style={{ display: 'block', height: '100%', width: '100%' }}
@@ -208,10 +218,4 @@ function straightPointsToPath(points: Array<{ x: number; y: number }>) {
 
 function formatPoint(point: { x: number; y: number }) {
   return `${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
-}
-
-function normalizeCurveSmoothing(value: number | boolean) {
-  if (typeof value === 'boolean') return value ? DEFAULT_CURVE_SMOOTHING : 0;
-  if (!Number.isFinite(value)) return DEFAULT_CURVE_SMOOTHING;
-  return Math.min(1, Math.max(0, value));
 }

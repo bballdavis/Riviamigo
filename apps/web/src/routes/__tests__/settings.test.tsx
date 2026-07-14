@@ -79,6 +79,13 @@ vi.mock('@riviamigo/hooks', () => ({
       },
       samples: [],
     }),
+    getTelemetryLanes: vi.fn().mockResolvedValue({
+      vehicle_id: 'v1',
+      window: { from: '2026-05-03T12:00:00Z', to: '2026-05-04T12:00:00Z', resolution_seconds: 300, approximate: true },
+      spine: [],
+      lanes: {},
+      truncated: false,
+    }),
     getRivianStewardship: vi.fn().mockResolvedValue({
       generated_at: '2026-05-04T12:00:00Z',
       retention_days: 7,

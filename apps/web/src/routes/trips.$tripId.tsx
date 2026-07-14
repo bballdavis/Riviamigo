@@ -130,15 +130,22 @@ export function TripDetailContent() {
   const pressureFactor = unitPreferences.pressure_unit === 'kpa' ? 6.89476 : 1;
   const temperatureUnitLabel = unitPreferences.temperature_unit === 'fahrenheit' ? '°F' : '°C';
   const pressureUnitLabel = unitPreferences.pressure_unit === 'kpa' ? 'kPa' : 'psi';
-  const outsideTemperatureLabel = detailData?.outside_temperature.source === 'open_meteo'
+  const outsideTemperatureLabel = detailData?.outside_temperature?.source === 'open_meteo'
     ? 'Outside (estimated)'
-    : detailData?.outside_temperature.source === 'mixed'
+    : detailData?.outside_temperature?.source === 'mixed'
       ? 'Outside (mixed)'
       : 'Outside';
+  const drivePowerSource = detailData?.power?.source
+    ?? (timeline.some((point) => point.power_kw != null || point.regen_kw != null) ? 'direct' : 'unavailable');
+  const drivePowerIsEstimated = drivePowerSource === 'estimated_soc';
   const chartSeries = React.useMemo(() => ({
     drive: [
-      { key: 'power', label: 'Power', color: CHART_COLORS.accent, values: timeline.map((point) => point.power_kw) },
-      { key: 'regen', label: 'Regen', color: CHART_COLORS.success, values: timeline.map((point) => point.regen_kw) },
+      ...(drivePowerIsEstimated
+        ? [{ key: 'estimated_net_power', label: 'Estimated net power', color: CHART_COLORS.accent, values: timeline.map((point) => point.estimated_net_power_kw) }]
+        : [
+          { key: 'power', label: 'Power', color: CHART_COLORS.accent, values: timeline.map((point) => point.power_kw) },
+          { key: 'regen', label: 'Regen', color: CHART_COLORS.success, values: timeline.map((point) => point.regen_kw) },
+        ]),
       { key: 'speed', label: 'Speed', color: CHART_COLORS.sky, yScale: 'y2' as const, values: timeline.map((point) => point.speed_mph) },
     ],
     temperature: [
@@ -155,7 +162,7 @@ export function TripDetailContent() {
       { key: 'tire_rl', label: 'Rear Left', color: CHART_COLORS.success, values: timeline.map((point) => point.tire_rl_psi == null ? null : point.tire_rl_psi * pressureFactor) },
       { key: 'tire_rr', label: 'Rear Right', color: CHART_COLORS.warning, values: timeline.map((point) => point.tire_rr_psi == null ? null : point.tire_rr_psi * pressureFactor) },
     ],
-  }), [outsideTemperatureLabel, pressureFactor, temperatureFactor, temperatureOffset, timeline]);
+  }), [drivePowerIsEstimated, outsideTemperatureLabel, pressureFactor, temperatureFactor, temperatureOffset, timeline]);
 
   const metricCoverage = React.useMemo(() => {
     let powerSamples = 0;
@@ -163,7 +170,9 @@ export function TripDetailContent() {
     let tireSamples = 0;
 
     for (const point of timeline) {
-      if (point.power_kw != null || point.regen_kw != null) powerSamples += 1;
+      if (drivePowerIsEstimated
+        ? point.estimated_net_power_kw != null
+        : point.power_kw != null || point.regen_kw != null) powerSamples += 1;
       if (point.outside_temp_c != null || point.cabin_temp_c != null || point.driver_temp_c != null) tempSamples += 1;
       if (point.tire_fl_psi != null || point.tire_fr_psi != null || point.tire_rl_psi != null || point.tire_rr_psi != null) {
         tireSamples += 1;
@@ -176,7 +185,7 @@ export function TripDetailContent() {
       tireSamples,
       totalTimelineSamples: timeline.length,
     };
-  }, [timeline]);
+  }, [drivePowerIsEstimated, timeline]);
 
   const activeTimelinePoint = React.useMemo(
     () => (activeIndex == null ? null : timeline[activeIndex] ?? null),
@@ -261,7 +270,9 @@ export function TripDetailContent() {
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold text-fg">Drive Chart</h3>
                     <p className="text-xs text-fg-tertiary">
-                      {metricCoverage.powerSamples > 0
+                      {drivePowerIsEstimated
+                        ? `${detailData?.power?.sample_count ?? metricCoverage.powerSamples} estimated intervals${detailData?.power?.median_interval_seconds != null ? ` · median ${Math.round(detailData.power.median_interval_seconds)}s` : ''}`
+                        : metricCoverage.powerSamples > 0
                         ? `${metricCoverage.powerSamples} power samples`
                         : 'No power samples in trip telemetry'}
                     </p>
@@ -279,9 +290,14 @@ export function TripDetailContent() {
                     yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
                     cursorSyncKey={`trip-${tripId}`}
                     onCursorIndexChange={setActiveIndexThrottled}
-                    connectGaps
+                    connectGaps={!drivePowerIsEstimated}
                     emptyTitle="No drive profile data for this trip."
                   />
+                  {drivePowerIsEstimated ? (
+                    <p className="mt-2 text-xs leading-5 text-fg-tertiary">
+                      Averaged between state-of-charge updates. Negative values indicate net regeneration; short acceleration and braking peaks are not available from Rivian.
+                    </p>
+                  ) : null}
                 </div>
 
               </div>
@@ -323,7 +339,7 @@ export function TripDetailContent() {
                     connectGaps
                     emptyTitle="No temperature data for this trip."
                   />
-                  {detailData?.outside_temperature.attribution && (
+                  {detailData?.outside_temperature?.attribution && (
                     <p className="mt-2 text-xs text-fg-tertiary">
                       Estimated exterior temperature: {' '}
                       <a
@@ -402,6 +418,7 @@ interface TimelinePoint {
   speed_mph: number | null;
   power_kw: number | null;
   regen_kw: number | null;
+  estimated_net_power_kw: number | null;
   battery_level: number | null;
   outside_temp_c: number | null;
   cabin_temp_c: number | null;
@@ -444,6 +461,7 @@ function buildTimeline(
     speed_mph: samples.speed_mph[index] ?? null,
     power_kw: samples.power_kw[index] ?? null,
     regen_kw: samples.regen_power_kw[index] != null ? -Math.abs(samples.regen_power_kw[index]!) : null,
+    estimated_net_power_kw: samples.estimated_net_power_kw?.[index] ?? null,
     battery_level: samples.battery_level[index] ?? null,
     outside_temp_c: samples.outside_temp_c[index] ?? null,
     cabin_temp_c: samples.cabin_temp_c[index] ?? null,

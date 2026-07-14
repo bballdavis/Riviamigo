@@ -22,8 +22,14 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/setup", get(setup))
         .route("/auth/register", post(register))
-        .route("/auth/account-invitations/preview", post(preview_account_invitation))
-        .route("/auth/account-invitations/accept", post(accept_account_invitation))
+        .route(
+            "/auth/account-invitations/preview",
+            post(preview_account_invitation),
+        )
+        .route(
+            "/auth/account-invitations/accept",
+            post(accept_account_invitation),
+        )
         .route("/auth/login", post(login))
         .route("/auth/bootstrap", post(bootstrap))
         .route("/auth/refresh", post(refresh))
@@ -78,7 +84,9 @@ async fn setup(State(state): State<AppState>) -> Result<Json<SetupResponse>, App
     let has_users: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users)")
         .fetch_one(&state.pool)
         .await?;
-    Ok(Json(SetupResponse { setup_required: !has_users }))
+    Ok(Json(SetupResponse {
+        setup_required: !has_users,
+    }))
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -240,20 +248,38 @@ async fn accept_account_invitation(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    audit_log(state.pool.clone(), "account_invitation_accepted", Some(user_id), "account invitation accepted".to_string());
+    audit_log(
+        state.pool.clone(),
+        "account_invitation_accepted",
+        Some(user_id),
+        "account invitation accepted".to_string(),
+    );
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
     let cookie = refresh_cookie(&refresh, 2_592_000);
-    Ok((StatusCode::CREATED, [(SET_COOKIE, cookie)], Json(AccessTokenResponse {
-        access_token: token, expires_in: 900, default_vehicle_id: None,
-    })).into_response())
+    Ok((
+        StatusCode::CREATED,
+        [(SET_COOKIE, cookie)],
+        Json(AccessTokenResponse {
+            access_token: token,
+            expires_in: 900,
+            default_vehicle_id: None,
+        }),
+    )
+        .into_response())
 }
 
 fn validate_account_invitation(row: &sqlx::postgres::PgRow) -> Result<(), AppError> {
-    if row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at").is_some() {
+    if row
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
+        .is_some()
+    {
         return Err(AppError::Validation("invitation revoked".into()));
     }
-    if row.get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at").is_some() {
+    if row
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("accepted_at")
+        .is_some()
+    {
         return Err(AppError::Validation("invitation already accepted".into()));
     }
     if row.get::<chrono::DateTime<chrono::Utc>, _>("expires_at") <= chrono::Utc::now() {
