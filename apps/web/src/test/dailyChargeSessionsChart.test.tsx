@@ -28,6 +28,7 @@ describe('DailyChargeSessionsChart', () => {
             day_start: '2024-01-01T00:00:00Z',
             started_at: '2024-01-01T10:00:00Z',
             energy_added_kwh: 10,
+            cost_usd: 1.25,
             charger_type: 'ac',
             location_name: 'Home',
           },
@@ -37,6 +38,7 @@ describe('DailyChargeSessionsChart', () => {
             day_start: '2024-01-01T00:00:00Z',
             started_at: '2024-01-01T12:00:00Z',
             energy_added_kwh: 20,
+            cost_usd: 4.5,
             charger_type: 'dc',
             location_name: 'Office',
           },
@@ -46,6 +48,7 @@ describe('DailyChargeSessionsChart', () => {
             day_start: '2024-01-01T00:00:00Z',
             started_at: '2024-01-01T13:00:00Z',
             energy_added_kwh: 5,
+            cost_usd: 0.75,
             charger_type: 'ac',
             location_name: 'Home',
           },
@@ -55,6 +58,7 @@ describe('DailyChargeSessionsChart', () => {
             day_start: '2024-01-02T00:00:00Z',
             started_at: '2024-01-02T09:00:00Z',
             energy_added_kwh: 70,
+            cost_usd: 3.25,
             charger_type: 'ac',
             location_name: 'Fast Charger',
           },
@@ -101,6 +105,7 @@ describe('DailyChargeSessionsChart', () => {
             day_start: '2024-01-01T00:00:00Z',
             started_at: '2024-01-01T10:00:00Z',
             energy_added_kwh: 24,
+            cost_usd: 2.4,
             charger_type: 'ac',
             location_name: 'Home',
           },
@@ -110,6 +115,7 @@ describe('DailyChargeSessionsChart', () => {
             day_start: '2024-01-01T00:00:00Z',
             started_at: '2024-01-01T17:00:00Z',
             energy_added_kwh: 16,
+            cost_usd: 5.6,
             charger_type: 'dc',
             location_name: 'Office',
           },
@@ -123,6 +129,8 @@ describe('DailyChargeSessionsChart', () => {
     expect(tooltip.textContent ?? '').toContain('40 kWh total');
     expect(tooltip.textContent ?? '').toContain('AC');
     expect(tooltip.textContent ?? '').toContain('DC');
+    expect(tooltip.textContent ?? '').toContain('$2.40');
+    expect(tooltip.textContent ?? '').toContain('$5.60');
     expect(tooltip.textContent ?? '').toContain('2 sessions');
   });
 
@@ -172,6 +180,7 @@ describe('DailyChargeSessionsChart', () => {
                 day_start: '2024-01-01T00:00:00Z',
                 started_at: '2024-01-01T10:00:00Z',
                 energy_added_kwh: 12,
+                cost_usd: null,
                 charger_type: 'ac',
                 location_name: 'Home',
               },

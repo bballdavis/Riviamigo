@@ -317,15 +317,15 @@ const mockChargingChartSeries = vi.fn(() => ({
     daily_sessions: [
       {
         session_id: 's1', day_local: '2024-01-01', day_start: '2024-01-01T00:00:00Z',
-        started_at: '2024-01-01T10:00:00Z', energy_added_kwh: 24, charger_type: 'AC', location_name: 'Home',
+        started_at: '2024-01-01T10:00:00Z', energy_added_kwh: 24, cost_usd: 2.4, charger_type: 'AC', location_name: 'Home',
       },
       {
         session_id: 's2', day_local: '2024-01-01', day_start: '2024-01-01T00:00:00Z',
-        started_at: '2024-01-01T17:00:00Z', energy_added_kwh: 16, charger_type: 'DC', location_name: 'Office',
+        started_at: '2024-01-01T17:00:00Z', energy_added_kwh: 16, cost_usd: 5.6, charger_type: 'DC', location_name: 'Office',
       },
       {
         session_id: 's3', day_local: '2024-01-02', day_start: '2024-01-02T00:00:00Z',
-        started_at: '2024-01-02T09:00:00Z', energy_added_kwh: 15, charger_type: 'AC', location_name: 'Home',
+        started_at: '2024-01-02T09:00:00Z', energy_added_kwh: 15, cost_usd: 1.5, charger_type: 'AC', location_name: 'Home',
       },
     ],
   },

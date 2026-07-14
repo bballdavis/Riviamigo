@@ -25,7 +25,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
 
 /// All telemetry columns that Grafana can request.
@@ -53,14 +53,14 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Grafana health check — returns 200 OK with empty body.
-async fn health_check() -> impl IntoResponse {
+async fn health_check(_auth: AuthUser) -> impl IntoResponse {
     (StatusCode::OK, "")
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
 /// Returns the list of available metric names.
-async fn search() -> Json<Vec<&'static str>> {
+async fn search(_auth: AuthUser) -> Json<Vec<&'static str>> {
     Json(ALLOWED_METRICS.to_vec())
 }
 
@@ -128,6 +128,7 @@ async fn query(
             .or(qp.vehicle_id)
             .ok_or_else(|| AppError::Validation("vehicleId is required".to_string()))?;
 
+        require_vehicle_access(&auth, vehicle_id)?;
         // Verify the vehicle belongs to the authenticated user.
         require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
@@ -170,14 +171,14 @@ async fn query(
 
 // ── Stubs ─────────────────────────────────────────────────────────────────────
 
-async fn annotations() -> Json<serde_json::Value> {
+async fn annotations(_auth: AuthUser) -> Json<serde_json::Value> {
     Json(serde_json::json!([]))
 }
 
-async fn tag_keys() -> Json<serde_json::Value> {
+async fn tag_keys(_auth: AuthUser) -> Json<serde_json::Value> {
     Json(serde_json::json!([]))
 }
 
-async fn tag_values() -> Json<serde_json::Value> {
+async fn tag_values(_auth: AuthUser) -> Json<serde_json::Value> {
     Json(serde_json::json!([]))
 }

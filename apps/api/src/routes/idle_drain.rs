@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
 
 const DEFAULT_MIN_DURATION_HOURS: f64 = 6.0;
@@ -166,6 +166,7 @@ async fn idle_drain(
     Path(vehicle_id): Path<Uuid>,
     Query(params): Query<IdleDrainParams>,
 ) -> Result<Json<IdleDrainResponse>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
     let (from, to) =

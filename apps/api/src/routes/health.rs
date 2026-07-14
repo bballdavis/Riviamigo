@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
 
 pub fn router() -> Router<AppState> {
@@ -103,6 +103,7 @@ async fn health(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<HealthResponse>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
 
     let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count) = tokio::try_join!(

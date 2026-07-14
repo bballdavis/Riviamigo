@@ -11,8 +11,9 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
+    db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
 
 pub fn router() -> Router<AppState> {
@@ -72,20 +73,8 @@ async fn overview(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<OverviewResponse>, AppError> {
-    // Verify ownership
-    let owned: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-        vehicle_id,
-        auth.user_id
-    )
-    .fetch_one(&state.pool)
-    .await
-    .map_err(AppError::from)?
-    .unwrap_or(false);
-
-    if !owned {
-        return Err(AppError::NotFound);
-    }
+    require_vehicle_access(&auth, vehicle_id)?;
+    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
     let (live, last_trip, last_charge, today_miles) = tokio::try_join!(
         fetch_live(&state.pool, vehicle_id),

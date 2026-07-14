@@ -720,6 +720,7 @@ function ChargingSessionsChart({
     day_start: string;
     started_at: string;
     energy_added_kwh: number | null;
+    cost_usd: number | null;
     charger_type: string | null;
     location_name: string | null;
   }>;

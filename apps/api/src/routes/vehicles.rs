@@ -23,7 +23,7 @@ use crate::{
     db::vehicles::{get_default_vehicle_id, require_vehicle_role},
     errors::AppError,
     ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::range_normalization::normalize_remaining_range_miles,
 };
 
@@ -68,6 +68,8 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/status", get(vehicle_status))
         .route("/vehicles/:id/images", get(vehicle_images))
         .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
+        .route("/vehicles/:id/raw-events", get(raw_vehicle_events))
+        .route("/vehicles/:id/raw-events/:event_id", get(raw_vehicle_event))
         .route("/vehicles/:id/settings", put(update_vehicle_settings))
         .route("/vehicles/:id/battery-config", put(update_battery_config))
         .route("/vehicles/:id/name", put(update_vehicle_name))
@@ -76,6 +78,23 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize)]
 struct RawDataParams {
     limit: Option<i64>,
+    per_page: Option<i64>,
+    page: Option<i64>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+    search: Option<String>,
+    fields: Option<String>,
+    populated_only: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RawEventParams {
+    per_page: Option<i64>,
+    page: Option<i64>,
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+    event_type: Option<String>,
+    message_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1015,6 +1034,40 @@ struct RawVehicleCoverageRow {
     lock_samples: i64,
     software_samples: i64,
 }
+
+#[derive(Debug, sqlx::FromRow)]
+struct RawEventSummaryRow {
+    id: Uuid,
+    received_at: chrono::DateTime<chrono::Utc>,
+    event_type: String,
+    message_type: Option<String>,
+    has_json: bool,
+    has_payload: bool,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct RawEventDetailRow {
+    id: Uuid,
+    received_at: chrono::DateTime<chrono::Utc>,
+    event_type: String,
+    message_type: Option<String>,
+    payload_json: Option<serde_json::Value>,
+    payload_text: Option<String>,
+}
+
+const RAW_TELEMETRY_FIELDS: &[&str] = &[
+    "latitude", "longitude", "altitude_m", "speed_mph", "battery_level", "battery_capacity_wh",
+    "distance_to_empty_mi", "battery_limit", "power_state", "charger_state", "charger_status",
+    "time_to_end_of_charge_min", "drive_mode", "gear_status", "cabin_temp_c", "driver_temp_c",
+    "outside_temp_c", "hvac_active", "power_kw", "regen_power_kw", "heading_deg", "odometer_miles",
+    "tire_fl_psi", "tire_fr_psi", "tire_rl_psi", "tire_rr_psi", "tire_fl_status", "tire_fr_status",
+    "tire_rl_status", "tire_rr_status", "tire_fl_valid", "tire_fr_valid", "tire_rl_valid",
+    "tire_rr_valid", "door_front_left_locked", "door_front_right_locked", "door_rear_left_locked",
+    "door_rear_right_locked", "door_front_left_closed", "door_front_right_closed", "door_rear_left_closed",
+    "door_rear_right_closed", "closure_frunk_closed", "closure_liftgate_closed", "closure_tailgate_closed",
+    "ota_current_version", "ota_available_version", "ota_status", "ota_current_status", "hv_thermal_event",
+    "twelve_volt_health", "is_online",
+];
 
 #[derive(Serialize)]
 struct ConnectResponse {
@@ -2112,9 +2165,12 @@ async fn list_vehicles(
          JOIN riviamigo.vehicle_memberships vm ON vm.vehicle_id = v.id \
          LEFT JOIN riviamigo.vehicle_user_settings vus ON vus.vehicle_id = v.id AND vus.user_id = vm.user_id \
          LEFT JOIN riviamigo.vehicle_runtime_state vrs ON vrs.vehicle_id = v.id \
-         WHERE vm.user_id = $1 ORDER BY v.created_at",
+         WHERE vm.user_id = $1
+           AND ($2::uuid IS NULL OR v.id = $2)
+         ORDER BY v.created_at",
     )
     .bind(auth.user_id)
+    .bind(auth.api_vehicle_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -2358,6 +2414,7 @@ async fn vehicle_status(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<VehicleStatusResponse>, AppError> {
+    require_vehicle_access(&auth, vid)?;
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let vehicle = sqlx::query_scalar::<_, Option<f64>>(
@@ -3406,6 +3463,7 @@ async fn vehicle_images(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vid)?;
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     Ok(Json(
         fetch_vehicle_images_json(&state.pool, &state.config, vid).await?,
@@ -4016,11 +4074,19 @@ async fn raw_vehicle_data(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
     Query(params): Query<RawDataParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vid)?;
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    let limit = params.limit.unwrap_or(25).clamp(1, 100);
+    validate_raw_time_bounds(params.from.clone(), params.to.clone())?;
+    let selected_fields = parse_raw_fields(params.fields.as_deref())?;
+    let selected_fields_csv = selected_fields.iter().map(|field| (*field).to_string()).collect::<Vec<_>>();
+    let per_page = params.per_page.or(params.limit).unwrap_or(25).clamp(1, 200);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1).saturating_mul(per_page);
+    let search = params.search.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let where_clause = raw_telemetry_where_clause(&selected_fields, params.populated_only.unwrap_or(false));
 
     let samples = sqlx::query_as::<_, RawVehicleSampleRow>(
-        r#"
+        &format!(r#"
         SELECT ts, latitude, longitude, altitude_m, speed_mph,
                battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
                power_state, charger_state, charger_status, time_to_end_of_charge_min,
@@ -4034,19 +4100,23 @@ async fn raw_vehicle_data(
                closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
                ota_current_version, ota_available_version, ota_status, ota_current_status,
                hv_thermal_event, twelve_volt_health, is_online
-        FROM timeseries.telemetry
-        WHERE vehicle_id = $1
-        ORDER BY ts DESC
-        LIMIT $2
-        "#
+        FROM timeseries.telemetry t
+        WHERE {where_clause}
+        ORDER BY t.ts DESC
+        LIMIT $5 OFFSET $6
+        "#)
     )
     .bind(vid)
-    .bind(limit)
+    .bind(params.from.clone())
+    .bind(params.to.clone())
+    .bind(search)
+    .bind(per_page)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await?;
 
     let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(
-        r#"
+        &format!(r#"
         SELECT min(ts) AS first_event_at,
                max(ts) AS last_event_at,
                count(*) AS sample_count,
@@ -4059,11 +4129,39 @@ async fn raw_vehicle_data(
                greatest(count(tire_fl_psi), count(tire_fl_status)) AS tire_pressure_samples,
                count(door_front_left_locked) AS lock_samples,
                count(ota_status) AS software_samples
-        FROM timeseries.telemetry
-        WHERE vehicle_id = $1
-        "#,
+        FROM timeseries.telemetry t
+        WHERE {where_clause}
+        "#),
     )
     .bind(vid)
+    .bind(params.from.clone())
+    .bind(params.to.clone())
+    .bind(search)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*)::BIGINT FROM timeseries.telemetry t WHERE {where_clause}",
+    ))
+    .bind(vid)
+    .bind(params.from.clone())
+    .bind(params.to.clone())
+    .bind(search)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let field_coverage_projection = RAW_TELEMETRY_FIELDS
+        .iter()
+        .map(|field| format!("'{field}', COUNT(t.{field})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let field_coverage: serde_json::Value = sqlx::query_scalar(&format!(
+        "SELECT jsonb_build_object({field_coverage_projection}) FROM timeseries.telemetry t WHERE {where_clause}",
+    ))
+    .bind(vid)
+    .bind(params.from.clone())
+    .bind(params.to.clone())
+    .bind(search)
     .fetch_one(&state.pool)
     .await?;
 
@@ -4083,62 +4181,238 @@ async fn raw_vehicle_data(
             "lock_samples": coverage.lock_samples,
             "software_samples": coverage.software_samples
         },
-        "samples": samples.into_iter().map(|r| serde_json::json!({
-            "ts": r.ts,
-            "latitude": r.latitude,
-            "longitude": r.longitude,
-            "altitude_m": r.altitude_m,
-            "speed_mph": r.speed_mph,
-            "battery_level": r.battery_level,
-            "battery_capacity_wh": r.battery_capacity_wh,
-            "distance_to_empty_mi": r.distance_to_empty_mi,
-            "battery_limit": r.battery_limit,
-            "power_state": r.power_state,
-            "charger_state": r.charger_state,
-            "charger_status": r.charger_status,
-            "time_to_end_of_charge_min": r.time_to_end_of_charge_min,
-            "drive_mode": r.drive_mode,
-            "gear_status": r.gear_status,
-            "cabin_temp_c": r.cabin_temp_c,
-            "driver_temp_c": r.driver_temp_c,
-            "outside_temp_c": r.outside_temp_c,
-            "hvac_active": r.hvac_active,
-            "power_kw": r.power_kw,
-            "regen_power_kw": r.regen_power_kw,
-            "heading_deg": r.heading_deg,
-            "odometer_miles": r.odometer_miles,
-            "tire_fl_psi": r.tire_fl_psi,
-            "tire_fr_psi": r.tire_fr_psi,
-            "tire_rl_psi": r.tire_rl_psi,
-            "tire_rr_psi": r.tire_rr_psi,
-            "tire_fl_status": r.tire_fl_status,
-            "tire_fr_status": r.tire_fr_status,
-            "tire_rl_status": r.tire_rl_status,
-            "tire_rr_status": r.tire_rr_status,
-            "tire_fl_valid": r.tire_fl_valid,
-            "tire_fr_valid": r.tire_fr_valid,
-            "tire_rl_valid": r.tire_rl_valid,
-            "tire_rr_valid": r.tire_rr_valid,
-            "door_front_left_locked": r.door_front_left_locked,
-            "door_front_right_locked": r.door_front_right_locked,
-            "door_rear_left_locked": r.door_rear_left_locked,
-            "door_rear_right_locked": r.door_rear_right_locked,
-            "door_front_left_closed": r.door_front_left_closed,
-            "door_front_right_closed": r.door_front_right_closed,
-            "door_rear_left_closed": r.door_rear_left_closed,
-            "door_rear_right_closed": r.door_rear_right_closed,
-            "closure_frunk_closed": r.closure_frunk_closed,
-            "closure_liftgate_closed": r.closure_liftgate_closed,
-            "closure_tailgate_closed": r.closure_tailgate_closed,
-            "ota_current_version": r.ota_current_version,
-            "ota_available_version": r.ota_available_version,
-            "ota_status": r.ota_status,
-            "ota_current_status": r.ota_current_status,
-            "hv_thermal_event": r.hv_thermal_event,
-            "twelve_volt_health": r.twelve_volt_health,
-            "is_online": r.is_online
-        })).collect::<Vec<_>>()
+        "samples": samples.into_iter().map(raw_sample_json).collect::<Vec<_>>(),
+        "total": total,
+        "limit": per_page,
+        "offset": offset,
+        "page": page,
+        "per_page": per_page,
+        "selected_fields": selected_fields_csv,
+        "field_coverage": field_coverage
     })))
+}
+
+async fn raw_vehicle_events(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(vid): axum::extract::Path<Uuid>,
+    Query(params): Query<RawEventParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_raw_event_access(&state, &auth, vid).await?;
+    validate_raw_time_bounds(params.from.clone(), params.to.clone())?;
+    let per_page = params.per_page.unwrap_or(25).clamp(1, 100);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1).saturating_mul(per_page);
+    let event_type = params.event_type.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let message_type = params.message_type.as_deref().map(str::trim).filter(|value| !value.is_empty());
+
+    let items = sqlx::query_as::<_, RawEventSummaryRow>(
+        r#"
+        SELECT id, received_at, event_type, message_type,
+               payload_json IS NOT NULL AS has_json,
+               (payload_json IS NOT NULL OR payload_text IS NOT NULL) AS has_payload
+        FROM riviamigo.rivian_ws_raw_events
+        WHERE vehicle_id = $1
+          AND ($2::timestamptz IS NULL OR received_at >= $2)
+          AND ($3::timestamptz IS NULL OR received_at <= $3)
+          AND ($4::text IS NULL OR event_type = $4)
+          AND ($5::text IS NULL OR message_type = $5)
+        ORDER BY received_at DESC
+        LIMIT $6 OFFSET $7
+        "#,
+    )
+    .bind(vid)
+    .bind(params.from.clone())
+    .bind(params.to.clone())
+    .bind(event_type)
+    .bind(message_type)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM riviamigo.rivian_ws_raw_events
+        WHERE vehicle_id = $1
+          AND ($2::timestamptz IS NULL OR received_at >= $2)
+          AND ($3::timestamptz IS NULL OR received_at <= $3)
+          AND ($4::text IS NULL OR event_type = $4)
+          AND ($5::text IS NULL OR message_type = $5)
+        "#,
+    )
+    .bind(vid)
+    .bind(params.from.clone())
+    .bind(params.to.clone())
+    .bind(event_type)
+    .bind(message_type)
+    .fetch_one(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "vehicle_id": vid,
+        "retention_days": state.config.rivian_raw_event_retention_days.max(1),
+        "items": items.into_iter().map(raw_event_summary_json).collect::<Vec<_>>(),
+        "total": total,
+        "page": page,
+        "per_page": per_page
+    })))
+}
+
+async fn raw_vehicle_event(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path((vid, event_id)): axum::extract::Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_raw_event_access(&state, &auth, vid).await?;
+    let row = sqlx::query_as::<_, RawEventDetailRow>(
+        r#"
+        SELECT id, received_at, event_type, message_type, payload_json, payload_text
+        FROM riviamigo.rivian_ws_raw_events
+        WHERE id = $1 AND vehicle_id = $2
+        "#,
+    )
+    .bind(event_id)
+    .bind(vid)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let (payload, payload_format) = match (row.payload_json, row.payload_text) {
+        (Some(payload), _) => (payload, "json"),
+        (None, Some(payload)) => (serde_json::Value::String(payload), "text"),
+        (None, None) => (serde_json::Value::Null, "empty"),
+    };
+    Ok(Json(serde_json::json!({
+        "id": row.id,
+        "received_at": row.received_at,
+        "event_type": row.event_type,
+        "message_type": row.message_type,
+        "has_json": payload_format == "json",
+        "has_payload": payload_format != "empty",
+        "payload": payload,
+        "payload_format": payload_format
+    })))
+}
+
+async fn require_raw_event_access(state: &AppState, auth: &AuthUser, vehicle_id: Uuid) -> Result<(), AppError> {
+    if auth.api_access_level.is_some() {
+        return Err(AppError::Forbidden);
+    }
+    require_vehicle_role(&state.pool, auth.user_id, vehicle_id, &["owner", "manager"]).await
+}
+
+fn validate_raw_time_bounds(
+    from: Option<chrono::DateTime<chrono::Utc>>,
+    to: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<(), AppError> {
+    if from.zip(to).is_some_and(|(from, to)| from > to) {
+        return Err(AppError::Validation("from must be before to".into()));
+    }
+    Ok(())
+}
+
+fn parse_raw_fields(fields: Option<&str>) -> Result<Vec<&'static str>, AppError> {
+    let Some(fields) = fields.map(str::trim).filter(|fields| !fields.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut selected = Vec::new();
+    for field in fields.split(',').map(str::trim).filter(|field| !field.is_empty()) {
+        let Some(&known) = RAW_TELEMETRY_FIELDS.iter().find(|known| **known == field) else {
+            return Err(AppError::Validation(format!("unknown telemetry field: {field}")));
+        };
+        if !selected.contains(&known) {
+            selected.push(known);
+        }
+    }
+    Ok(selected)
+}
+
+fn raw_telemetry_where_clause(selected_fields: &[&str], populated_only: bool) -> String {
+    let mut clauses = vec![
+        "t.vehicle_id = $1".to_string(),
+        "($2::timestamptz IS NULL OR t.ts >= $2)".to_string(),
+        "($3::timestamptz IS NULL OR t.ts <= $3)".to_string(),
+        "($4::text IS NULL OR to_jsonb(t)::text ILIKE '%' || $4 || '%')".to_string(),
+    ];
+    let fields = if selected_fields.is_empty() { RAW_TELEMETRY_FIELDS } else { selected_fields };
+    if populated_only || !selected_fields.is_empty() {
+        clauses.push(format!(
+            "({})",
+            fields.iter().map(|field| format!("t.{field} IS NOT NULL")).collect::<Vec<_>>().join(" OR "),
+        ));
+    }
+    clauses.join(" AND ")
+}
+
+fn raw_sample_json(r: RawVehicleSampleRow) -> serde_json::Value {
+    serde_json::json!({
+        "ts": r.ts,
+        "latitude": r.latitude,
+        "longitude": r.longitude,
+        "altitude_m": r.altitude_m,
+        "speed_mph": r.speed_mph,
+        "battery_level": r.battery_level,
+        "battery_capacity_wh": r.battery_capacity_wh,
+        "distance_to_empty_mi": r.distance_to_empty_mi,
+        "battery_limit": r.battery_limit,
+        "power_state": r.power_state,
+        "charger_state": r.charger_state,
+        "charger_status": r.charger_status,
+        "time_to_end_of_charge_min": r.time_to_end_of_charge_min,
+        "drive_mode": r.drive_mode,
+        "gear_status": r.gear_status,
+        "cabin_temp_c": r.cabin_temp_c,
+        "driver_temp_c": r.driver_temp_c,
+        "outside_temp_c": r.outside_temp_c,
+        "hvac_active": r.hvac_active,
+        "power_kw": r.power_kw,
+        "regen_power_kw": r.regen_power_kw,
+        "heading_deg": r.heading_deg,
+        "odometer_miles": r.odometer_miles,
+        "tire_fl_psi": r.tire_fl_psi,
+        "tire_fr_psi": r.tire_fr_psi,
+        "tire_rl_psi": r.tire_rl_psi,
+        "tire_rr_psi": r.tire_rr_psi,
+        "tire_fl_status": r.tire_fl_status,
+        "tire_fr_status": r.tire_fr_status,
+        "tire_rl_status": r.tire_rl_status,
+        "tire_rr_status": r.tire_rr_status,
+        "tire_fl_valid": r.tire_fl_valid,
+        "tire_fr_valid": r.tire_fr_valid,
+        "tire_rl_valid": r.tire_rl_valid,
+        "tire_rr_valid": r.tire_rr_valid,
+        "door_front_left_locked": r.door_front_left_locked,
+        "door_front_right_locked": r.door_front_right_locked,
+        "door_rear_left_locked": r.door_rear_left_locked,
+        "door_rear_right_locked": r.door_rear_right_locked,
+        "door_front_left_closed": r.door_front_left_closed,
+        "door_front_right_closed": r.door_front_right_closed,
+        "door_rear_left_closed": r.door_rear_left_closed,
+        "door_rear_right_closed": r.door_rear_right_closed,
+        "closure_frunk_closed": r.closure_frunk_closed,
+        "closure_liftgate_closed": r.closure_liftgate_closed,
+        "closure_tailgate_closed": r.closure_tailgate_closed,
+        "ota_current_version": r.ota_current_version,
+        "ota_available_version": r.ota_available_version,
+        "ota_status": r.ota_status,
+        "ota_current_status": r.ota_current_status,
+        "hv_thermal_event": r.hv_thermal_event,
+        "twelve_volt_health": r.twelve_volt_health,
+        "is_online": r.is_online
+    })
+}
+
+fn raw_event_summary_json(row: RawEventSummaryRow) -> serde_json::Value {
+    serde_json::json!({
+        "id": row.id,
+        "received_at": row.received_at,
+        "event_type": row.event_type,
+        "message_type": row.message_type,
+        "has_json": row.has_json,
+        "has_payload": row.has_payload
+    })
 }
 
 #[cfg(test)]
@@ -4562,6 +4836,7 @@ mod tests {
                 user_id: other_user_id,
                 default_vehicle_id: None,
                 api_access_level: None,
+                api_vehicle_id: None,
             },
             Json(OtpBody {
                 challenge_id: challenge_id.clone(),

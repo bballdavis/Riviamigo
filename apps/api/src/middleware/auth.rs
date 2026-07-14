@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::get_default_vehicle_id, errors::AppError,
-    ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key,
+    errors::AppError, ingestion::supervisor::SupervisorHandle, routes::api_keys::hash_api_key,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +26,9 @@ pub struct AuthUser {
     pub user_id: Uuid,
     pub default_vehicle_id: Option<Uuid>,
     pub api_access_level: Option<String>,
+    /// The one vehicle an integration key may read. Session-authenticated users
+    /// have no key scope and continue to rely on their memberships.
+    pub api_vehicle_id: Option<Uuid>,
 }
 
 pub struct JwtKeys {
@@ -120,6 +122,7 @@ impl FromRequestParts<AppState> for AuthUser {
             user_id: claims.sub,
             default_vehicle_id: claims.default_vehicle_id,
             api_access_level: None,
+            api_vehicle_id: None,
         })
     }
 }
@@ -131,7 +134,7 @@ async fn authenticate_api_key(
     token: &str,
 ) -> Result<AuthUser, AppError> {
     let hash = hash_api_key(token);
-    let row = sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
         r#"
         SELECT k.user_id, k.vehicle_id, k.access_level
         FROM riviamigo.api_keys k
@@ -148,11 +151,7 @@ async fn authenticate_api_key(
     .ok_or(AppError::Unauthorized)?;
 
     match row.2.as_str() {
-        "view" if method != Method::GET => return Err(AppError::Forbidden),
-        "edit" if is_admin_path(path) => return Err(AppError::Forbidden),
-        "view" if is_admin_path(path) => return Err(AppError::Forbidden),
-        "admin" => {}
-        "edit" | "view" => {}
+        "read" if is_integration_read_request(&method, path) => {}
         _ => return Err(AppError::Forbidden),
     }
 
@@ -167,17 +166,81 @@ async fn authenticate_api_key(
     .execute(&state.pool)
     .await?;
 
-    let default_vehicle_id = row.1.or(get_default_vehicle_id(&state.pool, row.0).await?);
-
     Ok(AuthUser {
         user_id: row.0,
-        default_vehicle_id,
+        default_vehicle_id: Some(row.1),
         api_access_level: Some(row.2),
+        api_vehicle_id: Some(row.1),
     })
 }
 
-fn is_admin_path(path: &str) -> bool {
-    path.contains("/admin/")
+pub fn require_vehicle_access(auth: &AuthUser, vehicle_id: Uuid) -> Result<(), AppError> {
+    if let Some(scoped_vehicle_id) = auth.api_vehicle_id {
+        if scoped_vehicle_id != vehicle_id {
+            return Err(AppError::Forbidden);
+        }
+    }
+    Ok(())
+}
+
+/// Integration keys may read only this deliberate, stable data surface.  The
+/// list is kept here with authentication so adding a route cannot accidentally
+/// make it available just because it happens to use GET.  `metrics/batch` and
+/// the Grafana compatibility calls are read operations despite using POST.
+fn is_integration_read_request(method: &Method, path: &str) -> bool {
+    if *method == Method::POST {
+        return matches!(
+            path,
+            "/v1/metrics/batch"
+                | "/v1/grafana/search"
+                | "/v1/grafana/query"
+                | "/v1/grafana/annotations"
+                | "/v1/grafana/tag-keys"
+                | "/v1/grafana/tag-values"
+        );
+    }
+
+    if *method != Method::GET {
+        return false;
+    }
+
+    path == "/v1/api/catalog"
+        || path == "/v1/vehicles"
+        || path.starts_with("/v1/battery/")
+        || path.starts_with("/v1/metrics/")
+        || path.starts_with("/v1/trips")
+        || path.starts_with("/v1/charging")
+        || path.starts_with("/v1/efficiency/")
+        || path.starts_with("/v1/dashboard/overview/")
+        || path.starts_with("/v1/grafana")
+        || is_scoped_vehicle_read_path(path)
+}
+
+fn is_scoped_vehicle_read_path(path: &str) -> bool {
+    let Some(suffix) = path.strip_prefix("/v1/vehicles/") else {
+        return false;
+    };
+    matches!(
+        suffix.split('/').skip(1).collect::<Vec<_>>().as_slice(),
+        ["status"]
+            | ["images"]
+            | ["raw-data"]
+            | ["health"]
+            | ["idle-drain"]
+            | ["state-timeline"]
+            | ["locations"]
+            | ["live-session"]
+            | ["charging-sessions"]
+            | ["charging-sessions", _]
+            | ["charging-sessions", _, "curve"]
+            | ["costs"]
+            | ["drives", _, "power"]
+            | ["charging-schedule"]
+            | ["departure-schedules"]
+            | ["wallboxes"]
+            | ["ota-details"]
+            | ["backfill-status"]
+    )
 }
 
 pub fn issue_access_token(
@@ -199,4 +262,67 @@ pub fn issue_access_token(
         &claims,
         &keys.encoding,
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integration_keys_allow_declared_read_posts_but_no_writes() {
+        assert!(is_integration_read_request(
+            &Method::POST,
+            "/v1/metrics/batch"
+        ));
+        assert!(is_integration_read_request(
+            &Method::POST,
+            "/v1/grafana/query"
+        ));
+        assert!(!is_integration_read_request(
+            &Method::POST,
+            "/v1/dashboards"
+        ));
+        assert!(!is_integration_read_request(
+            &Method::PUT,
+            "/v1/vehicles/id/settings"
+        ));
+    }
+
+    #[test]
+    fn integration_keys_do_not_gain_unlisted_get_routes() {
+        assert!(is_integration_read_request(
+            &Method::GET,
+            "/v1/vehicles/id/status"
+        ));
+        assert!(is_integration_read_request(
+            &Method::GET,
+            "/v1/vehicles/id/charging-sessions/session-id/curve"
+        ));
+        assert!(!is_integration_read_request(&Method::GET, "/v1/api-keys"));
+        assert!(!is_integration_read_request(
+            &Method::GET,
+            "/v1/vehicles/live"
+        ));
+        assert!(!is_integration_read_request(
+            &Method::GET,
+            "/v1/admin/users"
+        ));
+    }
+
+    #[test]
+    fn vehicle_scope_rejects_other_vehicles() {
+        let allowed = Uuid::new_v4();
+        let auth = AuthUser {
+            user_id: Uuid::new_v4(),
+            default_vehicle_id: Some(allowed),
+            api_access_level: Some("read".into()),
+            api_vehicle_id: Some(allowed),
+        };
+
+        assert!(require_vehicle_access(&auth, allowed).is_ok());
+        assert!(matches!(
+            require_vehicle_access(&auth, Uuid::new_v4()),
+            Err(AppError::Forbidden)
+        ));
+    }
 }

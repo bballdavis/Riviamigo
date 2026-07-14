@@ -86,6 +86,7 @@ Common usage:
 - Prominent cards should still look like part of Riviamigo, not a special-case microsite.
 - Compact card badges should use the shared `Badge` primitive instead of ad hoc border pills.
 - Only show timeframe badges when the timeframe itself adds meaning. For battery and charging summary cards, omit `Current` labels and use a small `Lifetime` badge only on lifetime-scoped history cards.
+- Range-scoped sensor cards must display a server-calculated value for the selected dashboard timeframe, never the last point from their background sparkline. Use the shared tooltip trigger beside a compact domain-specific label when a derived value needs a short explanation.
 
 ### Charts
 

@@ -1,85 +1,87 @@
-# Riviamigo API Access
+# Riviamigo integration API
 
-Use Settings > API Access to create vehicle-scoped API keys for local troubleshooting and integrations. Keys are only shown once.
+Riviamigo integration keys are read-only, bearer tokens scoped to one vehicle.
+Create and revoke them in **Settings > Integrations**. The secret is shown once;
+store it in the integration's secret store rather than in a dashboard or source
+file.
 
-## Access levels
+The API is intentionally not an automation or dashboard-management API.
+Connecting a Rivian account, changing vehicle settings, creating dashboards,
+and every administrative operation require a signed-in browser session.
 
-- `view`: allows `GET` requests for dashboard, vehicle, battery, trip, charging, stats, and live data. Blocks writes and admin routes.
-- `edit`: allows `view` plus non-admin writes to owned resources, such as dashboard create/update/delete.
-- `admin`: allows admin routes. Admin keys can only be created by a Riviamigo user with `role = 'admin'`.
+## Authentication and scope
 
-Vehicle ownership checks still apply to all levels.
-
-## Admin vehicle picker
-
-The Users admin workspace uses `GET /v1/admin/vehicles` to populate its
-vehicle-membership picker. It requires an authenticated admin or super-user account and
-returns only each vehicle's `id`, `display_name`, and `model`; it is not a
-telemetry endpoint.
-
-## List the API catalog
-
-PowerShell:
+Send the key with every request:
 
 ```powershell
-$apiKey = "rmigo_REPLACE_ME"
-$baseUrl = "http://localhost:3001"
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/api/catalog"
+$apiKey = 'rmigo_REPLACE_ME'
+$baseUrl = 'http://localhost:3001'
+$headers = @{ Authorization = "Bearer $apiKey" }
 ```
 
-For local development, store the real key in `.env.local`:
+The key can read only the vehicle selected when it was created. Requests for a
+different `vehicle_id` return `403 Forbidden`, and `GET /v1/vehicles` returns
+only the scoped vehicle. Keys never authorize `PUT`, `PATCH`, or `DELETE`.
+`POST /v1/metrics/batch` is permitted because it is a bounded read query.
 
-```dotenv
-VITE_RIVIAMIGO_DEV_API_KEY=rmigo_REPLACE_ME
-VITE_RIVIAMIGO_API_BASE_URL=http://localhost:3001
-```
+## Machine-readable catalog
 
-The repository-root `.env.local` is gitignored; use `compose/.env.full.example` as the committed variable reference.
-
-Admin catalog:
+Use the catalog as the current endpoint index. It requires the same bearer key
+and is generated from the server's integration-read policy:
 
 ```powershell
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/admin/api/catalog"
+Invoke-RestMethod -Headers $headers -Uri "$baseUrl/v1/api/catalog"
 ```
 
-## Read the frontend vehicle payload
+The catalog includes method, path template, whether a vehicle scope is
+required, and purpose. It deliberately omits session-only and administrative
+routes.
 
-This is the fastest check when Settings shows an online vehicle but missing identifiers or dashboard data.
+## Read surface
+
+| Group | Endpoints |
+|---|---|
+| Vehicle | `GET /v1/vehicles`; `/v1/vehicles/{id}/status`, `/images`, `/raw-data`, `/health`, `/idle-drain`, `/state-timeline`, `/locations`, `/live-session`, `/charging-schedule`, `/departure-schedules`, `/wallboxes`, `/ota-details`, and `/backfill-status` |
+| Battery | `GET /v1/battery/soc`, `/range`, `/capacity`, `/health`, `/mileage`, `/phantom-drain`, `/degradation` |
+| Metrics | `GET /v1/metrics/catalog`, `/value`, `/series`; `POST /v1/metrics/batch` |
+| Trips | `GET /v1/trips`, `/trips/map`, and `/trips/{id}` with `/detail`, `/track`, `/speed`, `/elevation`, `/power`, or `/series`; `GET /v1/vehicles/{id}/drives/{trip_id}/power` is the path-scoped power alias |
+| Charging | `GET /v1/charging`, `/summary`, `/chart-series`, `/curve-analysis`, and individual session/curve routes; path-scoped aliases are available below `/v1/vehicles/{id}/charging-sessions` and `/costs` |
+| Efficiency | `GET /v1/efficiency/summary`, `/by-mode`, `/trend`, `/vs-temp`, `/range-vs-temp` |
+| Overview | `GET /v1/dashboard/overview/{vehicle_id}` and `GET /v1/vehicles/{id}/live-session` |
+| Grafana compatibility | `GET /v1/grafana`; `POST /v1/grafana/search`, `/query`, `/annotations`, `/tag-keys`, `/tag-values` |
+
+## Raw telemetry explorer
+
+`GET /v1/vehicles/{id}/raw-data` remains an API-key-safe normalized telemetry surface. It keeps the compatibility `samples` array and now supports `from`, `to`, `page`, `per_page` (or legacy `limit`), `search`, comma-separated `fields`, and `populated_only=true`. Responses also include paging metadata and per-field coverage so clients can distinguish missing upstream data from an empty dashboard aggregation.
+
+The exact inbound Rivian websocket stream is intentionally separate: signed-in vehicle owners and managers can list retained event metadata at `GET /v1/vehicles/{id}/raw-events` and fetch a single payload at `GET /v1/vehicles/{id}/raw-events/{event_id}`. These session-only routes are excluded from integration-key access and expose their configured retention period in the list response.
+
+All historical endpoints accept a bounded timeframe where applicable. Use UTC
+RFC 3339 timestamps and URL-encode query parameters.
+
+Raw Rivian WebSocket event payloads, vehicle membership lists, invitations, and
+all configuration routes remain session-only. They are diagnostic or account
+management surfaces rather than a stable integration contract.
+
+## Examples
+
+List the scoped vehicle and save its ID:
 
 ```powershell
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/vehicles"
+$vehicle = (Invoke-RestMethod -Headers $headers -Uri "$baseUrl/v1/vehicles").vehicles[0]
+$vehicleId = $vehicle.id
 ```
 
-Then compare the returned `id`, `rivian_vehicle_id`, `vin`, `model`, and `display_name` with the Settings page.
-
-## Read live status
+Read a state-of-charge series:
 
 ```powershell
-$vehicleId = "LOCAL_VEHICLE_UUID"
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/vehicles/$vehicleId/status"
-```
-
-## Read dashboard data endpoints
-
-```powershell
-$from = "2026-04-01T00:00:00Z"
-$to = "2026-04-29T23:59:59Z"
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
+$from = '2026-07-01T00:00:00Z'
+$to = '2026-07-14T23:59:59Z'
+Invoke-RestMethod -Headers $headers `
   -Uri "$baseUrl/v1/battery/soc?vehicle_id=$vehicleId&from=$from&to=$to"
-
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/stats/summary?vehicle_id=$vehicleId"
 ```
 
-If these return empty arrays while `/v1/vehicles/{id}/status` reports online, inspect the ingestion logs and Timescale rows next.
-
-## Read batched dashboard metrics
-
-Dashboard grids use a compact batch endpoint for metric-chip latest values and sparklines. It validates vehicle ownership and metric IDs once per request, preserves normal timeframe or lifetime behavior, and caps each sparkline at 96 adaptive points. Existing single-metric endpoints remain available for integrations and detail views.
+Read bounded dashboard metrics:
 
 ```powershell
 $body = @{
@@ -87,49 +89,27 @@ $body = @{
   from = $from
   to = $to
   metrics = @(
-    @{ metric = "odometer_mi"; include_latest = $true; include_series = $false }
-    @{ metric = "avg_efficiency"; include_latest = $true; include_series = $true }
+    @{ metric = 'odometer_miles'; include_latest = $true; include_series = $false }
+    @{ metric = 'avg_efficiency'; include_latest = $true; include_series = $true }
   )
 } | ConvertTo-Json -Depth 4
 
-Invoke-RestMethod -Method Post -Headers @{ Authorization = "Bearer $apiKey" } `
-  -ContentType "application/json" -Body $body -Uri "$baseUrl/v1/metrics/batch"
+Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/json' `
+  -Body $body -Uri "$baseUrl/v1/metrics/batch"
 ```
 
-## Read high-density trip data
+## Prometheus is separate
 
-Trip map and detail views use bounded payloads so the browser does not need to request every raw telemetry point:
+The REST integration API is for structured and historical vehicle data. A
+future Prometheus/OpenMetrics exporter should expose only current gauges and
+application health, with low-cardinality labels; it should not expose raw
+telemetry, trips, locations, or dashboard configuration. See
+[`docs/roadmap.md`](./roadmap.md) for that planned exporter work.
 
-```powershell
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/trips/map?vehicle_id=$vehicleId&from=$from&to=$to"
+## Verification
 
-$tripId = "LOCAL_TRIP_UUID"
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/trips/$tripId/detail?vehicle_id=$vehicleId"
-```
-
-`/v1/trips/map` returns one simplified route preview per matching trip. `/v1/trips/{id}/detail` returns one adaptive, columnar sample set containing the route points and chart metrics. The existing trip, track, series, speed, elevation, and power endpoints remain available for compatibility.
-
-## Run the live endpoint contract test
-
-The opt-in Vitest contract test uses `VITE_RIVIAMIGO_DEV_API_KEY` and exercises the same endpoints the dashboard needs.
+The optional live contract test uses `VITE_RIVIAMIGO_DEV_API_KEY`:
 
 ```powershell
 pnpm --filter @riviamigo/web test -- src/test/liveApi.contract.test.ts
 ```
-
-The test verifies `GET /v1/vehicles`, `GET /v1/vehicles/{id}/status`, `GET /v1/stats/summary`, `GET /v1/charging`, `GET /v1/efficiency/summary`, and `GET /v1/vehicles/{id}/raw-data`.
-
-If the key is not present, the test suite skips the live contract instead of failing.
-
-## Inspect raw stored telemetry
-
-Use this when dashboard cards are empty and we need to distinguish "Rivian did not send the field" from "we parsed it but did not store it" or "we stored it but the aggregate endpoint missed it".
-
-```powershell
-Invoke-RestMethod -Headers @{ Authorization = "Bearer $apiKey" } `
-  -Uri "$baseUrl/v1/vehicles/$vehicleId/raw-data?limit=25"
-```
-
-The Settings page also has a Raw Data tab with field coverage counts and the latest samples.

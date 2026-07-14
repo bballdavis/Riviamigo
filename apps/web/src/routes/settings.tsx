@@ -3,7 +3,7 @@ import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
 import { api, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
-import type { ApiAccessLevel, UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
+import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
   materializeUserDashboardDraft,
@@ -16,9 +16,6 @@ import {
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import {
-  formatMiles,
-  formatPressure,
-  formatTemp,
   getUnitPreferences,
   setUnitPreferences,
   type UnitMode,
@@ -34,9 +31,10 @@ import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { BackupSection } from '../components/settings/BackupSection';
 import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
+import { RawTelemetryExplorer } from '../components/settings/RawTelemetryExplorer';
 import { canManageSystemDashboards } from '../components/dashboard/DashboardPage';
 import {
-  Car, CircleHelp, Clipboard, Database, DatabaseBackup, Download, ExternalLink, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, ShieldCheck, Star, Trash2, Unlock, Users, X,
+  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, ShieldCheck, Star, Trash2, Unlock, Users, X,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -72,21 +70,11 @@ const baseSections: Array<{ id: SettingsSection; label: string; icon: React.Elem
   { id: 'dashboards', label: 'Dashboards', icon: Clipboard },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
-  { id: 'api', label: 'API Access', icon: KeyRound },
+  { id: 'api', label: 'Integrations', icon: KeyRound },
   { id: 'jobs', label: 'Jobs', icon: ListChecks },
   { id: 'raw', label: 'Raw Data', icon: Database },
   { id: 'appearance', label: 'Appearance', icon: ShieldCheck },
   { id: 'account', label: 'Account', icon: LogOut },
-];
-
-const accessLevels: Array<{
-  value: ApiAccessLevel;
-  label: string;
-  copy: string;
-}> = [
-  { value: 'view', label: 'View', copy: 'Read-only dashboard and diagnostic data.' },
-  { value: 'edit', label: 'Edit', copy: 'Read access plus owned dashboard/configuration writes.' },
-  { value: 'admin', label: 'Admin', copy: 'Admin routes. Creation requires an admin user.' },
 ];
 
 const IMPERIAL_UNITS: UnitPreferences = {
@@ -110,20 +98,6 @@ const METRIC_UNITS: UnitPreferences = {
   place_radius_unit: 'meters',
   efficiency_display: 'distance_per_energy',
 };
-
-function formatRawNumber(value: number | null | undefined, unit = '') {
-  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}${unit}` : '-';
-}
-
-function formatCount(value: number | null | undefined) {
-  return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '0';
-}
-
-function formatSuppressionRate(suppressed: number | undefined, persisted: number | undefined) {
-  const total = (suppressed ?? 0) + (persisted ?? 0);
-  if (total <= 0) return '0%';
-  return `${Math.round(((suppressed ?? 0) / total) * 100)}%`;
-}
 
 function formatMembershipRole(role: VehicleMember['role'] | undefined) {
   if (role === 'owner') return 'Owner';
@@ -436,12 +410,9 @@ export function SettingsContent() {
   const [activeSection, setActiveSection] = React.useState<SettingsSection>('vehicles');
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
-  const [apiAccessLevel, setApiAccessLevel] = React.useState<ApiAccessLevel>('view');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
-  const [rawVehicleId, setRawVehicleId] = React.useState('');
   const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
   const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
-  const [rawTableView, setRawTableView] = React.useState<'table' | 'json'>('table');
   const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
   const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
   const [batteryPreset, setBatteryPreset] = React.useState('r1_large_g1');
@@ -469,18 +440,7 @@ export function SettingsContent() {
     queryKey: ['api-keys'],
     queryFn: () => api.listApiKeys(),
     enabled: authReady && activeSection === 'api' && !!accessToken,
-  });
-
-  const apiCatalog = useQuery({
-    queryKey: ['api-catalog'],
-    queryFn: () => api.getApiCatalog(),
-    enabled: authReady && activeSection === 'api' && !!accessToken,
-  });
-
-  const stewardship = useQuery({
-    queryKey: ['rivian-stewardship'],
-    queryFn: () => api.getRivianStewardship(),
-    enabled: authReady && activeSection === 'raw' && isAdmin && !!accessToken,
+    retry: false,
   });
 
   const dashboards = useDashboards();
@@ -540,22 +500,7 @@ export function SettingsContent() {
     if (!apiKeyVehicleId && vehicles?.[0]?.id) {
       setApiKeyVehicleId(vehicles[0].id);
     }
-    if (!rawVehicleId && vehicles?.[0]?.id) {
-      setRawVehicleId(vehicles[0].id);
-    }
-  }, [apiKeyVehicleId, rawVehicleId, vehicles]);
-
-  const rawTelemetry = useQuery({
-    queryKey: ['raw-telemetry', rawVehicleId],
-    queryFn: () => api.getRawTelemetry(rawVehicleId, 25),
-    enabled: authReady && activeSection === 'raw' && !!rawVehicleId && !!accessToken,
-  });
-
-  React.useEffect(() => {
-    if (!isAdmin && apiAccessLevel === 'admin') {
-      setApiAccessLevel('view');
-    }
-  }, [apiAccessLevel, isAdmin]);
+  }, [apiKeyVehicleId, vehicles]);
 
   const vehicleMembers = useQuery({
     queryKey: ['vehicle-members', sharingVehicleId],
@@ -579,7 +524,6 @@ export function SettingsContent() {
     mutationFn: () => api.createApiKey({
       vehicle_id: apiKeyVehicleId,
       name: apiKeyName,
-      access_level: apiAccessLevel,
     }),
     onSuccess: (result) => {
       setCreatedKey(result.key);
@@ -1335,10 +1279,13 @@ export function SettingsContent() {
               <div className="flex flex-col gap-5">
                 <Card>
                   <CardHeader>
-                    <CardTitle>API Access</CardTitle>
+                    <CardTitle>Integration Keys</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-4">
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_11rem_9rem_auto] md:items-end">
+                    <p className="text-sm text-fg-tertiary">
+                      Integration keys are read-only and limited to one vehicle. Dashboard, account, and administrative changes stay in the signed-in app.
+                    </p>
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_13rem_auto] md:items-end">
                       <label className="grid gap-1">
                         <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Name</span>
                         <input
@@ -1357,37 +1304,6 @@ export function SettingsContent() {
                           options={vehicles?.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name })) ?? []}
                         />
                       </label>
-                      <label className="grid gap-1">
-                        <span className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-                          <span>Level</span>
-                          {!isAdmin && (
-                            <Tooltip
-                              align="center"
-                              content="Admin keys are reserved for users with the admin role."
-                              contentClassName="w-52"
-                            >
-                              <span
-                                tabIndex={0}
-                                aria-label="Admin role information"
-                                className="inline-flex h-4 w-4 items-center justify-center rounded-sm text-fg-tertiary transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                              >
-                                <CircleHelp className="h-3.5 w-3.5" />
-                              </span>
-                            </Tooltip>
-                          )}
-                        </span>
-                        <SelectPicker
-                          className="w-full"
-                          value={apiAccessLevel}
-                          onChange={(value) => setApiAccessLevel(value as ApiAccessLevel)}
-                          aria-label="API access level"
-                          options={accessLevels.map((level) => ({
-                            value: level.value,
-                            label: level.label,
-                            disabled: level.value === 'admin' && !isAdmin,
-                          }))}
-                        />
-                      </label>
                       <Button
                         size="sm"
                         iconLeft={<KeyRound className="h-3.5 w-3.5" />}
@@ -1397,18 +1313,6 @@ export function SettingsContent() {
                       >
                         Create
                       </Button>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-3">
-                      {accessLevels.map((level) => (
-                        <div key={level.value} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
-                          <div className="mb-1 flex items-center justify-between">
-                            <p className="text-sm font-medium text-fg">{level.label}</p>
-                            <Badge variant="default">{level.value}</Badge>
-                          </div>
-                          <p className="text-xs text-fg-tertiary">{level.copy}</p>
-                        </div>
-                      ))}
                     </div>
 
                     {createdKey && (
@@ -1431,6 +1335,12 @@ export function SettingsContent() {
                     <CardTitle>Issued Keys</CardTitle>
                   </CardHeader>
                   <CardContent>
+                    {apiKeys.isError && (
+                      <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-fg">
+                        <span>Could not load integration keys. The server logged the request details; retry after checking the API migration status.</span>
+                        <Button variant="secondary" size="sm" onClick={() => apiKeys.refetch()}>Retry</Button>
+                      </div>
+                    )}
                     {(apiKeys.data?.length ?? 0) === 0 && (
                       <p className="text-sm text-fg-tertiary">No API keys issued yet.</p>
                     )}
@@ -1467,35 +1377,14 @@ export function SettingsContent() {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>API Catalog</CardTitle>
-                    <Badge variant="default">{apiCatalog.data?.endpoints.length ?? 0} routes</Badge>
+                    <CardTitle>Integration Reference</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[42rem] text-left text-sm">
-                        <thead className="text-xs uppercase tracking-wide text-fg-tertiary">
-                          <tr className="border-b border-border">
-                            <th className="py-2 pr-3 font-medium">Method</th>
-                            <th className="py-2 pr-3 font-medium">Path</th>
-                            <th className="py-2 pr-3 font-medium">Access</th>
-                            <th className="py-2 font-medium">Purpose</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {apiCatalog.data?.endpoints.map((endpoint) => (
-                            <tr key={`${endpoint.method}-${endpoint.path}`}>
-                              <td className="py-2 pr-3 font-mono text-xs text-fg">{endpoint.method}</td>
-                              <td className="py-2 pr-3 font-mono text-xs text-fg">{endpoint.path}</td>
-                              <td className="py-2 pr-3"><Badge variant="default">{endpoint.minimum_access}</Badge></td>
-                              <td className="py-2 text-xs text-fg-tertiary">{endpoint.purpose}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="mt-4 flex items-center gap-2 rounded-lg bg-bg-elevated/50 p-3 text-xs text-fg-tertiary">
+                    <div className="flex items-start gap-2 rounded-lg bg-bg-elevated/50 p-3 text-xs text-fg-tertiary">
                       <Database className="h-4 w-4 shrink-0" />
-                      <span>Use <span className="font-mono text-fg">GET /v1/api/catalog</span> for the user catalog and <span className="font-mono text-fg">GET /v1/admin/api/catalog</span> for admin routes.</span>
+                      <span>
+                        Use <span className="font-mono text-fg">GET /v1/api/catalog</span> with the key you create above to inspect the machine-readable read API. Full examples and response details live in <span className="font-mono text-fg">docs/api-access.md</span>.
+                      </span>
                     </div>
                   </CardContent>
                 </Card>
@@ -1598,203 +1487,7 @@ export function SettingsContent() {
 
             {activeSection === 'jobs' && <JobsSection vehicles={vehicles ?? []} />}
 
-            {activeSection === 'raw' && (
-              <div className="flex flex-col gap-5">
-                {/* Vehicle Stats */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Vehicle Stats</CardTitle>
-                    <div className="flex items-center gap-2">
-                      <SelectPicker
-                        className="min-w-[11rem]"
-                        value={rawVehicleId}
-                        onChange={setRawVehicleId}
-                        aria-label="Raw telemetry vehicle"
-                        options={vehicles?.map((vehicle) => ({ value: vehicle.id, label: vehicle.display_name })) ?? []}
-                      />
-                      <Button variant="secondary" size="sm" loading={rawTelemetry.isFetching} onClick={() => rawTelemetry.refetch()}>
-                        Refresh
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    <div className="grid gap-3 md:grid-cols-4">
-                      {[
-                        ['Total Samples', rawTelemetry.data?.coverage.sample_count],
-                        ['Odometer', rawTelemetry.data?.coverage.odometer_samples],
-                        ['Battery', rawTelemetry.data?.coverage.battery_samples],
-                        ['Power', rawTelemetry.data?.coverage.power_samples],
-                        ['Range', rawTelemetry.data?.coverage.range_samples],
-                        ['Outside Temp', rawTelemetry.data?.coverage.outside_temp_samples],
-                        ['Regen', rawTelemetry.data?.coverage.regen_samples],
-                        ['Tire Pressure', rawTelemetry.data?.coverage.tire_pressure_samples],
-                        ['Locks', rawTelemetry.data?.coverage.lock_samples],
-                        ['Software', rawTelemetry.data?.coverage.software_samples],
-                      ].map(([label, value]) => (
-                        <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
-                          <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
-                          <p className="mt-1 text-lg font-semibold text-fg">{value ?? 0}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-xs text-fg-tertiary">
-                      <p>First event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.first_event_at ?? 'none'}</span></p>
-                      <p className="mt-1">Latest event: <span className="font-mono text-fg">{rawTelemetry.data?.coverage.last_event_at ?? 'none'}</span></p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* DB Stats */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>DB Stats</CardTitle>
-                    <Button variant="secondary" size="sm" loading={stewardship.isFetching} disabled={!isAdmin} onClick={() => stewardship.refetch()}>
-                      Refresh
-                    </Button>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    {!isAdmin ? (
-                      <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-sm text-fg-tertiary">
-                        Admin access is required.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="grid gap-3 md:grid-cols-4">
-                          {[
-                            ['Active collectors', stewardship.data?.active_collectors],
-                            ['Reconnects', stewardship.data?.totals_24h.ws_reconnects],
-                            ['Outbound messages', stewardship.data?.totals_24h.outbound_messages_sent],
-                            ['Heartbeats ignored', stewardship.data?.totals_24h.ws_heartbeats_received],
-                            ['Payload messages', stewardship.data?.totals_24h.ws_payload_messages_received],
-                            ['Writes persisted', stewardship.data?.totals_24h.telemetry_writes_persisted],
-                            ['Writes suppressed', stewardship.data?.totals_24h.telemetry_writes_suppressed],
-                            ['Suppression rate', formatSuppressionRate(
-                              stewardship.data?.totals_24h.telemetry_writes_suppressed,
-                              stewardship.data?.totals_24h.telemetry_writes_persisted,
-                            )],
-                            ['Duplicate suppressions', stewardship.data?.totals_24h.telemetry_suppressed_duplicate],
-                            ['Collector lock skips', stewardship.data?.totals_24h.collector_lock_skips],
-                            ['Raw retained', stewardship.data?.raw_events_retained],
-                            ['Retention days', stewardship.data?.retention_days],
-                          ].map(([label, value]) => (
-                            <div key={label} className="rounded-lg border border-border bg-bg-elevated/40 p-3">
-                              <p className="text-xs uppercase tracking-wide text-fg-tertiary">{label}</p>
-                              <p className="mt-1 text-lg font-semibold text-fg">
-                                {typeof value === 'string' ? value : formatCount(value as number | undefined)}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="overflow-x-auto rounded-lg border border-border">
-                          <table className="w-full min-w-[54rem] text-left text-xs">
-                            <thead className="bg-bg-elevated text-fg-tertiary">
-                              <tr>
-                                {['Vehicle', 'Health', 'Last seen', 'Messages', 'Heartbeats', 'Persisted', 'Suppressed', 'Reconnects'].map((heading) => (
-                                  <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border">
-                              {stewardship.data?.vehicles.map((vehicle) => (
-                                <tr key={vehicle.vehicle_id}>
-                                  <td className="px-3 py-2 text-fg">{vehicle.display_name}</td>
-                                  <td className="px-3 py-2">{vehicle.worker_health ?? '-'}</td>
-                                  <td className="px-3 py-2 font-mono">{vehicle.last_seen_at ? new Date(vehicle.last_seen_at).toLocaleString() : '-'}</td>
-                                  <td className="px-3 py-2">{formatCount(vehicle.ws_messages_received)}</td>
-                                  <td className="px-3 py-2">{formatCount(vehicle.ws_heartbeats_received)}</td>
-                                  <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_persisted)}</td>
-                                  <td className="px-3 py-2">{formatCount(vehicle.telemetry_writes_suppressed)}</td>
-                                  <td className="px-3 py-2">{formatCount(vehicle.ws_reconnects)}</td>
-                                </tr>
-                              ))}
-                              {(stewardship.data?.vehicles.length ?? 0) === 0 && (
-                                <tr>
-                                  <td colSpan={8} className="px-3 py-6 text-center text-fg-tertiary">No vehicle stewardship records yet.</td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Telemetry Records with table / raw JSON toggle */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Telemetry Records</CardTitle>
-                    <div className="flex items-center gap-1 rounded-lg border border-border bg-bg-elevated p-0.5">
-                      {(['table', 'json'] as const).map((view) => (
-                        <button
-                          key={view}
-                          type="button"
-                          onClick={() => setRawTableView(view)}
-                          className={[
-                            'rounded-md px-3 py-1 text-xs font-medium transition-colors',
-                            rawTableView === view
-                              ? 'bg-bg text-fg shadow-sm'
-                              : 'text-fg-secondary hover:text-fg',
-                          ].join(' ')}
-                        >
-                          {view === 'table' ? 'Table' : 'Raw JSON'}
-                        </button>
-                      ))}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    {rawTableView === 'table' ? (
-                      <div className="overflow-x-auto rounded-lg border border-border">
-                        <table className="w-full min-w-[64rem] text-left text-xs">
-                          <thead className="bg-bg-elevated text-fg-tertiary">
-                            <tr>
-                              {['Time', 'Odometer', 'SOC', 'Range', 'Power', 'Regen', 'State', 'Charger', 'Temp', 'Tires'].map((heading) => (
-                                <th key={heading} className="px-3 py-2 font-medium">{heading}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {rawTelemetry.data?.samples.map((sample) => (
-                              <tr key={sample.ts}>
-                                <td className="px-3 py-2 font-mono text-fg">{new Date(sample.ts).toLocaleString()}</td>
-                                <td className="px-3 py-2">{sample.odometer_miles === null || sample.odometer_miles === undefined ? '-' : formatMiles(sample.odometer_miles)}</td>
-                                <td className="px-3 py-2">{formatRawNumber(sample.battery_level, '%')}</td>
-                                <td className="px-3 py-2">{formatRawNumber(sample.distance_to_empty_mi, ' mi')}</td>
-                                <td className="px-3 py-2">{formatRawNumber(sample.power_kw, ' kW')}</td>
-                                <td className="px-3 py-2">{formatRawNumber(sample.regen_power_kw, ' kW')}</td>
-                                <td className="px-3 py-2">{sample.power_state ?? '-'}</td>
-                                <td className="px-3 py-2">{sample.charger_state ?? '-'}</td>
-                                <td className="px-3 py-2">{sample.outside_temp_c === null || sample.outside_temp_c === undefined ? '-' : formatTemp(sample.outside_temp_c)}</td>
-                                <td className="px-3 py-2">
-                                  {[sample.tire_fl_psi, sample.tire_fr_psi, sample.tire_rl_psi, sample.tire_rr_psi]
-                                    .map((psi) => psi === null || psi === undefined ? '-' : formatPressure(psi))
-                                    .join(' / ')}
-                                </td>
-                              </tr>
-                            ))}
-                            {(rawTelemetry.data?.samples.length ?? 0) === 0 && (
-                              <tr>
-                                <td colSpan={10} className="px-3 py-6 text-center text-fg-tertiary">No telemetry samples stored yet.</td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto rounded-lg border border-border bg-bg-elevated/40">
-                        <pre className="p-4 text-xs text-fg font-mono leading-relaxed whitespace-pre-wrap break-all">
-                          {rawTelemetry.data?.samples && rawTelemetry.data.samples.length > 0
-                            ? JSON.stringify(rawTelemetry.data.samples, null, 2)
-                            : 'No samples.'}
-                        </pre>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            )}
-
-
+            {activeSection === 'raw' && <RawTelemetryExplorer vehicles={vehicles ?? []} isAdmin={isAdmin} />}
 
             {activeSection === 'appearance' && (
               <Card>

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
 };
 
@@ -42,6 +42,14 @@ mod timeframe_tests {
 
         assert_eq!(resolved_to, to);
         assert_eq!(from, chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    }
+
+    #[test]
+    fn explicit_time_bounds_are_preserved() {
+        let from = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+        let to = Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap();
+
+        assert_eq!(super::resolve_time_bounds(Some(from), Some(to), false, 90), (from, to));
     }
 }
 
@@ -82,6 +90,7 @@ struct SummaryRow {
     total_distance_miles: Option<f64>,
     weighted_efficiency_wh_mi: Option<f64>,
     total_miles: f64,
+    efficiency_miles: f64,
     p10: Option<f64>,
     p90: Option<f64>,
 }
@@ -94,18 +103,19 @@ async fn get_summary(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
     let row = sqlx::query_as::<_, SummaryRow>(
-        "SELECT COALESCE(SUM(distance_miles), 0)::float8 AS total_distance_miles,
-                COALESCE(SUM(distance_miles * efficiency_wh_per_mile), 0)::float8 AS weighted_efficiency_wh_mi,
-                COALESCE(SUM(distance_miles),0) AS total_miles,
-                PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) AS p10,
-                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) AS p90
+        "SELECT COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS total_distance_miles,
+                COALESCE(SUM(distance_miles * efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS weighted_efficiency_wh_mi,
+                COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
+                COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS efficiency_miles,
+                PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL) AS p10,
+                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL) AS p90
          FROM riviamigo.trips
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND efficiency_wh_per_mile IS NOT NULL
            AND distance_miles > 0"
     )
     .bind(vid)
@@ -120,6 +130,8 @@ async fn get_summary(
     Ok(Json(serde_json::json!({
         "avg_wh_per_mi":  avg_wh_per_mi,
         "total_miles":    row.total_miles,
+        "efficiency_miles": row.efficiency_miles,
+        "coverage_percent": if row.total_miles > 0.0 { row.efficiency_miles / row.total_miles * 100.0 } else { 0.0 },
         "p10_wh_per_mi":  row.p10.unwrap_or(0.0),
         "p90_wh_per_mi":  row.p90.unwrap_or(0.0),
     })))
@@ -133,21 +145,30 @@ async fn get_by_mode(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 180);
 
-    let rows = sqlx::query!(
+    #[derive(sqlx::FromRow)]
+    struct ModeRow {
+        drive_mode: String,
+        trip_count: i64,
+        total_miles: Option<f64>,
+        avg_wh_per_mi: Option<f64>,
+    }
+
+    let rows = sqlx::query_as::<_, ModeRow>(
         "SELECT drive_mode, COUNT(*) AS trip_count,
-                COALESCE(SUM(distance_miles),0) AS total_miles,
-                COALESCE(AVG(efficiency_wh_per_mile),0) AS avg_wh_per_mi
+                COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
+                (SUM(distance_miles * efficiency_wh_per_mile) / NULLIF(SUM(distance_miles), 0))::float8 AS avg_wh_per_mi
          FROM riviamigo.trips
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND drive_mode IS NOT NULL AND efficiency_wh_per_mile IS NOT NULL
+           AND drive_mode IS NOT NULL AND efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0
          GROUP BY drive_mode ORDER BY avg_wh_per_mi",
-        vid,
-        from,
-        to
     )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
     .fetch_all(&state.pool)
     .await?;
 
@@ -170,6 +191,7 @@ async fn get_vs_temp_binned(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
@@ -177,7 +199,7 @@ async fn get_vs_temp_binned(
         "SELECT
            (floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) * 10 - 32) * 5.0/9.0        AS temp_c_low,
            ((floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) + 1) * 10 - 32) * 5.0/9.0  AS temp_c_high,
-           avg(t.efficiency_wh_per_mile) AS avg_efficiency_wh_mi,
+           (sum(t.distance_miles * t.efficiency_wh_per_mile) / nullif(sum(t.distance_miles), 0)) AS avg_efficiency_wh_mi,
            count(*) AS trip_count,
            sum(t.distance_miles) AS total_miles,
            CASE WHEN sum(t.duration_seconds) > 0
@@ -186,6 +208,7 @@ async fn get_vs_temp_binned(
          FROM riviamigo.trips t
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.outside_temp_c IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL
+           AND t.distance_miles > 0
          GROUP BY 1, 2 ORDER BY 1",
     )
     .bind(vid)
@@ -205,6 +228,7 @@ async fn get_trend(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
@@ -212,19 +236,24 @@ async fn get_trend(
         "WITH daily AS (
            SELECT
              started_at::date AS day,
-             avg(efficiency_wh_per_mile) AS day_avg_wh_mi
+             SUM(distance_miles)::float8 AS total_distance_miles,
+             SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi
            FROM riviamigo.trips
            WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
              AND efficiency_wh_per_mile IS NOT NULL
+             AND distance_miles > 0
            GROUP BY started_at::date
          )
          SELECT
            day,
-           day_avg_wh_mi,
-           avg(day_avg_wh_mi) OVER (
+           weighted_efficiency_wh_mi / NULLIF(total_distance_miles, 0) AS day_avg_wh_mi,
+           SUM(weighted_efficiency_wh_mi) OVER (
              ORDER BY day
              ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-           ) AS rolling_7d_wh_mi
+           ) / NULLIF(SUM(total_distance_miles) OVER (
+             ORDER BY day
+             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+           ), 0) AS rolling_7d_wh_mi
          FROM daily
          ORDER BY 1",
     )
@@ -245,6 +274,7 @@ async fn get_range_vs_temp(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 

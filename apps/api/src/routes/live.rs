@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser, Claims},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser, Claims},
 };
 
 pub fn router() -> Router<AppState> {
@@ -85,6 +85,7 @@ async fn live_session_handler(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
     let key = format!("vehicle:{vehicle_id}:live_session");

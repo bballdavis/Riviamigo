@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const metricMocks = vi.hoisted(() => ({
@@ -52,11 +52,15 @@ const metricMocks = vi.hoisted(() => ({
     p10: 180,
     p90: 220,
     total_miles: 120,
+    efficiency_miles: 120,
+    coverage_percent: 100,
   } as null | {
     avg: number;
     p10: number;
     p90: number;
     total_miles: number;
+    efficiency_miles: number;
+    coverage_percent: number;
   },
   vehicleStatus: null as null | Record<string, unknown>,
 }));
@@ -164,7 +168,14 @@ describe('dashboard sensor chips', () => {
     ];
     metricMocks.batteryHealth = null;
     metricMocks.chargingSummary = null;
-    metricMocks.efficiencySummary = { avg: 200, p10: 180, p90: 220, total_miles: 120 };
+    metricMocks.efficiencySummary = {
+      avg: 200,
+      p10: 180,
+      p90: 220,
+      total_miles: 120,
+      efficiency_miles: 120,
+      coverage_percent: 100,
+    };
     metricMocks.vehicleStatus = null;
     metricMocks.metricSeriesCalls = [];
     metricMocks.metricBatchCalls = [];
@@ -276,11 +287,11 @@ describe('dashboard sensor chips', () => {
     expect(screen.queryByText('1.0 mi/kWh')).not.toBeInTheDocument();
   });
 
-  it('uses latest finite avg gross efficiency bucket within the bounded timeframe', () => {
+  it('uses the server-calculated range value instead of the latest gross-efficiency bucket', () => {
     metricMocks.value = {
       metric: 'avg_gross_efficiency',
-      value: 777,
-      unit: null,
+      value: 333,
+      unit: 'Wh/mi',
       label: 'Avg Gross Efficiency',
       ts: '2026-05-07T00:00:00Z',
     };
@@ -299,15 +310,15 @@ describe('dashboard sensor chips', () => {
       />
     );
 
-    expect(screen.getByText('31')).toBeInTheDocument();
-    expect(screen.queryByText('777')).not.toBeInTheDocument();
+    expect(screen.getByText('3.0 mi/kWh')).toBeInTheDocument();
+    expect(screen.queryByText('32.3 mi/kWh')).not.toBeInTheDocument();
   });
 
-  it('uses latest finite outside temperature bucket within the bounded timeframe', () => {
+  it('uses the server-calculated range value instead of the latest temperature bucket', () => {
     metricMocks.value = {
       metric: 'avg_outside_temp_c',
-      value: 999,
-      unit: null,
+      value: 20,
+      unit: 'C',
       label: 'Avg Outside Temp',
       ts: '2026-05-07T00:00:00Z',
     };
@@ -326,8 +337,56 @@ describe('dashboard sensor chips', () => {
       />
     );
 
-    expect(screen.getByText('62')).toBeInTheDocument();
-    expect(screen.queryByText('999')).not.toBeInTheDocument();
+    expect(screen.getByText('68 F')).toBeInTheDocument();
+    expect(screen.queryByText('62')).not.toBeInTheDocument();
+  });
+
+  it('renders consumption coverage with covered and total miles plus an accessible explanation', () => {
+    metricMocks.efficiencySummary = {
+      avg: 400,
+      p10: 300,
+      p90: 500,
+      total_miles: 1211.2,
+      efficiency_miles: 1199.5,
+      coverage_percent: 99,
+    };
+
+    render(
+      <DashboardRenderer
+        config={config(false, false, {}, 'efficiency_coverage', 'Consumption Data Coverage')}
+        ctx={defaultCtx}
+      />
+    );
+
+    expect(screen.getByText('99%')).toBeInTheDocument();
+    expect(screen.getByText('1,200 mi / 1,211 mi')).toBeInTheDocument();
+
+    fireEvent.focus(screen.getByRole('button', { name: 'Consumption Data Coverage help' }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Share of miles in this range');
+  });
+
+  it('explains the distance-weighted average and its data coverage', () => {
+    metricMocks.value = {
+      metric: 'avg_efficiency',
+      value: 400,
+      unit: 'Wh/mi',
+      label: 'Avg Efficiency',
+      ts: '2026-05-07T00:00:00Z',
+    };
+    metricMocks.efficiencySummary = {
+      avg: 400,
+      p10: 300,
+      p90: 500,
+      total_miles: 1211.2,
+      efficiency_miles: 1199.5,
+      coverage_percent: 99,
+    };
+
+    render(<DashboardRenderer config={config(false, false, {}, 'avg_efficiency', 'Avg Consumption')} ctx={defaultCtx} />);
+
+    fireEvent.focus(screen.getByRole('button', { name: 'Avg Consumption help' }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Total estimated battery energy used ÷ miles driven');
+    expect(screen.getByRole('tooltip')).toHaveTextContent('1,200 mi of 1,211 mi');
   });
 
   it('passes bounded timeframe bounds into metric series for latest-mode sensor chips', () => {

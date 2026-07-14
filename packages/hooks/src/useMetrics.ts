@@ -29,11 +29,17 @@ export function useMetricCatalog() {
   });
 }
 
-export function useMetricValue(vehicleId: string | null, metric: string | null) {
+export function useMetricValue(
+  vehicleId: string | null,
+  metric: string | null,
+  from: string | null = null,
+  to: string | null = null,
+) {
   const authReady = useAuthReady();
+  const lifetime = !from && !to;
   return useQuery({
-    queryKey: ['metrics', 'value', vehicleId, metric],
-    queryFn: () => api.getMetricValue(vehicleId!, metric!),
+    queryKey: ['metrics', 'value', vehicleId, metric, from, to, lifetime],
+    queryFn: () => api.getMetricValue(vehicleId!, metric!, from, to, lifetime),
     enabled: authReady && !!vehicleId && !!metric,
     staleTime: 2 * 60 * 1000,
     placeholderData: (previous) => previous,

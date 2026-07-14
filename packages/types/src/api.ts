@@ -283,6 +283,7 @@ export interface ChargingChartSessionPoint {
   day_start: string;
   started_at: string;
   energy_added_kwh: number | null;
+  cost_usd: number | null;
   charger_type: ChargerType | null;
   location_name: string | null;
 }
@@ -314,6 +315,8 @@ export interface EfficiencySummary {
   p10: number;
   p90: number;
   total_miles: number;
+  efficiency_miles: number;
+  coverage_percent: number;
 }
 
 export interface ChargingSummary {
@@ -377,6 +380,10 @@ export interface VehicleHealthTires {
   tire_fr_status: string | null;
   tire_rl_status: string | null;
   tire_rr_status: string | null;
+  tire_fl_valid: boolean | null;
+  tire_fr_valid: boolean | null;
+  tire_rl_valid: boolean | null;
+  tire_rr_valid: boolean | null;
 }
 
 export interface VehicleHealthClosures {
@@ -717,7 +724,7 @@ export interface UnitPreferences {
   efficiency_display: EfficiencyDisplay;
 }
 
-export type ApiAccessLevel = 'view' | 'edit' | 'admin';
+export type ApiAccessLevel = 'read';
 
 export interface ApiKeyRecord {
   id: string;
@@ -733,7 +740,6 @@ export interface ApiKeyRecord {
 export interface CreateApiKeyBody {
   vehicle_id: string;
   name: string;
-  access_level: ApiAccessLevel;
 }
 
 export interface CreateApiKeyResult {
@@ -843,16 +849,12 @@ export interface AdminUserDetail {
 }
 
 export interface ApiCatalog {
-  access_levels: Array<{
-    level: ApiAccessLevel;
-    description: string;
-    allows: string[];
-    restricts: string[];
-  }>;
+  version: string;
+  authentication: string;
   endpoints: Array<{
     method: string;
     path: string;
-    minimum_access: ApiAccessLevel;
+    vehicle_scoped: boolean;
     purpose: string;
   }>;
 }
@@ -889,6 +891,10 @@ export interface RawTelemetrySample {
   tire_fr_status: string | null;
   tire_rl_status: string | null;
   tire_rr_status: string | null;
+  tire_fl_valid: boolean | null;
+  tire_fr_valid: boolean | null;
+  tire_rl_valid: boolean | null;
+  tire_rr_valid: boolean | null;
   door_front_left_locked: boolean | null;
   door_front_right_locked: boolean | null;
   door_rear_left_locked: boolean | null;
@@ -909,6 +915,20 @@ export interface RawTelemetrySample {
   is_online: boolean | null;
 }
 
+export interface RawTelemetryQuery {
+  from?: string;
+  to?: string;
+  page?: number;
+  per_page?: number;
+  search?: string;
+  fields?: string[];
+  populated_only?: boolean;
+}
+
+export interface RawTelemetryFieldCoverage {
+  [field: string]: number;
+}
+
 export interface RawTelemetryResponse {
   vehicle_id: string;
   coverage: {
@@ -926,6 +946,45 @@ export interface RawTelemetryResponse {
     software_samples: number;
   };
   samples: RawTelemetrySample[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  page?: number;
+  per_page?: number;
+  selected_fields?: string[];
+  field_coverage?: RawTelemetryFieldCoverage;
+}
+
+export interface RawEventQuery {
+  from?: string;
+  to?: string;
+  page?: number;
+  per_page?: number;
+  event_type?: string;
+  message_type?: string;
+}
+
+export interface RawEventSummary {
+  id: string;
+  received_at: string;
+  event_type: string;
+  message_type: string | null;
+  has_json: boolean;
+  has_payload: boolean;
+}
+
+export interface RawEventListResponse {
+  vehicle_id: string;
+  retention_days: number;
+  items: RawEventSummary[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface RawEventDetail extends RawEventSummary {
+  payload: unknown;
+  payload_format: 'json' | 'text' | 'empty';
 }
 
 export interface RivianStewardshipTotals {

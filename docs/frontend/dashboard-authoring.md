@@ -118,6 +118,8 @@ For `vehicleStatus` chips, the definition also owns the semantic availability be
 
 For source-backed chips, define the canonical behavior in `packages/dashboards/src/widgets/sensor/sensorDefinitions.ts`. Keep default dashboard JSON minimal when a definition already owns the source, unit, formula, inline secondary, label suffix, icon, value color, and graph defaults. Use widget `options` only for presentation overrides such as an accent border. Conditional visibility belongs in the typed `visibility` field, not widget options.
 
+For `timeframeScope: "range"`, the chip value is the server-calculated aggregate for the dashboard's selected dates; its sparkline is context only and must not replace that aggregate. Derived measures should aggregate their components directly (for example, distance-weighted consumption), and expose coverage or a tooltip when incomplete source data affects confidence.
+
 The editor exposes the same language under the sensor settings:
 
 - `Data source` chooses the backing object or metric catalog.
