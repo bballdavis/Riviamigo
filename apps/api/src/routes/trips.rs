@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::trip_routes::build_route_preview,
 };
 
@@ -244,6 +244,7 @@ async fn list_trips(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
@@ -342,6 +343,7 @@ async fn get_trip(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let row = sqlx::query_as::<_, TripRow>(
@@ -378,6 +380,7 @@ async fn get_trip_map(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let search = p
@@ -527,6 +530,7 @@ async fn get_trip_detail(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let trip = sqlx::query_as::<_, TripRow>(
@@ -668,6 +672,7 @@ async fn get_track(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
@@ -753,6 +758,7 @@ async fn get_speed_profile(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
@@ -794,6 +800,7 @@ async fn get_elevation_profile(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
@@ -829,6 +836,7 @@ async fn get_power_profile(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     power_profile_response(&state, auth.user_id, vid, id).await
 }
 
@@ -837,6 +845,7 @@ async fn get_power_profile_path(
     auth: AuthUser,
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     power_profile_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -849,6 +858,7 @@ async fn get_trip_series(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     trip_series_response(&state, auth.user_id, vid, id).await
 }
 

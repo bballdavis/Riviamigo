@@ -11,6 +11,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 const settingsMocks = vi.hoisted(() => ({
   auth: {
     logout: vi.fn(),
+    accessToken: undefined as string | undefined,
     defaultVehicleId: 'v1',
     setDefaultVehicleId: vi.fn(),
     setActiveVehicleId: vi.fn(),
@@ -234,6 +235,7 @@ vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: 
 vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('lucide-react', () => ({
   Activity: () => <svg data-testid="icon-activity" />,
+  Braces: () => <svg data-testid="icon-braces" />,
   Car:    () => <svg data-testid="icon-car" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
   Clipboard: () => <svg data-testid="icon-clipboard" />,
@@ -244,6 +246,7 @@ vi.mock('lucide-react', () => ({
   AlertTriangle: () => <svg data-testid="icon-alert-triangle" />,
   CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
   ChevronDown: () => <svg data-testid="icon-chevron-down" />,
+  ChevronLeft: () => <svg data-testid="icon-chevron-left" />,
   ChevronRight: () => <svg data-testid="icon-chevron-right" />,
   Clock3: () => <svg data-testid="icon-clock" />,
   Download: () => <svg data-testid="icon-download" />,
@@ -266,7 +269,9 @@ vi.mock('lucide-react', () => ({
   Ruler: () => <svg data-testid="icon-ruler" />,
   RotateCcw: () => <svg data-testid="icon-rotate" />,
   Save:       () => <svg data-testid="icon-save" />,
+  Search: () => <svg data-testid="icon-search" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
+  SlidersHorizontal: () => <svg data-testid="icon-sliders" />,
   Star: () => <svg data-testid="icon-star" />,
   Users: () => <svg data-testid="icon-users" />,
   X:      () => <svg data-testid="icon-x" />,
@@ -296,6 +301,7 @@ describe('Settings page', () => {
     settingsMocks.auth.logout.mockReset();
     settingsMocks.auth.setDefaultVehicleId.mockReset();
     settingsMocks.auth.setActiveVehicleId.mockReset();
+    settingsMocks.auth.accessToken = undefined;
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
@@ -545,6 +551,19 @@ describe('Settings page', () => {
     expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
   });
 
+  it('renders read-only integrations without loading the API catalog', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    settingsMocks.auth.accessToken = 'test-access-token';
+    renderSettings();
+    fireEvent.click(screen.getByText('Integrations'));
+
+    expect(screen.getByText('Integration Keys')).toBeInTheDocument();
+    expect(screen.getByText(/read-only and limited to one vehicle/i)).toBeInTheDocument();
+    expect(screen.queryByText('API Catalog')).not.toBeInTheDocument();
+    await waitFor(() => expect(hooks.api.listApiKeys).toHaveBeenCalled());
+    expect(hooks.api.getApiCatalog).not.toHaveBeenCalled();
+  });
+
   it('shows address suggestions while typing a place search', async () => {
     renderSettings();
     fireEvent.click(screen.getByText('Places'));
@@ -663,16 +682,15 @@ describe('Settings page', () => {
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
   });
 
-  it('renders the stewardship section for admin users', async () => {
-    const hooks = await import('@riviamigo/hooks');
+  it('renders the telemetry explorer for admin users', async () => {
     settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
     renderSettings();
     fireEvent.click(screen.getByText('Raw Data'));
 
     await waitFor(() => {
-      expect(screen.getByText('DB Stats')).toBeInTheDocument();
-      expect(screen.getByText('Active collectors')).toBeInTheDocument();
-      expect(screen.getByText('Heartbeats ignored')).toBeInTheDocument();
+      expect(screen.getByText('Telemetry Explorer')).toBeInTheDocument();
+      expect(screen.getByText('Field coverage')).toBeInTheDocument();
+      expect(screen.getByText('Inbound Rivian events')).toBeInTheDocument();
     });
   });
 

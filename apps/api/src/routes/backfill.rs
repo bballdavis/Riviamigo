@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::charge_backfill::{self, ChargeBackfillError},
 };
 
@@ -30,6 +30,7 @@ async fn get_backfill_status(
     auth: AuthUser,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<charge_backfill::ChargeBackfillStatus>, AppError> {
+    require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
     Ok(Json(
         charge_backfill::get_status(&state.pool, vehicle_id)

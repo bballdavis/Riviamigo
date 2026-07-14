@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
-import { formatSmartNumber } from '../lib/utils';
+import { formatCurrency, formatSmartNumber } from '../lib/utils';
 
 export interface DailyChargeSessionsDay {
   day_local: string;
@@ -16,6 +16,7 @@ export interface DailyChargeSessionsSession {
   day_start: string;
   started_at: string;
   energy_added_kwh: number | null;
+  cost_usd: number | null;
   charger_type: string | null;
   location_name: string | null;
 }
@@ -57,6 +58,7 @@ interface ChargerGroup {
   label: string;
   color: string;
   energyKwh: number;
+  costUsd: number | null;
   sessionCount: number;
   sessions: DailyChargeSessionsSession[];
 }
@@ -151,8 +153,10 @@ export function DailyChargingBarChart({
           const meta = GROUP_META[groupKey];
           const current = groupsByKey.get(groupKey);
           const energy = Math.max(0, session.energy_added_kwh ?? 0);
+          const cost = Number.isFinite(session.cost_usd) ? session.cost_usd : null;
           if (current) {
             current.energyKwh += energy;
+            if (cost != null) current.costUsd = (current.costUsd ?? 0) + cost;
             current.sessionCount += 1;
             current.sessions.push(session);
           } else {
@@ -161,6 +165,7 @@ export function DailyChargingBarChart({
               label: meta.label,
               color: meta.color,
               energyKwh: energy,
+              costUsd: cost,
               sessionCount: 1,
               sessions: [session],
             });
@@ -322,6 +327,7 @@ export function DailyChargingBarChart({
                       <div className="min-w-0">
                         <div className="text-fg">
                           <span className="font-medium text-fg">{group.label}</span>
+                          {group.costUsd != null ? <span className="text-fg-tertiary"> · {formatCurrency(group.costUsd)}</span> : null}
                           <span className="text-fg-tertiary"> {formatEnergy(group.energyKwh)}</span>
                         </div>
                         <div className="text-fg-tertiary">

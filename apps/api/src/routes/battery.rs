@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     db::vehicles::require_vehicle_owned,
     errors::AppError,
-    middleware::auth::{AppState, AuthUser},
+    middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::idle_drain::fetch_validated_idle_drain_periods_for_chart,
     routes::range_normalization::{
         normalize_remaining_range_miles_strict, projected_full_charge_range_miles,
@@ -106,6 +106,7 @@ async fn get_soc(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 7);
 
@@ -134,6 +135,7 @@ async fn get_range(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
 
@@ -177,6 +179,7 @@ async fn get_capacity(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
@@ -292,6 +295,7 @@ async fn get_degradation(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
@@ -326,6 +330,7 @@ async fn get_health(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
@@ -395,6 +400,7 @@ async fn get_mileage(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 730);
@@ -458,6 +464,7 @@ async fn get_phantom_drain(
     let vid = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let periods = fetch_validated_idle_drain_periods_for_chart(&state.pool, vid, from, to).await?;

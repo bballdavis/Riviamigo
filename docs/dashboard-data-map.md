@@ -22,14 +22,14 @@ Sources:
 | Efficiency | avg Wh/mi, best/worst bands, efficiency by mode, trend, temp bins | completed trips | Needs more trip finalization and outside-temp capture before it becomes rich. |
 | Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; daily totals and stacked session composition share the filled charging-bar visual; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
 | Trips | trip list, route map, synchronized detail charts, speed, elevation | completed trip detector, persisted route previews, adaptive telemetry samples | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Raw compatibility endpoints remain available. |
-| Settings Raw Data | telemetry field coverage and recent samples | raw Timescale telemetry | Use this to verify ingestion before wiring new dashboard cards. |
+| Settings Raw Data | searchable normalized telemetry, per-field coverage, selected-record inspection, and owner/manager-only retained inbound events | raw Timescale telemetry plus short-lived Rivian websocket payload retention | Use this to verify ingestion before wiring new dashboard cards; original payloads are troubleshooting evidence, not a stable dashboard contract. |
 
 ## TeslaMate parity targets
 
 ### Charging chart semantics
 
 - `Energy Charged` (`charging-weekly-energy`) is a daily total-energy bar chart. Each bar is one local charge day and hover shows the day plus total kWh.
-- `Daily Charge Sessions` (`charging-sessions-energy`) is a daily stacked bar chart. Each local-day bar is composed of AC, DC, and Unknown session groups, with legend, grouped hover details, and optional day selection for the charging table.
+- `Daily Charge Sessions` (`charging-sessions-energy`) is a daily stacked bar chart. Each local-day bar is composed of AC, DC, and Unknown session groups, with legend, grouped hover details including the sum of recorded USD costs per charger type, and optional day selection for the charging table.
 - Both charts use the shared filled-bar treatment; the stacked chart retains its segmentation because it answers a different question from the daily total chart.
 
 TeslaMate-style dashboards generally cover these data families:
@@ -75,6 +75,6 @@ For each new field family:
 
 1. Add only schema-confirmed fields to the websocket or vehicle-state query.
 2. Store raw normalized values in Timescale or a dedicated state table.
-3. Add coverage counts to `GET /v1/vehicles/:id/raw-data`.
-4. Confirm non-null samples in Settings -> Raw Data.
+3. Add field coverage to `GET /v1/vehicles/:id/raw-data`.
+4. Confirm non-null samples and the normalized field inspector in Settings -> Raw Data.
 5. Promote the field into dashboard chips/cards/charts.

@@ -8,7 +8,7 @@ import type {
   StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, ChargingChartSeries, PaginatedResponse,
   AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
   CreateDemoVehicleBody, CreateDemoVehicleResult,
-  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse,
+  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse, RawTelemetryQuery, RawEventDetail, RawEventListResponse, RawEventQuery,
   Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
   BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
   MetricValueResponse, MetricBatchRequest, MetricBatchResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
@@ -972,6 +972,7 @@ class ApiClient {
         day_start: typeof row.day_start === 'string' ? row.day_start : new Date().toISOString(),
         started_at: typeof row.started_at === 'string' ? row.started_at : new Date().toISOString(),
         energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? null,
+        cost_usd: finiteNumber(row.cost_usd) ?? null,
         charger_type: typeof row.charger_type === 'string'
           ? row.charger_type as ChargingChartSeries['daily_sessions'][number]['charger_type']
           : null,
@@ -1034,6 +1035,8 @@ class ApiClient {
       p10_wh_per_mi: number;
       p90_wh_per_mi: number;
       total_miles: number;
+      efficiency_miles: number;
+      coverage_percent: number;
     }>('GET', '/v1/efficiency/summary', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
@@ -1044,6 +1047,8 @@ class ApiClient {
       p10: summary.p10_wh_per_mi,
       p90: summary.p90_wh_per_mi,
       total_miles: summary.total_miles,
+      efficiency_miles: summary.efficiency_miles,
+      coverage_percent: summary.coverage_percent,
     } satisfies EfficiencySummary;
   }
 
@@ -1089,8 +1094,18 @@ class ApiClient {
     return response.metrics ?? [];
   }
 
-  async getMetricValue(vehicleId: string, metric: string): Promise<MetricValueResponse> {
-    return this.request('GET', '/v1/metrics/value', undefined, { vehicle_id: vehicleId, metric });
+  async getMetricValue(
+    vehicleId: string,
+    metric: string,
+    from: string | null = null,
+    to: string | null = null,
+    lifetime = false,
+  ): Promise<MetricValueResponse> {
+    return this.request('GET', '/v1/metrics/value', undefined, {
+      vehicle_id: vehicleId,
+      metric,
+      ...buildTimeframeParams(from, to, lifetime),
+    });
   }
 
   async getMetricSeries(
@@ -1113,8 +1128,34 @@ class ApiClient {
     return this.request('POST', '/v1/metrics/batch', request);
   }
 
-  async getRawTelemetry(vehicleId: string, limit = 25) {
-    return this.request<RawTelemetryResponse>('GET', `/v1/vehicles/${vehicleId}/raw-data`, undefined, { limit });
+  async getRawTelemetry(vehicleId: string, options: RawTelemetryQuery | number = {}) {
+    const legacyLimit = typeof options === 'number' ? options : undefined;
+    const query = typeof options === 'number' ? {} : options;
+    const fields = query.fields?.filter(Boolean).join(',');
+    return this.request<RawTelemetryResponse>('GET', `/v1/vehicles/${vehicleId}/raw-data`, undefined, {
+      ...(query.from ? { from: query.from } : {}),
+      ...(query.to ? { to: query.to } : {}),
+      ...(query.page ? { page: query.page } : {}),
+      ...(legacyLimit ? { limit: legacyLimit } : query.per_page ? { per_page: query.per_page } : {}),
+      ...(query.search?.trim() ? { search: query.search.trim() } : {}),
+      ...(fields ? { fields } : {}),
+      ...(query.populated_only ? { populated_only: 'true' } : {}),
+    });
+  }
+
+  async getRawEvents(vehicleId: string, query: RawEventQuery = {}) {
+    return this.request<RawEventListResponse>('GET', `/v1/vehicles/${vehicleId}/raw-events`, undefined, {
+      ...(query.from ? { from: query.from } : {}),
+      ...(query.to ? { to: query.to } : {}),
+      ...(query.page ? { page: query.page } : {}),
+      ...(query.per_page ? { per_page: query.per_page } : {}),
+      ...(query.event_type ? { event_type: query.event_type } : {}),
+      ...(query.message_type ? { message_type: query.message_type } : {}),
+    });
+  }
+
+  async getRawEvent(vehicleId: string, eventId: string) {
+    return this.request<RawEventDetail>('GET', `/v1/vehicles/${vehicleId}/raw-events/${eventId}`);
   }
 
   async getRivianStewardship(): Promise<RivianStewardshipResponse> {

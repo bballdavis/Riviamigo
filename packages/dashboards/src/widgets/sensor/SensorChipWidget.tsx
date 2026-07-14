@@ -1,5 +1,6 @@
 import React from 'react';
 import { Icon } from '@iconify/react';
+import { CircleHelp } from 'lucide-react';
 import {
   useBatteryHealth,
   useChargingSummary,
@@ -69,6 +70,7 @@ interface SensorChipOptions {
   inlineSecondaryUnit?: string | null;
   inlineSecondaryPrefix?: string;
   secondaryTemplate?: string;
+  helpText?: string;
   labelSuffix?: string;
   showSprite?: boolean;
   showSubtitle?: boolean;
@@ -109,6 +111,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     inlineSecondaryUnit: options.inlineSecondaryUnit ?? definition.inlineSecondaryUnit ?? null,
     inlineSecondaryPrefix: options.inlineSecondaryPrefix ?? definition.inlineSecondaryPrefix ?? '',
     secondaryTemplate: options.secondaryTemplate ?? definition.secondaryTemplate ?? '',
+    helpText: options.helpText ?? definition.helpText ?? '',
     labelSuffix: options.labelSuffix ?? definition.labelSuffix ?? '',
     showSprite: options.showSprite ?? true,
     showSubtitle: options.showSubtitle ?? false,
@@ -138,6 +141,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const { selectedIds, tripRegistry } = useTripSelection();
   const needsHealth = options.dataSource === 'batteryHealth';
   const needsCharging = options.dataSource === 'chargingSummary';
+  const needsEfficiency = metric === 'avg_efficiency' || options.dataSource === 'efficiencySummary';
   const needsStatus = options.dataSource === 'vehicleStatus' || usesStatus(options);
   const tripSelectionStat = (ctx.dashboardSlug === 'trips' || options.tripSelectionAware)
     ? getTripStatKind(metric)
@@ -158,6 +162,8 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const { data: fetchedValue } = useMetricValue(
     dashboardDataAvailable ? null : ctx.vehicleId,
     dashboardDataAvailable ? null : metric,
+    ctx.from,
+    ctx.to,
   );
   const { data: fetchedSeries = [] } = useMetricSeries(
     dashboardDataAvailable ? null : ctx.vehicleId,
@@ -166,7 +172,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     ctx.to,
   );
   const { data: fetchedEfficiencySummary } = useEfficiencySummary(
-    !dashboardDataAvailable && metric === 'avg_efficiency' ? ctx.vehicleId : null,
+    !dashboardDataAvailable && needsEfficiency ? ctx.vehicleId : null,
     ctx.from,
     ctx.to
   );
@@ -189,7 +195,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const status = dashboardDataAvailable ? dashboardStatus : fetchedStatus;
   const title = instance.title ?? definition?.title ?? value?.label ?? options.metric;
   const iconId = resolveIconId(options.icon);
-  const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, status);
+  const sourceValues = buildSourceValues(options.dataSource, health, chargingSummary, efficiencySummary, status);
   const timeframeScope = options.timeframeScope;
   const isLifetimeTimeframe = ctx.timeframe?.kind === 'lifetime';
   const allowLatestFallback = timeframeScope !== 'range' || isLifetimeTimeframe;
@@ -204,21 +210,12 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const hasFiniteSeriesPoint = series.some(
     (point) => typeof point.value === 'number' && Number.isFinite(point.value)
   );
-  const resolvedMetricLatest = hasFiniteSeriesPoint
-    ? resolveLatestSeriesPoint(series)
-    : allowLatestFallback
-      ? (value?.value ?? null)
-      : null;
-  const effectiveMetricMode = definition?.cumulative ? 'sum' : options.valueMode;
-  const useSeriesForValue =
-    options.dataSource === 'metric' && metric !== 'avg_efficiency' && hasFiniteSeriesPoint;
+  const resolvedMetricValue = allowLatestFallback || hasFiniteSeriesPoint ? (value?.value ?? null) : null;
   const resolvedValue =
     options.dataSource === 'metric'
       ? metric === 'avg_efficiency'
         ? (efficiencySummary?.avg ?? (allowLatestFallback ? (value?.value ?? null) : null))
-        : useSeriesForValue
-          ? deriveMetricValue(effectiveMetricMode, resolvedMetricLatest, series)
-          : (resolvedMetricLatest ?? null)
+        : resolvedMetricValue
       : resolveConfiguredValue(options, sourceValues);
   const statusPresentation =
     options.dataSource === 'vehicleStatus'
@@ -252,6 +249,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     : options.valueColor === 'accent'
       ? 'text-accent'
       : 'text-fg';
+  const helpContent = getHelpContent(options.helpText, metric, efficiencySummary);
 
   const isDailyDelta = options.chartType === 'daily_delta';
   const sparklineType: MiniSparklineType = isDailyDelta
@@ -307,6 +305,17 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
                   </span>
                 ) : null}
               </p>
+              {helpContent ? (
+                <Tooltip content={helpContent} align="start">
+                  <button
+                    type="button"
+                    aria-label={`${title} help`}
+                    className="inline-flex shrink-0 rounded text-fg-tertiary transition-colors hover:text-fg focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                  >
+                    <CircleHelp className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              ) : null}
               {timeframeScope === 'lifetime' ? (
                 <Badge
                   size="sm"
@@ -352,6 +361,7 @@ function buildSourceValues(
   dataSource: SensorDataSource,
   health: unknown,
   chargingSummary: unknown,
+  efficiencySummary: unknown,
   status: unknown
 ) {
   const charging = objectValues(chargingSummary);
@@ -360,6 +370,8 @@ function buildSourceValues(
       ? health
       : dataSource === 'chargingSummary'
         ? chargingSummary
+        : dataSource === 'efficiencySummary'
+          ? efficiencySummary
         : dataSource === 'vehicleStatus'
           ? status
           : {};
@@ -381,8 +393,21 @@ function buildSourceValues(
     health,
     battery: health,
     charging: chargingSummary,
+    efficiency: efficiencySummary,
     status,
   } as Record<string, unknown>;
+}
+
+function getHelpContent(
+  helpText: string,
+  metric: string | null,
+  efficiencySummary: { efficiency_miles: number; total_miles: number } | null | undefined,
+) {
+  if (!helpText) return null;
+  if (metric !== 'avg_efficiency' || !efficiencySummary || efficiencySummary.total_miles <= 0) {
+    return helpText;
+  }
+  return `${helpText} Based on ${formatMiles(efficiencySummary.efficiency_miles)} of ${formatMiles(efficiencySummary.total_miles)} driven.`;
 }
 
 function objectValues(value: unknown) {
@@ -563,33 +588,6 @@ function deriveSpriteData(
   return [];
 }
 
-function resolveLatestSeriesPoint(series: Array<{ value: number | null | undefined }>) {
-  for (let index = series.length - 1; index >= 0; index -= 1) {
-    const value = series[index]?.value;
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-  }
-  return null;
-}
-
-function deriveMetricValue(
-  mode: Required<SensorChipOptions>['valueMode'],
-  latest: number | null | undefined,
-  series: Array<{ value: number | null | undefined }>
-) {
-  if (mode === 'latest') return latest;
-
-  const values = series
-    .map((point) => point.value)
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-
-  if (mode === 'count') return values.length;
-  if (values.length === 0) return null;
-  if (mode === 'sum') return values.reduce((sum, value) => sum + value, 0);
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
 function formatMetricValue(value: number | null | undefined, unit: string | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-';
   if (unit === 'mi') return formatMiles(value);
@@ -683,7 +681,7 @@ function sensorDataRequirements(instance: WidgetInstance): DashboardDataRequirem
     } : {}),
     ...(options.dataSource === 'batteryHealth' ? { batteryHealth: true } : {}),
     ...(options.dataSource === 'chargingSummary' ? { chargingSummary: true } : {}),
-    ...(metric === 'avg_efficiency' ? { efficiencySummary: true } : {}),
+    ...(metric === 'avg_efficiency' || options.dataSource === 'efficiencySummary' ? { efficiencySummary: true } : {}),
     ...(options.dataSource === 'vehicleStatus' || usesStatus(options) ? { status: true } : {}),
   };
 }
@@ -711,6 +709,7 @@ for (const definition of SENSOR_DEFINITIONS) {
       inlineSecondaryUnit: definition.inlineSecondaryUnit ?? null,
       inlineSecondaryPrefix: definition.inlineSecondaryPrefix ?? '',
       secondaryTemplate: definition.secondaryTemplate ?? '',
+      helpText: definition.helpText ?? '',
       labelSuffix: definition.labelSuffix ?? '',
       valueMode: definition.valueMode,
       valueColor: definition.valueColor ?? 'accent',
