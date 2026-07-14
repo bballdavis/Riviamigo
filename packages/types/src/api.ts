@@ -142,6 +142,7 @@ export interface Trip {
   start_place?: string | null;
   end_place?: string | null;
   outside_temp_c?: number | null;
+  outside_temp_source?: OutsideTemperatureSource | null;
 }
 
 export interface TrackPoint {
@@ -215,6 +216,90 @@ export interface TripDetailResponse {
   trip: Trip;
   sample_interval_seconds: number;
   samples: TripDetailSamples;
+  outside_temperature: OutsideTemperatureSeries;
+}
+
+export type OutsideTemperatureSource = 'vehicle' | 'open_meteo' | 'mixed' | 'unavailable';
+
+export interface OutsideTemperatureSample {
+  elapsed_s: number;
+  ts: string;
+  temperature_c: number;
+  source: 'vehicle' | 'open_meteo';
+}
+
+export interface OutsideTemperatureSeries {
+  source: OutsideTemperatureSource;
+  attribution: { name: string; url: string } | null;
+  samples: OutsideTemperatureSample[];
+}
+
+export type ExternalConnectionMode = 'hosted' | 'custom' | 'disabled';
+export type WeatherLocationPrecision = 'approximate' | 'exact';
+
+export interface ExternalConnectionRecord {
+  id: 'rivian_account' | 'open_meteo' | 'nominatim' | 'basemap' | 'iconify' | 'rivian_artwork' | 's3_backup';
+  name: string;
+  purpose: string;
+  data_shared: string[];
+  disabled_effect: string;
+  execution: string;
+  privacy_url: string | null;
+  terms_url: string | null;
+  editable: boolean;
+  enabled: boolean;
+  mode: ExternalConnectionMode;
+  endpoint: string | null;
+  endpoint_is_private: boolean;
+  weather_precision: WeatherLocationPrecision | null;
+  forecast_url: string | null;
+  archive_url: string | null;
+  base_url: string | null;
+  light_url_template: string | null;
+  dark_url_template: string | null;
+  attribution: string | null;
+  attribution_url: string | null;
+  request_identifier: string | null;
+  custom_autocomplete: boolean;
+  allow_private_network: boolean;
+  has_api_key: boolean;
+  has_bearer_token: boolean;
+  updated_at: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  request_count_today: number;
+}
+
+export interface ExternalConnectionsResponse {
+  can_manage: boolean;
+  connections: ExternalConnectionRecord[];
+}
+
+export interface UpdateExternalConnectionBody {
+  enabled: boolean;
+  mode: ExternalConnectionMode;
+  weather_precision?: WeatherLocationPrecision | null;
+  forecast_url?: string | null;
+  archive_url?: string | null;
+  base_url?: string | null;
+  light_url_template?: string | null;
+  dark_url_template?: string | null;
+  attribution?: string | null;
+  attribution_url?: string | null;
+  request_identifier?: string | null;
+  custom_autocomplete?: boolean;
+  allow_private_network?: boolean;
+  api_key?: string | null;
+  clear_api_key?: boolean;
+  bearer_token?: string | null;
+  clear_bearer_token?: boolean;
+}
+
+export interface TestExternalConnectionResponse {
+  ok: boolean;
+  message: string;
+  preview_data_url: string | null;
 }
 
 export interface ChargeSession {

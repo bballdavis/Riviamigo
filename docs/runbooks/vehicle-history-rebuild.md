@@ -18,7 +18,7 @@ This runbook is canonical for the `rebuild_vehicle_history` maintenance workflow
 4. replaying Rivian completed-session payloads back into canonical matching
 5. canonicalizing duplicate charge rows and recovering API-only charge history
 6. replaying trips and telemetry `trip_id` links
-7. re-enriching rebuilt trips with geofence/address matching and missing outside temperatures
+7. reattaching geofence/address matches and queueing route-aware outside-temperature enrichment
 
 The rebuild is intentionally self-healing for trip presentation and efficiency analysis. A completed rebuild should leave `/v1/trips` with human-readable start/destination labels when enrichment is available and `/v1/efficiency/vs-temp` with rebuilt trips included once outside temperatures are restored.
 
@@ -61,7 +61,7 @@ Treat the DB counts as the source of truth. Logs alone are not enough to accept 
 ## Post-Replay Enrichment Behavior
 
 - Trip geofence and address IDs are reattached after replay through the shared trip enrichment service.
-- Missing trip outside temperatures are re-fetched after replay through the same service.
+- Rebuilt trips enqueue the same idempotent route-aware weather jobs used for new drives. The rebuild does not issue synchronous start-location weather calls.
 - Rebuild completion logs now include filled/failed counts for:
   - trip geofence matches
   - trip address matches
@@ -70,7 +70,7 @@ Treat the DB counts as the source of truth. Logs alone are not enough to accept 
 
 ## Operational Tradeoffs
 
-- The rebuild now depends on external enrichment services for the address and weather portions of trip recovery.
+- Address enrichment can run during the rebuild. Weather restoration is asynchronous and remains pending while Open-Meteo is disabled.
 - Reverse geocoding and weather lookups fail gracefully; a rebuild can still finish even when some trips remain partially enriched.
 - Because enrichment is external, rebuilds can take longer than pure local replay and may show non-zero failed counts when providers are unavailable or rate-limited.
 
@@ -87,7 +87,7 @@ cargo run --bin backfill_trip_addresses -- --vehicle <uuid>
 cargo run --bin backfill_outside_temp -- --vehicle <uuid>
 ```
 
-3. Re-run `report_trip_enrichment_gaps -- --vehicle <uuid>` and confirm the missing-field counts actually improved.
+3. Keep the API worker running, then re-run `report_trip_enrichment_gaps -- --vehicle <uuid>` after queued jobs complete and confirm the missing-field counts actually improved.
 4. Run `diagnose_charge_sessions -- --vehicle <uuid>` before and after any charge-session rebuild or repair.
 5. Only if coordinate-bearing trips are still missing enrichment should you run `rebuild_vehicle_history -- --vehicle <uuid>`.
 6. Immediately rerun the diagnostics report after a rebuild. A rebuild is only accepted when the post-run counts improve and charge-session diagnostics no longer show canonical overlaps, null `source` rows, or unresolved payload gaps.

@@ -25,6 +25,8 @@ pub enum AppError {
     Validation(String),
     #[error("Dependency unavailable: {0}")]
     DependencyUnavailable(String),
+    #[error("External connection disabled: {0}")]
+    ExternalConnectionDisabled(String),
     #[error("Internal error")]
     Internal(#[from] anyhow::Error),
     #[error("Redis error: {0}")]
@@ -42,6 +44,11 @@ impl IntoResponse for AppError {
             AppError::DependencyUnavailable(m) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "DEPENDENCY_UNAVAILABLE",
+                m.clone(),
+            ),
+            AppError::ExternalConnectionDisabled(m) => (
+                StatusCode::CONFLICT,
+                "EXTERNAL_CONNECTION_DISABLED",
                 m.clone(),
             ),
             AppError::Io(e) => {

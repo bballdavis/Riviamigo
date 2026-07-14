@@ -101,6 +101,7 @@ struct TripRow {
     start_address: Option<String>,
     end_address: Option<String>,
     outside_temp_c: Option<f64>,
+    outside_temp_source: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -191,6 +192,35 @@ struct TripDetailResponse {
     trip: TripRow,
     sample_interval_seconds: i32,
     samples: TripDetailSamples,
+    outside_temperature: OutsideTemperatureResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct OutsideTemperatureResponse {
+    source: String,
+    attribution: Option<OutsideTemperatureAttribution>,
+    samples: Vec<OutsideTemperatureSample>,
+}
+
+#[derive(Debug, Serialize)]
+struct OutsideTemperatureAttribution {
+    name: &'static str,
+    url: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct OutsideTemperatureSample {
+    elapsed_s: i32,
+    ts: DateTime<Utc>,
+    temperature_c: f64,
+    source: &'static str,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct TripWeatherRow {
+    sampled_at: DateTime<Utc>,
+    elapsed_seconds: i32,
+    temperature_c: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,7 +299,7 @@ async fn list_trips(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $7 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -353,7 +383,7 @@ async fn get_trip(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -540,7 +570,7 @@ async fn get_trip_detail(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -560,17 +590,27 @@ async fn get_trip_detail(
         .duration_seconds
         .unwrap_or_else(|| (trip.ended_at - trip.started_at).num_seconds().max(0) as i32);
     let sample_interval_seconds = detail_bucket_seconds(duration_seconds);
-    let cache_key = format!("trips:detail:v1:{vid}:{id}:{sample_interval_seconds}");
+    let weather_rows = sqlx::query_as::<_, TripWeatherRow>(
+        "SELECT sampled_at, elapsed_seconds, temperature_c FROM riviamigo.trip_weather_samples WHERE trip_id=$1 ORDER BY sampled_at",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    let cache_key = format!("trips:detail:v2:{vid}:{id}:{sample_interval_seconds}");
     let mut redis_conn = state.redis.get_multiplexed_async_connection().await.ok();
     if let Some(conn) = redis_conn.as_mut() {
         let cached: Option<String> = conn.get(&cache_key).await.ok();
         if let Some(payload) = cached {
-            if let Ok(samples) = serde_json::from_str::<TripDetailSamples>(&payload) {
+            if let Ok(mut samples) = serde_json::from_str::<TripDetailSamples>(&payload) {
+                let raw_elapsed = raw_outside_elapsed(&samples);
+                merge_weather_samples(&mut samples, &weather_rows);
+                let outside_temperature = build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
                 debug!(trip_id = %id, vehicle_id = %vid, cache_hit = true, "trips.detail_cache");
                 return Ok(Json(TripDetailResponse {
                     trip,
                     sample_interval_seconds,
                     samples,
+                    outside_temperature,
                 }));
             }
         }
@@ -628,6 +668,10 @@ async fn get_trip_detail(
         samples.tire_rr_psi.push(row.tire_rr_psi);
     }
 
+    let raw_elapsed = raw_outside_elapsed(&samples);
+    merge_weather_samples(&mut samples, &weather_rows);
+    let outside_temperature = build_outside_temperature(&trip, &samples, &weather_rows, &raw_elapsed);
+
     if let Some(conn) = redis_conn.as_mut() {
         if let Ok(payload) = serde_json::to_string(&samples) {
             let _: Result<(), redis::RedisError> =
@@ -648,7 +692,55 @@ async fn get_trip_detail(
         trip,
         sample_interval_seconds,
         samples,
+        outside_temperature,
     }))
+}
+
+fn raw_outside_elapsed(samples: &TripDetailSamples) -> std::collections::HashSet<i32> {
+    samples.elapsed_s.iter().copied().zip(samples.outside_temp_c.iter())
+        .filter_map(|(elapsed, value)| value.map(|_| elapsed)).collect()
+}
+
+fn merge_weather_samples(samples: &mut TripDetailSamples, weather_rows: &[TripWeatherRow]) {
+    if samples.elapsed_s.is_empty() { return; }
+    for weather in weather_rows {
+        let Some((index, _)) = samples.elapsed_s.iter().enumerate()
+            .min_by_key(|(_, elapsed)| (**elapsed - weather.elapsed_seconds).abs()) else { continue; };
+        if samples.outside_temp_c.get(index).copied().flatten().is_none() {
+            if let Some(value) = samples.outside_temp_c.get_mut(index) { *value = Some(weather.temperature_c); }
+        }
+    }
+}
+
+fn build_outside_temperature(
+    trip: &TripRow,
+    samples: &TripDetailSamples,
+    weather_rows: &[TripWeatherRow],
+    raw_elapsed: &std::collections::HashSet<i32>,
+) -> OutsideTemperatureResponse {
+    let source = trip.outside_temp_source.clone().unwrap_or_else(|| {
+        if !raw_elapsed.is_empty() && !weather_rows.is_empty() { "mixed".into() }
+        else if !raw_elapsed.is_empty() { "vehicle".into() }
+        else if !weather_rows.is_empty() { "open_meteo".into() }
+        else { "unavailable".into() }
+    });
+    let timeline_samples = samples.elapsed_s.iter().enumerate().filter_map(|(index, elapsed)| {
+        let temperature_c = samples.outside_temp_c.get(index).copied().flatten()?;
+        let matched_weather = weather_rows.iter().min_by_key(|row| (row.elapsed_seconds - *elapsed).abs())
+            .filter(|row| (row.elapsed_seconds - *elapsed).abs() <= 30);
+        let sample_source = if raw_elapsed.contains(elapsed) { "vehicle" } else if matched_weather.is_some() { "open_meteo" } else { "vehicle" };
+        Some(OutsideTemperatureSample {
+            elapsed_s: *elapsed,
+            ts: matched_weather.map(|row| row.sampled_at).unwrap_or_else(|| trip.started_at + chrono::Duration::seconds(i64::from(*elapsed))),
+            temperature_c,
+            source: sample_source,
+        })
+    }).collect();
+    OutsideTemperatureResponse {
+        attribution: matches!(source.as_str(), "open_meteo" | "mixed").then_some(OutsideTemperatureAttribution { name: "Open-Meteo", url: "https://open-meteo.com/" }),
+        source,
+        samples: timeline_samples,
+    }
 }
 
 fn detail_bucket_seconds(duration_seconds: i32) -> i32 {

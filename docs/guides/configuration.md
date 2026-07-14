@@ -21,6 +21,8 @@ Production refuses to auto-generate signing or encryption keys. Keep those value
 
 ## Optional settings
 
+Weather, geocoding, basemap, Iconify, and Rivian-artwork policies are configured in **Settings > External Connections** and stored in the database. Do not add provider URLs or API keys to `.env`; custom connection secrets are encrypted with the installation age key and remain write-only. See [external connections](./external-connections.md).
+
 - `RIVIAMIGO_ORIGIN_PORT` changes the loopback listener from its default of `8080`.
 - `IMAGE_TAG` chooses a published image. It defaults to `latest`; pin an exact Calendar Version such as `2026.07.0` for repeatable deployments.
 - `RIVIAMIGO_IMAGE_REGISTRY` defaults to the public `ghcr.io/bballdavis` registry namespace.

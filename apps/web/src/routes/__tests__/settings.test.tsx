@@ -251,6 +251,7 @@ vi.mock('lucide-react', () => ({
   Clock3: () => <svg data-testid="icon-clock" />,
   Download: () => <svg data-testid="icon-download" />,
   ExternalLink: () => <svg data-testid="icon-external-link" />,
+  Globe2: () => <svg data-testid="icon-globe" />,
   HardDrive: () => <svg data-testid="icon-hard-drive" />,
   History: () => <svg data-testid="icon-history" />,
   Home: () => <svg data-testid="icon-home" />,
@@ -271,6 +272,7 @@ vi.mock('lucide-react', () => ({
   Save:       () => <svg data-testid="icon-save" />,
   Search: () => <svg data-testid="icon-search" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
+  ShieldOff: () => <svg data-testid="icon-shield-off" />,
   SlidersHorizontal: () => <svg data-testid="icon-sliders" />,
   Star: () => <svg data-testid="icon-star" />,
   Users: () => <svg data-testid="icon-users" />,
@@ -555,7 +557,7 @@ describe('Settings page', () => {
     const hooks = await import('@riviamigo/hooks');
     settingsMocks.auth.accessToken = 'test-access-token';
     renderSettings();
-    fireEvent.click(screen.getByText('Integrations'));
+    fireEvent.click(screen.getByText('API Access'));
 
     expect(screen.getByText('Integration Keys')).toBeInTheDocument();
     expect(screen.getByText(/read-only and limited to one vehicle/i)).toBeInTheDocument();
@@ -564,11 +566,12 @@ describe('Settings page', () => {
     expect(hooks.api.getApiCatalog).not.toHaveBeenCalled();
   });
 
-  it('shows address suggestions while typing a place search', async () => {
+  it('shows address suggestions after explicitly submitting a place search', async () => {
     renderSettings();
     fireEvent.click(screen.getByText('Places'));
 
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() => {
       expect(screen.getByText('123 Main St, Denver, CO')).toBeInTheDocument();
@@ -582,6 +585,7 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Places'));
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: '123 Main' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() => {
       expect(screen.getByText('Searching addresses...')).toBeInTheDocument();
@@ -595,6 +599,7 @@ describe('Settings page', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Places'));
     fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: 'unlikely query xyz' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() => {
       expect(screen.getByText('No matching addresses found. Try a broader search.')).toBeInTheDocument();

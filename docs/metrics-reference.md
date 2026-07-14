@@ -108,6 +108,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 | P10 / P90 efficiency | Wh/mi | Aggregate | Distribution percentiles |
 | Efficiency by drive mode | Wh/mi | Aggregate | Grouped bar chart |
 | Efficiency vs temperature | Wh/mi | Aggregate | Cold/warm correction insight |
+| Avg outside temperature | °C | Trip weather timeline | Time-weighted merged vehicle/Open-Meteo samples; estimated provenance is shown in the UI |
 | Efficiency trend (rolling) | Wh/mi | Time-series | 7-day rolling avg |
 | Cost per mile | $/mi | Derived | From kWh rate setting |
 | Energy cost total (period) | $ | Aggregate | |
@@ -121,7 +122,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 | Metric | Unit | Source | Notes |
 |--------|------|--------|-------|
 | Cabin temp history | °C | Time-series | When online |
-| Outside temp correlation | °C vs Wh/mi | Derived | Scatter plot |
+| Outside temp correlation | °C vs Wh/mi | Derived | Uses the same route-aware trip summary as the timeline and efficiency buckets |
 | Preconditioning events | count/duration | Aggregate | |
 | Cabin overheat protection | bool | Optional | |
 
@@ -147,7 +148,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 
 ### Schema additions needed (timeseries.telemetry)
 - `heading_deg` FLOAT8
-- `outside_temp_c` FLOAT8
+- Raw `outside_temp_c` acquisition remains unavailable from the current Rivian subscription; the normalized column is retained so vehicle readings can supersede estimates if upstream support appears.
 - `hvac_active` BOOLEAN
 - `regen_power_kw` FLOAT8
 - `power_kw` FLOAT8 (net traction power, positive = consuming, negative = regen)
@@ -163,6 +164,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 - `regen_wh` FLOAT8
 - `elevation_gain_m` FLOAT8
 - `outside_temp_c` FLOAT8 (already in schema ✓)
+- `outside_temp_source` TEXT and route-aware `trip_weather_samples` (implemented)
 
 ### New API endpoints needed
 - `GET /v1/battery/degradation` — capacity trend over time
