@@ -728,6 +728,140 @@ async fn admin_vehicle_options_require_an_admin_role_and_return_picker_safe_fiel
 }
 
 #[tokio::test]
+async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
+    let app = TestApp::new().await;
+    let admin_token = register_and_login(&app, "account-inviter@example.com").await;
+    let admin_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "account-inviter@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("admin id");
+    let vehicle_id = insert_vehicle(&app.pool, admin_id, "invite-vehicle", "Family R1S").await;
+
+    let invalid = app
+        .request(
+            Method::POST,
+            "/v1/admin/account-invitations",
+            Some(json!({ "email": "invalid-vehicle@example.com", "vehicle_id": Uuid::new_v4() })),
+            Some(&admin_token),
+            None,
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid.body["error"]["message"], "vehicle not found");
+
+    let created = app
+        .request(
+            Method::POST,
+            "/v1/admin/account-invitations",
+            Some(json!({ "email": "viewer-invitee@example.com", "vehicle_id": vehicle_id })),
+            Some(&admin_token),
+            None,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK);
+    let activation_token = created.body["activation_token"]
+        .as_str()
+        .expect("activation token");
+
+    let listed = app
+        .request(
+            Method::GET,
+            "/v1/admin/account-invitations",
+            None,
+            Some(&admin_token),
+            None,
+        )
+        .await;
+    assert_eq!(listed.status, StatusCode::OK);
+    let listed_invitation = listed.body["invitations"]
+        .as_array()
+        .expect("invitations")
+        .iter()
+        .find(|invitation| invitation["invitee_email"] == "viewer-invitee@example.com")
+        .expect("listed invitation");
+    assert_eq!(listed_invitation["vehicle_id"], json!(vehicle_id));
+    assert_eq!(listed_invitation["vehicle_name"], "Family R1S");
+
+    let accepted = app
+        .request(
+            Method::POST,
+            "/v1/auth/account-invitations/accept",
+            Some(json!({ "token": activation_token, "password": "invitepassword" })),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(accepted.status, StatusCode::CREATED);
+    let invitee_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "viewer-invitee@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("invitee id");
+    let membership: (String, bool) = sqlx::query_as(
+        "SELECT role, is_default FROM riviamigo.vehicle_memberships WHERE vehicle_id = $1 AND user_id = $2",
+    )
+    .bind(vehicle_id)
+    .bind(invitee_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("viewer membership");
+    assert_eq!(membership.0, "viewer");
+    assert!(!membership.1);
+    let settings_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM riviamigo.vehicle_user_settings WHERE vehicle_id = $1 AND user_id = $2",
+    )
+    .bind(vehicle_id)
+    .bind(invitee_id)
+    .fetch_one(&app.pool)
+    .await
+    .expect("vehicle settings count");
+    assert_eq!(settings_count, 1);
+
+    let no_vehicle_created = app
+        .request(
+            Method::POST,
+            "/v1/admin/account-invitations",
+            Some(json!({ "email": "no-vehicle-invitee@example.com", "vehicle_id": null })),
+            Some(&admin_token),
+            None,
+        )
+        .await;
+    assert_eq!(no_vehicle_created.status, StatusCode::OK);
+    let no_vehicle_token = no_vehicle_created.body["activation_token"]
+        .as_str()
+        .expect("no-vehicle activation token");
+    let no_vehicle_accepted = app
+        .request(
+            Method::POST,
+            "/v1/auth/account-invitations/accept",
+            Some(json!({ "token": no_vehicle_token, "password": "invitepassword" })),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(no_vehicle_accepted.status, StatusCode::CREATED);
+    let no_vehicle_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "no-vehicle-invitee@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("no-vehicle invitee id");
+    let no_membership_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.vehicle_memberships WHERE user_id = $1")
+            .bind(no_vehicle_id)
+            .fetch_one(&app.pool)
+            .await
+            .expect("no membership count");
+    assert_eq!(no_membership_count, 0);
+}
+
+#[tokio::test]
 async fn stats_summary_requires_vehicle_id() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "stats-missing@example.com").await;

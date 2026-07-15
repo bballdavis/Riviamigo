@@ -28,7 +28,8 @@ vi.mock('@riviamigo/dashboards', () => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+  useAuth: () => ({ defaultVehicleId: null }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true }),
   useSavedPlaces: () => ({ data: [], isLoading: false }),
   useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false, isLoading: false }),
   useChargeSession: () => ({

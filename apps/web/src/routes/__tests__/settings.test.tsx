@@ -44,7 +44,13 @@ vi.mock('@riviamigo/hooks', () => ({
   api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
     listApiKeys: vi.fn().mockResolvedValue([]),
-    getApiCatalog: vi.fn().mockResolvedValue({ endpoints: [] }),
+    getApiCatalog: vi.fn().mockResolvedValue({
+      endpoints: [
+        { method: 'GET', path: '/v1/vehicles', vehicle_scoped: false, purpose: 'List vehicles' },
+        { method: 'GET', path: '/v1/vehicles/{id}/raw-data', vehicle_scoped: true, purpose: 'Read raw data' },
+        { method: 'POST', path: '/v1/metrics/batch', vehicle_scoped: false, purpose: 'Read metrics' },
+      ],
+    }),
     listPlaces: vi.fn().mockResolvedValue([]),
     searchPlaceAddresses: vi.fn().mockResolvedValue([
       {
@@ -561,7 +567,7 @@ describe('Settings page', () => {
     expect(screen.getAllByText(/Saved Places/i).length).toBeGreaterThan(0);
   });
 
-  it('renders read-only integrations without loading the API catalog', async () => {
+  it('renders and filters the API endpoint catalog', async () => {
     const hooks = await import('@riviamigo/hooks');
     settingsMocks.auth.accessToken = 'test-access-token';
     renderSettings();
@@ -569,9 +575,17 @@ describe('Settings page', () => {
 
     expect(screen.getByText('Integration Keys')).toBeInTheDocument();
     expect(screen.getByText(/read-only and limited to one vehicle/i)).toBeInTheDocument();
-    expect(screen.queryByText('API Catalog')).not.toBeInTheDocument();
     await waitFor(() => expect(hooks.api.listApiKeys).toHaveBeenCalled());
-    expect(hooks.api.getApiCatalog).not.toHaveBeenCalled();
+    await waitFor(() => expect(hooks.api.getApiCatalog).toHaveBeenCalled());
+    expect(screen.getByText('/v1/vehicles')).toBeInTheDocument();
+    expect(screen.getByText('/v1/vehicles/{id}/raw-data')).toBeInTheDocument();
+    expect(screen.getByText('/v1/metrics/batch')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Search API endpoints'), { target: { value: 'raw-data' } });
+
+    expect(screen.getByText('/v1/vehicles/{id}/raw-data')).toBeInTheDocument();
+    expect(screen.queryByText('/v1/vehicles')).not.toBeInTheDocument();
+    expect(screen.queryByText('/v1/metrics/batch')).not.toBeInTheDocument();
   });
 
   it('shows address suggestions after explicitly submitting a place search', async () => {

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
@@ -18,7 +19,6 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new().route("/vehicles/:vehicle_id/locations", get(locations))
 }
-
 #[derive(Deserialize)]
 struct LocationParams {
     from: Option<DateTime<Utc>>,
@@ -59,7 +59,7 @@ async fn locations(
     Query(params): Query<LocationParams>,
 ) -> Result<Json<LocationsResponse>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
-    ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
+    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
     let from = params
         .from
@@ -94,25 +94,4 @@ async fn locations(
     .map_err(AppError::from)?;
 
     Ok(Json(LocationsResponse { vehicle_id, points }))
-}
-
-async fn ensure_owned(
-    pool: &sqlx::PgPool,
-    vehicle_id: Uuid,
-    user_id: Uuid,
-) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-    )
-    .bind(vehicle_id)
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .map_err(AppError::from)?;
-
-    if !owned {
-        Err(AppError::NotFound)
-    } else {
-        Ok(())
-    }
 }

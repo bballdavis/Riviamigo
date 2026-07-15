@@ -30,7 +30,7 @@ The loopback binding is intentional. Place an authenticated HTTPS tunnel or iden
 
 4. Configure an authenticated gateway that forwards to `127.0.0.1:8080` and supports WebSockets. The [secure deployment guide](./secure-deployment.md) has the required access boundary.
 
-5. Open the authenticated HTTPS address. The first account is the `super_user`; afterward, that owner can create activation links for invited users.
+5. Open the authenticated HTTPS address. The first account is the `super_user`; afterward, that owner can create activation links for invited users and optionally assign viewer access to a vehicle during the invitation flow.
 
 ## Logs and updates
 

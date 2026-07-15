@@ -11,6 +11,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
+    db::vehicles::require_vehicle_owned,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
@@ -104,7 +105,7 @@ async fn health(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<HealthResponse>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
-    ensure_owned(&state.pool, vehicle_id, auth.user_id).await?;
+    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
     let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count) = tokio::try_join!(
         fetch_vehicle(&state.pool, vehicle_id),
@@ -264,25 +265,4 @@ async fn fetch_thermal_count(pool: &sqlx::PgPool, vid: Uuid) -> Result<i64, AppE
     .await
     .map_err(AppError::from)?;
     Ok(count)
-}
-
-async fn ensure_owned(
-    pool: &sqlx::PgPool,
-    vehicle_id: Uuid,
-    user_id: Uuid,
-) -> Result<(), AppError> {
-    let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id=$1 AND user_id=$2)",
-    )
-    .bind(vehicle_id)
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .map_err(AppError::from)?;
-
-    if !owned {
-        Err(AppError::NotFound)
-    } else {
-        Ok(())
-    }
 }

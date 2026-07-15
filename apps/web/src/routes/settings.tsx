@@ -35,7 +35,7 @@ import { PlacesSection } from '../components/settings/PlacesSection';
 import { RawTelemetryExplorer } from '../components/settings/RawTelemetryExplorer';
 import { canManageSystemDashboards } from '../components/dashboard/DashboardPage';
 import {
-  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, ShieldCheck, Star, Trash2, Unlock, Users, X,
+  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -413,6 +413,7 @@ export function SettingsContent() {
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
+  const [apiCatalogSearch, setApiCatalogSearch] = React.useState('');
   const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
   const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
   const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
@@ -444,6 +445,20 @@ export function SettingsContent() {
     enabled: authReady && activeSection === 'api' && !!accessToken,
     retry: false,
   });
+
+  const apiCatalog = useQuery({
+    queryKey: ['api-catalog'],
+    queryFn: () => api.getApiCatalog(),
+    enabled: authReady && activeSection === 'api' && !!accessToken,
+    retry: false,
+  });
+
+  const filteredApiEndpoints = React.useMemo(() => {
+    const query = apiCatalogSearch.trim().toLowerCase();
+    const endpoints = apiCatalog.data?.endpoints ?? [];
+    if (!query) return endpoints;
+    return endpoints.filter((endpoint) => `${endpoint.method} ${endpoint.path}`.toLowerCase().includes(query));
+  }, [apiCatalog.data?.endpoints, apiCatalogSearch]);
 
   const dashboards = useDashboards();
   const createDashboard = useCreateDashboard();
@@ -1436,13 +1451,45 @@ export function SettingsContent() {
                   <CardHeader>
                     <CardTitle>Integration Reference</CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="flex items-start gap-2 rounded-lg bg-bg-elevated/50 p-3 text-xs text-fg-tertiary">
-                      <Database className="h-4 w-4 shrink-0" />
-                      <span>
-                        Use <span className="font-mono text-fg">GET /v1/api/catalog</span> with the key you create above to inspect the machine-readable read API. Full examples and response details live in <span className="font-mono text-fg">docs/api-access.md</span>.
-                      </span>
+                  <CardContent className="grid gap-3">
+                    <div className="relative">
+                      <label className="sr-only" htmlFor="api-endpoint-search">Search API endpoints</label>
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary" />
+                      <input
+                        id="api-endpoint-search"
+                        value={apiCatalogSearch}
+                        onChange={(event) => setApiCatalogSearch(event.target.value)}
+                        placeholder="Search API endpoints"
+                        className="h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
+                      />
                     </div>
+
+                    {apiCatalog.isLoading && <p className="text-sm text-fg-tertiary">Loading API endpoints...</p>}
+                    {apiCatalog.isError && (
+                      <div className="flex items-center justify-between gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-fg">
+                        <span>Could not load the API endpoint list.</span>
+                        <Button variant="secondary" size="sm" onClick={() => apiCatalog.refetch()}>Retry</Button>
+                      </div>
+                    )}
+                    {!apiCatalog.isLoading && !apiCatalog.isError && (
+                      <>
+                        <p className="text-xs text-fg-tertiary">
+                          Showing {filteredApiEndpoints.length} of {apiCatalog.data?.endpoints.length ?? 0} endpoints
+                        </p>
+                        {filteredApiEndpoints.length > 0 ? (
+                          <div className="divide-y divide-border rounded-lg border border-border">
+                            {filteredApiEndpoints.map((endpoint) => (
+                              <div key={`${endpoint.method}-${endpoint.path}`} className="flex items-center gap-3 px-3 py-2.5">
+                                <Badge variant="default">{endpoint.method}</Badge>
+                                <span className="min-w-0 break-all font-mono text-xs text-fg">{endpoint.path}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-fg-tertiary">No endpoints match your search.</p>
+                        )}
+                      </>
+                    )}
                   </CardContent>
                 </Card>
               </div>

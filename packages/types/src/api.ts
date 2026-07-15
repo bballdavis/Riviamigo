@@ -924,12 +924,15 @@ export interface AdminVehicleOption {
 
 export interface CreateAccountInvitationBody {
   email: string;
+  vehicle_id: string | null;
   expires_in_days?: number;
 }
 
 export interface AccountInvitation {
   id: string;
   invitee_email: string;
+  vehicle_id: string | null;
+  vehicle_name: string | null;
   expires_at: string;
   accepted_at: string | null;
   revoked_at: string | null;

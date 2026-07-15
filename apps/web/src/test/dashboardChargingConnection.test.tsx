@@ -28,7 +28,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         vehicle_id: 'vehicle-1',
         battery_level: 64,
         range_miles: 188,
-        battery_limit: 80,
+        battery_limit: 75,
         power_state: 'ready',
         charger_state: chargingMocks.forcePluggedState,
         charger_status:
@@ -267,6 +267,7 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
+    expect(screen.getByText('75%')).toBeInTheDocument();
     expect(screen.queryByTestId('sensor-chip')).toBeNull();
   });
 

@@ -213,7 +213,7 @@ async fn accept_account_invitation(
     let password_hash = hash_password(&body.password)?;
     let mut tx = state.pool.begin().await?;
     let invitation = sqlx::query(
-        "SELECT id, invitee_email, expires_at, accepted_at, revoked_at
+        "SELECT id, invitee_email, vehicle_id, expires_at, accepted_at, revoked_at
          FROM riviamigo.account_invitations WHERE token_hash = $1 FOR UPDATE",
     )
     .bind(token_hash)
@@ -223,6 +223,7 @@ async fn accept_account_invitation(
     validate_account_invitation(&invitation)?;
     let invitation_id: Uuid = invitation.get("id");
     let email: String = invitation.get("invitee_email");
+    let vehicle_id: Option<Uuid> = invitation.get("vehicle_id");
     let user_id: Uuid = sqlx::query_scalar(
         "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, 'user') RETURNING id",
     )
@@ -240,6 +241,24 @@ async fn accept_account_invitation(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    if let Some(vehicle_id) = vehicle_id {
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+             VALUES ($1, $2, 'viewer', FALSE)",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_user_settings (vehicle_id, user_id)
+             VALUES ($1, $2)",
+        )
+        .bind(vehicle_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query(
         "UPDATE riviamigo.account_invitations SET accepted_at = now(), created_user_id = $2, updated_at = now() WHERE id = $1",
     )

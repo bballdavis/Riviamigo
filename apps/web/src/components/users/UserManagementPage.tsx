@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, useAuth, useAuthReady, useMe } from '@riviamigo/hooks';
-import type { UserRole } from '@riviamigo/types';
+import type { AdminVehicleOption, UserRole } from '@riviamigo/types';
 import {
   Badge,
   Button,
@@ -123,6 +123,9 @@ function ConfirmationDialog({
 function InviteUserDialog({
   email,
   setEmail,
+  vehicleId,
+  setVehicleId,
+  vehicleOptions,
   activationLink,
   pending,
   onClose,
@@ -131,6 +134,9 @@ function InviteUserDialog({
 }: {
   email: string;
   setEmail: (email: string) => void;
+  vehicleId: string;
+  setVehicleId: (vehicleId: string) => void;
+  vehicleOptions: AdminVehicleOption[];
   activationLink: string | null;
   pending: boolean;
   onClose: () => void;
@@ -138,6 +144,7 @@ function InviteUserDialog({
   onCopy: () => void;
 }) {
   const [copied, setCopied] = React.useState(false);
+  const [step, setStep] = React.useState<'email' | 'vehicle'>('email');
 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-bg-page/80 p-2 backdrop-blur-sm sm:items-center sm:justify-center">
@@ -145,7 +152,7 @@ function InviteUserDialog({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-fg">Invite user</h2>
-            <p className="mt-1 text-sm text-fg-tertiary">Create a standard account invitation. The activation link is shown once.</p>
+            <p className="mt-1 text-sm text-fg-tertiary">Create an account invitation and optionally grant vehicle access. The activation link is shown once.</p>
           </div>
           <IconAction label="Close invite dialog" onClick={onClose}><X className="h-4 w-4" /></IconAction>
         </div>
@@ -161,14 +168,28 @@ function InviteUserDialog({
             <p className="text-xs text-fg-tertiary" aria-live="polite">{copied ? 'Activation link copied. It cannot be recovered later.' : 'Copy this link before closing. It cannot be recovered later.'}</p>
           </div>
         ) : (
-          <form className="mt-5 grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-email">Email address</label>
-              <input id="invite-email" autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email@example.com" className={CONTROL_CLASS} />
-            </div>
+          <form className="mt-5 grid gap-4" onSubmit={(event) => { event.preventDefault(); if (step === 'email') setStep('vehicle'); else onSubmit(); }}>
+            {step === 'email' ? (
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-email">Email address</label>
+                <input id="invite-email" autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email@example.com" className={CONTROL_CLASS} />
+              </div>
+            ) : (
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-fg-secondary" htmlFor="invite-vehicle">Vehicle access</label>
+                <SelectPicker
+                  id="invite-vehicle"
+                  aria-label="Vehicle access"
+                  value={vehicleId}
+                  onChange={setVehicleId}
+                  options={[{ value: '', label: 'No vehicle access' }, ...vehicleOptions.map((vehicle) => ({ value: vehicle.id, label: `${vehicle.display_name} · ${vehicle.model}` }))]}
+                />
+                <p className="text-xs text-fg-tertiary">The selected vehicle will be added with viewer access after the account is activated.</p>
+              </div>
+            )}
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="secondary" size="md" onClick={onClose}>Cancel</Button>
-              <Button type="submit" size="md" iconLeft={<MailPlus className="h-4 w-4" />} loading={pending} disabled={!email.trim()}>Create invitation</Button>
+              <Button type="button" variant="secondary" size="md" onClick={step === 'email' ? onClose : () => setStep('email')}>{step === 'email' ? 'Cancel' : 'Back'}</Button>
+              <Button type="submit" size="md" iconLeft={step === 'vehicle' ? <MailPlus className="h-4 w-4" /> : undefined} loading={pending} disabled={!email.trim()}>{step === 'email' ? 'Continue' : 'Create invitation'}</Button>
             </div>
           </form>
         )}
@@ -195,6 +216,7 @@ export function UserManagementPage() {
   const [grantRole, setGrantRole] = React.useState<'owner' | 'manager' | 'viewer'>('viewer');
   const [inviteOpen, setInviteOpen] = React.useState(false);
   const [inviteEmail, setInviteEmail] = React.useState('');
+  const [inviteVehicleId, setInviteVehicleId] = React.useState('');
   const [activationLink, setActivationLink] = React.useState<string | null>(null);
   const [confirmation, setConfirmation] = React.useState<Confirmation | null>(null);
 
@@ -202,16 +224,19 @@ export function UserManagementPage() {
     queryKey: ['admin-users', search],
     queryFn: () => api.listUsers(search.trim()),
     enabled: authReady && isPrivileged && !!accessToken,
+    refetchOnMount: 'always',
   });
   const accountInvitations = useQuery({
     queryKey: ['admin-account-invitations'],
     queryFn: () => api.listAccountInvitations(),
     enabled: authReady && isPrivileged && !!accessToken,
+    refetchOnMount: 'always',
   });
   const vehicleOptions = useQuery({
     queryKey: ['admin-vehicle-options'],
     queryFn: () => api.listAdminVehicleOptions(),
     enabled: authReady && isPrivileged && !!accessToken,
+    refetchOnMount: 'always',
   });
 
   React.useEffect(() => {
@@ -229,6 +254,7 @@ export function UserManagementPage() {
     queryKey: ['admin-user-detail', selectedUserId],
     queryFn: () => api.getUserDetail(selectedUserId!),
     enabled: authReady && isPrivileged && !!selectedUserId && !!accessToken,
+    refetchOnMount: 'always',
   });
 
   React.useEffect(() => {
@@ -239,10 +265,11 @@ export function UserManagementPage() {
   }, [detail.data?.user.id, detail.data?.user.email, detail.data?.user.role]);
 
   const createInvitation = useMutation({
-    mutationFn: () => api.createAccountInvitation({ email: inviteEmail.trim() }),
+    mutationFn: () => api.createAccountInvitation({ email: inviteEmail.trim(), vehicle_id: inviteVehicleId || null }),
     onSuccess: (result) => {
       setActivationLink(`${window.location.origin}/activate#${result.activation_token}`);
       void queryClient.invalidateQueries({ queryKey: ['admin-account-invitations'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
   });
   const updateUser = useMutation({
@@ -261,7 +288,10 @@ export function UserManagementPage() {
   });
   const revokeAccountInvitation = useMutation({
     mutationFn: (id: string) => api.revokeAccountInvitation(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-account-invitations'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-account-invitations'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
   });
   const grantMembership = useMutation({
     mutationFn: ({ userId, vehicleId, role }: { userId: string; vehicleId: string; role: 'owner' | 'manager' | 'viewer' }) =>
@@ -344,7 +374,7 @@ export function UserManagementPage() {
         title="Users"
         subtitle="Manage accounts, vehicle access, and invitations."
         actions={isPrivileged ? (
-          <Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteOpen(true); }}>
+          <Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteVehicleId(''); setInviteOpen(true); }}>
             Invite user
           </Button>
         ) : undefined}
@@ -433,16 +463,16 @@ export function UserManagementPage() {
             ) : (
               <Card padding="none" className="overflow-hidden">
                 <section className="p-4 sm:p-5" aria-label="Account invitations">
-                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold text-fg">Account invitations</h2><p className="mt-1 text-sm text-fg-tertiary">Pending invitations are actionable; completed invitations remain available as history.</p></div><Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteOpen(true); }}>Invite user</Button></div>
-                  <div className="mt-5 divide-y divide-border overflow-hidden rounded-xl border border-border">{pendingInvitations.length === 0 ? <p className="p-4 text-sm text-fg-tertiary">No pending account invitations.</p> : pendingInvitations.map((invitation) => <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-medium text-fg">{invitation.invitee_email}</p><p className="mt-1 text-xs text-fg-tertiary">Expires {new Date(invitation.expires_at).toLocaleString()}</p></div><div className="flex items-center gap-2"><Badge size="sm" variant="warning">pending</Badge><IconAction label={`Revoke invitation for ${invitation.invitee_email}`} variant="danger" onClick={() => setConfirmation({ kind: 'revoke-account-invitation', invitationId: invitation.id, email: invitation.invitee_email })}><Trash2 className="h-4 w-4" /></IconAction></div></div>)}</div>
-                  {invitationHistory.length > 0 ? <details className="mt-4 rounded-xl border border-border bg-bg-elevated/35"><summary className="cursor-pointer px-4 py-3 text-sm font-medium text-fg">Invitation history ({invitationHistory.length})</summary><div className="divide-y divide-border border-t border-border">{invitationHistory.map((invitation) => { const status = invitationStatus(invitation); return <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm"><span className="text-fg">{invitation.invitee_email}</span><Badge size="sm" variant={status === 'accepted' ? 'success' : 'danger'}>{status}</Badge></div>; })}</div></details> : null}
+                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-base font-semibold text-fg">Account invitations</h2><p className="mt-1 text-sm text-fg-tertiary">Pending invitations are actionable; completed invitations remain available as history.</p></div><Button type="button" size="md" iconLeft={<MailPlus className="h-4 w-4" />} onClick={() => { setActivationLink(null); setInviteEmail(''); setInviteVehicleId(''); setInviteOpen(true); }}>Invite user</Button></div>
+                  <div className="mt-5 divide-y divide-border overflow-hidden rounded-xl border border-border">{pendingInvitations.length === 0 ? <p className="p-4 text-sm text-fg-tertiary">No pending account invitations.</p> : pendingInvitations.map((invitation) => <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-medium text-fg">{invitation.invitee_email}</p><p className="mt-1 text-xs text-fg-tertiary">Expires {new Date(invitation.expires_at).toLocaleString()}</p><p className="mt-1 text-xs text-fg-tertiary">Vehicle access: {invitation.vehicle_name ?? 'None'}</p></div><div className="flex items-center gap-2"><Badge size="sm" variant="warning">pending</Badge><IconAction label={`Revoke invitation for ${invitation.invitee_email}`} variant="danger" onClick={() => setConfirmation({ kind: 'revoke-account-invitation', invitationId: invitation.id, email: invitation.invitee_email })}><Trash2 className="h-4 w-4" /></IconAction></div></div>)}</div>
+                  {invitationHistory.length > 0 ? <details className="mt-4 rounded-xl border border-border bg-bg-elevated/35"><summary className="cursor-pointer px-4 py-3 text-sm font-medium text-fg">Invitation history ({invitationHistory.length})</summary><div className="divide-y divide-border border-t border-border">{invitationHistory.map((invitation) => { const status = invitationStatus(invitation); return <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm"><div><span className="text-fg">{invitation.invitee_email}</span><p className="mt-1 text-xs text-fg-tertiary">Vehicle access: {invitation.vehicle_name ?? 'None'}</p></div><Badge size="sm" variant={status === 'accepted' ? 'success' : 'danger'}>{status}</Badge></div>; })}</div></details> : null}
                 </section>
               </Card>
             )}
           </div>
         )}
       </PageLayout>
-      {inviteOpen ? <InviteUserDialog email={inviteEmail} setEmail={setInviteEmail} activationLink={activationLink} pending={createInvitation.isPending} onClose={() => setInviteOpen(false)} onSubmit={() => void handleInviteSubmit()} onCopy={() => { if (activationLink) { void navigator.clipboard?.writeText(activationLink); emitToast('Activation link copied', 'The invitation link is ready to share.', 'success'); } }} /> : null}
+      {inviteOpen ? <InviteUserDialog email={inviteEmail} setEmail={setInviteEmail} vehicleId={inviteVehicleId} setVehicleId={setInviteVehicleId} vehicleOptions={vehicleOptions.data ?? []} activationLink={activationLink} pending={createInvitation.isPending} onClose={() => setInviteOpen(false)} onSubmit={() => void handleInviteSubmit()} onCopy={() => { if (activationLink) { void navigator.clipboard?.writeText(activationLink); emitToast('Activation link copied', 'The invitation link is ready to share.', 'success'); } }} /> : null}
       {confirmation ? <ConfirmationDialog confirmation={confirmation} pending={confirmationPending} onCancel={() => setConfirmation(null)} onConfirm={() => void handleConfirmation()} /> : null}
     </AppLayout>
   );

@@ -84,6 +84,7 @@ describe('UserManagementPage', () => {
 
     await actor.click(await screen.findByRole('tab', { name: 'Vehicles' }));
     expect(await screen.findByLabelText('Vehicle')).toBeInTheDocument();
+    await actor.click(screen.getByLabelText('Vehicle'));
     expect(screen.getByRole('option', { name: 'R1S · R1S' })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Vehicle UUID')).not.toBeInTheDocument();
 
@@ -100,7 +101,11 @@ describe('UserManagementPage', () => {
     await actor.click(await screen.findByRole('button', { name: 'Invite user' }));
     expect(screen.getByRole('dialog', { name: 'Invite user' })).toBeInTheDocument();
     await actor.type(screen.getByLabelText('Email address'), 'new@example.com');
+    await actor.click(screen.getByRole('button', { name: 'Continue' }));
+    await actor.click(screen.getByRole('button', { name: 'Vehicle access' }));
+    await actor.click(screen.getByRole('option', { name: 'R1S · R1S' }));
     await actor.click(screen.getByRole('button', { name: 'Create invitation' }));
+    await waitFor(() => expect(apiMocks.createAccountInvitation).toHaveBeenCalledWith({ email: 'new@example.com', vehicle_id: 'vehicle-1' }));
     expect((await screen.findByLabelText('Activation link')).getAttribute('value')).toContain('/activate#one-time-token');
     await actor.click(screen.getByRole('button', { name: 'Copy activation link' }));
     expect(screen.getByRole('button', { name: 'Activation link copied' })).toBeInTheDocument();
@@ -110,6 +115,21 @@ describe('UserManagementPage', () => {
     expect(screen.getByRole('dialog', { name: 'Delete driver@example.com?' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog', { name: 'Delete driver@example.com?' })).not.toBeInTheDocument();
+  });
+
+  it('defaults account invitations to no vehicle access', async () => {
+    const actor = userEvent.setup();
+    renderPage();
+
+    await actor.click(await screen.findByRole('button', { name: 'Invite user' }));
+    await actor.type(screen.getByLabelText('Email address'), 'none@example.com');
+    await actor.click(screen.getByRole('button', { name: 'Continue' }));
+    await actor.click(screen.getByRole('button', { name: 'Vehicle access' }));
+    expect(screen.getByRole('option', { name: 'No vehicle access' })).toHaveAttribute('aria-selected', 'true');
+    await actor.click(screen.getByRole('button', { name: 'Vehicle access' }));
+    await actor.click(screen.getByRole('button', { name: 'Create invitation' }));
+
+    await waitFor(() => expect(apiMocks.createAccountInvitation).toHaveBeenCalledWith({ email: 'none@example.com', vehicle_id: null }));
   });
 
   it('requires an explicit save for account edits', async () => {

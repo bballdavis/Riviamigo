@@ -104,7 +104,7 @@ function ChargingConnectionWidget({
     },
     {
       label: 'Max Charge Limit',
-      value: formatMaybePercent(snapshot?.max_charge_limit_pct ?? status?.battery_limit ?? null, 0),
+      value: formatMaybePercent(status?.battery_limit ?? snapshot?.max_charge_limit_pct ?? null, 0),
     },
     {
       label: 'Full In',

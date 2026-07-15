@@ -60,6 +60,7 @@ vi.mock('@riviamigo/ui/tables', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: null, accessToken: null }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: null, vehicleSelectionReady: true, vehicles: [] }),
   useMe: () => ({ data: { role: 'user' } }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [] }),
@@ -131,6 +132,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   }),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: emptyConfig, isLoading: false }),
+  useDashboardById: () => ({ data: undefined, isLoading: false, isError: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCloneDashboard: () => ({ mutateAsync: vi.fn() }),
