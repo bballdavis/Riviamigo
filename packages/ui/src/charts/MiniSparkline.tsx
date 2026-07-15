@@ -1,6 +1,7 @@
 import React from 'react';
 import { CHART_COLORS } from './ChartProvider';
 import {
+  bucketTimeSeriesValues,
   DEFAULT_SPRITE_TIME_FILTER,
   filterTimeSeriesValues,
   normalizeTimeFilter,
@@ -29,10 +30,12 @@ export function MiniSparkline({
   if (type === 'none') return null;
 
   const chartData = data
-    .map((point, index) => ({ x: point.ts ?? String(index), value: point.value }))
-    .filter((point): point is { x: string; value: number } => Number.isFinite(point.value));
+    .map((point, index) => ({
+      x: point.ts ?? String(index),
+      value: Number.isFinite(point.value) ? point.value as number : null,
+    }));
 
-  if (chartData.length === 0) {
+  if (!chartData.some((point) => point.value != null)) {
     return showFallback ? <EmptySparkline height={height} color={color} /> : null;
   }
 
@@ -45,7 +48,20 @@ export function MiniSparkline({
   const filteredData = chartData.map((point, index) => ({ ...point, value: filteredValues[index]! }));
 
   if (type === 'bar') {
-    return <CanvasSparkline data={chartData} type="bar" height={height} color={color} timeFilter="raw" />;
+    const bucketedData = bucketTimeSeriesValues(
+      chartData.map((point) => point.x),
+      chartData.map((point) => point.value),
+      resolvedFilter,
+    ).map((point) => ({ x: String(point.timestamp), value: point.value }));
+    return (
+      <CanvasSparkline
+        data={bucketedData}
+        type="bar"
+        height={height}
+        color={color}
+        timeFilter={resolvedFilter}
+      />
+    );
   }
 
   return (
@@ -86,7 +102,7 @@ function EmptySparkline({ height, color }: { height: number; color: string }) {
   );
 }
 
-function resolveCanvasColor(canvas: HTMLCanvasElement, color: string) {
+export function resolveCanvasColor(canvas: HTMLCanvasElement, color: string) {
   const variable = color.match(/^var\((--[^,)]+)\)$/)?.[1];
   if (!variable || typeof window === 'undefined') return color;
   return window.getComputedStyle(canvas).getPropertyValue(variable).trim() || CHART_COLORS.accent;
@@ -100,7 +116,7 @@ function CanvasSparkline({
   fill,
   timeFilter,
 }: {
-  data: Array<{ x: string; value: number }>;
+  data: Array<{ x: string; value: number | null }>;
   type: Exclude<MiniSparklineType, 'none' | 'area'>;
   height: number;
   color: string;
@@ -125,7 +141,9 @@ function CanvasSparkline({
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, width, height);
 
-      const values = data.map((point) => point.value);
+      const values = data
+        .map((point) => point.value)
+        .filter((value): value is number => value != null);
       let min = Number.POSITIVE_INFINITY;
       let max = Number.NEGATIVE_INFINITY;
       for (const value of values) {
@@ -147,7 +165,8 @@ function CanvasSparkline({
         const barWidth = Math.max(1, width / data.length);
         context.fillStyle = canvasColor;
         for (let index = 0; index < data.length; index += 1) {
-          const normalized = maxValue > 0 ? data[index]!.value / maxValue : 0;
+          const value = data[index]!.value ?? 0;
+          const normalized = maxValue > 0 ? value / maxValue : 0;
           const barHeight = normalized > 0 ? Math.max(2, normalized * (height - 6)) : 1;
           context.globalAlpha = normalized > 0 ? 0.72 : 0.26;
           context.fillRect(index * barWidth + barWidth * 0.18, height - 2 - barHeight, Math.max(1, barWidth * 0.64), barHeight);
@@ -156,31 +175,54 @@ function CanvasSparkline({
         return;
       }
 
-      const points = data.map(pointAt);
-      const drawLinePath = () => {
-        context.moveTo(points[0]!.x, points[0]!.y);
-        for (let index = 1; index < points.length; index += 1) {
-          context.lineTo(points[index]!.x, points[index]!.y);
+      const points = data.map((point, index) => point.value == null ? null : pointAt({ value: point.value }, index));
+      const drawLinePaths = () => {
+        let previousPoint: { x: number; y: number } | null = null;
+        for (const point of points) {
+          if (!point) {
+            previousPoint = null;
+          } else if (!previousPoint) {
+            context.moveTo(point.x, point.y);
+            previousPoint = point;
+          } else {
+            context.lineTo(point.x, point.y);
+            previousPoint = point;
+          }
         }
       };
       context.strokeStyle = canvasColor;
       context.lineWidth = 1.6;
       context.lineJoin = 'round';
       context.lineCap = 'round';
-      context.beginPath();
-      drawLinePath();
 
       if (fill) {
-        context.lineTo(width, height);
-        context.lineTo(0, height);
-        context.closePath();
+        context.beginPath();
+        let segmentStart: { x: number; y: number } | null = null;
+        let previousPoint: { x: number; y: number } | null = null;
+        for (const point of [...points, null]) {
+          if (point) {
+            if (!segmentStart) {
+              segmentStart = point;
+              context.moveTo(point.x, height);
+              context.lineTo(point.x, point.y);
+            } else {
+              context.lineTo(point.x, point.y);
+            }
+            previousPoint = point;
+          } else if (segmentStart && previousPoint) {
+            context.lineTo(previousPoint.x, height);
+            context.closePath();
+            segmentStart = null;
+            previousPoint = null;
+          }
+        }
         context.globalAlpha = 0.16;
         context.fillStyle = canvasColor;
         context.fill();
         context.globalAlpha = 1;
-        context.beginPath();
-        drawLinePath();
       }
+      context.beginPath();
+      drawLinePaths();
       context.stroke();
     };
 
@@ -197,6 +239,8 @@ function CanvasSparkline({
       data-sparkline-state={data.length === 1 ? 'single' : 'series'}
       data-sparkline-renderer="canvas"
       data-sparkline-filter={timeFilter}
+      data-sparkline-point-count={data.length}
+      data-sparkline-aggregation={type === 'bar' && timeFilter !== 'raw' ? 'sum' : 'none'}
     >
       <canvas ref={canvasRef} style={{ display: 'block', height: '100%', width: '100%' }} aria-hidden="true" />
     </div>

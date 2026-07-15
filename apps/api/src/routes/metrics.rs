@@ -200,14 +200,16 @@ fn resolve_batch_density(
         "full" => Ok(("full", "raw", None)),
         "compact" => Ok((
             "compact",
-        resolve_bucket(requested_bucket, from, to)?,
-        Some(
-            requested_max_points
-                .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
-                .clamp(2, DASHBOARD_METRIC_MAX_POINTS),
-        ),
+            resolve_bucket(requested_bucket, from, to)?,
+            Some(
+                requested_max_points
+                    .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
+                    .clamp(2, DASHBOARD_METRIC_MAX_POINTS),
+            ),
         )),
-        other => Err(AppError::Validation(format!("unsupported density: {other}"))),
+        other => Err(AppError::Validation(format!(
+            "unsupported density: {other}"
+        ))),
     }
 }
 
