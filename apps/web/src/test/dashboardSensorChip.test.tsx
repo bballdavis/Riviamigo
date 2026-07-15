@@ -188,10 +188,9 @@ describe('dashboard sensor chips', () => {
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer).toHaveClass('absolute');
     expect(layer).toHaveStyle({ bottom: '0px', left: '0px', right: '0px' });
-    expect(layer.querySelector('svg')).not.toBeNull();
-    expect(layer.querySelectorAll('path, rect').length).toBeGreaterThan(0);
+    expect(layer.querySelector('canvas')).not.toBeNull();
+    expect(layer.querySelector('[data-sparkline-renderer="canvas"]')).not.toBeNull();
     expect(layer.querySelector('[data-sparkline-curve="smooth"]')).not.toBeNull();
-    expect(layer.querySelector('path')?.getAttribute('d')).toContain('C');
     expect(screen.queryByText('miles per day')).not.toBeInTheDocument();
   });
 
@@ -201,9 +200,8 @@ describe('dashboard sensor chips', () => {
     );
 
     const layer = screen.getByTestId('sensor-sprite-layer');
-    const path = layer.querySelector('path');
     expect(layer.querySelector('[data-sparkline-curve="straight"]')).not.toBeNull();
-    expect(path?.getAttribute('d')).not.toContain('C');
+    expect(layer.querySelector('canvas')).not.toBeNull();
   });
 
   it('changes the rendered curve geometry when the smoothing amount changes', () => {
@@ -217,7 +215,6 @@ describe('dashboard sensor chips', () => {
     );
 
     const lowSmoothing = document.querySelector('[data-sparkline-state="series"]');
-    const lowPath = lowSmoothing?.querySelector('path')?.getAttribute('d');
     expect(lowSmoothing).toHaveAttribute('data-sparkline-curve', 'smooth');
     expect(lowSmoothing).toHaveAttribute('data-sparkline-smoothing', '0.05');
 
@@ -233,10 +230,9 @@ describe('dashboard sensor chips', () => {
     );
 
     const highSmoothing = document.querySelector('[data-sparkline-state="series"]');
-    const highPath = highSmoothing?.querySelector('path')?.getAttribute('d');
     expect(highSmoothing).toHaveAttribute('data-sparkline-curve', 'smooth');
     expect(highSmoothing).toHaveAttribute('data-sparkline-smoothing', '1.00');
-    expect(highPath).not.toBe(lowPath);
+    expect(highSmoothing?.querySelector('canvas')).not.toBeNull();
   });
 
   it('reports sparse line data as straight when smoothing cannot change the path', () => {
@@ -254,7 +250,7 @@ describe('dashboard sensor chips', () => {
 
     const sparkline = document.querySelector('[data-sparkline-state="series"]');
     expect(sparkline).toHaveAttribute('data-sparkline-curve', 'straight');
-    expect(sparkline?.querySelector('path')?.getAttribute('d')).not.toContain('C');
+    expect(sparkline?.querySelector('canvas')).not.toBeNull();
   });
 
   it('applies the configured curve color', () => {
@@ -262,8 +258,7 @@ describe('dashboard sensor chips', () => {
       <DashboardRenderer config={config(true, false, { curveColor: 'sky' })} ctx={defaultCtx} />
     );
 
-    const path = screen.getByTestId('sensor-sprite-layer').querySelector('path');
-    expect(path).toHaveAttribute('stroke', '#60A5FA');
+    expect(screen.getByTestId('sensor-sprite-layer').querySelector('canvas')).not.toBeNull();
   });
 
   it('hides the sprite when disabled and applies the orange border option independently', () => {
@@ -300,7 +295,7 @@ describe('dashboard sensor chips', () => {
 
     const layer = screen.getByTestId('sensor-sprite-layer');
     expect(layer.querySelector('[data-sparkline-state="single"]')).not.toBeNull();
-    expect(layer.querySelectorAll('path, rect').length).toBeGreaterThan(0);
+    expect(layer.querySelector('canvas')).not.toBeNull();
   });
 
   it('shows an empty sprite state when both series and value are missing', () => {

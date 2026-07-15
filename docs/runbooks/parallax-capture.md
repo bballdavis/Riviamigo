@@ -40,13 +40,14 @@ offline without changing the production telemetry schema.
 
 ## Connection lifecycle
 
-Rivian closes long-lived GraphQL sockets with close code `4420` and reason
-`Connection TTL expired`. This is expected; the collector renews the
-subscription immediately and resets its retry backoff. The
-`Parallax subscription acknowledged and submitted` log confirms that the
-server accepted the connection and subscription. If that appears but the table
-stays empty after several minutes, investigate RVM availability or feature
-gating rather than waiting for a drive.
+Parallax shares the authenticated vehicle-state WebSocket connection. Rivian
+closes long-lived GraphQL sockets with close code `4420` and reason
+`Connection TTL expired`. This is expected; the existing collector renews the
+socket and both subscriptions immediately. The
+`Parallax subscription submitted on existing Rivian WS connection` confirms
+that the client sent the subscription after the shared connection was
+acknowledged. If that appears but the table stays empty after several minutes,
+investigate RVM availability or feature gating rather than waiting for a drive.
 
 ## Stop or remove the experiment
 

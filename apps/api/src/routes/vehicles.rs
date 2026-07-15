@@ -4742,10 +4742,9 @@ fn resolve_telemetry_resolution(
     }
 }
 
-fn telemetry_lane(
-    rows: &[TelemetryLaneRow],
-    fields: &[(&str, fn(&TelemetryLaneRow) -> Option<f64>)],
-) -> TelemetryLane {
+type TelemetryLaneField = (&'static str, fn(&TelemetryLaneRow) -> Option<f64>);
+
+fn telemetry_lane(rows: &[TelemetryLaneRow], fields: &[TelemetryLaneField]) -> TelemetryLane {
     let numeric = fields
         .iter()
         .map(|(name, value)| {
@@ -4779,7 +4778,7 @@ async fn raw_vehicle_data(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
     crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
-    validate_raw_time_bounds(params.from.clone(), params.to.clone())?;
+    validate_raw_time_bounds(params.from, params.to)?;
     let selected_fields = parse_raw_fields(params.fields.as_deref())?;
     let selected_fields_csv = selected_fields
         .iter()
@@ -4818,8 +4817,8 @@ async fn raw_vehicle_data(
         "#)
     )
     .bind(vid)
-    .bind(params.from.clone())
-    .bind(params.to.clone())
+    .bind(params.from)
+    .bind(params.to)
     .bind(search)
     .bind(per_page)
     .bind(offset)
@@ -4845,8 +4844,8 @@ async fn raw_vehicle_data(
         "#
     ))
     .bind(vid)
-    .bind(params.from.clone())
-    .bind(params.to.clone())
+    .bind(params.from)
+    .bind(params.to)
     .bind(search)
     .fetch_one(&state.pool)
     .await?;
@@ -4855,8 +4854,8 @@ async fn raw_vehicle_data(
         "SELECT COUNT(*)::BIGINT FROM timeseries.telemetry t WHERE {where_clause}",
     ))
     .bind(vid)
-    .bind(params.from.clone())
-    .bind(params.to.clone())
+    .bind(params.from)
+    .bind(params.to)
     .bind(search)
     .fetch_one(&state.pool)
     .await?;
@@ -4864,8 +4863,8 @@ async fn raw_vehicle_data(
     let field_coverage =
         sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(&raw_field_coverage_query(&where_clause))
             .bind(vid)
-            .bind(params.from.clone())
-            .bind(params.to.clone())
+            .bind(params.from)
+            .bind(params.to)
             .bind(search)
             .fetch_all(&state.pool)
             .await?;
@@ -4904,7 +4903,7 @@ async fn raw_vehicle_events(
     Query(params): Query<RawEventParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_raw_event_access(&state, &auth, vid).await?;
-    validate_raw_time_bounds(params.from.clone(), params.to.clone())?;
+    validate_raw_time_bounds(params.from, params.to)?;
     let per_page = params.per_page.unwrap_or(25).clamp(1, 100);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1).saturating_mul(per_page);
@@ -4935,8 +4934,8 @@ async fn raw_vehicle_events(
         "#,
     )
     .bind(vid)
-    .bind(params.from.clone())
-    .bind(params.to.clone())
+    .bind(params.from)
+    .bind(params.to)
     .bind(event_type)
     .bind(message_type)
     .bind(per_page)
@@ -4956,8 +4955,8 @@ async fn raw_vehicle_events(
         "#,
     )
     .bind(vid)
-    .bind(params.from.clone())
-    .bind(params.to.clone())
+    .bind(params.from)
+    .bind(params.to)
     .bind(event_type)
     .bind(message_type)
     .fetch_one(&state.pool)

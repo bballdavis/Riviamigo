@@ -1,5 +1,11 @@
 import React from 'react';
 import { CHART_COLORS } from './ChartProvider';
+import {
+  DEFAULT_SPRITE_TIME_FILTER,
+  filterTimeSeriesValues,
+  normalizeTimeFilter,
+  type TimeFilterWindow,
+} from './timeFilter';
 
 export type MiniSparklineType = 'none' | 'line' | 'area' | 'bar';
 
@@ -9,18 +15,7 @@ export interface MiniSparklineProps {
   height?: number;
   color?: string;
   showFallback?: boolean;
-  curveSmoothing?: number | boolean;
-}
-
-export const DEFAULT_CURVE_SMOOTHING = 0.45;
-
-/** Normalize the shared sensor-graph curve interpolation setting. */
-export function normalizeCurveSmoothing(value: unknown, fallback = DEFAULT_CURVE_SMOOTHING) {
-  if (typeof value === 'boolean') return value ? fallback : 0;
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.min(1, Math.max(0, value));
-  }
-  return fallback;
+  timeFilter?: TimeFilterWindow;
 }
 
 export function MiniSparkline({
@@ -29,7 +24,7 @@ export function MiniSparkline({
   height = 42,
   color = CHART_COLORS.accent,
   showFallback = true,
-  curveSmoothing = DEFAULT_CURVE_SMOOTHING,
+  timeFilter = DEFAULT_SPRITE_TIME_FILTER,
 }: MiniSparklineProps) {
   if (type === 'none') return null;
 
@@ -41,18 +36,26 @@ export function MiniSparkline({
     return showFallback ? <EmptySparkline height={height} color={color} /> : null;
   }
 
+  const resolvedFilter = normalizeTimeFilter(timeFilter, DEFAULT_SPRITE_TIME_FILTER);
+  const filteredValues = filterTimeSeriesValues(
+    chartData.map((point) => point.x),
+    chartData.map((point) => point.value),
+    resolvedFilter,
+  );
+  const filteredData = chartData.map((point, index) => ({ ...point, value: filteredValues[index]! }));
+
   if (type === 'bar') {
-    return <CanvasSparkline data={chartData} type="bar" height={height} color={color} />;
+    return <CanvasSparkline data={chartData} type="bar" height={height} color={color} timeFilter="raw" />;
   }
 
   return (
     <CanvasSparkline
-      data={chartData}
+      data={filteredData}
       type="line"
       height={height}
       color={color}
       fill={type === 'area'}
-      curveSmoothing={normalizeCurveSmoothing(curveSmoothing)}
+      timeFilter={resolvedFilter}
     />
   );
 }
@@ -83,20 +86,26 @@ function EmptySparkline({ height, color }: { height: number; color: string }) {
   );
 }
 
+function resolveCanvasColor(canvas: HTMLCanvasElement, color: string) {
+  const variable = color.match(/^var\((--[^,)]+)\)$/)?.[1];
+  if (!variable || typeof window === 'undefined') return color;
+  return window.getComputedStyle(canvas).getPropertyValue(variable).trim() || CHART_COLORS.accent;
+}
+
 function CanvasSparkline({
   data,
   type,
   height,
   color,
   fill,
-  curveSmoothing,
+  timeFilter,
 }: {
   data: Array<{ x: string; value: number }>;
   type: Exclude<MiniSparklineType, 'none' | 'area'>;
   height: number;
   color: string;
   fill?: boolean;
-  curveSmoothing?: number;
+  timeFilter: TimeFilterWindow;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
 
@@ -112,12 +121,17 @@ function CanvasSparkline({
 
       const context = canvas.getContext('2d');
       if (!context) return;
+      const canvasColor = resolveCanvasColor(canvas, color);
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, width, height);
 
       const values = data.map((point) => point.value);
-      const min = Math.min(...values);
-      const max = Math.max(...values);
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      for (const value of values) {
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+      }
       const span = max - min;
       const parsedTimes = data.map((point) => Date.parse(point.x));
       const usesTime = parsedTimes.every(Number.isFinite) && parsedTimes.length > 1 && parsedTimes[0] !== parsedTimes[parsedTimes.length - 1];
@@ -129,9 +143,9 @@ function CanvasSparkline({
       });
 
       if (type === 'bar') {
-        const maxValue = Math.max(0, ...values);
+        const maxValue = Math.max(0, max);
         const barWidth = Math.max(1, width / data.length);
-        context.fillStyle = color;
+        context.fillStyle = canvasColor;
         for (let index = 0; index < data.length; index += 1) {
           const normalized = maxValue > 0 ? data[index]!.value / maxValue : 0;
           const barHeight = normalized > 0 ? Math.max(2, normalized * (height - 6)) : 1;
@@ -143,29 +157,29 @@ function CanvasSparkline({
       }
 
       const points = data.map(pointAt);
-      context.strokeStyle = color;
+      const drawLinePath = () => {
+        context.moveTo(points[0]!.x, points[0]!.y);
+        for (let index = 1; index < points.length; index += 1) {
+          context.lineTo(points[index]!.x, points[index]!.y);
+        }
+      };
+      context.strokeStyle = canvasColor;
       context.lineWidth = 1.6;
       context.lineJoin = 'round';
       context.lineCap = 'round';
       context.beginPath();
-      points.forEach((point, index) => {
-        if (index === 0) context.moveTo(point.x, point.y);
-        else context.lineTo(point.x, point.y);
-      });
+      drawLinePath();
 
       if (fill) {
         context.lineTo(width, height);
         context.lineTo(0, height);
         context.closePath();
         context.globalAlpha = 0.16;
-        context.fillStyle = color;
+        context.fillStyle = canvasColor;
         context.fill();
         context.globalAlpha = 1;
         context.beginPath();
-        points.forEach((point, index) => {
-          if (index === 0) context.moveTo(point.x, point.y);
-          else context.lineTo(point.x, point.y);
-        });
+        drawLinePath();
       }
       context.stroke();
     };
@@ -182,8 +196,7 @@ function CanvasSparkline({
       className="overflow-hidden"
       data-sparkline-state={data.length === 1 ? 'single' : 'series'}
       data-sparkline-renderer="canvas"
-      data-sparkline-curve={curveSmoothing && curveSmoothing > 0 && data.length >= 3 ? 'smooth' : 'straight'}
-      data-sparkline-smoothing={(curveSmoothing ?? 0).toFixed(2)}
+      data-sparkline-filter={timeFilter}
     >
       <canvas ref={canvasRef} style={{ display: 'block', height: '100%', width: '100%' }} aria-hidden="true" />
     </div>
