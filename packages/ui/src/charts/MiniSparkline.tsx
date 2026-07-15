@@ -4,6 +4,7 @@ import {
   bucketTimeSeriesValues,
   DEFAULT_SPRITE_TIME_FILTER,
   filterTimeSeriesValues,
+  maximumContinuousTimeGapMilliseconds,
   normalizeTimeFilter,
   type TimeFilterWindow,
 } from './timeFilter';
@@ -189,9 +190,25 @@ function CanvasSparkline({
         return;
       }
 
-      const points = data.map((point, index) => point.value == null ? null : pointAt({ value: point.value }, index));
+      const maximumGap = maximumContinuousTimeGapMilliseconds(timeFilter);
+      const points: Array<CurvePoint | null> = [];
+      let previousTimestamp: number | null = null;
+      for (let index = 0; index < data.length; index += 1) {
+        const point = data[index]!;
+        const timestamp = parsedTimes[index]!;
+        if (point.value == null) {
+          points.push(null);
+          previousTimestamp = null;
+          continue;
+        }
+        if (usesTime && previousTimestamp != null && timestamp - previousTimestamp > maximumGap) {
+          points.push(null);
+        }
+        points.push(pointAt({ value: point.value }, index));
+        previousTimestamp = usesTime ? timestamp : null;
+      }
       const drawLinePaths = () => {
-        for (const segment of splitCurveSegments(points as Array<CurvePoint | null>)) {
+        for (const segment of splitCurveSegments(points)) {
           context.moveTo(segment[0]!.x, segment[0]!.y);
           if (smoothness === 'straight' || segment.length < 2) {
             for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
@@ -215,7 +232,7 @@ function CanvasSparkline({
 
       if (fill) {
         context.beginPath();
-        for (const segment of splitCurveSegments(points as Array<CurvePoint | null>)) {
+        for (const segment of splitCurveSegments(points)) {
           const first = segment[0]!;
           const last = segment[segment.length - 1]!;
           context.moveTo(first.x, height);
@@ -250,7 +267,7 @@ function CanvasSparkline({
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
     observer?.observe(canvas);
     return () => observer?.disconnect();
-  }, [color, data, fill, height, smoothness, type]);
+  }, [color, data, fill, height, smoothness, timeFilter, type]);
 
   return (
     <div

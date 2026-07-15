@@ -1,18 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
   clampedControlPoints,
+  CURVE_SMOOTHNESS_OPTIONS,
   curveSmoothnessLabel,
   normalizeCurveSmoothness,
   splitCurveSegments,
 } from '@riviamigo/ui/charts';
 
 describe('curve smoothness', () => {
-  it('normalizes the new values and legacy smoothing values', () => {
+  it('keeps all three persisted settings and legacy normalization behavior', () => {
+    expect(CURVE_SMOOTHNESS_OPTIONS).toEqual([
+      { value: 'straight', label: 'Straight' },
+      { value: 'gentle', label: 'Gentle' },
+      { value: 'smooth', label: 'Smooth' },
+    ]);
     expect(normalizeCurveSmoothness('straight')).toBe('straight');
+    expect(normalizeCurveSmoothness('gentle')).toBe('gentle');
     expect(normalizeCurveSmoothness('smooth')).toBe('smooth');
+    expect(normalizeCurveSmoothness(false)).toBe('straight');
     expect(normalizeCurveSmoothness(0)).toBe('straight');
+    expect(normalizeCurveSmoothness(true)).toBe('gentle');
     expect(normalizeCurveSmoothness(0.4)).toBe('gentle');
-    expect(curveSmoothnessLabel('gentle')).toBe('Gentle');
+    expect(curveSmoothnessLabel('smooth')).toBe('Smooth');
   });
 
   it('preserves null gaps as separate curve segments', () => {
@@ -22,12 +31,13 @@ describe('curve smoothness', () => {
       null,
       { x: 4, y: 3 },
     ]);
-    expect(segments).toHaveLength(2);
-    expect(segments[0]).toHaveLength(2);
-    expect(segments[1]).toHaveLength(1);
+    expect(segments).toEqual([
+      [{ x: 0, y: 1 }, { x: 1, y: 2 }],
+      [{ x: 4, y: 3 }],
+    ]);
   });
 
-  it('clamps curved control points to neighboring values', () => {
+  it('keeps lightweight canvas control points bounded to neighboring values', () => {
     const [first, second] = clampedControlPoints(
       [
         { x: 0, y: 0 },
