@@ -112,7 +112,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     render(<DashboardChartWidget instance={instance} ctx={CTX} />);
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
-    const slider = screen.getByRole('slider');
+    const slider = screen.getByLabelText('Display filter');
     expect(slider).toBeTruthy();
     expect(slider.getAttribute('value')).toBe('0');
     expect(screen.queryByLabelText('Time minimum')).toBeNull();
@@ -153,13 +153,24 @@ describe('DashboardChartWidget - smoothing controls', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
-    fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
 
     expect(updateWidgetOptions).toHaveBeenLastCalledWith(
       'test-soc-history',
       expect.objectContaining({
         chartSettings: { 'soc-history': { timeFilter: '1h' } },
       }),
+    );
+  });
+
+  it('persists curve smoothness independently from the display filter', () => {
+    const updateWidgetOptions = vi.fn();
+    renderWidget(makeInstance('soc-history'), { ...CTX, updateWidgetOptions });
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-soc-history',
+      expect.objectContaining({ chartSettings: { 'soc-history': { smoothness: 'smooth' } } }),
     );
   });
 

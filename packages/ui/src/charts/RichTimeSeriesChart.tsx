@@ -8,7 +8,7 @@ import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
 import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
-import { DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, type CurveSmoothness } from './curveSmoothness';
+import { clampedControlPoints, DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, splitCurveSegments, type CurvePoint, type CurveSmoothness } from './curveSmoothness';
 
 export interface RichSeries {
   key: string;
@@ -336,7 +336,9 @@ export function buildRichTimeSeriesUPlotSeries(
         });
       }
       if (seriesMode === 'scatter') next.paths = () => null;
-      if (smoothness !== 'straight' && item.smoothable !== false && (seriesMode === 'line' || seriesMode === 'area')) {
+      if (smoothness === 'smooth' && item.smoothable !== false && (seriesMode === 'line' || seriesMode === 'area')) {
+        next.paths = buildStandardSplinePath();
+      } else if (smoothness === 'gentle' && item.smoothable !== false && (seriesMode === 'line' || seriesMode === 'area')) {
         next.paths = uPlot.paths.spline!();
       } else if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
         next.paths = uPlot.paths.stepped!({ align: 1 });
@@ -344,6 +346,48 @@ export function buildRichTimeSeriesUPlotSeries(
       return next;
     }),
   ];
+}
+
+function buildStandardSplinePath(): NonNullable<Series['paths']> {
+  return (u, seriesIdx, idx0, idx1) => {
+    const series = u.series[seriesIdx]!;
+    const scaleKey = series.scale ?? 'y';
+    const values = u.data[seriesIdx] as Array<number | null>;
+    const xValues = u.data[0] as number[];
+    const points: Array<CurvePoint | null> = [];
+    for (let index = idx0; index <= idx1; index += 1) {
+      const value = values[index];
+      points.push(value == null || !Number.isFinite(value)
+        ? null
+        : { x: u.valToPos(xValues[index]!, 'x', true), y: u.valToPos(value, scaleKey, true) });
+    }
+    const stroke = new Path2D();
+    const segments = splitCurveSegments(points);
+    for (const segment of segments) {
+      stroke.moveTo(segment[0]!.x, segment[0]!.y);
+      if (segment.length < 2) continue;
+      for (let index = 0; index < segment.length - 1; index += 1) {
+        const [controlOne, controlTwo] = clampedControlPoints(segment, index, 'smooth');
+        const point = segment[index + 1]!;
+        stroke.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
+      }
+    }
+    if (!series.fill) return { stroke, fill: null, clip: null };
+    const fill = new Path2D(stroke);
+    const fillTo = typeof series.fillTo === 'function'
+      ? series.fillTo(u, seriesIdx, series.min, series.max, 0)
+      : series.fillTo;
+    const baseline = u.valToPos(fillTo ?? 0, scaleKey, true);
+    for (const segment of segments) {
+      if (segment.length === 0) continue;
+      const first = segment[0]!;
+      const last = segment[segment.length - 1]!;
+      fill.lineTo(last.x, baseline);
+      fill.lineTo(first.x, baseline);
+      fill.closePath();
+    }
+    return { stroke, fill, clip: null };
+  };
 }
 
 export function RichTimeSeriesChart({
@@ -735,7 +779,12 @@ export function RichTimeSeriesChart({
       )}
       style={{ height }}
     >
-      <div ref={rootRef} className="rich-uplot-chart w-full min-h-0 flex-1" style={{ height: chartHeight }} />
+      <div
+        ref={rootRef}
+        className="rich-uplot-chart w-full min-h-0 flex-1"
+        style={{ height: chartHeight }}
+        data-chart-smoothness={smoothness}
+      />
       {isZoomed ? (
         <button
           type="button"

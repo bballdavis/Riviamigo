@@ -51,6 +51,7 @@ import {
   getChartDefinitions,
   getChartOptions,
   getChartSettingsCapabilities,
+  supportsDashboardChartSmoothness,
   type DashboardChartAxisCapability,
   type DashboardChartAxisId,
   type DashboardChartDefinition,
@@ -227,7 +228,9 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
 
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
   const activeChartDefinition = getChartDefinition(activeChartId);
-  const activeCapabilities = activeChartDefinition ? getChartSettingsCapabilities(activeChartDefinition) : EMPTY_CAPABILITIES;
+  const activeCapabilities = activeChartDefinition
+    ? { ...getChartSettingsCapabilities(activeChartDefinition), smoothness: supportsDashboardChartSmoothness(activeChartDefinition) }
+    : EMPTY_CAPABILITIES;
   const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyTimeFilter, options.legacySmoothness);
   const activeChartTitle = activeChartDefinition?.title ?? instance.title ?? 'Chart';
 
@@ -332,6 +335,12 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           updateActiveChartSettings((current) => ({
             ...current,
             timeFilter: next,
+          }))
+        }
+        onSmoothnessChange={(next) =>
+          updateActiveChartSettings((current) => ({
+            ...current,
+            smoothness: next,
           }))
         }
         onAxisModeChange={(axisId, mode) =>
@@ -626,9 +635,9 @@ function renderSingleChart(
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
   timeFilter: TimeFilterWindow = 'raw',
-  smoothness: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS,
   manualYRange?: [number, number],
   interactionMode: 'standard' | 'touch-explore' = 'standard',
+  smoothness: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS,
 ) {
   return (
     <RichTimeSeriesChart
@@ -1635,6 +1644,7 @@ interface ChartSettingsPanelProps {
   persistent: boolean;
   onClose: () => void;
   onTimeFilterChange: (next: TimeFilterWindow) => void;
+  onSmoothnessChange: (next: CurveSmoothness) => void;
   onAxisModeChange: (axisId: DashboardChartAxisId, mode: DashboardChartAxisMode) => void;
   onAxisValueChange: (axisId: DashboardChartAxisId, bound: 'min' | 'max', value: number | undefined) => void;
 }
@@ -1648,6 +1658,7 @@ function ChartSettingsPanel({
   persistent,
   onClose,
   onTimeFilterChange,
+  onSmoothnessChange,
   onAxisModeChange,
   onAxisValueChange,
 }: ChartSettingsPanelProps) {
@@ -1655,10 +1666,11 @@ function ChartSettingsPanel({
   const [position, setPosition] = React.useState({ top: 0, left: 0, visibility: 'hidden' as 'hidden' | 'visible' });
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === settings.timeFilter));
+  const smoothnessIndex = Math.max(0, CURVE_SMOOTHNESS_OPTIONS.findIndex((option) => option.value === (settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)));
   const axisEntries = AXIS_ORDER.flatMap((axisId) =>
     capabilities.axes[axisId] ? [[axisId, capabilities.axes[axisId]] as const] : [],
   );
-  const hasControls = capabilities.timeFilter || axisEntries.length > 0;
+  const hasControls = capabilities.timeFilter || capabilities.smoothness === true || axisEntries.length > 0;
 
   React.useEffect(() => {
     const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -1784,6 +1796,7 @@ function ChartSettingsPanel({
                   <span>{timeFilterLabel(settings.timeFilter)}</span>
                 </div>
                 <input
+                  aria-label="Display filter"
                   type="range"
                   min={0}
                   max={TIME_FILTER_OPTIONS.length - 1}
@@ -1791,6 +1804,30 @@ function ChartSettingsPanel({
                   value={timeFilterIndex}
                   onChange={(event) => onTimeFilterChange(TIME_FILTER_OPTIONS[Number(event.target.value)]!.value)}
                   className="rm-accent-range w-full"
+                />
+              </div>
+            </section>
+          ) : null}
+          {capabilities.smoothness ? (
+            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve smoothness</p>
+                <p className="text-sm text-fg">Path between recorded points</p>
+              </div>
+              <div>
+                <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                  <span>Values and timestamps stay unchanged.</span>
+                  <span>{curveSmoothnessLabel(settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
+                  step={1}
+                  value={smoothnessIndex}
+                  onChange={(event) => onSmoothnessChange(CURVE_SMOOTHNESS_OPTIONS[Number(event.target.value)]!.value)}
+                  className="rm-accent-range w-full"
+                  aria-label="Curve smoothness"
                 />
               </div>
             </section>
