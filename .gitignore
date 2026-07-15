@@ -31,6 +31,9 @@ coverage/
 playwright-report/
 test-results/
 .playwright-cli/
+output/
+*.log
+*.tmp
 *.tsbuildinfo
 compose/resolv.conf
 .codex_tmp/
