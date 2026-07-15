@@ -12,7 +12,10 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
 import { getDefaultBySlug } from '@riviamigo/dashboards';
-import { getProjectedRangeMileageYRange } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
+import {
+  getBatteryCapacityMileageYRange,
+  getProjectedRangeMileageYRange,
+} from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
 const originalMatchMedia = window.matchMedia;
 
@@ -190,7 +193,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     fireEvent.change(screen.getByLabelText('Mileage minimum'), { target: { value: '1000' } });
     fireEvent.change(screen.getByLabelText('Mileage maximum'), { target: { value: '9000' } });
 
-    expect(screen.getByTestId('rich-chart').getAttribute('data-x-range')).toBe('1000|9000');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-right-range')).toBe('1000|9000');
   });
 
   it('persists per-chart manual ranges through the edit-mode widget seam', () => {
@@ -373,10 +376,10 @@ const mockChargingChartSeries = vi.fn(() => ({
 const mockChargeCurve = vi.fn(() => ({ data: [{ minutes_elapsed: 0, soc_pct: 20, power_kw: 11.5 }], isLoading: false }));
 const mockChargeCurveAnalysis = vi.fn(() => ({
   data: [
-    { session_id: 's1', minutes_elapsed: 0, soc_pct: 20, charge_rate_kw: 11.5, charger_type: 'ac', sample_source: 'telemetry' },
-    { session_id: 's1', minutes_elapsed: 5, soc_pct: 70, charge_rate_kw: 6.5, charger_type: 'ac', sample_source: 'telemetry' },
-    { session_id: 's2', minutes_elapsed: 0, soc_pct: 25, charge_rate_kw: 150, charger_type: 'dc', sample_source: 'telemetry' },
-    { session_id: 's2', minutes_elapsed: 10, soc_pct: 80, charge_rate_kw: 70, charger_type: 'dc', sample_source: 'telemetry' },
+    { session_id: 's1', minutes_elapsed: 0, soc_pct: 20, charge_rate_kw: 11.5, charger_type: 'ac', sample_source: 'telemetry', power_method: 'soc_delta' },
+    { session_id: 's1', minutes_elapsed: 5, soc_pct: 70, charge_rate_kw: 6.5, charger_type: 'ac', sample_source: 'telemetry', power_method: 'soc_delta' },
+    { session_id: 's2', minutes_elapsed: 0, soc_pct: 25, charge_rate_kw: 150, charger_type: 'dc', sample_source: 'telemetry', power_method: 'soc_delta' },
+    { session_id: 's2', minutes_elapsed: 10, soc_pct: 80, charge_rate_kw: 70, charger_type: 'dc', sample_source: 'telemetry', power_method: 'soc_delta' },
   ],
   isLoading: false,
 }));
@@ -520,16 +523,26 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       xRange,
       yRange,
       yRightRange,
+      xSplits,
+      height,
+      connectGaps,
+      yAxisValueFormatter,
+      yRightAxisValueFormatter,
       yValueFormatter,
       yUnit,
     }: {
       points: Array<{ ts: string | number | Date }>;
-      series: Array<{ label: string; tooltipOnly?: boolean }>;
+      series: Array<{ label: string; color?: string; mode?: string; tooltipOnly?: boolean; values?: Array<number | null>; tooltipDetails?: Array<string | null | undefined>; pointSize?: number }>;
       emptyTitle: string;
       timeFilter?: string;
       xRange?: [number, number];
       yRange?: [number, number];
       yRightRange?: [number, number];
+      xSplits?: number[];
+      height?: number;
+      connectGaps?: boolean;
+      yAxisValueFormatter?: (value: number | null | undefined, unit?: string) => string;
+      yRightAxisValueFormatter?: (value: number | null | undefined, unit?: string) => string;
       yValueFormatter?: (value: number | null | undefined, unit?: string) => string;
       yUnit?: string;
     }) =>
@@ -540,10 +553,20 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
           data-testid="rich-chart"
           data-time-filter={timeFilter ?? 'raw'}
           data-series={series.map((item) => item.label).join('|')}
+          data-series-colors={series.map((item) => `${item.label}:${item.color ?? ''}`).join('|')}
+          data-series-modes={series.map((item) => `${item.label}:${item.mode ?? ''}`).join('|')}
+          data-series-values={series.map((item) => `${item.label}:${item.values?.map((value) => value ?? '').join(',') ?? ''}`).join('|')}
+          data-tooltip-details={series.map((item) => `${item.label}:${item.tooltipDetails?.filter(Boolean).join(',') ?? ''}`).join('|')}
           data-tooltip-only-series={series.filter((item) => item.tooltipOnly).map((item) => item.label).join('|')}
           data-x-range={xRange ? xRange.join('|') : ''}
+          data-x-splits={xSplits?.join('|') ?? ''}
+          data-height={height ?? ''}
+          data-point-sizes={series.map((item) => `${item.label}:${item.pointSize ?? ''}`).join('|')}
           data-y-range={yRange ? yRange.join('|') : ''}
           data-y-right-range={yRightRange ? yRightRange.join('|') : ''}
+          data-connect-gaps={connectGaps ? 'true' : 'false'}
+          data-has-y-axis-formatter={yAxisValueFormatter ? 'true' : 'false'}
+          data-has-y-right-axis-formatter={yRightAxisValueFormatter ? 'true' : 'false'}
           data-has-y-formatter={yValueFormatter ? 'true' : 'false'}
           data-y-format-sample={yValueFormatter ? yValueFormatter(112.1, yUnit) : ''}
         />
@@ -675,8 +698,66 @@ describe('DashboardChartWidget — charging_curve_analysis', () => {
   it('renders cross-session charge curve analysis data', () => {
     renderChart('charging-curve-analysis');
     expectChartHasData('No charging curve history is available for this period');
-    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Smoothed Trend');
-    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).not.toContain('DC Regression');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Observed trend');
+    expect(screen.getByRole('button', { name: 'Switch to Best observed' })).toHaveTextContent('Trend: Observed');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-details')).toContain('SoC/time estimate');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-x-range', '0|100');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-x-splits', '0|10|20|30|40|50|60|70|80|90|100');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-point-sizes', expect.stringContaining('Verified DC sessions:6'));
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-series-colors', expect.stringContaining('Verified DC sessions:#f97316'));
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-series-colors', expect.stringContaining('Verified DC sessions:#10b981'));
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-series-modes', expect.stringContaining('Observed trend:line'));
+    expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-details')).toContain('25 SoC; SoC/time estimate');
+  });
+
+  it('cycles the in-chart trend overlay through observed, best, and off without changing chart height', () => {
+    renderChart('charging-curve-analysis');
+    const chart = screen.getByTestId('rich-chart');
+    const initialHeight = chart.getAttribute('data-height');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Best observed' }));
+
+    expect(screen.getByRole('button', { name: 'Switch to Off' })).toHaveTextContent('Trend: Best observed');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Best observed trend (P75)');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-height', initialHeight ?? '');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Off' }));
+    expect(screen.getByRole('button', { name: 'Switch to Observed' })).toHaveTextContent('Trend: Off');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).not.toContain('trend');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Verified DC sessions');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-height', initialHeight ?? '');
+  });
+
+  it('keeps every raw session point while fitting observed and best local-regression trends', () => {
+    mockChargeCurveAnalysis.mockReturnValueOnce({
+      data: [
+        { session_id: 'slow', minutes_elapsed: 0, soc_pct: 20, charge_rate_kw: 100, charger_type: 'dc', sample_source: 'telemetry', power_method: 'soc_delta' },
+        { session_id: 'slow', minutes_elapsed: 1, soc_pct: 21, charge_rate_kw: 96, charger_type: 'dc', sample_source: 'telemetry', power_method: 'soc_delta' },
+        { session_id: 'slow', minutes_elapsed: 2, soc_pct: 22, charge_rate_kw: 92, charger_type: 'dc', sample_source: 'telemetry', power_method: 'soc_delta' },
+        { session_id: 'fast', minutes_elapsed: 0, soc_pct: 20, charge_rate_kw: 200, charger_type: 'dc', sample_source: 'telemetry', power_method: 'recorded' },
+        { session_id: 'fast', minutes_elapsed: 1, soc_pct: 21, charge_rate_kw: 190, charger_type: 'dc', sample_source: 'telemetry', power_method: 'recorded' },
+        { session_id: 'fast', minutes_elapsed: 2, soc_pct: 22, charge_rate_kw: 180, charger_type: 'dc', sample_source: 'telemetry', power_method: 'recorded' },
+        { session_id: 'fast', minutes_elapsed: 3, soc_pct: 23, charge_rate_kw: 170, charger_type: 'dc', sample_source: 'telemetry', power_method: 'recorded' },
+      ],
+      isLoading: false,
+    });
+    renderChart('charging-curve-analysis');
+
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Verified DC sessions');
+    const observedTrend = screen.getByTestId('rich-chart').getAttribute('data-series-values')
+      ?.split('|')
+      .find((series) => series.startsWith('Observed trend:'));
+    expect(observedTrend?.split(':')[1]?.split(',').filter(Boolean)).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Best observed' }));
+    const bestTrend = screen.getByTestId('rich-chart').getAttribute('data-series-values')
+      ?.split('|')
+      .find((series) => series.startsWith('Best observed trend (P75):'));
+    expect(bestTrend?.split(':')[1]).not.toBe(observedTrend?.split(':')[1]);
+  });
+
+  it('uses spaced x-axis labels on mobile', () => {
+    setMatchMedia(true);
+    renderChart('charging-curve-analysis');
+
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-x-splits', '0|20|40|60|80|100');
   });
 
   it('shows empty state when no curve-analysis data exists', () => {
@@ -688,14 +769,15 @@ describe('DashboardChartWidget — charging_curve_analysis', () => {
   it('keeps fallback samples visible when the source is approximate historical curve data', () => {
     mockChargeCurveAnalysis.mockReturnValueOnce({
       data: [
-        { session_id: 's9', minutes_elapsed: 0, soc_pct: 18, charge_rate_kw: 160, charger_type: 'dc', sample_source: 'rivian_charge_curve_points' },
-        { session_id: 's9', minutes_elapsed: 5, soc_pct: 42, charge_rate_kw: 120, charger_type: 'dc', sample_source: 'rivian_charge_curve_points' },
+        { session_id: 's9', minutes_elapsed: 0, soc_pct: 18, charge_rate_kw: 160, charger_type: 'dc', sample_source: 'rivian_charge_curve_points', power_method: 'recorded' },
+        { session_id: 's9', minutes_elapsed: 5, soc_pct: 42, charge_rate_kw: 120, charger_type: 'dc', sample_source: 'rivian_charge_curve_points', power_method: 'recorded' },
       ],
       isLoading: false,
     });
 
     renderChart('charging-curve-analysis');
-    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Fallback Samples');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Estimated history');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toContain('Observed trend');
   });
 });
 
@@ -879,6 +961,12 @@ describe('DashboardChartWidget — battery_capacity_mileage', () => {
   it('renders chart when mileage data is present', () => {
     renderChart('battery-capacity-mileage');
     expectChartHasData('No battery capacity mileage data recorded yet');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('Usable Capacity|Mileage');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series-modes')).toBe('Usable Capacity:area|Mileage:line');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-y-range')).toBe('0|132');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-connect-gaps')).toBe('true');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-has-y-axis-formatter')).toBe('true');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-has-y-right-axis-formatter')).toBe('true');
   });
 
   it('uses decimal battery-capacity labels when whole numbers would collapse distinct values', () => {
@@ -917,6 +1005,12 @@ describe('DashboardChartWidget — battery_capacity_mileage', () => {
     mockBatteryMileage.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('battery-capacity-mileage');
     expectChartEmpty('No battery capacity mileage data recorded yet');
+  });
+
+  it('uses zero through the observed maximum for the automatic y-axis', () => {
+    expect(getBatteryCapacityMileageYRange([null, 111.6, 112.1, 110.8])).toEqual([0, 124]);
+    expect(getBatteryCapacityMileageYRange([0])).toEqual([0, 1]);
+    expect(getBatteryCapacityMileageYRange([])).toBeUndefined();
   });
 });
 

@@ -1,7 +1,7 @@
 {
   "id": "charging-curve-analysis",
   "title": "DC Charging Curve Trend",
-  "description": "Scatter of DC charge samples by state of charge with a session-aware smoothed trend.",
+  "description": "Verified DC charge sessions by exact state of charge, with dense power-colored evidence points and an optional observed or best-observed local-regression trend line.",
   "pages": ["charging"],
   "source": "charging_curve_analysis",
   "mode": "scatter",

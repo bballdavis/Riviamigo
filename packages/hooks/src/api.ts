@@ -932,6 +932,7 @@ class ApiClient {
       soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
       power_kw: finiteNumber(row.power_kw) ?? finiteNumber(row.charge_rate_kw) ?? 0,
       ...(typeof row.sample_source === 'string' ? { sample_source: row.sample_source } : {}),
+      ...(typeof row.power_method === 'string' ? { power_method: row.power_method } : {}),
     })) satisfies ChargeCurvePoint[];
   }
 
@@ -951,6 +952,7 @@ class ApiClient {
         ? row.charger_type as ChargeCurveAnalysisPoint['charger_type']
         : null,
       sample_source: typeof row.sample_source === 'string' ? row.sample_source : 'telemetry',
+      ...(typeof row.power_method === 'string' ? { power_method: row.power_method } : {}),
     })) satisfies ChargeCurveAnalysisPoint[];
   }
 

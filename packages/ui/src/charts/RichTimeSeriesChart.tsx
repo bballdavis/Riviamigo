@@ -1,5 +1,6 @@
 import * as React from 'react';
 import uPlot from 'uplot';
+import { RotateCcw } from 'lucide-react';
 import type { AlignedData, Options, Series } from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { cn } from '../lib/utils';
@@ -7,6 +8,7 @@ import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
 import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
+import { DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, type CurveSmoothness } from './curveSmoothness';
 
 export interface RichSeries {
   key: string;
@@ -14,14 +16,22 @@ export interface RichSeries {
   color?: string;
   values: Array<number | null>;
   mode?: 'line' | 'area' | 'bar' | 'scatter';
+  /** Marker diameter for scatter series. */
+  pointSize?: number;
   /** Include values in the hover tooltip without drawing a series or legend item. */
   tooltipOnly?: boolean;
+  /** Draw the series without adding another legend item. */
+  showInLegend?: boolean;
   /** Formats this series in the hover tooltip, independent of the chart axis unit. */
   tooltipFormatter?: (value: number | null | undefined) => string;
+  /** Optional per-point context appended to this series' hover row. */
+  tooltipDetails?: Array<string | null | undefined>;
   /** Which Y scale this series is drawn on. Default 'y' (left). Use 'y2' for a right axis. */
   yScale?: 'y' | 'y2';
   /** Keep cumulative or derived supporting series raw while filtering the primary line. */
   filterable?: boolean;
+  /** Opt out supporting/derived line series from display curve shaping. */
+  smoothable?: boolean;
 }
 
 export interface RichTimeSeriesChartProps {
@@ -40,8 +50,13 @@ export interface RichTimeSeriesChartProps {
   xValueFormatter?: ((value: number) => string) | undefined;
   /** Secondary X axis shown at the top of the chart (same scale as primary X, different label format). */
   xSecondaryFormatter?: ((value: number) => string) | undefined;
+  /** Optional formatter for primary Y-axis tick labels. Tooltip formatting remains controlled by yValueFormatter. */
+  yAxisValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
+  /** Optional formatter for secondary Y-axis tick labels. Tooltip formatting remains controlled by yValueFormatter. */
+  yRightAxisValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
   timeFilter?: TimeFilterWindow | undefined;
+  smoothness?: CurveSmoothness | undefined;
   xRange?: [number, number] | undefined;
   yRange?: [number, number] | undefined;
   yRightRange?: [number, number] | undefined;
@@ -78,6 +93,11 @@ export function clampExplorationRange(
     min = max - span;
   }
   return [min, max];
+}
+
+export function isZoomedXRange(current: [number, number], full: [number, number]) {
+  const tolerance = Math.max(1e-9, Math.abs(full[1] - full[0]) * 1e-6);
+  return Math.abs(current[0] - full[0]) > tolerance || Math.abs(current[1] - full[1]) > tolerance;
 }
 
 function attachTouchExploration(root: HTMLDivElement, chart: uPlot, bounds: [number, number]) {
@@ -255,6 +275,11 @@ export function getExplicitScaleConfig(range?: [number, number], extra: Omit<uPl
   };
 }
 
+/** uPlot takes bar radii as a fraction of bar width; keep the shared radius in pixels. */
+export function getUPlotBarRadius(maxBarPx: number): [number, number] {
+  return [Math.min(0.5, CHART_BAR_STYLE.radius / Math.max(1, maxBarPx)), 0];
+}
+
 function estimateYLabelWidth(labels: string[]): number {
   let maxLen = 4;
   for (const label of labels) {
@@ -271,12 +296,14 @@ export function buildRichTimeSeriesUPlotSeries(
     hiddenKeys = new Set<string>(),
     connectGaps = false,
     stepInterpolation = false,
+    smoothness = DEFAULT_CURVE_SMOOTHNESS,
   }: {
     mode?: RichTimeSeriesChartProps['mode'];
     barCount?: number;
     hiddenKeys?: ReadonlySet<string>;
     connectGaps?: boolean;
     stepInterpolation?: boolean;
+    smoothness?: CurveSmoothness;
   } = {},
 ): Series[] {
   return [
@@ -293,7 +320,7 @@ export function buildRichTimeSeriesUPlotSeries(
         width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : 2,
         points: {
           show: seriesMode === 'scatter',
-          size: 6,
+          size: item.pointSize ?? 6,
           stroke: color,
           fill: color,
         },
@@ -303,10 +330,15 @@ export function buildRichTimeSeriesUPlotSeries(
       if (seriesMode === 'bar') {
         const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
         next.fill = color;
-        next.paths = uPlot.paths.bars!({ size: [CHART_BAR_STYLE.slotRatio, maxBarPx] });
+        next.paths = uPlot.paths.bars!({
+          size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
+          radius: getUPlotBarRadius(maxBarPx),
+        });
       }
       if (seriesMode === 'scatter') next.paths = () => null;
-      if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
+      if (smoothness !== 'straight' && item.smoothable !== false && (seriesMode === 'line' || seriesMode === 'area')) {
+        next.paths = uPlot.paths.spline!();
+      } else if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
         next.paths = uPlot.paths.stepped!({ align: 1 });
       }
       return next;
@@ -328,8 +360,11 @@ export function RichTimeSeriesChart({
   xUnit,
   xValueFormatter,
   xSecondaryFormatter,
+  yAxisValueFormatter,
+  yRightAxisValueFormatter,
   yValueFormatter,
   timeFilter = 'raw',
+  smoothness = DEFAULT_CURVE_SMOOTHNESS,
   xRange,
   yRange,
   yRightRange,
@@ -344,10 +379,13 @@ export function RichTimeSeriesChart({
   const chartRef = React.useRef<uPlot | null>(null);
   const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
   const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
+  const [isZoomed, setIsZoomed] = React.useState(false);
 
   const seriesRef = React.useRef(series);
   const yUnitRef = React.useRef(yUnit);
   const yRightUnitRef = React.useRef(yRightUnit);
+  const yAxisValueFormatterRef = React.useRef(yAxisValueFormatter);
+  const yRightAxisValueFormatterRef = React.useRef(yRightAxisValueFormatter);
   const yValueFormatterRef = React.useRef(yValueFormatter);
   const xTimeRef = React.useRef(xTime);
   const xUnitRef = React.useRef(xUnit);
@@ -355,12 +393,15 @@ export function RichTimeSeriesChart({
   const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
   const onCursorIndexChangeRef = React.useRef(onCursorIndexChange);
   const tooltipValuesRef = React.useRef<Array<Array<number | null>>>([]);
+  const tooltipDetailsRef = React.useRef<Array<Array<string | null | undefined>>>([]);
   const yPrecisionRef = React.useRef(0);
   const yRightPrecisionRef = React.useRef(0);
   const alignedDataRef = React.useRef<AlignedData>([[], []]);
   seriesRef.current = series;
   yUnitRef.current = yUnit;
   yRightUnitRef.current = yRightUnit;
+  yAxisValueFormatterRef.current = yAxisValueFormatter;
+  yRightAxisValueFormatterRef.current = yRightAxisValueFormatter;
   yValueFormatterRef.current = yValueFormatter;
   xTimeRef.current = xTime;
   xUnitRef.current = xUnit;
@@ -387,23 +428,24 @@ export function RichTimeSeriesChart({
     [alignedData, connectGaps],
   );
   tooltipValuesRef.current = tooltipValues;
+  tooltipDetailsRef.current = series.map((item) => item.tooltipDetails ?? []);
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
-  const legendSeries = series.filter((item) => !item.tooltipOnly);
+  const legendSeries = series.filter((item) => !item.tooltipOnly && item.showInLegend !== false);
   const showLegend = legendSeries.length > 0;
   const chartHeight = Math.max(120, height - (showLegend ? 34 : 0));
   const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
 
   const structureKey = React.useMemo(
     () =>
-      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${timeFilter}|${stepInterpolation}|` +
+      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${timeFilter}|${smoothness}|${stepInterpolation}|` +
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
       `${interactionMode}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, timeFilter, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -422,6 +464,7 @@ export function RichTimeSeriesChart({
 
     const xValues = alignedDataRef.current[0] as number[];
     const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
+    const fullXRange: [number, number] = xRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
 
     const hasRightAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
 
@@ -491,6 +534,9 @@ export function RichTimeSeriesChart({
         const precision = getAdaptiveDecimalPrecision(vals);
         yPrecisionRef.current = precision;
         return vals.map((v) => {
+          if (yAxisValueFormatterRef.current) {
+            return yAxisValueFormatterRef.current(v, yUnitRef.current);
+          }
           if (yValueFormatterRef.current) {
             return yValueFormatterRef.current(v, yUnitRef.current);
           }
@@ -516,6 +562,9 @@ export function RichTimeSeriesChart({
             const precision = getAdaptiveDecimalPrecision(vals);
             yRightPrecisionRef.current = precision;
             return vals.map((v) => {
+              if (yRightAxisValueFormatterRef.current) {
+                return yRightAxisValueFormatterRef.current(v, yRightUnitRef.current);
+              }
               if (yValueFormatterRef.current) {
                 return yValueFormatterRef.current(v, yRightUnitRef.current);
               }
@@ -558,8 +607,18 @@ export function RichTimeSeriesChart({
         hiddenKeys,
         connectGaps,
         stepInterpolation,
+        smoothness: normalizeCurveSmoothness(smoothness),
       }),
       hooks: {
+        setScale: [
+          (u, key) => {
+            if (key !== 'x') return;
+            const scale = u.scales.x;
+            if (scale?.min == null || scale.max == null) return;
+            const nextZoomed = isZoomedXRange([scale.min, scale.max], fullXRange);
+            setIsZoomed((current) => current === nextZoomed ? current : nextZoomed);
+          },
+        ],
         setCursor: [
           (u) => {
             const idx = u.cursor.idx;
@@ -576,16 +635,18 @@ export function RichTimeSeriesChart({
               .map((item, seriesIndex) => {
                 if (hiddenKeys.has(item.key)) return null;
                 const value = tooltipValuesRef.current[seriesIndex]?.[idx] ?? null;
+                const detail = tooltipDetailsRef.current[seriesIndex]?.[idx];
+                const withDetail = (text: string) => detail ? `${text} (${detail})` : text;
                 if (item.tooltipFormatter) {
-                  return `${item.label}: ${item.tooltipFormatter(value)}`;
+                  return withDetail(`${item.label}: ${item.tooltipFormatter(value)}`);
                 }
                 // Use the right-axis unit for y2 series, primary unit for y series.
                 const unit = item.yScale === 'y2' ? yRightUnitRef.current : yUnitRef.current;
                 const precision = item.yScale === 'y2' ? yRightPrecisionRef.current : yPrecisionRef.current;
                 if (yValueFormatterRef.current) {
-                  return `${item.label}: ${yValueFormatterRef.current(value, unit)}`;
+                  return withDetail(`${item.label}: ${yValueFormatterRef.current(value, unit)}`);
                 }
-                return `${item.label}: ${formatChartNumber(value, unit, precision)}`;
+                return withDetail(`${item.label}: ${formatChartNumber(value, unit, precision)}`);
               })
               .filter((row): row is string => Boolean(row));
 
@@ -618,10 +679,11 @@ export function RichTimeSeriesChart({
     };
 
     chartRef.current = new uPlot(opts, alignedDataRef.current, root);
+    setIsZoomed(false);
 
     const chart = chartRef.current;
     const touchCleanup = interactionMode === 'touch-explore'
-      ? attachTouchExploration(root, chart, xRange ?? [xValues[0]!, xValues[xValues.length - 1]!])
+      ? attachTouchExploration(root, chart, fullXRange)
       : undefined;
 
     const observer =
@@ -674,7 +736,7 @@ export function RichTimeSeriesChart({
       style={{ height }}
     >
       <div ref={rootRef} className="rich-uplot-chart w-full min-h-0 flex-1" style={{ height: chartHeight }} />
-      {interactionMode === 'touch-explore' ? (
+      {isZoomed ? (
         <button
           type="button"
           onClick={() => {
@@ -683,9 +745,11 @@ export function RichTimeSeriesChart({
             if (!chart || values.length < 2) return;
             chart.setScale('x', { min: xRange?.[0] ?? values[0]!, max: xRange?.[1] ?? values[values.length - 1]! });
           }}
-          className="absolute bottom-3 right-3 z-20 rounded-md border border-border bg-bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-fg shadow-sm transition-colors hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-accent"
+          className="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-surface/95 text-fg-secondary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+          aria-label="Return to full chart view"
+          title="Return to full chart view"
         >
-          Reset zoom
+          <RotateCcw className="h-4 w-4" aria-hidden="true" />
         </button>
       ) : null}
       {tooltip ? (

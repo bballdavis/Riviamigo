@@ -16,17 +16,22 @@ import {
 } from '@riviamigo/hooks';
 import {
   CHART_COLORS,
+  CURVE_SMOOTHNESS_OPTIONS,
   DEFAULT_CHART_TIME_FILTER,
+  DEFAULT_CURVE_SMOOTHNESS,
   DailyChargeSessionsChart,
   DailyEnergyBarChart,
   EfficiencyPillBarChart,
   formatChartNumber,
   getAdaptiveDecimalPrecision,
   normalizeTimeFilter,
+  curveSmoothnessLabel,
+  normalizeCurveSmoothness,
   RichTimeSeriesChart,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
   type TimeFilterWindow,
+  type CurveSmoothness,
 } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
@@ -66,6 +71,7 @@ interface DashboardChartOptions {
   page?: DashboardChartPage;
   showPicker?: boolean;
   timeFilter?: TimeFilterWindow;
+  smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
   chartSettings?: Record<string, DashboardChartDisplaySettings>;
   /** Optional subtitle shown in the compact header when showPicker is false. */
@@ -82,6 +88,7 @@ interface DashboardChartAxisRangeSetting {
 
 interface DashboardChartDisplaySettings {
   timeFilter?: TimeFilterWindow;
+  smoothness?: CurveSmoothness;
   /** Legacy geometric interpolation setting, retained only while reading saved dashboards. */
   smoothing?: number;
   axes?: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>>;
@@ -93,6 +100,7 @@ interface ResolvedDashboardChartOptions {
   page?: DashboardChartPage;
   showPicker: boolean;
   legacyTimeFilter: TimeFilterWindow;
+  legacySmoothness: CurveSmoothness;
   chartSettings: Record<string, DashboardChartDisplaySettings>;
   headerSubtitle?: string;
 }
@@ -168,6 +176,7 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
       options.timeFilter,
       legacySmoothingToTimeFilter(options.curveSmoothing),
     ),
+    legacySmoothness: normalizeCurveSmoothness(options.smoothness, normalizeCurveSmoothness(options.curveSmoothing)),
     chartSettings: normalizeChartSettingsMap(options.chartSettings),
     ...(page ? { page } : {}),
     ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
@@ -219,7 +228,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
   const activeChartDefinition = getChartDefinition(activeChartId);
   const activeCapabilities = activeChartDefinition ? getChartSettingsCapabilities(activeChartDefinition) : EMPTY_CAPABILITIES;
-  const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyTimeFilter);
+  const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyTimeFilter, options.legacySmoothness);
   const activeChartTitle = activeChartDefinition?.title ?? instance.title ?? 'Chart';
 
   function updateActiveChartSettings(
@@ -408,6 +417,7 @@ export function DashboardChartRenderer({
       ctx={ctx}
       height={height}
       timeFilter={settings?.timeFilter ?? timeFilter}
+      smoothness={settings?.smoothness ?? DEFAULT_CURVE_SMOOTHNESS}
       presentation={presentation}
       {...(settings ? { settings } : {})}
     />
@@ -419,6 +429,7 @@ type ActiveDashboardChartSourceProps = {
   ctx: WidgetCtx;
   height: number;
   timeFilter: TimeFilterWindow;
+  smoothness: CurveSmoothness;
   settings?: DashboardChartDisplaySettings;
   presentation: 'embedded' | 'mobile-viewer';
 };
@@ -452,7 +463,7 @@ function sourceAxisRanges(settings?: DashboardChartDisplaySettings) {
   };
 }
 
-function SocHistorySource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
+function SocHistorySource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data: soc = [], isLoading: socLoading } = useSocHistory(ctx.vehicleId, ctx.from, ctx.to);
   const { data: range = [], isLoading: rangeLoading } = useRangeHistory(ctx.vehicleId, ctx.from, ctx.to);
   return renderSocHistoryChart(
@@ -462,12 +473,13 @@ function SocHistorySource({ definition, ctx, height, timeFilter, settings, prese
     soc.map((point) => ({ ts: point.ts, value: point.value })),
     range.map((point) => ({ ts: point.ts, value: point.value })),
     timeFilter,
+    smoothness,
     sourceAxisRanges(settings).yRange,
     chartInteractionMode(presentation),
   );
 }
 
-function ChargingSeriesSource({ definition, ctx, height, settings, sessions }: ActiveDashboardChartSourceProps & { sessions?: boolean }) {
+function ChargingSeriesSource({ definition, ctx, height, settings, presentation, sessions }: ActiveDashboardChartSourceProps & { sessions?: boolean }) {
   const { data, isLoading } = useChargingChartSeries(ctx.vehicleId, ctx.from, ctx.to);
   const daily = data?.daily ?? [];
   if (sessions) {
@@ -478,16 +490,17 @@ function ChargingSeriesSource({ definition, ctx, height, settings, sessions }: A
         dailySessions={data?.daily_sessions ?? []}
         loading={isLoading}
         height={height}
+        interactionMode={chartInteractionMode(presentation)}
         selectedDayLocal={ctx.chargeSessionDayLocal ?? null}
         {...(ctx.setChargeSessionDayLocal ? { onDayClick: ctx.setChargeSessionDayLocal } : {})}
       />
     );
   }
   const { yRange } = sourceAxisRanges(settings);
-  return <DailyEnergyChart definition={definition} daily={daily} loading={isLoading} height={height} {...(yRange ? { yRange } : {})} />;
+  return <DailyEnergyChart definition={definition} daily={daily} loading={isLoading} height={height} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
 }
 
-function ChargeSessionCurveSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
+function ChargeSessionCurveSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useChargeCurve(ctx.chargeSessionId ?? null, ctx.vehicleId);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return (
@@ -497,6 +510,7 @@ function ChargeSessionCurveSource({ definition, ctx, height, timeFilter, setting
       loading={isLoading}
       height={height}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       startedAt={ctx.from || null}
       sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
       interactionMode={chartInteractionMode(presentation)}
@@ -512,10 +526,10 @@ function ChargingCurveAnalysisSource({ definition, ctx, height, settings, presen
   return <ChargingCurveAnalysisChart definition={definition} data={data} loading={isLoading} height={height} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
 }
 
-function EfficiencyTrendSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
+function EfficiencyTrendSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange } = sourceAxisRanges(settings);
-  return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
+  return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} timeFilter={timeFilter} smoothness={smoothness} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
 }
 
 function EfficiencyTemperatureSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
@@ -533,9 +547,9 @@ function PhantomDrainSource({ definition, ctx, height, settings, presentation }:
   return <PhantomDrainChart periods={data?.periods ?? []} loading={isLoading} height={height} emptyTitle={definition.emptyTitle} yUnit={definition.yUnit} yRange={sourceAxisRanges(settings).yRange ?? definition.yRange} interactionMode={chartInteractionMode(presentation)} />;
 }
 
-function BatteryDegradationSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
+function BatteryDegradationSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useDegradation(ctx.vehicleId, ctx.from, ctx.to);
-  return renderSingleChart(definition, height, isLoading, data.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), timeFilter, sourceAxisRanges(settings).yRange, chartInteractionMode(presentation));
+  return renderSingleChart(definition, height, isLoading, data.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), timeFilter, sourceAxisRanges(settings).yRange, chartInteractionMode(presentation), smoothness);
 }
 
 function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data']) {
@@ -549,13 +563,13 @@ function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data
   }));
 }
 
-function BatteryMileageSource({ definition, ctx, height, settings, presentation }: ActiveDashboardChartSourceProps) {
+function BatteryMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
-  const { xRange, yRange } = sourceAxisRanges(settings);
-  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
+  const { yRange, yRightRange } = sourceAxisRanges(settings);
+  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
 }
 
-function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
+function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
@@ -568,6 +582,7 @@ function renderSocHistoryChart(
   soc: Array<{ ts: string; value: number | null }>,
   range: Array<{ ts: string; value: number | null }>,
   timeFilter: TimeFilterWindow = 'raw',
+  smoothness: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS,
   manualYRange?: [number, number],
   interactionMode: 'standard' | 'touch-explore' = 'standard',
 ) {
@@ -599,6 +614,7 @@ function renderSocHistoryChart(
       stepInterpolation={definition.stepInterpolation}
       mode={definition.mode}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       interactionMode={interactionMode}
     />
   );
@@ -610,6 +626,7 @@ function renderSingleChart(
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
   timeFilter: TimeFilterWindow = 'raw',
+  smoothness: CurveSmoothness = DEFAULT_CURVE_SMOOTHNESS,
   manualYRange?: [number, number],
   interactionMode: 'standard' | 'touch-explore' = 'standard',
 ) {
@@ -625,6 +642,7 @@ function renderSingleChart(
       stepInterpolation={definition.stepInterpolation}
       mode={definition.mode}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       interactionMode={interactionMode}
     />
   );
@@ -638,6 +656,7 @@ function ChargingSessionsChart({
   height,
   selectedDayLocal,
   onDayClick,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number; session_count: number }>;
@@ -655,6 +674,7 @@ function ChargingSessionsChart({
   height: number;
   selectedDayLocal?: string | null;
   onDayClick?: (dayLocal: string | null) => void;
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   return (
     <DailyChargeSessionsChart
@@ -663,6 +683,7 @@ function ChargingSessionsChart({
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
+      interactionMode={interactionMode}
       {...(selectedDayLocal !== undefined ? { selectedDayLocal } : {})}
       {...(onDayClick ? { onDayClick } : {})}
     />
@@ -675,6 +696,7 @@ function ChargeSessionCurveChart({
   loading,
   height,
   timeFilter,
+  smoothness,
   startedAt,
   sessionEnergyKwh,
   yRange,
@@ -686,6 +708,7 @@ function ChargeSessionCurveChart({
   loading: boolean;
   height: number;
   timeFilter: TimeFilterWindow;
+  smoothness: CurveSmoothness;
   startedAt: string | null;
   sessionEnergyKwh: number | null;
   yRange?: [number, number];
@@ -825,6 +848,7 @@ function ChargeSessionCurveChart({
       xValueFormatter={useTime ? undefined : (value) => `${Math.round(value)}%`}
       xSplits={xSplits}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       interactionMode={interactionMode}
     />
   );
@@ -847,8 +871,107 @@ function ChargingCurveAnalysisChart({
   yRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
 }) {
-  const rows = data
-    .filter((point): point is ChargeCurveAnalysisPoint & { soc_pct: number; charge_rate_kw: number } =>
+  const [mode, setMode] = React.useState<ChargeCurveMode>('observed');
+  const [isMobile, setIsMobile] = React.useState(isMobileViewport);
+  const plot = React.useMemo(() => buildChargeCurvePlot(data, mode), [data, mode]);
+
+  React.useEffect(() => {
+    const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 639px)')
+      : null;
+    const update = () => setIsMobile(mediaQuery?.matches ?? false);
+    update();
+    mediaQuery?.addEventListener?.('change', update);
+    mediaQuery?.addListener?.(update);
+    return () => {
+      mediaQuery?.removeEventListener?.('change', update);
+      mediaQuery?.removeListener?.(update);
+    };
+  }, []);
+
+  const nextMode = nextChargeCurveMode(mode);
+  const nextModeLabel = chargeCurveModeLabel(nextMode);
+
+  return (
+    <div className="relative h-full min-h-0">
+      <RichTimeSeriesChart
+        points={plot.rows.map((row) => ({ ts: row.plotSoc }))}
+        series={[
+          ...buildChargeCurveScatterSeries(plot.rows),
+          ...(plot.hasEstimatedHistory ? [{
+            key: 'dc-estimated-history',
+            label: 'Estimated history',
+            color: CHART_COLORS.amber,
+            mode: 'scatter' as const,
+            values: plot.rows.map((row) => row.estimatedKw),
+            tooltipDetails: plot.rows.map((row) => row.estimatedDetail),
+            pointSize: 6,
+          }] : []),
+          ...(mode === 'off' ? [] : [{
+            key: 'dc-summary',
+            label: mode === 'observed' ? 'Observed trend' : 'Best observed trend (P75)',
+            color: CHART_COLORS.orange,
+            mode: 'line' as const,
+            values: plot.rows.map((row) => row.summaryKw),
+            tooltipDetails: plot.rows.map((row) => row.summaryDetail),
+          }] as const),
+        ]}
+        loading={loading}
+        emptyTitle={definition.emptyTitle}
+        height={height}
+        xTime={false}
+        xUnit="%"
+        yUnit="kW"
+        xRange={xRange ?? [0, 100]}
+        yRange={yRange}
+        mode="scatter"
+        connectGaps
+        xSplits={isMobile ? [0, 20, 40, 60, 80, 100] : [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]}
+        xValueFormatter={(value) => `${Math.round(value)}%`}
+        interactionMode={interactionMode}
+      />
+      <button
+        type="button"
+        aria-label={`Switch to ${nextModeLabel}`}
+        title={`Switch to ${nextModeLabel}`}
+        onClick={() => setMode(nextMode)}
+        className="absolute right-3 top-3 z-10 rounded-md border border-border bg-bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-fg shadow-sm transition-colors hover:bg-bg-elevated"
+      >
+        Trend: {chargeCurveModeLabel(mode)}
+      </button>
+    </div>
+  );
+}
+
+type ChargeCurveMode = 'off' | 'observed' | 'best-observed';
+
+type ChargeCurvePlotRow = {
+  socPct: number;
+  plotSoc: number;
+  observedKw: number | null;
+  observedDetail: string | null;
+  estimatedKw: number | null;
+  estimatedDetail: string | null;
+  summaryKw: number | null;
+  summaryDetail: string | null;
+};
+
+type CurvePoint = ChargeCurveAnalysisPoint & {
+  soc_pct: number;
+  charge_rate_kw: number;
+  sample_source: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points';
+  power_method: 'recorded' | 'soc_delta';
+};
+
+function normalizeSampleSource(value: unknown): CurvePoint['sample_source'] {
+  const source = typeof value === 'string' ? value : '';
+  if (source === 'rivian_charge_curve_points' || source === 'telemetry_1min') return source;
+  return 'telemetry';
+}
+
+function buildChargeCurvePlot(data: ChargeCurveAnalysisPoint[], mode: ChargeCurveMode) {
+  const points = data
+    .filter((point): point is CurvePoint =>
       Number.isFinite(point.soc_pct) &&
       Number.isFinite(point.charge_rate_kw) &&
       point.charge_rate_kw > 0 &&
@@ -857,153 +980,196 @@ function ChargingCurveAnalysisChart({
     .map((point) => ({
       ...point,
       sample_source: normalizeSampleSource(point.sample_source),
-    }))
-    .sort((left, right) =>
-      left.soc_pct - right.soc_pct ||
-      (left.session_id || '').localeCompare(right.session_id || '') ||
-      (left.minutes_elapsed ?? 0) - (right.minutes_elapsed ?? 0)
-    );
+      power_method: point.power_method === 'recorded' ? 'recorded' as const : 'soc_delta' as const,
+    }));
 
-  const trendValues = buildChargeCurveTrend(rows);
-  const telemetryValues = rows.map((row) => (row.sample_source === 'rivian_charge_curve_points' ? null : row.charge_rate_kw));
-  const fallbackValues = rows.map((row) => (row.sample_source === 'rivian_charge_curve_points' ? row.charge_rate_kw : null));
-  const hasFallbackSamples = fallbackValues.some((value) => value != null);
-
-  return (
-    <RichTimeSeriesChart
-      points={rows.map((point) => ({ ts: point.soc_pct }))}
-      series={[
-        {
-          key: 'dc-telemetry',
-          label: 'DC Samples',
-          color: CHART_COLORS.rose,
-          mode: 'scatter',
-          values: telemetryValues,
-        },
-        ...(hasFallbackSamples ? [{
-          key: 'dc-fallback',
-          label: 'Fallback Samples',
-          color: CHART_COLORS.amber,
-          mode: 'scatter' as const,
-          values: fallbackValues,
-        }] : []),
-        {
-          key: 'dc-trend',
-          label: 'Smoothed Trend',
-          color: CHART_COLORS.orange,
-          mode: 'line',
-          values: trendValues,
-        },
-      ]}
-      loading={loading}
-      emptyTitle={definition.emptyTitle}
-      height={height}
-      xTime={false}
-      xUnit="%"
-      yUnit="kW"
-      xRange={xRange}
-      yRange={yRange}
-      mode="scatter"
-      xValueFormatter={(value) => `${Math.round(value)}%`}
-      interactionMode={interactionMode}
-    />
-  );
-}
-
-function normalizeSampleSource(value: unknown) {
-  const source = typeof value === 'string' ? value : '';
-  return source === 'rivian_charge_curve_points' ? source : 'telemetry';
-}
-
-function buildChargeCurveTrend(rows: Array<{ session_id: string; soc_pct: number; charge_rate_kw: number; sample_source: string }>) {
-  if (rows.length < 4) {
-    return rows.map(() => null);
+  if (points.length === 0) {
+    return { rows: [] as ChargeCurvePlotRow[], hasEstimatedHistory: false };
   }
 
-  const binSize = 5;
-  const sessionBins = new Map<string, Map<number, number[]>>();
+  const observed = points.filter((point) => point.sample_source !== 'rivian_charge_curve_points');
+  const estimated = points.filter((point) => point.sample_source === 'rivian_charge_curve_points');
+  const rows: ChargeCurvePlotRow[] = [
+    ...observed.map((point) => ({
+      socPct: point.soc_pct,
+      plotSoc: point.soc_pct,
+      observedKw: point.charge_rate_kw,
+      observedDetail: `${formatExactSoc(point.soc_pct)} SoC; ${powerMethodLabel([point])}`,
+      estimatedKw: null,
+      estimatedDetail: null,
+      summaryKw: null,
+      summaryDetail: null,
+    })),
+    ...estimated.map((point) => ({
+      socPct: point.soc_pct,
+      plotSoc: point.soc_pct,
+      observedKw: null,
+      observedDetail: null,
+      estimatedKw: point.charge_rate_kw,
+      estimatedDetail: `${formatExactSoc(point.soc_pct)} SoC; Recorded kW; estimated SoC (excluded from summaries)`,
+      summaryKw: null,
+      summaryDetail: null,
+    })),
+    ...buildChargeCurveRegression(observed, mode).map((trend) => {
+      return {
+        socPct: trend.socPct,
+        plotSoc: trend.socPct,
+        observedKw: null,
+        observedDetail: null,
+        estimatedKw: null,
+        estimatedDetail: null,
+        summaryKw: trend.powerKw,
+        summaryDetail: `${formatExactSoc(trend.socPct)} SoC; ${trend.sampleCount} nearby samples; ${mode === 'best-observed' ? 'local upper-quartile regression' : 'local weighted regression'}`,
+      };
+    }),
+  ];
 
-  for (const row of rows) {
-    const sessionId = row.session_id || 'unknown';
-    const bin = Math.max(0, Math.min(20, Math.floor(row.soc_pct / binSize)));
-    const perSession = sessionBins.get(sessionId) ?? new Map<number, number[]>();
-    const values = perSession.get(bin) ?? [];
-    values.push(row.charge_rate_kw);
-    perSession.set(bin, values);
-    sessionBins.set(sessionId, perSession);
-  }
-
-  const binValues = new Map<number, number[]>();
-  for (const perSession of sessionBins.values()) {
-    for (const [bin, values] of perSession.entries()) {
-      const sessionMedian = median(values);
-      const existing = binValues.get(bin) ?? [];
-      existing.push(sessionMedian);
-      binValues.set(bin, existing);
-    }
-  }
-
-  const trendPoints = Array.from(binValues.entries())
-    .map(([bin, values]) => ({
-      x: bin * binSize + binSize / 2,
-      y: median(values),
-    }))
-    .sort((left, right) => left.x - right.x);
-
-  const smoothed = smoothTrendPoints(trendPoints);
-  return rows.map((row) => interpolateTrend(smoothed, row.soc_pct));
+  return { rows: distributeChargeCurveSoc(rows), hasEstimatedHistory: estimated.length > 0 };
 }
 
-function smoothTrendPoints(points: Array<{ x: number; y: number }>) {
-  if (points.length < 3) return points;
+const CHARGE_CURVE_REGRESSION_RADIUS_SOC = 8;
 
-  return points.map((point, index) => {
-    const window = points.slice(Math.max(0, index - 1), Math.min(points.length, index + 2));
-    return {
-      x: point.x,
-      y: median(window.map((item) => item.y)),
-    };
-  });
+function buildChargeCurveRegression(points: CurvePoint[], mode: ChargeCurveMode) {
+  if (points.length < 3) return [];
+  const minSoc = Math.ceil(Math.min(...points.map((point) => point.soc_pct)));
+  const maxSoc = Math.floor(Math.max(...points.map((point) => point.soc_pct)));
+  const trend: Array<{ socPct: number; powerKw: number; sampleCount: number }> = [];
+
+  for (let socPct = minSoc; socPct <= maxSoc; socPct += 1) {
+    const nearby = points
+      .map((point) => {
+        const distance = Math.abs(point.soc_pct - socPct);
+        const normalizedDistance = distance / CHARGE_CURVE_REGRESSION_RADIUS_SOC;
+        return { x: point.soc_pct, y: point.charge_rate_kw, weight: (1 - normalizedDistance ** 3) ** 3 };
+      })
+      .filter((point) => point.weight > 0);
+    if (nearby.length < 3) continue;
+
+    const regressionPoints = mode === 'best-observed'
+      ? nearby.filter((point) => point.y >= weightedPercentile(nearby, 0.75))
+      : nearby;
+    const powerKw = weightedLinearPrediction(regressionPoints, socPct);
+    if (powerKw == null) continue;
+    trend.push({ socPct, powerKw, sampleCount: regressionPoints.length });
+  }
+
+  return trend;
 }
 
-function interpolateTrend(points: Array<{ x: number; y: number }>, x: number) {
+function weightedLinearPrediction(points: Array<{ x: number; y: number; weight: number }>, atX: number) {
   if (points.length === 0) return null;
-  if (points.length === 1) return points[0]!.y;
-  if (x <= points[0]!.x) return points[0]!.y;
-  if (x >= points[points.length - 1]!.x) return points[points.length - 1]!.y;
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const left = points[index]!;
-    const right = points[index + 1]!;
-    if (x < left.x || x > right.x) continue;
-    const span = right.x - left.x;
-    if (span <= 0) return right.y;
-    const ratio = (x - left.x) / span;
-    return left.y + (right.y - left.y) * ratio;
-  }
-
-  return points[points.length - 1]!.y;
+  const sums = points.reduce<{ weight: number; x: number; y: number; xx: number; xy: number }>(
+    (total, point) => ({
+      weight: total.weight + point.weight,
+      x: total.x + point.weight * point.x,
+      y: total.y + point.weight * point.y,
+      xx: total.xx + point.weight * point.x * point.x,
+      xy: total.xy + point.weight * point.x * point.y,
+    }),
+    { weight: 0, x: 0, y: 0, xx: 0, xy: 0 },
+  );
+  if (sums.weight === 0) return null;
+  const denominator = sums.weight * sums.xx - sums.x ** 2;
+  if (Math.abs(denominator) < Number.EPSILON) return Math.max(0, sums.y / sums.weight);
+  const slope = (sums.weight * sums.xy - sums.x * sums.y) / denominator;
+  const intercept = (sums.y - slope * sums.x) / sums.weight;
+  return Math.max(0, intercept + slope * atX);
 }
 
-function median(values: number[]) {
+function weightedPercentile(points: Array<{ y: number; weight: number }>, quantile: number) {
+  const sorted = [...points].sort((left, right) => left.y - right.y);
+  const target = sorted.reduce((total, point) => total + point.weight, 0) * quantile;
+  let cumulative = 0;
+  for (const point of sorted) {
+    cumulative += point.weight;
+    if (cumulative >= target) return point.y;
+  }
+  return sorted.at(-1)?.y ?? 0;
+}
+
+function distributeChargeCurveSoc(rows: ChargeCurvePlotRow[]) {
+  const sorted = [...rows].sort((left, right) => left.socPct - right.socPct);
+  const result: ChargeCurvePlotRow[] = [];
+  for (let index = 0; index < sorted.length;) {
+    let end = index + 1;
+    while (end < sorted.length && sorted[end]!.socPct === sorted[index]!.socPct) end += 1;
+    const group = sorted.slice(index, end);
+    const offset = Math.min(0.04, 0.2 / group.length);
+    group.forEach((row, rowIndex) => {
+      result.push({ ...row, plotSoc: row.socPct + (rowIndex - (group.length - 1) / 2) * offset });
+    });
+    index = end;
+  }
+  return result;
+}
+
+function formatExactSoc(soc: number) {
+  return Number.isInteger(soc) ? String(soc) : soc.toFixed(1).replace(/\.0$/, '');
+}
+
+function nextChargeCurveMode(mode: ChargeCurveMode): ChargeCurveMode {
+  if (mode === 'observed') return 'best-observed';
+  if (mode === 'best-observed') return 'off';
+  return 'observed';
+}
+
+function chargeCurveModeLabel(mode: ChargeCurveMode) {
+  if (mode === 'best-observed') return 'Best observed';
+  if (mode === 'off') return 'Off';
+  return 'Observed';
+}
+
+const CHARGE_CURVE_SCATTER_BUCKETS = 6;
+
+function buildChargeCurveScatterSeries(rows: ChargeCurvePlotRow[]) {
+  const values = rows
+    .map((row) => row.observedKw)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+
+  return Array.from({ length: CHARGE_CURVE_SCATTER_BUCKETS }, (_, bucket) => ({
+    key: `dc-observed-samples-${bucket}`,
+    label: 'Verified DC sessions',
+    color: interpolateHexColor(CHART_COLORS.accent, CHART_COLORS.emerald, bucket / (CHARGE_CURVE_SCATTER_BUCKETS - 1)),
+    mode: 'scatter' as const,
+    showInLegend: false,
+    pointSize: 6,
+    values: rows.map((row) => chargeCurvePowerBucket(row.observedKw, low, high) === bucket ? row.observedKw : null),
+    tooltipDetails: rows.map((row) => chargeCurvePowerBucket(row.observedKw, low, high) === bucket ? row.observedDetail : null),
+  }));
+}
+
+function chargeCurvePowerBucket(value: number | null, low: number, high: number) {
+  if (value == null || !Number.isFinite(value)) return -1;
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return CHARGE_CURVE_SCATTER_BUCKETS - 1;
+  return Math.min(CHARGE_CURVE_SCATTER_BUCKETS - 1, Math.floor(((value - low) / (high - low)) * CHARGE_CURVE_SCATTER_BUCKETS));
+}
+
+function interpolateHexColor(start: string, end: string, ratio: number) {
+  const parse = (color: string) => [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
+  const [startRed, startGreen, startBlue] = parse(start);
+  const [endRed, endGreen, endBlue] = parse(end);
+  const channel = (from: number, to: number) => Math.round(from + (to - from) * ratio).toString(16).padStart(2, '0');
+  return `#${channel(startRed!, endRed!)}${channel(startGreen!, endGreen!)}${channel(startBlue!, endBlue!)}`;
+}
+
+function powerMethodLabel(points: CurvePoint[]) {
+  const methods = new Set(points.map((point) => point.power_method));
+  if (methods.size === 1 && methods.has('recorded')) return 'Recorded kW';
+  if (methods.size === 1) return 'SoC/time estimate';
+  return 'Recorded and SoC/time estimates';
+}
+
+function percentile(values: number[], quantile: number) {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1]! + sorted[mid]!) / 2
-    : sorted[mid]!;
-}
-
-function buildRegression(points: Array<{ x: number; y: number }>) {
-  if (points.length < 2) return null;
-  const meanX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
-  const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
-  const numerator = points.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0);
-  const denominator = points.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0);
-  if (denominator === 0) return null;
-  const slope = numerator / denominator;
-  const intercept = meanY - slope * meanX;
-  return (x: number) => Math.max(0, intercept + slope * x);
+  const position = (sorted.length - 1) * quantile;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower]!;
+  const ratio = position - lower;
+  return sorted[lower]! + (sorted[upper]! - sorted[lower]!) * ratio;
 }
 
 function normalizeChargeCurveType(chargerType: ChargeCurveAnalysisPoint['charger_type']) {
@@ -1019,12 +1185,14 @@ function DailyEnergyChart({
   loading,
   height,
   yRange,
+  interactionMode,
 }: {
   definition: DashboardChartDefinition;
   daily: Array<{ day_local: string; day_start: string; total_energy_kwh: number; session_count: number }>;
   loading: boolean;
   height: number;
   yRange?: [number, number];
+  interactionMode: 'standard' | 'touch-explore';
 }) {
   return (
     <DailyEnergyBarChart
@@ -1033,6 +1201,7 @@ function DailyEnergyChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       yRange={yRange}
+      interactionMode={interactionMode}
     />
   );
 }
@@ -1043,6 +1212,7 @@ function EfficiencyTrendChart({
   loading,
   height,
   timeFilter,
+  smoothness,
   yRange,
   interactionMode,
 }: {
@@ -1051,6 +1221,7 @@ function EfficiencyTrendChart({
   loading: boolean;
   height: number;
   timeFilter: TimeFilterWindow;
+  smoothness: CurveSmoothness;
   yRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
 }) {
@@ -1069,6 +1240,7 @@ function EfficiencyTrendChart({
       yRange={yRange}
       mode={definition.mode}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       interactionMode={interactionMode}
     />
   );
@@ -1146,80 +1318,74 @@ function BatteryCapacityMileageChart({
   points,
   loading,
   height,
-  xRange,
+  timeFilter,
   yRange,
+  yRightRange,
   interactionMode,
 }: {
   definition: DashboardChartDefinition;
-  points: Array<{ x: number | null; y: number | null; degradationPct: number | null }>;
+  points: Array<{ ts: string; x: number | null; y: number | null; degradationPct: number | null }>;
   loading: boolean;
   height: number;
-  xRange?: [number, number];
+  timeFilter: TimeFilterWindow;
   yRange?: [number, number];
+  yRightRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
 }) {
   const rows = points
-    .filter((point): point is { x: number; y: number; degradationPct: number | null } => point.x != null && point.y != null)
-    .sort((a, b) => a.x - b.x);
-  const yValues = rows.map((point) => point.y);
+    .filter((point) => point.x != null || point.y != null)
+    .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  const yValues = rows
+    .map((point) => point.y)
+    .filter((value): value is number => value != null && Number.isFinite(value));
   const yPrecision = getBatteryCapacityMileagePrecision(yValues);
-
-  const trendline = buildRegression(rows.map((point) => ({ x: point.x, y: point.y })));
+  const autoYRange = getBatteryCapacityMileageYRange(yValues);
 
   return (
     <RichTimeSeriesChart
-      points={rows.map((point) => ({ ts: point.x }))}
+      points={rows.map((point) => ({ ts: point.ts }))}
       series={[
         {
-          key: 'degradation-under-10',
-          label: 'Degradation <10%',
+          key: 'usable-capacity',
+          label: 'Usable Capacity',
+          color: CHART_COLORS.accent,
+          mode: 'area',
+          values: rows.map((point) => point.y),
+        },
+        {
+          key: 'odometer-mi',
+          label: 'Mileage',
           color: CHART_COLORS.emerald,
-          mode: 'scatter',
-          values: rows.map((point) => point.degradationPct != null && point.degradationPct < 10 ? point.y : null),
-        },
-        {
-          key: 'degradation-10-20',
-          label: 'Degradation 10-20%',
-          color: CHART_COLORS.amber,
-          mode: 'scatter',
-          values: rows.map((point) => point.degradationPct != null && point.degradationPct >= 10 && point.degradationPct < 20 ? point.y : null),
-        },
-        {
-          key: 'degradation-20-30',
-          label: 'Degradation 20-30%',
-          color: CHART_COLORS.orange,
-          mode: 'scatter',
-          values: rows.map((point) => point.degradationPct != null && point.degradationPct >= 20 && point.degradationPct < 30 ? point.y : null),
-        },
-        {
-          key: 'degradation-over-30',
-          label: 'Degradation >30%',
-          color: CHART_COLORS.rose,
-          mode: 'scatter',
-          values: rows.map((point) => point.degradationPct != null && point.degradationPct >= 30 ? point.y : null),
-        },
-        {
-          key: 'capacity-trend',
-          label: 'Trend',
-          color: CHART_COLORS.muted,
           mode: 'line',
-          values: rows.map((point) => trendline ? trendline(point.x) : null),
+          values: rows.map((point) => point.x),
+          yScale: 'y2',
+          filterable: false,
         },
       ]}
       loading={loading}
       emptyTitle={definition.emptyTitle}
       height={height}
-      xTime={false}
-      xUnit="mi"
       yUnit={definition.yUnit}
-      xRange={xRange}
-      yRange={yRange ?? definition.yRange}
-      mode="scatter"
-      xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
+      yRange={yRange ?? autoYRange ?? definition.yRange}
+      yRightUnit="mi"
+      yRightRange={yRightRange}
+      mode={definition.mode}
+      timeFilter={timeFilter}
+      connectGaps
+      yAxisValueFormatter={(value, unit) => formatChartNumber(value, unit, 0)}
+      yRightAxisValueFormatter={(value, unit) => formatChartNumber(value, unit, 0)}
       yValueFormatter={(value, unit) => formatChartNumber(value, unit, yPrecision)}
       interactionMode={interactionMode}
     />
   );
+}
+
+export function getBatteryCapacityMileageYRange(values: Array<number | null | undefined>) {
+  const populated = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (populated.length === 0) return undefined;
+
+  const max = Math.max(...populated);
+  return [0, max > 0 ? Math.ceil(max * 1.1) : 1] as [number, number];
 }
 
 function ProjectedRangeMileageChart({
@@ -1372,6 +1538,9 @@ function normalizeChartDisplaySettings(value: unknown): DashboardChartDisplaySet
   } else if ('smoothing' in settings && typeof settings.smoothing === 'number') {
     normalized.smoothing = settings.smoothing;
   }
+  if ('smoothness' in settings) {
+    normalized.smoothness = normalizeCurveSmoothness(settings.smoothness);
+  }
   if (Object.keys(normalizedAxes).length > 0) {
     normalized.axes = normalizedAxes;
   }
@@ -1410,6 +1579,7 @@ function resolveChartDisplaySettings(
   allSettings: Record<string, DashboardChartDisplaySettings>,
   chartId: string,
   legacyTimeFilter: TimeFilterWindow,
+  legacySmoothness: CurveSmoothness,
 ) {
   const chartSettings = allSettings[chartId] ?? {};
   const axes = chartSettings.axes ?? {};
@@ -1420,6 +1590,7 @@ function resolveChartDisplaySettings(
         : legacySmoothingToTimeFilter(chartSettings.smoothing)
     ),
     axes,
+    smoothness: chartSettings.smoothness ?? normalizeCurveSmoothness(chartSettings.smoothing, legacySmoothness),
   };
 }
 
