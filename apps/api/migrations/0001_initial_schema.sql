@@ -1,31 +1,19 @@
+-- no-transaction
 -- Riviamigo release baseline.
 -- This schema-only snapshot is the initial state for fresh installs.
 -- Existing pre-release databases are adopted with pnpm db:rebaseline;
 -- do not apply this file directly to a populated database.
 
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
-    CREATE EXTENSION pgcrypto;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
-    CREATE EXTENSION timescaledb;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'cube') THEN
-    CREATE EXTENSION cube;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'earthdistance') THEN
-    CREATE EXTENSION earthdistance;
-  END IF;
-END $$;
+CREATE SCHEMA IF NOT EXISTS riviamigo;
+CREATE SCHEMA IF NOT EXISTS timeseries;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS cube WITH SCHEMA riviamigo;
+CREATE EXTENSION IF NOT EXISTS earthdistance WITH SCHEMA riviamigo;
 
-Exit code: 0
-Wall time: 0.8 seconds
-Output:
 --
 -- PostgreSQL database dump
 --
-
 
 -- Dumped from database version 16.13
 -- Dumped by pg_dump version 16.13
@@ -45,15 +33,13 @@ SET row_security = off;
 -- Name: riviamigo; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA riviamigo;
-
+CREATE SCHEMA IF NOT EXISTS riviamigo;
 
 --
 -- Name: timeseries; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA timeseries;
-
+CREATE SCHEMA IF NOT EXISTS timeseries;
 
 SET default_tablespace = '';
 
@@ -121,6 +107,7 @@ CREATE TABLE timeseries.telemetry (
     charge_session_id uuid,
     charge_port_open boolean,
     charger_derate_active boolean,
+
     cabin_precon_status text,
     cabin_precon_type text,
     pet_mode_active boolean,
@@ -155,7 +142,6 @@ CREATE TABLE timeseries.telemetry (
     side_bin_right_closed boolean
 );
 
-
 --
 -- Name: rivian_charge_payloads; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -170,7 +156,6 @@ CREATE TABLE riviamigo.rivian_charge_payloads (
     captured_at timestamp with time zone DEFAULT now() NOT NULL,
     payload jsonb NOT NULL
 );
-
 
 --
 -- Name: account_invitations; Type: TABLE; Schema: riviamigo; Owner: -
@@ -189,7 +174,6 @@ CREATE TABLE riviamigo.account_invitations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     vehicle_id uuid
 );
-
 
 --
 -- Name: addresses; Type: TABLE; Schema: riviamigo; Owner: -
@@ -210,7 +194,6 @@ CREATE TABLE riviamigo.addresses (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: api_keys; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -221,6 +204,7 @@ CREATE TABLE riviamigo.api_keys (
     key_hash bytea NOT NULL,
     label text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+
     last_used_at timestamp with time zone,
     revoked_at timestamp with time zone,
     access_level text DEFAULT 'view'::text NOT NULL,
@@ -230,7 +214,6 @@ CREATE TABLE riviamigo.api_keys (
     user_id uuid NOT NULL,
     CONSTRAINT api_keys_access_level_check CHECK ((access_level = ANY (ARRAY['view'::text, 'edit'::text, 'admin'::text])))
 );
-
 
 --
 -- Name: backup_artifacts; Type: TABLE; Schema: riviamigo; Owner: -
@@ -249,7 +232,6 @@ CREATE TABLE riviamigo.backup_artifacts (
     CONSTRAINT backup_artifacts_storage_type_check CHECK ((storage_type = 'local'::text))
 );
 
-
 --
 -- Name: backup_restore_requests; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -266,7 +248,6 @@ CREATE TABLE riviamigo.backup_restore_requests (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT backup_restore_requests_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'running'::text, 'completed'::text, 'failed'::text, 'canceled'::text])))
 );
-
 
 --
 -- Name: backup_runs; Type: TABLE; Schema: riviamigo; Owner: -
@@ -286,7 +267,6 @@ CREATE TABLE riviamigo.backup_runs (
     CONSTRAINT backup_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text]))),
     CONSTRAINT backup_runs_trigger_check CHECK ((trigger = ANY (ARRAY['manual'::text, 'scheduled'::text, 'restore'::text])))
 );
-
 
 --
 -- Name: backup_settings; Type: TABLE; Schema: riviamigo; Owner: -
@@ -318,9 +298,9 @@ CREATE TABLE riviamigo.backup_settings (
     CONSTRAINT backup_settings_target_type_check CHECK ((target_type = 's3'::text))
 );
 
-
 --
 -- Name: battery_capacity_snapshots; Type: TABLE; Schema: riviamigo; Owner: -
+
 --
 
 CREATE TABLE riviamigo.battery_capacity_snapshots (
@@ -332,7 +312,6 @@ CREATE TABLE riviamigo.battery_capacity_snapshots (
     rated_kwh double precision,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: charge_session_external_aliases; Type: TABLE; Schema: riviamigo; Owner: -
@@ -350,7 +329,6 @@ CREATE TABLE riviamigo.charge_session_external_aliases (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: charge_session_user_annotations; Type: TABLE; Schema: riviamigo; Owner: -
@@ -370,7 +348,6 @@ CREATE TABLE riviamigo.charge_session_user_annotations (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: charge_sessions; Type: TABLE; Schema: riviamigo; Owner: -
@@ -421,9 +398,7 @@ CREATE TABLE riviamigo.charge_sessions (
     live_current_currency text,
     live_total_charged_kwh double precision,
     live_range_added_km double precision,
-+Exit code: 0
-Wall time: 0.8 seconds
-Output:
+
     live_power_kw double precision,
     live_charge_rate_kph double precision,
     live_time_elapsed_seconds integer,
@@ -432,7 +407,6 @@ Output:
     api_ended_at timestamp with time zone,
     data_confidence text
 );
-
 
 --
 -- Name: charging_schedules; Type: TABLE; Schema: riviamigo; Owner: -
@@ -452,7 +426,6 @@ CREATE TABLE riviamigo.charging_schedules (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: cost_profiles; Type: TABLE; Schema: riviamigo; Owner: -
@@ -474,7 +447,6 @@ CREATE TABLE riviamigo.cost_profiles (
     CONSTRAINT cost_profiles_billing_type_check CHECK ((billing_type = ANY (ARRAY['per_kwh'::text, 'per_minute'::text, 'free'::text, 'flat'::text, 'tou'::text])))
 );
 
-
 --
 -- Name: dashboards; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -492,7 +464,6 @@ CREATE TABLE riviamigo.dashboards (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: departure_schedules; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -509,7 +480,6 @@ CREATE TABLE riviamigo.departure_schedules (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: external_connection_activity; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -524,9 +494,9 @@ CREATE TABLE riviamigo.external_connection_activity (
     last_test_at timestamp with time zone,
     last_test_ok boolean,
     last_test_error text,
+
     last_test_checks jsonb
 );
-
 
 --
 -- Name: external_connection_settings; Type: TABLE; Schema: riviamigo; Owner: -
@@ -555,7 +525,6 @@ CREATE TABLE riviamigo.external_connection_settings (
     CONSTRAINT external_connection_weather_precision_check CHECK (((weather_precision IS NULL) OR (weather_precision = ANY (ARRAY['approximate'::text, 'exact'::text]))))
 );
 
-
 --
 -- Name: geofences; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -575,7 +544,6 @@ CREATE TABLE riviamigo.geofences (
     cost_profile_id uuid
 );
 
-
 --
 -- Name: refresh_tokens; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -588,7 +556,6 @@ CREATE TABLE riviamigo.refresh_tokens (
     revoked_at timestamp with time zone
 );
 
-
 --
 -- Name: rivian_charge_curve_points; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -600,7 +567,6 @@ CREATE TABLE riviamigo.rivian_charge_curve_points (
     power_kw double precision,
     captured_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: rivian_parallax_events; Type: TABLE; Schema: riviamigo; Owner: -
@@ -616,7 +582,6 @@ CREATE TABLE riviamigo.rivian_parallax_events (
     rvm text NOT NULL,
     payload_b64 text NOT NULL
 );
-
 
 --
 -- Name: rivian_stewardship_counters; Type: TABLE; Schema: riviamigo; Owner: -
@@ -645,7 +610,6 @@ CREATE TABLE riviamigo.rivian_stewardship_counters (
     parallax_events_persisted bigint DEFAULT 0 NOT NULL
 );
 
-
 --
 -- Name: rivian_ws_raw_events; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -660,7 +624,6 @@ CREATE TABLE riviamigo.rivian_ws_raw_events (
     payload_text text
 );
 
-
 --
 -- Name: security_events; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -673,7 +636,6 @@ CREATE TABLE riviamigo.security_events (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: security_events_id_seq; Type: SEQUENCE; Schema: riviamigo; Owner: -
 --
@@ -685,13 +647,11 @@ CREATE SEQUENCE riviamigo.security_events_id_seq
     NO MAXVALUE
     CACHE 1;
 
-
 --
 -- Name: security_events_id_seq; Type: SEQUENCE OWNED BY; Schema: riviamigo; Owner: -
 --
 
 ALTER SEQUENCE riviamigo.security_events_id_seq OWNED BY riviamigo.security_events.id;
-
 
 --
 -- Name: service_events; Type: TABLE; Schema: riviamigo; Owner: -
@@ -708,7 +668,6 @@ CREATE TABLE riviamigo.service_events (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: software_versions; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -721,9 +680,9 @@ CREATE TABLE riviamigo.software_versions (
     observed_until timestamp with time zone
 );
 
-
 --
 -- Name: software_versions_id_seq; Type: SEQUENCE; Schema: riviamigo; Owner: -
+
 --
 
 CREATE SEQUENCE riviamigo.software_versions_id_seq
@@ -733,13 +692,11 @@ CREATE SEQUENCE riviamigo.software_versions_id_seq
     NO MAXVALUE
     CACHE 1;
 
-
 --
 -- Name: software_versions_id_seq; Type: SEQUENCE OWNED BY; Schema: riviamigo; Owner: -
 --
 
 ALTER SEQUENCE riviamigo.software_versions_id_seq OWNED BY riviamigo.software_versions.id;
-
 
 --
 -- Name: system_config; Type: TABLE; Schema: riviamigo; Owner: -
@@ -750,7 +707,6 @@ CREATE TABLE riviamigo.system_config (
     value text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: trip_user_annotations; Type: TABLE; Schema: riviamigo; Owner: -
@@ -768,7 +724,6 @@ CREATE TABLE riviamigo.trip_user_annotations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: trip_weather_samples; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -784,7 +739,6 @@ CREATE TABLE riviamigo.trip_weather_samples (
     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT trip_weather_samples_source_check CHECK ((source = 'open_meteo'::text))
 );
-
 
 --
 -- Name: trips; Type: TABLE; Schema: riviamigo; Owner: -
@@ -824,9 +778,7 @@ CREATE TABLE riviamigo.trips (
     power_min_kw double precision,
     elevation_loss_m double precision,
     inside_temp_avg_c double precision,
-+Exit code: 0
-Wall time: 0.9 seconds
-Output:
+
     range_start_mi double precision,
     range_end_mi double precision,
     energy_strategy text,
@@ -835,7 +787,6 @@ Output:
     outside_temp_source text,
     CONSTRAINT trips_outside_temp_source_check CHECK (((outside_temp_source IS NULL) OR (outside_temp_source = ANY (ARRAY['vehicle'::text, 'open_meteo'::text, 'mixed'::text]))))
 );
-
 
 --
 -- Name: user_preferences; Type: TABLE; Schema: riviamigo; Owner: -
@@ -866,7 +817,6 @@ CREATE TABLE riviamigo.user_preferences (
     CONSTRAINT user_preferences_unit_mode_check CHECK ((unit_mode = ANY (ARRAY['imperial'::text, 'metric'::text, 'custom'::text])))
 );
 
-
 --
 -- Name: users; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -882,7 +832,6 @@ CREATE TABLE riviamigo.users (
     is_disabled boolean DEFAULT false NOT NULL,
     CONSTRAINT users_role_check CHECK ((role = ANY (ARRAY['super_user'::text, 'admin'::text, 'user'::text])))
 );
-
 
 --
 -- Name: vehicle_artwork_cache_state; Type: TABLE; Schema: riviamigo; Owner: -
@@ -902,7 +851,6 @@ CREATE TABLE riviamigo.vehicle_artwork_cache_state (
     CONSTRAINT vehicle_artwork_cache_state_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'repairing'::text, 'ready'::text, 'failed'::text])))
 );
 
-
 --
 -- Name: vehicle_credentials; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -913,7 +861,6 @@ CREATE TABLE riviamigo.vehicle_credentials (
     token_created_at timestamp with time zone NOT NULL,
     last_refreshed_at timestamp with time zone
 );
-
 
 --
 -- Name: vehicle_images; Type: TABLE; Schema: riviamigo; Owner: -
@@ -927,12 +874,12 @@ CREATE TABLE riviamigo.vehicle_images (
     size text,
     resolution text,
     url text NOT NULL,
+
     overlays jsonb DEFAULT '[]'::jsonb NOT NULL,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: vehicle_invites; Type: TABLE; Schema: riviamigo; Owner: -
@@ -953,7 +900,6 @@ CREATE TABLE riviamigo.vehicle_invites (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT vehicle_invites_role_check CHECK ((role = ANY (ARRAY['owner'::text, 'manager'::text, 'viewer'::text])))
 );
-
 
 --
 -- Name: vehicle_latest_status; Type: TABLE; Schema: riviamigo; Owner: -
@@ -1027,6 +973,7 @@ CREATE TABLE riviamigo.vehicle_latest_status (
     tonneau_locked boolean,
     tonneau_closed boolean,
     side_bin_left_locked boolean,
+
     side_bin_right_locked boolean,
     window_fl_closed boolean,
     window_fr_closed boolean,
@@ -1056,7 +1003,6 @@ CREATE TABLE riviamigo.vehicle_latest_status (
     odometer_miles_ts timestamp with time zone
 );
 
-
 --
 -- Name: vehicle_memberships; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -1071,7 +1017,6 @@ CREATE TABLE riviamigo.vehicle_memberships (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT vehicle_memberships_role_check CHECK ((role = ANY (ARRAY['owner'::text, 'manager'::text, 'viewer'::text])))
 );
-
 
 --
 -- Name: vehicle_runtime_state; Type: TABLE; Schema: riviamigo; Owner: -
@@ -1099,7 +1044,6 @@ CREATE TABLE riviamigo.vehicle_runtime_state (
     last_charge_history_success_at timestamp with time zone
 );
 
-
 --
 -- Name: vehicle_state_periods; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -1118,7 +1062,6 @@ END) STORED,
     CONSTRAINT vehicle_state_periods_state_check CHECK ((state = ANY (ARRAY['drive'::text, 'charging'::text, 'ready'::text, 'sleep'::text, 'offline'::text, 'updating'::text, 'unknown'::text])))
 );
 
-
 --
 -- Name: vehicle_state_periods_id_seq; Type: SEQUENCE; Schema: riviamigo; Owner: -
 --
@@ -1127,16 +1070,15 @@ CREATE SEQUENCE riviamigo.vehicle_state_periods_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
+
     NO MAXVALUE
     CACHE 1;
-
 
 --
 -- Name: vehicle_state_periods_id_seq; Type: SEQUENCE OWNED BY; Schema: riviamigo; Owner: -
 --
 
 ALTER SEQUENCE riviamigo.vehicle_state_periods_id_seq OWNED BY riviamigo.vehicle_state_periods.id;
-
 
 --
 -- Name: vehicle_user_settings; Type: TABLE; Schema: riviamigo; Owner: -
@@ -1152,7 +1094,6 @@ CREATE TABLE riviamigo.vehicle_user_settings (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
-
 
 --
 -- Name: vehicles; Type: TABLE; Schema: riviamigo; Owner: -
@@ -1190,7 +1131,6 @@ CREATE TABLE riviamigo.vehicles (
     target_tire_pressure_psi double precision DEFAULT 48
 );
 
-
 --
 -- Name: wallboxes; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -1211,7 +1151,6 @@ CREATE TABLE riviamigo.wallboxes (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-
 --
 -- Name: weather_enrichment_jobs; Type: TABLE; Schema: riviamigo; Owner: -
 --
@@ -1227,10 +1166,6 @@ CREATE TABLE riviamigo.weather_enrichment_jobs (
     completed_at timestamp with time zone,
     CONSTRAINT weather_enrichment_jobs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'unavailable'::text, 'failed'::text])))
 );
-+Exit code: 0
-Wall time: 1.1 seconds
-Output:
-
 
 --
 -- Name: efficiency_trend_7d; Type: VIEW; Schema: timeseries; Owner: -
@@ -1244,7 +1179,6 @@ CREATE VIEW timeseries.efficiency_trend_7d AS
    FROM riviamigo.trips
   WHERE (efficiency_wh_per_mile IS NOT NULL)
   GROUP BY vehicle_id, ((started_at)::date), efficiency_wh_per_mile;
-
 
 --
 -- Name: efficiency_vs_temp; Type: VIEW; Schema: timeseries; Owner: -
@@ -1260,19 +1194,6 @@ CREATE VIEW timeseries.efficiency_vs_temp AS
    FROM riviamigo.trips t
   WHERE ((outside_temp_c IS NOT NULL) AND (efficiency_wh_per_mile IS NOT NULL))
   GROUP BY vehicle_id, (width_bucket(outside_temp_c, ('-20'::integer)::double precision, (45)::double precision, 13)), ((round((('-20'::integer + ((width_bucket(outside_temp_c, ('-20'::integer)::double precision, (45)::double precision, 13) - 1) * 5)))::numeric, 0))::integer), ((round((('-20'::integer + (width_bucket(outside_temp_c, ('-20'::integer)::double precision, (45)::double precision, 13) * 5)))::numeric, 0))::integer);
-
-
---
--- Name: odometer_daily; Type: VIEW; Schema: timeseries; Owner: -
---
-
-CREATE VIEW timeseries.odometer_daily AS
- SELECT vehicle_id,
-    day,
-    odometer_end,
-    miles_driven
-   FROM _timescaledb_internal._materialized_hypertable_2;
-
 
 --
 -- Name: phantom_drain_periods; Type: VIEW; Schema: timeseries; Owner: -
@@ -1330,6 +1251,7 @@ CREATE VIEW timeseries.phantom_drain_periods AS
            FROM ((periods p
              LEFT JOIN LATERAL ( SELECT t.battery_level AS soc
                    FROM timeseries.telemetry t
+
                   WHERE ((t.vehicle_id = p.vehicle_id) AND (t.ts <= p.period_start) AND (t.battery_level IS NOT NULL))
                   ORDER BY t.ts DESC
                  LIMIT 1) start_sample ON (true))
@@ -1353,11 +1275,9 @@ CREATE VIEW timeseries.phantom_drain_periods AS
    FROM enriched
   WHERE (((period_end - period_start) >= '00:15:00'::interval) AND (soc_start IS NOT NULL) AND (soc_end IS NOT NULL) AND (soc_start >= soc_end));
 
-
 --
 -- Name: phantom_drain_daily; Type: VIEW; Schema: timeseries; Owner: -
 --
-
 CREATE VIEW timeseries.phantom_drain_daily AS
  SELECT vehicle_id,
     date(period_start) AS day,
@@ -1367,7 +1287,6 @@ CREATE VIEW timeseries.phantom_drain_daily AS
     count(*) AS idle_period_count
    FROM timeseries.phantom_drain_periods
   GROUP BY vehicle_id, (date(period_start));
-
 
 --
 -- Name: telemetry_1day; Type: VIEW; Schema: timeseries; Owner: -
@@ -1386,7 +1305,6 @@ CREATE VIEW timeseries.telemetry_1day AS
     avg(outside_temp_c) AS avg_outside_temp_c
    FROM timeseries.telemetry
   GROUP BY (public.time_bucket('1 day'::interval, ts)), vehicle_id;
-
 
 --
 -- Name: telemetry_1hr; Type: VIEW; Schema: timeseries; Owner: -
@@ -1409,62 +1327,11 @@ CREATE VIEW timeseries.telemetry_1hr AS
    FROM timeseries.telemetry
   GROUP BY (public.time_bucket('01:00:00'::interval, ts)), vehicle_id;
 
-
---
--- Name: telemetry_1min; Type: VIEW; Schema: timeseries; Owner: -
---
-
-CREATE VIEW timeseries.telemetry_1min AS
- SELECT _materialized_hypertable_3.bucket,
-    _materialized_hypertable_3.vehicle_id,
-    _materialized_hypertable_3.avg_soc,
-    _materialized_hypertable_3.avg_range_mi,
-    _materialized_hypertable_3.avg_speed_mph,
-    _materialized_hypertable_3.max_speed_mph,
-    _materialized_hypertable_3.avg_cabin_temp_c,
-    _materialized_hypertable_3.power_state,
-    _materialized_hypertable_3.charger_state,
-    _materialized_hypertable_3.drive_mode,
-    _materialized_hypertable_3.odometer_miles,
-    _materialized_hypertable_3.battery_capacity_wh,
-    _materialized_hypertable_3.sample_count,
-    _materialized_hypertable_3.avg_power_kw,
-    _materialized_hypertable_3.regen_kw_sum,
-    _materialized_hypertable_3.avg_outside_temp_c
-   FROM _timescaledb_internal._materialized_hypertable_3
-  WHERE (_materialized_hypertable_3.bucket < COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(3)), '-infinity'::timestamp with time zone))
-UNION ALL
- SELECT public.time_bucket('00:01:00'::interval, telemetry.ts) AS bucket,
-    telemetry.vehicle_id,
-    avg(telemetry.battery_level) AS avg_soc,
-    avg(telemetry.distance_to_empty_mi) AS avg_range_mi,
-    avg(telemetry.speed_mph) AS avg_speed_mph,
-    max(telemetry.speed_mph) AS max_speed_mph,
-    avg(telemetry.cabin_temp_c) AS avg_cabin_temp_c,
-    public.last(telemetry.power_state, telemetry.ts) AS power_state,
-    public.last(telemetry.charger_state, telemetry.ts) AS charger_state,
-    public.last(telemetry.drive_mode, telemetry.ts) AS drive_mode,
-    public.last(telemetry.odometer_miles, telemetry.ts) AS odometer_miles,
-    max(telemetry.battery_capacity_wh) AS battery_capacity_wh,
-    count(*) AS sample_count,
-    avg(telemetry.power_kw) AS avg_power_kw,
-    sum(
-        CASE
-            WHEN (telemetry.regen_power_kw < (0)::double precision) THEN telemetry.regen_power_kw
-            ELSE (0)::double precision
-        END) AS regen_kw_sum,
-    avg(telemetry.outside_temp_c) AS avg_outside_temp_c
-   FROM timeseries.telemetry
-  WHERE (telemetry.ts >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(3)), '-infinity'::timestamp with time zone))
-  GROUP BY (public.time_bucket('00:01:00'::interval, telemetry.ts)), telemetry.vehicle_id;
-
-
 --
 -- Name: security_events id; Type: DEFAULT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.security_events ALTER COLUMN id SET DEFAULT nextval('riviamigo.security_events_id_seq'::regclass);
-
 
 --
 -- Name: software_versions id; Type: DEFAULT; Schema: riviamigo; Owner: -
@@ -1472,13 +1339,11 @@ ALTER TABLE ONLY riviamigo.security_events ALTER COLUMN id SET DEFAULT nextval('
 
 ALTER TABLE ONLY riviamigo.software_versions ALTER COLUMN id SET DEFAULT nextval('riviamigo.software_versions_id_seq'::regclass);
 
-
 --
 -- Name: vehicle_state_periods id; Type: DEFAULT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_state_periods ALTER COLUMN id SET DEFAULT nextval('riviamigo.vehicle_state_periods_id_seq'::regclass);
-
 
 --
 -- Name: account_invitations account_invitations_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1487,14 +1352,12 @@ ALTER TABLE ONLY riviamigo.vehicle_state_periods ALTER COLUMN id SET DEFAULT nex
 ALTER TABLE ONLY riviamigo.account_invitations
     ADD CONSTRAINT account_invitations_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: account_invitations account_invitations_token_hash_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.account_invitations
     ADD CONSTRAINT account_invitations_token_hash_key UNIQUE (token_hash);
-
 
 --
 -- Name: addresses addresses_osm_id_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1503,14 +1366,12 @@ ALTER TABLE ONLY riviamigo.account_invitations
 ALTER TABLE ONLY riviamigo.addresses
     ADD CONSTRAINT addresses_osm_id_key UNIQUE (osm_id);
 
-
 --
 -- Name: addresses addresses_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.addresses
     ADD CONSTRAINT addresses_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: api_keys api_keys_key_hash_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1519,7 +1380,6 @@ ALTER TABLE ONLY riviamigo.addresses
 ALTER TABLE ONLY riviamigo.api_keys
     ADD CONSTRAINT api_keys_key_hash_key UNIQUE (key_hash);
 
-
 --
 -- Name: api_keys api_keys_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
@@ -1527,14 +1387,13 @@ ALTER TABLE ONLY riviamigo.api_keys
 ALTER TABLE ONLY riviamigo.api_keys
     ADD CONSTRAINT api_keys_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: backup_artifacts backup_artifacts_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
+
 --
 
 ALTER TABLE ONLY riviamigo.backup_artifacts
     ADD CONSTRAINT backup_artifacts_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: backup_artifacts backup_artifacts_run_id_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1543,14 +1402,12 @@ ALTER TABLE ONLY riviamigo.backup_artifacts
 ALTER TABLE ONLY riviamigo.backup_artifacts
     ADD CONSTRAINT backup_artifacts_run_id_key UNIQUE (run_id);
 
-
 --
 -- Name: backup_restore_requests backup_restore_requests_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.backup_restore_requests
     ADD CONSTRAINT backup_restore_requests_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: backup_runs backup_runs_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1559,14 +1416,12 @@ ALTER TABLE ONLY riviamigo.backup_restore_requests
 ALTER TABLE ONLY riviamigo.backup_runs
     ADD CONSTRAINT backup_runs_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: backup_settings backup_settings_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.backup_settings
     ADD CONSTRAINT backup_settings_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: battery_capacity_snapshots battery_capacity_snapshots_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1575,14 +1430,12 @@ ALTER TABLE ONLY riviamigo.backup_settings
 ALTER TABLE ONLY riviamigo.battery_capacity_snapshots
     ADD CONSTRAINT battery_capacity_snapshots_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: charge_session_external_aliases charge_session_external_aliases_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_session_external_aliases
     ADD CONSTRAINT charge_session_external_aliases_pkey PRIMARY KEY (charge_session_id, external_id);
-
 
 --
 -- Name: charge_session_user_annotations charge_session_user_annotations_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1591,14 +1444,12 @@ ALTER TABLE ONLY riviamigo.charge_session_external_aliases
 ALTER TABLE ONLY riviamigo.charge_session_user_annotations
     ADD CONSTRAINT charge_session_user_annotations_pkey PRIMARY KEY (charge_session_id, user_id);
 
-
 --
 -- Name: charge_sessions charge_sessions_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_sessions
     ADD CONSTRAINT charge_sessions_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: charging_schedules charging_schedules_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1607,14 +1458,12 @@ ALTER TABLE ONLY riviamigo.charge_sessions
 ALTER TABLE ONLY riviamigo.charging_schedules
     ADD CONSTRAINT charging_schedules_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: charging_schedules charging_schedules_vehicle_id_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charging_schedules
     ADD CONSTRAINT charging_schedules_vehicle_id_key UNIQUE (vehicle_id);
-
 
 --
 -- Name: cost_profiles cost_profiles_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1623,17 +1472,12 @@ ALTER TABLE ONLY riviamigo.charging_schedules
 ALTER TABLE ONLY riviamigo.cost_profiles
     ADD CONSTRAINT cost_profiles_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: dashboards dashboards_owner_id_slug_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.dashboards
     ADD CONSTRAINT dashboards_owner_id_slug_key UNIQUE NULLS NOT DISTINCT (owner_id, slug);
-+Exit code: 0
-Wall time: 1 seconds
-Output:
-
 
 --
 -- Name: dashboards dashboards_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1642,14 +1486,12 @@ Output:
 ALTER TABLE ONLY riviamigo.dashboards
     ADD CONSTRAINT dashboards_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: departure_schedules departure_schedules_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.departure_schedules
     ADD CONSTRAINT departure_schedules_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: departure_schedules departure_schedules_vehicle_id_rivian_schedule_id_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1658,14 +1500,12 @@ ALTER TABLE ONLY riviamigo.departure_schedules
 ALTER TABLE ONLY riviamigo.departure_schedules
     ADD CONSTRAINT departure_schedules_vehicle_id_rivian_schedule_id_key UNIQUE (vehicle_id, rivian_schedule_id);
 
-
 --
 -- Name: external_connection_activity external_connection_activity_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.external_connection_activity
     ADD CONSTRAINT external_connection_activity_pkey PRIMARY KEY (connection_id);
-
 
 --
 -- Name: external_connection_settings external_connection_settings_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1674,7 +1514,6 @@ ALTER TABLE ONLY riviamigo.external_connection_activity
 ALTER TABLE ONLY riviamigo.external_connection_settings
     ADD CONSTRAINT external_connection_settings_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: geofences geofences_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
@@ -1682,22 +1521,18 @@ ALTER TABLE ONLY riviamigo.external_connection_settings
 ALTER TABLE ONLY riviamigo.geofences
     ADD CONSTRAINT geofences_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: refresh_tokens refresh_tokens_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.refresh_tokens
     ADD CONSTRAINT refresh_tokens_pkey PRIMARY KEY (token_hash);
-
-
 --
 -- Name: rivian_charge_curve_points rivian_charge_curve_points_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
     ADD CONSTRAINT rivian_charge_curve_points_pkey PRIMARY KEY (vehicle_id, ts);
-
 
 --
 -- Name: rivian_parallax_events rivian_parallax_events_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1706,14 +1541,12 @@ ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
 ALTER TABLE ONLY riviamigo.rivian_parallax_events
     ADD CONSTRAINT rivian_parallax_events_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: rivian_stewardship_counters rivian_stewardship_counters_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.rivian_stewardship_counters
     ADD CONSTRAINT rivian_stewardship_counters_pkey PRIMARY KEY (vehicle_id, day);
-
 
 --
 -- Name: rivian_ws_raw_events rivian_ws_raw_events_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1722,7 +1555,6 @@ ALTER TABLE ONLY riviamigo.rivian_stewardship_counters
 ALTER TABLE ONLY riviamigo.rivian_ws_raw_events
     ADD CONSTRAINT rivian_ws_raw_events_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: security_events security_events_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
@@ -1730,14 +1562,13 @@ ALTER TABLE ONLY riviamigo.rivian_ws_raw_events
 ALTER TABLE ONLY riviamigo.security_events
     ADD CONSTRAINT security_events_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: service_events service_events_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
+
 --
 
 ALTER TABLE ONLY riviamigo.service_events
     ADD CONSTRAINT service_events_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: software_versions software_versions_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1746,14 +1577,12 @@ ALTER TABLE ONLY riviamigo.service_events
 ALTER TABLE ONLY riviamigo.software_versions
     ADD CONSTRAINT software_versions_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: system_config system_config_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.system_config
     ADD CONSTRAINT system_config_pkey PRIMARY KEY (key);
-
 
 --
 -- Name: trip_user_annotations trip_user_annotations_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1762,14 +1591,12 @@ ALTER TABLE ONLY riviamigo.system_config
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_pkey PRIMARY KEY (trip_id, user_id);
 
-
 --
 -- Name: trip_weather_samples trip_weather_samples_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.trip_weather_samples
     ADD CONSTRAINT trip_weather_samples_pkey PRIMARY KEY (trip_id, sampled_at);
-
 
 --
 -- Name: trips trips_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1778,14 +1605,12 @@ ALTER TABLE ONLY riviamigo.trip_weather_samples
 ALTER TABLE ONLY riviamigo.trips
     ADD CONSTRAINT trips_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: user_preferences user_preferences_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.user_preferences
     ADD CONSTRAINT user_preferences_pkey PRIMARY KEY (user_id);
-
 
 --
 -- Name: users users_email_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1794,14 +1619,12 @@ ALTER TABLE ONLY riviamigo.user_preferences
 ALTER TABLE ONLY riviamigo.users
     ADD CONSTRAINT users_email_key UNIQUE (email);
 
-
 --
 -- Name: users users_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: vehicle_artwork_cache_state vehicle_artwork_cache_state_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1810,14 +1633,12 @@ ALTER TABLE ONLY riviamigo.users
 ALTER TABLE ONLY riviamigo.vehicle_artwork_cache_state
     ADD CONSTRAINT vehicle_artwork_cache_state_pkey PRIMARY KEY (vehicle_id);
 
-
 --
 -- Name: vehicle_credentials vehicle_credentials_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_credentials
     ADD CONSTRAINT vehicle_credentials_pkey PRIMARY KEY (vehicle_id);
-
 
 --
 -- Name: vehicle_images vehicle_images_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1826,14 +1647,12 @@ ALTER TABLE ONLY riviamigo.vehicle_credentials
 ALTER TABLE ONLY riviamigo.vehicle_images
     ADD CONSTRAINT vehicle_images_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: vehicle_invites vehicle_invites_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_invites
     ADD CONSTRAINT vehicle_invites_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: vehicle_invites vehicle_invites_token_hash_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1842,14 +1661,12 @@ ALTER TABLE ONLY riviamigo.vehicle_invites
 ALTER TABLE ONLY riviamigo.vehicle_invites
     ADD CONSTRAINT vehicle_invites_token_hash_key UNIQUE (token_hash);
 
-
 --
 -- Name: vehicle_latest_status vehicle_latest_status_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_latest_status
     ADD CONSTRAINT vehicle_latest_status_pkey PRIMARY KEY (vehicle_id);
-
 
 --
 -- Name: vehicle_memberships vehicle_memberships_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1858,14 +1675,12 @@ ALTER TABLE ONLY riviamigo.vehicle_latest_status
 ALTER TABLE ONLY riviamigo.vehicle_memberships
     ADD CONSTRAINT vehicle_memberships_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: vehicle_memberships vehicle_memberships_unique; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_memberships
     ADD CONSTRAINT vehicle_memberships_unique UNIQUE (vehicle_id, user_id);
-
 
 --
 -- Name: vehicle_runtime_state vehicle_runtime_state_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1874,14 +1689,12 @@ ALTER TABLE ONLY riviamigo.vehicle_memberships
 ALTER TABLE ONLY riviamigo.vehicle_runtime_state
     ADD CONSTRAINT vehicle_runtime_state_pkey PRIMARY KEY (vehicle_id);
 
-
 --
 -- Name: vehicle_state_periods vehicle_state_periods_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_state_periods
     ADD CONSTRAINT vehicle_state_periods_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: vehicle_user_settings vehicle_user_settings_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1890,14 +1703,12 @@ ALTER TABLE ONLY riviamigo.vehicle_state_periods
 ALTER TABLE ONLY riviamigo.vehicle_user_settings
     ADD CONSTRAINT vehicle_user_settings_pkey PRIMARY KEY (vehicle_id, user_id);
 
-
 --
 -- Name: vehicles vehicles_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicles
     ADD CONSTRAINT vehicles_pkey PRIMARY KEY (id);
-
 
 --
 -- Name: wallboxes wallboxes_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
@@ -1906,7 +1717,6 @@ ALTER TABLE ONLY riviamigo.vehicles
 ALTER TABLE ONLY riviamigo.wallboxes
     ADD CONSTRAINT wallboxes_pkey PRIMARY KEY (id);
 
-
 --
 -- Name: wallboxes wallboxes_user_id_rivian_wallbox_id_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
@@ -1914,14 +1724,11 @@ ALTER TABLE ONLY riviamigo.wallboxes
 ALTER TABLE ONLY riviamigo.wallboxes
     ADD CONSTRAINT wallboxes_user_id_rivian_wallbox_id_key UNIQUE (user_id, rivian_wallbox_id);
 
-
 --
 -- Name: weather_enrichment_jobs weather_enrichment_jobs_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
-
 ALTER TABLE ONLY riviamigo.weather_enrichment_jobs
     ADD CONSTRAINT weather_enrichment_jobs_pkey PRIMARY KEY (trip_id);
-
 
 --
 -- Name: telemetry telemetry_unique_sample; Type: CONSTRAINT; Schema: timeseries; Owner: -
@@ -1930,13 +1737,12 @@ ALTER TABLE ONLY riviamigo.weather_enrichment_jobs
 ALTER TABLE ONLY timeseries.telemetry
     ADD CONSTRAINT telemetry_unique_sample UNIQUE (vehicle_id, ts);
 
-
 --
 -- Name: account_invitations_active_email_idx; Type: INDEX; Schema: riviamigo; Owner: -
+
 --
 
 CREATE UNIQUE INDEX account_invitations_active_email_idx ON riviamigo.account_invitations USING btree (lower(invitee_email)) WHERE ((accepted_at IS NULL) AND (revoked_at IS NULL));
-
 
 --
 -- Name: account_invitations_created_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -1944,13 +1750,11 @@ CREATE UNIQUE INDEX account_invitations_active_email_idx ON riviamigo.account_in
 
 CREATE INDEX account_invitations_created_idx ON riviamigo.account_invitations USING btree (created_at DESC);
 
-
 --
 -- Name: account_invitations_vehicle_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX account_invitations_vehicle_idx ON riviamigo.account_invitations USING btree (vehicle_id) WHERE (vehicle_id IS NOT NULL);
-
 
 --
 -- Name: addresses_ll_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -1958,13 +1762,11 @@ CREATE INDEX account_invitations_vehicle_idx ON riviamigo.account_invitations US
 
 CREATE INDEX addresses_ll_idx ON riviamigo.addresses USING gist (riviamigo.ll_to_earth(latitude, longitude));
 
-
 --
 -- Name: api_keys_user_active_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX api_keys_user_active_idx ON riviamigo.api_keys USING btree (user_id, created_at DESC) WHERE (revoked_at IS NULL);
-
 
 --
 -- Name: api_keys_vehicle_active_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -1972,13 +1774,11 @@ CREATE INDEX api_keys_user_active_idx ON riviamigo.api_keys USING btree (user_id
 
 CREATE INDEX api_keys_vehicle_active_idx ON riviamigo.api_keys USING btree (vehicle_id, created_at DESC) WHERE (revoked_at IS NULL);
 
-
 --
 -- Name: backup_artifacts_created_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX backup_artifacts_created_idx ON riviamigo.backup_artifacts USING btree (created_at DESC);
-
 
 --
 -- Name: backup_artifacts_run_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -1986,13 +1786,11 @@ CREATE INDEX backup_artifacts_created_idx ON riviamigo.backup_artifacts USING bt
 
 CREATE INDEX backup_artifacts_run_idx ON riviamigo.backup_artifacts USING btree (run_id);
 
-
 --
 -- Name: backup_restore_requests_artifact_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX backup_restore_requests_artifact_idx ON riviamigo.backup_restore_requests USING btree (artifact_id, status);
-
 
 --
 -- Name: backup_restore_requests_requested_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2000,13 +1798,11 @@ CREATE INDEX backup_restore_requests_artifact_idx ON riviamigo.backup_restore_re
 
 CREATE INDEX backup_restore_requests_requested_idx ON riviamigo.backup_restore_requests USING btree (requested_at DESC);
 
-
 --
 -- Name: backup_runs_created_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX backup_runs_created_idx ON riviamigo.backup_runs USING btree (created_at DESC);
-
 
 --
 -- Name: backup_runs_status_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2014,13 +1810,11 @@ CREATE INDEX backup_runs_created_idx ON riviamigo.backup_runs USING btree (creat
 
 CREATE INDEX backup_runs_status_idx ON riviamigo.backup_runs USING btree (status, created_at DESC);
 
-
 --
 -- Name: charge_session_external_aliases_external_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX charge_session_external_aliases_external_idx ON riviamigo.charge_session_external_aliases USING btree (external_id);
-
 
 --
 -- Name: charge_session_external_aliases_grouping_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2028,15 +1822,10 @@ CREATE INDEX charge_session_external_aliases_external_idx ON riviamigo.charge_se
 
 CREATE INDEX charge_session_external_aliases_grouping_idx ON riviamigo.charge_session_external_aliases USING btree (transaction_id_grouping_key) WHERE (transaction_id_grouping_key IS NOT NULL);
 
-
 --
 -- Name: charge_sessions_source_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
-+Exit code: 0
-Wall time: 0.9 seconds
-Output:
 CREATE INDEX charge_sessions_source_idx ON riviamigo.charge_sessions USING btree (vehicle_id, source) WHERE (source IS NOT NULL);
-
 
 --
 -- Name: cost_profiles_tou_gin_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2044,13 +1833,11 @@ CREATE INDEX charge_sessions_source_idx ON riviamigo.charge_sessions USING btree
 
 CREATE INDEX cost_profiles_tou_gin_idx ON riviamigo.cost_profiles USING gin (tou_periods);
 
-
 --
 -- Name: cost_profiles_user_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX cost_profiles_user_idx ON riviamigo.cost_profiles USING btree (user_id);
-
 
 --
 -- Name: cs_geofence_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2058,13 +1845,11 @@ CREATE INDEX cost_profiles_user_idx ON riviamigo.cost_profiles USING btree (user
 
 CREATE INDEX cs_geofence_idx ON riviamigo.charge_sessions USING btree (geofence_id) WHERE (geofence_id IS NOT NULL);
 
-
 --
 -- Name: dashboards_default_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX dashboards_default_idx ON riviamigo.dashboards USING btree (is_default) WHERE (is_default = true);
-
 
 --
 -- Name: dashboards_owner_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2072,13 +1857,11 @@ CREATE INDEX dashboards_default_idx ON riviamigo.dashboards USING btree (is_defa
 
 CREATE INDEX dashboards_owner_idx ON riviamigo.dashboards USING btree (owner_id);
 
-
 --
 -- Name: dashboards_slug_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX dashboards_slug_idx ON riviamigo.dashboards USING btree (slug);
-
 
 --
 -- Name: departure_schedules_vehicle_id_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2086,13 +1869,11 @@ CREATE INDEX dashboards_slug_idx ON riviamigo.dashboards USING btree (slug);
 
 CREATE INDEX departure_schedules_vehicle_id_idx ON riviamigo.departure_schedules USING btree (vehicle_id);
 
-
 --
 -- Name: geofences_ll_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX geofences_ll_idx ON riviamigo.geofences USING gist (riviamigo.ll_to_earth(latitude, longitude));
-
 
 --
 -- Name: geofences_user_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2100,13 +1881,11 @@ CREATE INDEX geofences_ll_idx ON riviamigo.geofences USING gist (riviamigo.ll_to
 
 CREATE INDEX geofences_user_idx ON riviamigo.geofences USING btree (user_id);
 
-
 --
 -- Name: idx_api_keys_active; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX idx_api_keys_active ON riviamigo.api_keys USING btree (key_hash) WHERE (revoked_at IS NULL);
-
 
 --
 -- Name: idx_capacity_snapshots_vehicle_ts; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2114,13 +1893,11 @@ CREATE INDEX idx_api_keys_active ON riviamigo.api_keys USING btree (key_hash) WH
 
 CREATE INDEX idx_capacity_snapshots_vehicle_ts ON riviamigo.battery_capacity_snapshots USING btree (vehicle_id, snapshotted_at DESC);
 
-
 --
 -- Name: idx_charge_sessions_vehicle_started; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX idx_charge_sessions_vehicle_started ON riviamigo.charge_sessions USING btree (vehicle_id, started_at DESC);
-
 
 --
 -- Name: idx_charge_sessions_vehicle_started_no_rivian; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2128,13 +1905,11 @@ CREATE INDEX idx_charge_sessions_vehicle_started ON riviamigo.charge_sessions US
 
 CREATE UNIQUE INDEX idx_charge_sessions_vehicle_started_no_rivian ON riviamigo.charge_sessions USING btree (vehicle_id, started_at) WHERE (rivian_session_id IS NULL);
 
-
 --
 -- Name: idx_trips_vehicle_started; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX idx_trips_vehicle_started ON riviamigo.trips USING btree (vehicle_id, started_at DESC);
-
 
 --
 -- Name: idx_vehicle_images_vehicle_placement; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2142,13 +1917,11 @@ CREATE INDEX idx_trips_vehicle_started ON riviamigo.trips USING btree (vehicle_i
 
 CREATE INDEX idx_vehicle_images_vehicle_placement ON riviamigo.vehicle_images USING btree (vehicle_id, placement, design, size);
 
-
 --
 -- Name: idx_vehicle_state_periods_open; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE UNIQUE INDEX idx_vehicle_state_periods_open ON riviamigo.vehicle_state_periods USING btree (vehicle_id) WHERE (ended_at IS NULL);
-
 
 --
 -- Name: refresh_tokens_user_id_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2156,13 +1929,11 @@ CREATE UNIQUE INDEX idx_vehicle_state_periods_open ON riviamigo.vehicle_state_pe
 
 CREATE INDEX refresh_tokens_user_id_idx ON riviamigo.refresh_tokens USING btree (user_id) WHERE (revoked_at IS NULL);
 
-
 --
 -- Name: rivian_charge_curve_points_session_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX rivian_charge_curve_points_session_idx ON riviamigo.rivian_charge_curve_points USING btree (charge_session_id, ts) WHERE (charge_session_id IS NOT NULL);
-
 
 --
 -- Name: rivian_charge_payloads_captured_at_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2170,13 +1941,11 @@ CREATE INDEX rivian_charge_curve_points_session_idx ON riviamigo.rivian_charge_c
 
 CREATE INDEX rivian_charge_payloads_captured_at_idx ON riviamigo.rivian_charge_payloads USING btree (captured_at DESC);
 
-
 --
 -- Name: rivian_charge_payloads_id_captured_uidx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE UNIQUE INDEX rivian_charge_payloads_id_captured_uidx ON riviamigo.rivian_charge_payloads USING btree (id, captured_at);
-
 
 --
 -- Name: rivian_charge_payloads_transaction_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2184,13 +1953,11 @@ CREATE UNIQUE INDEX rivian_charge_payloads_id_captured_uidx ON riviamigo.rivian_
 
 CREATE INDEX rivian_charge_payloads_transaction_idx ON riviamigo.rivian_charge_payloads USING btree (rivian_transaction_id) WHERE (rivian_transaction_id IS NOT NULL);
 
-
 --
 -- Name: rivian_charge_payloads_vehicle_captured_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX rivian_charge_payloads_vehicle_captured_idx ON riviamigo.rivian_charge_payloads USING btree (vehicle_id, captured_at DESC);
-
 
 --
 -- Name: rivian_parallax_events_rvm_received_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2198,13 +1965,11 @@ CREATE INDEX rivian_charge_payloads_vehicle_captured_idx ON riviamigo.rivian_cha
 
 CREATE INDEX rivian_parallax_events_rvm_received_idx ON riviamigo.rivian_parallax_events USING btree (rvm, received_at DESC);
 
-
 --
 -- Name: rivian_parallax_events_trip_received_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX rivian_parallax_events_trip_received_idx ON riviamigo.rivian_parallax_events USING btree (trip_id, received_at) WHERE (trip_id IS NOT NULL);
-
 
 --
 -- Name: rivian_parallax_events_vehicle_received_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2212,13 +1977,11 @@ CREATE INDEX rivian_parallax_events_trip_received_idx ON riviamigo.rivian_parall
 
 CREATE INDEX rivian_parallax_events_vehicle_received_idx ON riviamigo.rivian_parallax_events USING btree (vehicle_id, received_at DESC);
 
-
 --
 -- Name: rivian_stewardship_counters_day_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX rivian_stewardship_counters_day_idx ON riviamigo.rivian_stewardship_counters USING btree (day DESC);
-
 
 --
 -- Name: rivian_ws_raw_events_received_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2226,20 +1989,18 @@ CREATE INDEX rivian_stewardship_counters_day_idx ON riviamigo.rivian_stewardship
 
 CREATE INDEX rivian_ws_raw_events_received_idx ON riviamigo.rivian_ws_raw_events USING btree (received_at);
 
-
 --
 -- Name: rivian_ws_raw_events_vehicle_received_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX rivian_ws_raw_events_vehicle_received_idx ON riviamigo.rivian_ws_raw_events USING btree (vehicle_id, received_at DESC);
 
-
 --
+
 -- Name: security_events_event_type_created_at_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX security_events_event_type_created_at_idx ON riviamigo.security_events USING btree (event_type, created_at DESC);
-
 
 --
 -- Name: security_events_type_created_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2247,13 +2008,11 @@ CREATE INDEX security_events_event_type_created_at_idx ON riviamigo.security_eve
 
 CREATE INDEX security_events_type_created_idx ON riviamigo.security_events USING btree (event_type, created_at DESC);
 
-
 --
 -- Name: security_events_user_created_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX security_events_user_created_idx ON riviamigo.security_events USING btree (user_id, created_at DESC);
-
 
 --
 -- Name: security_events_user_id_created_at_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2261,20 +2020,16 @@ CREATE INDEX security_events_user_created_idx ON riviamigo.security_events USING
 
 CREATE INDEX security_events_user_id_created_at_idx ON riviamigo.security_events USING btree (user_id, created_at DESC);
 
-
 --
 -- Name: service_events_vehicle_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX service_events_vehicle_idx ON riviamigo.service_events USING btree (vehicle_id, performed_at DESC);
-
-
 --
 -- Name: sv_open_one_per_vehicle_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE UNIQUE INDEX sv_open_one_per_vehicle_idx ON riviamigo.software_versions USING btree (vehicle_id) WHERE (observed_until IS NULL);
-
 
 --
 -- Name: sv_vehicle_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2282,13 +2037,11 @@ CREATE UNIQUE INDEX sv_open_one_per_vehicle_idx ON riviamigo.software_versions U
 
 CREATE INDEX sv_vehicle_idx ON riviamigo.software_versions USING btree (vehicle_id, installed_at DESC);
 
-
 --
 -- Name: trip_weather_samples_trip_elapsed_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX trip_weather_samples_trip_elapsed_idx ON riviamigo.trip_weather_samples USING btree (trip_id, elapsed_seconds);
-
 
 --
 -- Name: trips_geofence_end_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2296,13 +2049,11 @@ CREATE INDEX trip_weather_samples_trip_elapsed_idx ON riviamigo.trip_weather_sam
 
 CREATE INDEX trips_geofence_end_idx ON riviamigo.trips USING btree (end_geofence_id) WHERE (end_geofence_id IS NOT NULL);
 
-
 --
 -- Name: trips_geofence_start_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX trips_geofence_start_idx ON riviamigo.trips USING btree (start_geofence_id) WHERE (start_geofence_id IS NOT NULL);
-
 
 --
 -- Name: trips_route_preview_missing_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2310,13 +2061,11 @@ CREATE INDEX trips_geofence_start_idx ON riviamigo.trips USING btree (start_geof
 
 CREATE INDEX trips_route_preview_missing_idx ON riviamigo.trips USING btree (vehicle_id, started_at) WHERE ((route_preview IS NULL) OR (route_preview_version IS DISTINCT FROM 1));
 
-
 --
 -- Name: uq_charge_sessions_rivian_session; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE UNIQUE INDEX uq_charge_sessions_rivian_session ON riviamigo.charge_sessions USING btree (rivian_session_id) WHERE (rivian_session_id IS NOT NULL);
-
 
 --
 -- Name: uq_vehicle_images_vehicle_url; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2324,13 +2073,11 @@ CREATE UNIQUE INDEX uq_charge_sessions_rivian_session ON riviamigo.charge_sessio
 
 CREATE UNIQUE INDEX uq_vehicle_images_vehicle_url ON riviamigo.vehicle_images USING btree (vehicle_id, url);
 
-
 --
 -- Name: uq_vehicles_user_rivian_vehicle_id; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE UNIQUE INDEX uq_vehicles_user_rivian_vehicle_id ON riviamigo.vehicles USING btree (user_id, rivian_vehicle_id);
-
 
 --
 -- Name: vehicle_artwork_cache_state_next_attempt_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2338,13 +2085,11 @@ CREATE UNIQUE INDEX uq_vehicles_user_rivian_vehicle_id ON riviamigo.vehicles USI
 
 CREATE INDEX vehicle_artwork_cache_state_next_attempt_idx ON riviamigo.vehicle_artwork_cache_state USING btree (status, next_attempt_at);
 
-
 --
 -- Name: vehicle_invites_active_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX vehicle_invites_active_idx ON riviamigo.vehicle_invites USING btree (invitee_email) WHERE ((accepted_at IS NULL) AND (revoked_at IS NULL));
-
 
 --
 -- Name: vehicle_invites_email_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2352,13 +2097,11 @@ CREATE INDEX vehicle_invites_active_idx ON riviamigo.vehicle_invites USING btree
 
 CREATE INDEX vehicle_invites_email_idx ON riviamigo.vehicle_invites USING btree (invitee_email, created_at DESC);
 
-
 --
 -- Name: vehicle_invites_vehicle_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX vehicle_invites_vehicle_idx ON riviamigo.vehicle_invites USING btree (vehicle_id, created_at DESC);
-
 
 --
 -- Name: vehicle_memberships_default_user_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2366,13 +2109,11 @@ CREATE INDEX vehicle_invites_vehicle_idx ON riviamigo.vehicle_invites USING btre
 
 CREATE UNIQUE INDEX vehicle_memberships_default_user_idx ON riviamigo.vehicle_memberships USING btree (user_id) WHERE (is_default = true);
 
-
 --
 -- Name: vehicle_memberships_user_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX vehicle_memberships_user_idx ON riviamigo.vehicle_memberships USING btree (user_id, created_at DESC);
-
 
 --
 -- Name: vehicle_memberships_vehicle_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2380,13 +2121,10 @@ CREATE INDEX vehicle_memberships_user_idx ON riviamigo.vehicle_memberships USING
 
 CREATE INDEX vehicle_memberships_vehicle_idx ON riviamigo.vehicle_memberships USING btree (vehicle_id, created_at DESC);
 
-
 --
 -- Name: vehicles_user_id_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
-
 CREATE INDEX vehicles_user_id_idx ON riviamigo.vehicles USING btree (user_id);
-
 
 --
 -- Name: vsp_open_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2394,13 +2132,11 @@ CREATE INDEX vehicles_user_id_idx ON riviamigo.vehicles USING btree (user_id);
 
 CREATE INDEX vsp_open_idx ON riviamigo.vehicle_state_periods USING btree (vehicle_id) WHERE (ended_at IS NULL);
 
-
 --
 -- Name: vsp_range_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX vsp_range_idx ON riviamigo.vehicle_state_periods USING btree (vehicle_id, started_at DESC);
-
 
 --
 -- Name: wallboxes_user_id_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2408,13 +2144,11 @@ CREATE INDEX vsp_range_idx ON riviamigo.vehicle_state_periods USING btree (vehic
 
 CREATE INDEX wallboxes_user_id_idx ON riviamigo.wallboxes USING btree (user_id);
 
-
 --
 -- Name: weather_enrichment_jobs_ready_idx; Type: INDEX; Schema: riviamigo; Owner: -
 --
 
 CREATE INDEX weather_enrichment_jobs_ready_idx ON riviamigo.weather_enrichment_jobs USING btree (next_attempt_at, created_at) WHERE (status = ANY (ARRAY['pending'::text, 'failed'::text]));
-
 
 --
 -- Name: idx_telemetry_vehicle_charger_state_ts; Type: INDEX; Schema: timeseries; Owner: -
@@ -2422,23 +2156,17 @@ CREATE INDEX weather_enrichment_jobs_ready_idx ON riviamigo.weather_enrichment_j
 
 CREATE INDEX idx_telemetry_vehicle_charger_state_ts ON timeseries.telemetry USING btree (vehicle_id, charger_state, ts DESC) WHERE (charger_state IS NOT NULL);
 
-
 --
 -- Name: idx_telemetry_vehicle_odometer; Type: INDEX; Schema: timeseries; Owner: -
 --
 
 CREATE INDEX idx_telemetry_vehicle_odometer ON timeseries.telemetry USING btree (vehicle_id, ts DESC) WHERE (odometer_miles IS NOT NULL);
 
-
 --
 -- Name: idx_telemetry_vehicle_power_state_ts; Type: INDEX; Schema: timeseries; Owner: -
 --
 
 CREATE INDEX idx_telemetry_vehicle_power_state_ts ON timeseries.telemetry USING btree (vehicle_id, power_state, ts DESC) WHERE (power_state IS NOT NULL);
-+Exit code: 0
-Wall time: 0.9 seconds
-Output:
-
 
 --
 -- Name: idx_telemetry_vehicle_ts; Type: INDEX; Schema: timeseries; Owner: -
@@ -2446,13 +2174,11 @@ Output:
 
 CREATE INDEX idx_telemetry_vehicle_ts ON timeseries.telemetry USING btree (vehicle_id, ts DESC);
 
-
 --
 -- Name: telemetry_charge_idx; Type: INDEX; Schema: timeseries; Owner: -
 --
 
 CREATE INDEX telemetry_charge_idx ON timeseries.telemetry USING btree (charge_session_id, ts) WHERE (charge_session_id IS NOT NULL);
-
 
 --
 -- Name: telemetry_ll_idx; Type: INDEX; Schema: timeseries; Owner: -
@@ -2460,20 +2186,17 @@ CREATE INDEX telemetry_charge_idx ON timeseries.telemetry USING btree (charge_se
 
 CREATE INDEX telemetry_ll_idx ON timeseries.telemetry USING gist (riviamigo.ll_to_earth(latitude, longitude)) WHERE ((latitude IS NOT NULL) AND (longitude IS NOT NULL));
 
-
 --
 -- Name: telemetry_trip_idx; Type: INDEX; Schema: timeseries; Owner: -
 --
 
 CREATE INDEX telemetry_trip_idx ON timeseries.telemetry USING btree (trip_id, ts) WHERE (trip_id IS NOT NULL);
 
-
 --
 -- Name: telemetry_ts_idx; Type: INDEX; Schema: timeseries; Owner: -
 --
 
 CREATE INDEX telemetry_ts_idx ON timeseries.telemetry USING btree (ts DESC);
-
 
 --
 -- Name: account_invitations account_invitations_created_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2482,14 +2205,12 @@ CREATE INDEX telemetry_ts_idx ON timeseries.telemetry USING btree (ts DESC);
 ALTER TABLE ONLY riviamigo.account_invitations
     ADD CONSTRAINT account_invitations_created_user_id_fkey FOREIGN KEY (created_user_id) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
 
-
 --
 -- Name: account_invitations account_invitations_invited_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.account_invitations
     ADD CONSTRAINT account_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: account_invitations account_invitations_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2498,14 +2219,11 @@ ALTER TABLE ONLY riviamigo.account_invitations
 ALTER TABLE ONLY riviamigo.account_invitations
     ADD CONSTRAINT account_invitations_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE SET NULL;
 
-
 --
 -- Name: api_keys api_keys_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
-
 ALTER TABLE ONLY riviamigo.api_keys
     ADD CONSTRAINT api_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: api_keys api_keys_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2514,14 +2232,12 @@ ALTER TABLE ONLY riviamigo.api_keys
 ALTER TABLE ONLY riviamigo.api_keys
     ADD CONSTRAINT api_keys_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: backup_artifacts backup_artifacts_run_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.backup_artifacts
     ADD CONSTRAINT backup_artifacts_run_id_fkey FOREIGN KEY (run_id) REFERENCES riviamigo.backup_runs(id) ON DELETE CASCADE;
-
 
 --
 -- Name: backup_restore_requests backup_restore_requests_artifact_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2530,14 +2246,12 @@ ALTER TABLE ONLY riviamigo.backup_artifacts
 ALTER TABLE ONLY riviamigo.backup_restore_requests
     ADD CONSTRAINT backup_restore_requests_artifact_id_fkey FOREIGN KEY (artifact_id) REFERENCES riviamigo.backup_artifacts(id) ON DELETE CASCADE;
 
-
 --
 -- Name: backup_restore_requests backup_restore_requests_requested_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.backup_restore_requests
     ADD CONSTRAINT backup_restore_requests_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
 
 --
 -- Name: backup_runs backup_runs_requested_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2546,14 +2260,12 @@ ALTER TABLE ONLY riviamigo.backup_restore_requests
 ALTER TABLE ONLY riviamigo.backup_runs
     ADD CONSTRAINT backup_runs_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
 
-
 --
 -- Name: backup_settings backup_settings_updated_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.backup_settings
     ADD CONSTRAINT backup_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
 
 --
 -- Name: battery_capacity_snapshots battery_capacity_snapshots_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2562,14 +2274,12 @@ ALTER TABLE ONLY riviamigo.backup_settings
 ALTER TABLE ONLY riviamigo.battery_capacity_snapshots
     ADD CONSTRAINT battery_capacity_snapshots_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: charge_session_external_aliases charge_session_external_aliases_charge_session_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_session_external_aliases
     ADD CONSTRAINT charge_session_external_aliases_charge_session_id_fkey FOREIGN KEY (charge_session_id) REFERENCES riviamigo.charge_sessions(id) ON DELETE CASCADE;
-
 
 --
 -- Name: charge_session_user_annotations charge_session_user_annotations_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2578,14 +2288,12 @@ ALTER TABLE ONLY riviamigo.charge_session_external_aliases
 ALTER TABLE ONLY riviamigo.charge_session_user_annotations
     ADD CONSTRAINT charge_session_user_annotations_address_id_fkey FOREIGN KEY (address_id) REFERENCES riviamigo.addresses(id) ON DELETE SET NULL;
 
-
 --
 -- Name: charge_session_user_annotations charge_session_user_annotations_charge_session_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_session_user_annotations
     ADD CONSTRAINT charge_session_user_annotations_charge_session_id_fkey FOREIGN KEY (charge_session_id) REFERENCES riviamigo.charge_sessions(id) ON DELETE CASCADE;
-
 
 --
 -- Name: charge_session_user_annotations charge_session_user_annotations_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2594,14 +2302,12 @@ ALTER TABLE ONLY riviamigo.charge_session_user_annotations
 ALTER TABLE ONLY riviamigo.charge_session_user_annotations
     ADD CONSTRAINT charge_session_user_annotations_cost_profile_id_fkey FOREIGN KEY (cost_profile_id) REFERENCES riviamigo.cost_profiles(id) ON DELETE SET NULL;
 
-
 --
 -- Name: charge_session_user_annotations charge_session_user_annotations_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_session_user_annotations
     ADD CONSTRAINT charge_session_user_annotations_geofence_id_fkey FOREIGN KEY (geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
-
 
 --
 -- Name: charge_session_user_annotations charge_session_user_annotations_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2610,22 +2316,18 @@ ALTER TABLE ONLY riviamigo.charge_session_user_annotations
 ALTER TABLE ONLY riviamigo.charge_session_user_annotations
     ADD CONSTRAINT charge_session_user_annotations_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
 
-
 --
 -- Name: charge_sessions charge_sessions_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_sessions
     ADD CONSTRAINT charge_sessions_address_id_fkey FOREIGN KEY (address_id) REFERENCES riviamigo.addresses(id);
-
-
 --
 -- Name: charge_sessions charge_sessions_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_sessions
     ADD CONSTRAINT charge_sessions_cost_profile_id_fkey FOREIGN KEY (cost_profile_id) REFERENCES riviamigo.cost_profiles(id);
-
 
 --
 -- Name: charge_sessions charge_sessions_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2634,14 +2336,12 @@ ALTER TABLE ONLY riviamigo.charge_sessions
 ALTER TABLE ONLY riviamigo.charge_sessions
     ADD CONSTRAINT charge_sessions_geofence_id_fkey FOREIGN KEY (geofence_id) REFERENCES riviamigo.geofences(id);
 
-
 --
 -- Name: charge_sessions charge_sessions_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.charge_sessions
     ADD CONSTRAINT charge_sessions_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: charging_schedules charging_schedules_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2650,14 +2350,12 @@ ALTER TABLE ONLY riviamigo.charge_sessions
 ALTER TABLE ONLY riviamigo.charging_schedules
     ADD CONSTRAINT charging_schedules_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: cost_profiles cost_profiles_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.cost_profiles
     ADD CONSTRAINT cost_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: dashboards dashboards_owner_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2666,14 +2364,12 @@ ALTER TABLE ONLY riviamigo.cost_profiles
 ALTER TABLE ONLY riviamigo.dashboards
     ADD CONSTRAINT dashboards_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
 
-
 --
 -- Name: departure_schedules departure_schedules_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.departure_schedules
     ADD CONSTRAINT departure_schedules_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: external_connection_activity external_connection_activity_connection_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2682,14 +2378,12 @@ ALTER TABLE ONLY riviamigo.departure_schedules
 ALTER TABLE ONLY riviamigo.external_connection_activity
     ADD CONSTRAINT external_connection_activity_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES riviamigo.external_connection_settings(id) ON DELETE CASCADE;
 
-
 --
 -- Name: external_connection_settings external_connection_settings_updated_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.external_connection_settings
     ADD CONSTRAINT external_connection_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
 
 --
 -- Name: geofences geofences_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2698,14 +2392,12 @@ ALTER TABLE ONLY riviamigo.external_connection_settings
 ALTER TABLE ONLY riviamigo.geofences
     ADD CONSTRAINT geofences_address_id_fkey FOREIGN KEY (address_id) REFERENCES riviamigo.addresses(id);
 
-
 --
 -- Name: geofences geofences_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.geofences
     ADD CONSTRAINT geofences_cost_profile_id_fkey FOREIGN KEY (cost_profile_id) REFERENCES riviamigo.cost_profiles(id);
-
 
 --
 -- Name: geofences geofences_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2714,14 +2406,12 @@ ALTER TABLE ONLY riviamigo.geofences
 ALTER TABLE ONLY riviamigo.geofences
     ADD CONSTRAINT geofences_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
 
-
 --
 -- Name: refresh_tokens refresh_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.refresh_tokens
     ADD CONSTRAINT refresh_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: rivian_charge_curve_points rivian_charge_curve_points_charge_session_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2730,14 +2420,12 @@ ALTER TABLE ONLY riviamigo.refresh_tokens
 ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
     ADD CONSTRAINT rivian_charge_curve_points_charge_session_id_fkey FOREIGN KEY (charge_session_id) REFERENCES riviamigo.charge_sessions(id) ON DELETE CASCADE;
 
-
 --
 -- Name: rivian_charge_curve_points rivian_charge_curve_points_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
     ADD CONSTRAINT rivian_charge_curve_points_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: rivian_charge_payloads rivian_charge_payloads_charge_session_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2746,14 +2434,12 @@ ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
 ALTER TABLE ONLY riviamigo.rivian_charge_payloads
     ADD CONSTRAINT rivian_charge_payloads_charge_session_id_fkey FOREIGN KEY (charge_session_id) REFERENCES riviamigo.charge_sessions(id) ON DELETE SET NULL;
 
-
 --
 -- Name: rivian_charge_payloads rivian_charge_payloads_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.rivian_charge_payloads
     ADD CONSTRAINT rivian_charge_payloads_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: rivian_parallax_events rivian_parallax_events_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2762,14 +2448,12 @@ ALTER TABLE ONLY riviamigo.rivian_charge_payloads
 ALTER TABLE ONLY riviamigo.rivian_parallax_events
     ADD CONSTRAINT rivian_parallax_events_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: rivian_stewardship_counters rivian_stewardship_counters_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.rivian_stewardship_counters
     ADD CONSTRAINT rivian_stewardship_counters_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: rivian_ws_raw_events rivian_ws_raw_events_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2778,14 +2462,12 @@ ALTER TABLE ONLY riviamigo.rivian_stewardship_counters
 ALTER TABLE ONLY riviamigo.rivian_ws_raw_events
     ADD CONSTRAINT rivian_ws_raw_events_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: security_events security_events_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.security_events
     ADD CONSTRAINT security_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
 
 --
 -- Name: service_events service_events_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2794,14 +2476,12 @@ ALTER TABLE ONLY riviamigo.security_events
 ALTER TABLE ONLY riviamigo.service_events
     ADD CONSTRAINT service_events_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: software_versions software_versions_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.software_versions
     ADD CONSTRAINT software_versions_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: trip_user_annotations trip_user_annotations_end_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2810,14 +2490,12 @@ ALTER TABLE ONLY riviamigo.software_versions
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_end_address_id_fkey FOREIGN KEY (end_address_id) REFERENCES riviamigo.addresses(id) ON DELETE SET NULL;
 
-
 --
 -- Name: trip_user_annotations trip_user_annotations_end_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_end_geofence_id_fkey FOREIGN KEY (end_geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
-
 
 --
 -- Name: trip_user_annotations trip_user_annotations_start_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2826,7 +2504,6 @@ ALTER TABLE ONLY riviamigo.trip_user_annotations
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_start_address_id_fkey FOREIGN KEY (start_address_id) REFERENCES riviamigo.addresses(id) ON DELETE SET NULL;
 
-
 --
 -- Name: trip_user_annotations trip_user_annotations_start_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
@@ -2834,25 +2511,18 @@ ALTER TABLE ONLY riviamigo.trip_user_annotations
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_start_geofence_id_fkey FOREIGN KEY (start_geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
 
-
 --
 -- Name: trip_user_annotations trip_user_annotations_trip_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
-+Exit code: 0
-Wall time: 0.9 seconds
-Output:
 
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES riviamigo.trips(id) ON DELETE CASCADE;
 
-
 --
 -- Name: trip_user_annotations trip_user_annotations_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
-
 ALTER TABLE ONLY riviamigo.trip_user_annotations
     ADD CONSTRAINT trip_user_annotations_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: trip_weather_samples trip_weather_samples_trip_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2861,14 +2531,12 @@ ALTER TABLE ONLY riviamigo.trip_user_annotations
 ALTER TABLE ONLY riviamigo.trip_weather_samples
     ADD CONSTRAINT trip_weather_samples_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES riviamigo.trips(id) ON DELETE CASCADE;
 
-
 --
 -- Name: trips trips_end_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.trips
     ADD CONSTRAINT trips_end_address_id_fkey FOREIGN KEY (end_address_id) REFERENCES riviamigo.addresses(id);
-
 
 --
 -- Name: trips trips_end_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2877,14 +2545,12 @@ ALTER TABLE ONLY riviamigo.trips
 ALTER TABLE ONLY riviamigo.trips
     ADD CONSTRAINT trips_end_geofence_id_fkey FOREIGN KEY (end_geofence_id) REFERENCES riviamigo.geofences(id);
 
-
 --
 -- Name: trips trips_start_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.trips
     ADD CONSTRAINT trips_start_address_id_fkey FOREIGN KEY (start_address_id) REFERENCES riviamigo.addresses(id);
-
 
 --
 -- Name: trips trips_start_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2893,14 +2559,12 @@ ALTER TABLE ONLY riviamigo.trips
 ALTER TABLE ONLY riviamigo.trips
     ADD CONSTRAINT trips_start_geofence_id_fkey FOREIGN KEY (start_geofence_id) REFERENCES riviamigo.geofences(id);
 
-
 --
 -- Name: trips trips_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.trips
     ADD CONSTRAINT trips_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: user_preferences user_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2909,14 +2573,12 @@ ALTER TABLE ONLY riviamigo.trips
 ALTER TABLE ONLY riviamigo.user_preferences
     ADD CONSTRAINT user_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
 
-
 --
 -- Name: users users_default_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.users
     ADD CONSTRAINT users_default_vehicle_id_fkey FOREIGN KEY (default_vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE SET NULL;
-
 
 --
 -- Name: vehicle_artwork_cache_state vehicle_artwork_cache_state_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2925,14 +2587,12 @@ ALTER TABLE ONLY riviamigo.users
 ALTER TABLE ONLY riviamigo.vehicle_artwork_cache_state
     ADD CONSTRAINT vehicle_artwork_cache_state_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicle_credentials vehicle_credentials_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_credentials
     ADD CONSTRAINT vehicle_credentials_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: vehicle_images vehicle_images_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2941,14 +2601,12 @@ ALTER TABLE ONLY riviamigo.vehicle_credentials
 ALTER TABLE ONLY riviamigo.vehicle_images
     ADD CONSTRAINT vehicle_images_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicle_invites vehicle_invites_accepted_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_invites
     ADD CONSTRAINT vehicle_invites_accepted_user_id_fkey FOREIGN KEY (accepted_user_id) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
 
 --
 -- Name: vehicle_invites vehicle_invites_invited_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2957,14 +2615,12 @@ ALTER TABLE ONLY riviamigo.vehicle_invites
 ALTER TABLE ONLY riviamigo.vehicle_invites
     ADD CONSTRAINT vehicle_invites_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicle_invites vehicle_invites_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_invites
     ADD CONSTRAINT vehicle_invites_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: vehicle_latest_status vehicle_latest_status_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2973,14 +2629,12 @@ ALTER TABLE ONLY riviamigo.vehicle_invites
 ALTER TABLE ONLY riviamigo.vehicle_latest_status
     ADD CONSTRAINT vehicle_latest_status_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicle_memberships vehicle_memberships_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_memberships
     ADD CONSTRAINT vehicle_memberships_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: vehicle_memberships vehicle_memberships_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -2989,14 +2643,12 @@ ALTER TABLE ONLY riviamigo.vehicle_memberships
 ALTER TABLE ONLY riviamigo.vehicle_memberships
     ADD CONSTRAINT vehicle_memberships_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicle_runtime_state vehicle_runtime_state_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_runtime_state
     ADD CONSTRAINT vehicle_runtime_state_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
 
 --
 -- Name: vehicle_state_periods vehicle_state_periods_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -3005,14 +2657,12 @@ ALTER TABLE ONLY riviamigo.vehicle_runtime_state
 ALTER TABLE ONLY riviamigo.vehicle_state_periods
     ADD CONSTRAINT vehicle_state_periods_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicle_user_settings vehicle_user_settings_default_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_user_settings
     ADD CONSTRAINT vehicle_user_settings_default_cost_profile_id_fkey FOREIGN KEY (default_cost_profile_id) REFERENCES riviamigo.cost_profiles(id) ON DELETE SET NULL;
-
 
 --
 -- Name: vehicle_user_settings vehicle_user_settings_home_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -3021,14 +2671,12 @@ ALTER TABLE ONLY riviamigo.vehicle_user_settings
 ALTER TABLE ONLY riviamigo.vehicle_user_settings
     ADD CONSTRAINT vehicle_user_settings_home_geofence_id_fkey FOREIGN KEY (home_geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
 
-
 --
 -- Name: vehicle_user_settings vehicle_user_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicle_user_settings
     ADD CONSTRAINT vehicle_user_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: vehicle_user_settings vehicle_user_settings_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -3037,14 +2685,12 @@ ALTER TABLE ONLY riviamigo.vehicle_user_settings
 ALTER TABLE ONLY riviamigo.vehicle_user_settings
     ADD CONSTRAINT vehicle_user_settings_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
-
 --
 -- Name: vehicles vehicles_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicles
     ADD CONSTRAINT vehicles_cost_profile_id_fkey FOREIGN KEY (cost_profile_id) REFERENCES riviamigo.cost_profiles(id);
-
 
 --
 -- Name: vehicles vehicles_home_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -3053,14 +2699,12 @@ ALTER TABLE ONLY riviamigo.vehicles
 ALTER TABLE ONLY riviamigo.vehicles
     ADD CONSTRAINT vehicles_home_geofence_id_fkey FOREIGN KEY (home_geofence_id) REFERENCES riviamigo.geofences(id);
 
-
 --
 -- Name: vehicles vehicles_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.vehicles
     ADD CONSTRAINT vehicles_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
 
 --
 -- Name: wallboxes wallboxes_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
@@ -3069,16 +2713,74 @@ ALTER TABLE ONLY riviamigo.vehicles
 ALTER TABLE ONLY riviamigo.wallboxes
     ADD CONSTRAINT wallboxes_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
 
-
 --
 -- Name: weather_enrichment_jobs weather_enrichment_jobs_trip_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
 ALTER TABLE ONLY riviamigo.weather_enrichment_jobs
     ADD CONSTRAINT weather_enrichment_jobs_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES riviamigo.trips(id) ON DELETE CASCADE;
-
-
 --
 -- PostgreSQL database dump complete
 --
+-- Restore TimescaleDB-specific objects that pg_dump represents as views.
+SET search_path = riviamigo, timeseries, public;
+
+SELECT create_hypertable(
+  'timeseries.telemetry',
+  'ts',
+  chunk_time_interval => INTERVAL '1 week',
+  if_not_exists => TRUE
+);
+
+CREATE MATERIALIZED VIEW timeseries.odometer_daily
+  WITH (timescaledb.continuous) AS
+SELECT
+  vehicle_id,
+  time_bucket('1 day', ts) AS day,
+  max(odometer_miles) AS odometer_end,
+  max(odometer_miles) - min(odometer_miles) AS miles_driven
+FROM timeseries.telemetry
+WHERE odometer_miles IS NOT NULL
+GROUP BY vehicle_id, time_bucket('1 day', ts)
+WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy(
+  'timeseries.odometer_daily',
+  start_offset => INTERVAL '7 days',
+  end_offset => INTERVAL '1 hour',
+  schedule_interval => INTERVAL '1 hour',
+  if_not_exists => true
+);
+
+CREATE MATERIALIZED VIEW timeseries.telemetry_1min
+  WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
+SELECT
+  time_bucket('1 minute', ts) AS bucket,
+  vehicle_id,
+  avg(battery_level) AS avg_soc,
+  avg(distance_to_empty_mi) AS avg_range_mi,
+  avg(speed_mph) AS avg_speed_mph,
+  max(speed_mph) AS max_speed_mph,
+  avg(cabin_temp_c) AS avg_cabin_temp_c,
+  last(power_state, ts) AS power_state,
+  last(charger_state, ts) AS charger_state,
+  last(drive_mode, ts) AS drive_mode,
+  last(odometer_miles, ts) AS odometer_miles,
+  max(battery_capacity_wh) AS battery_capacity_wh,
+  count(*) AS sample_count,
+  avg(power_kw) AS avg_power_kw,
+  sum(CASE WHEN regen_power_kw < 0 THEN regen_power_kw ELSE 0 END) AS regen_kw_sum,
+  avg(outside_temp_c) AS avg_outside_temp_c
+FROM timeseries.telemetry
+GROUP BY time_bucket('1 minute', ts), vehicle_id
+WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy(
+  'timeseries.telemetry_1min',
+  start_offset => INTERVAL '7 days',
+  end_offset => INTERVAL '5 minutes',
+  schedule_interval => INTERVAL '5 minutes',
+  if_not_exists => true
+);
+
 -- END RIVIAMIGO RELEASE BASELINE
