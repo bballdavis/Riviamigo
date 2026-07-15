@@ -1494,8 +1494,8 @@ async fn load_curve(
 
     let (rows, sample_source) = if linked_sample_count >= 2 {
         (
-        sqlx::query_as::<_, CurveRow>(
-            r#"WITH cap AS (
+            sqlx::query_as::<_, CurveRow>(
+                r#"WITH cap AS (
                    SELECT COALESCE(
                        (SELECT battery_capacity_wh
                         FROM riviamigo.vehicles
@@ -1536,20 +1536,20 @@ async fn load_curve(
                CROSS JOIN cap
                WHERE avg_soc IS NOT NULL
                ORDER BY bucket"#,
-        )
-        .bind(vehicle_id)
-        .bind(session_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?,
-        "telemetry",
+            )
+            .bind(vehicle_id)
+            .bind(session_id)
+            .bind(started_at)
+            .bind(ended_at)
+            .bind(is_dc)
+            .fetch_all(pool)
+            .await?,
+            "telemetry",
         )
     } else {
         (
-        sqlx::query_as::<_, CurveRow>(
-            r#"WITH cap AS (
+            sqlx::query_as::<_, CurveRow>(
+                r#"WITH cap AS (
                    SELECT COALESCE(
                        (SELECT battery_capacity_wh
                         FROM riviamigo.vehicles
@@ -1589,14 +1589,14 @@ async fn load_curve(
                CROSS JOIN cap
                WHERE avg_soc IS NOT NULL
                ORDER BY bucket"#,
-        )
-        .bind(vehicle_id)
-        .bind(started_at)
-        .bind(ended_at)
-        .bind(is_dc)
-        .fetch_all(pool)
-        .await?,
-        "telemetry_1min",
+            )
+            .bind(vehicle_id)
+            .bind(started_at)
+            .bind(ended_at)
+            .bind(is_dc)
+            .fetch_all(pool)
+            .await?,
+            "telemetry_1min",
         )
     };
 

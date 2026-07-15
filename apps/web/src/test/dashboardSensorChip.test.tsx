@@ -102,7 +102,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
 });
 
 import { DashboardRenderer } from '@riviamigo/dashboards';
-import { MiniSparkline } from '@riviamigo/ui/charts';
+import { MiniSparkline, resolveCanvasColor } from '@riviamigo/ui/charts';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const defaultCtx = {
@@ -204,6 +204,22 @@ describe('dashboard sensor chips', () => {
     expect(layer.querySelector('canvas')).not.toBeNull();
   });
 
+  it('bins bar sprites into 24-hour windows by default', () => {
+    render(
+      <DashboardRenderer config={config(true, false, { chartType: 'bar' })} ctx={defaultCtx} />
+    );
+
+    expect(screen.getByTestId('sensor-sprite-layer').querySelector('[data-sparkline-filter="24h"]')).not.toBeNull();
+  });
+
+  it('keeps raw bars available when individual events matter', () => {
+    render(
+      <DashboardRenderer config={config(true, false, { chartType: 'bar', timeFilter: 'raw' })} ctx={defaultCtx} />
+    );
+
+    expect(screen.getByTestId('sensor-sprite-layer').querySelector('[data-sparkline-filter="raw"]')).not.toBeNull();
+  });
+
   it('records the selected timestamp filter on the sprite renderer', () => {
     const { unmount } = render(
       <MiniSparkline
@@ -251,12 +267,40 @@ describe('dashboard sensor chips', () => {
     expect(sparkline?.querySelector('canvas')).not.toBeNull();
   });
 
+  it('compresses bar sprites into summed time bins when a display filter is selected', () => {
+    render(
+      <MiniSparkline
+        data={[
+          { ts: '2026-05-01T00:05:00Z', value: 1 },
+          { ts: '2026-05-01T00:50:00Z', value: 1 },
+          { ts: '2026-05-01T01:10:00Z', value: 1 },
+        ]}
+        type="bar"
+        timeFilter="1h"
+        height={36}
+      />
+    );
+
+    const sparkline = document.querySelector('[data-sparkline-state="series"]');
+    expect(sparkline).toHaveAttribute('data-sparkline-filter', '1h');
+    expect(sparkline).toHaveAttribute('data-sparkline-aggregation', 'sum');
+    expect(sparkline).toHaveAttribute('data-sparkline-point-count', '2');
+  });
+
   it('applies the configured curve color', () => {
     render(
       <DashboardRenderer config={config(true, false, { curveColor: 'sky' })} ctx={defaultCtx} />
     );
 
     expect(screen.getByTestId('sensor-sprite-layer').querySelector('canvas')).not.toBeNull();
+  });
+
+  it('resolves theme tokens for Canvas without replacing an explicit editor color', () => {
+    const canvas = document.createElement('canvas');
+    canvas.style.setProperty('--rm-accent', 'rgb(27, 125, 232)');
+
+    expect(resolveCanvasColor(canvas, 'var(--rm-accent)')).toBe('rgb(27, 125, 232)');
+    expect(resolveCanvasColor(canvas, '#38bdf8')).toBe('#38bdf8');
   });
 
   it('hides the sprite when disabled and applies the orange border option independently', () => {

@@ -115,6 +115,51 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.queryByLabelText('Time minimum')).toBeNull();
   });
 
+  it('maps saved smoothing values to the chart filter default and preserves a zero value as raw', () => {
+    const filtered = renderWidget({
+      ...makeInstance('soc-history'),
+      options: {
+        ...makeInstance('soc-history').options,
+        curveSmoothing: 0.2,
+      },
+    });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', '15m');
+
+    filtered.unmount();
+    renderWidget({
+      ...makeInstance('soc-history'),
+      options: {
+        ...makeInstance('soc-history').options,
+        chartSettings: { 'soc-history': { smoothing: 0 } },
+      },
+    });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', 'raw');
+  });
+
+  it('writes only the new time-filter setting after editing a legacy chart', () => {
+    const updateWidgetOptions = vi.fn();
+    renderWidget(
+      {
+        ...makeInstance('soc-history'),
+        options: {
+          ...makeInstance('soc-history').options,
+          chartSettings: { 'soc-history': { smoothing: 0.2 } },
+        },
+      },
+      { ...CTX, updateWidgetOptions },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
+
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-soc-history',
+      expect.objectContaining({
+        chartSettings: { 'soc-history': { timeFilter: '1h' } },
+      }),
+    );
+  });
+
   it('uses a bottom-sheet layout on mobile viewports', () => {
     setMatchMedia(true);
     renderChart('soc-history');

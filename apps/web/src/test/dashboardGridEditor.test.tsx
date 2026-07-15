@@ -96,6 +96,33 @@ describe('GridEditor overlays', () => {
 
   });
 
+  it('offers the display filter for bar sprites and persists a time bin', () => {
+    const onChange = vi.fn();
+    const widget = {
+      ...BASE_CONFIG.widgets[0]!,
+      options: {
+        chartType: 'bar',
+        timeFilter: 'raw',
+      },
+    };
+
+    render(
+      <WidgetEditForm
+        widget={widget}
+        onChange={onChange}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(screen.getByText(/non-raw windows sum bars within each time bin/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '4' } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ timeFilter: '24h' }),
+      })
+    );
+  });
+
   it('keeps edit-only overlays out of the view grid chrome', () => {
     render(<DashboardGrid widgets={BASE_CONFIG.widgets} ctx={BASE_CTX} />);
 

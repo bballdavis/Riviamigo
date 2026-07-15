@@ -175,7 +175,6 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
 }
 
 const AXIS_ORDER: DashboardChartAxisId[] = ['x', 'y', 'y2'];
-const MIN_ENABLED_SMOOTHING = 0.05;
 const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
   timeFilter: false,
   axes: {},
@@ -239,88 +238,23 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     setDefaultChartId(nextChartId);
   }
 
-  // The retired inline popover remains inert until its removal can be folded
-  // into the next editor-layout cleanup; the active panel below owns filtering.
-  const smoothingOn = false;
-  const smoothing = 0;
-  const smoothingTrackPercent = 0;
-  const setSmoothing = (_next: number | ((current: number) => number)) => {};
-
   const settingsButton = (
     <div className="relative">
-    <button
-      ref={settingsTriggerRef}
-      type="button"
-      aria-label="Chart settings"
-      aria-haspopup="dialog"
-      aria-expanded={settingsOpen}
-      onClick={() => setSettingsOpen((value) => !value)}
-      className={cn(
-        'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
-        'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent',
-        settingsOpen && 'border-accent text-accent',
-      )}
-    >
-      <SlidersHorizontal className="h-4 w-4" />
-    </button>
-      {false ? (
-        <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 w-52 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-bg-surface p-3 shadow-lg">
-          {/* Smooth curves toggle row */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-fg">Smooth curves</span>
-            {/* Toggle — fixed sizing so thumb fits exactly */}
-            <button
-              type="button"
-              role="switch"
-              aria-label="Toggle smooth curves"
-              aria-checked={smoothingOn}
-              onClick={() => setSmoothing((v) => v > 0 ? 0 : MIN_ENABLED_SMOOTHING)}
-              className={cn(
-                'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border px-0.5',
-                'transition-all duration-200 ease-in-out',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2',
-                smoothingOn
-                  ? 'border-accent bg-accent shadow-[0_0_0_1px_var(--rm-accent)]'
-                  : 'border-border-strong bg-bg-elevated',
-              )}
-            >
-              <span
-                aria-hidden="true"
-                className={cn(
-                  'pointer-events-none inline-block h-4 w-4 rounded-full border bg-white shadow-sm',
-                  'transition-transform duration-200 ease-in-out',
-                  smoothingOn
-                    ? 'translate-x-5 border-accent'
-                    : 'translate-x-0 border-border-strong',
-                )}
-              />
-            </button>
-          </div>
-          {/* Smoothing amount slider — only shown when on */}
-          {smoothingOn ? (
-            <div className="mt-3">
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-xs text-fg-tertiary">Amount</span>
-                <span className="text-xs text-fg-tertiary">
-                  {smoothing < 0.25 ? 'Light' : smoothing < 0.6 ? 'Medium' : 'Heavy'}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={MIN_ENABLED_SMOOTHING}
-                max={1}
-                step={0.05}
-                value={smoothing}
-                onChange={(e) => setSmoothing(Number(e.target.value))}
-                className="rm-accent-range w-full"
-                style={{
-                  background: `linear-gradient(to right, var(--rm-accent) 0%, var(--rm-accent) ${smoothingTrackPercent}%, var(--rm-border-strong) ${smoothingTrackPercent}%, var(--rm-border-strong) 100%)`,
-                }}
-              />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <button
+        ref={settingsTriggerRef}
+        type="button"
+        aria-label="Chart settings"
+        aria-haspopup="dialog"
+        aria-expanded={settingsOpen}
+        onClick={() => setSettingsOpen((value) => !value)}
+        className={cn(
+          'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
+          'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent',
+          settingsOpen && 'border-accent text-accent',
+        )}
+      >
+        <SlidersHorizontal className="h-4 w-4" />
+      </button>
     </div>
   );
 
@@ -1433,8 +1367,11 @@ function normalizeChartDisplaySettings(value: unknown): DashboardChartDisplaySet
   const normalizedAxes = normalizeChartAxisSettingsMap(settings.axes);
   const normalized: DashboardChartDisplaySettings = {};
 
-  if ('timeFilter' in settings) normalized.timeFilter = normalizeTimeFilter(settings.timeFilter, DEFAULT_CHART_TIME_FILTER);
-  if ('smoothing' in settings && typeof settings.smoothing === 'number') normalized.smoothing = settings.smoothing;
+  if ('timeFilter' in settings) {
+    normalized.timeFilter = normalizeTimeFilter(settings.timeFilter, DEFAULT_CHART_TIME_FILTER);
+  } else if ('smoothing' in settings && typeof settings.smoothing === 'number') {
+    normalized.smoothing = settings.smoothing;
+  }
   if (Object.keys(normalizedAxes).length > 0) {
     normalized.axes = normalizedAxes;
   }
@@ -1477,7 +1414,11 @@ function resolveChartDisplaySettings(
   const chartSettings = allSettings[chartId] ?? {};
   const axes = chartSettings.axes ?? {};
   return {
-    timeFilter: chartSettings.timeFilter ?? legacyTimeFilter,
+    timeFilter: chartSettings.timeFilter ?? (
+      chartSettings.smoothing == null
+        ? legacyTimeFilter
+        : legacySmoothingToTimeFilter(chartSettings.smoothing)
+    ),
     axes,
   };
 }
@@ -1681,12 +1622,6 @@ function ChartSettingsPanel({
                   className="rm-accent-range w-full"
                 />
               </div>
-              {/* Time filtering replaces spline interpolation without reducing point density. */}
-              {false ? (
-                <div>
-                  Legacy control placeholder.
-                </div>
-              ) : null}
             </section>
           ) : null}
           {axisEntries.length > 0 ? (
