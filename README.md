@@ -63,7 +63,7 @@ Riviamigo does not include product analytics, tracking pixels, or metrics sent t
 
 ## AI, review, and releases
 
-We use AI coding tools as assistants—not as owners of a release. Contributors review and test AI-assisted changes before release, and the project’s CI includes dependency and secret checks, plus security auditing with `cargo audit`, `pnpm audit`, Gitleaks, Semgrep, and Trivy. CI is useful evidence, not a substitute for human review; see the [contributor guide](./docs/contributing.md) and [security audit](./docs/security-audit.md) for the full process.
+I use AI coding tools as assistants—not as owners of a release. I review and test AI-assisted changes before release, and the project’s CI includes dependency and secret checks, plus security auditing with `cargo audit`, `pnpm audit`, Gitleaks, Semgrep, and Trivy. CI is useful evidence, not a substitute for human review; see the [contributor guide](./docs/contributing.md) and [security audit](./docs/security-audit.md) for the full process.
 
 ## License
 
