@@ -61,6 +61,7 @@ vi.mock('@riviamigo/dashboards', () => ({
     </div>
   ),
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
+  useDashboardById: () => ({ data: undefined, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
   useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),

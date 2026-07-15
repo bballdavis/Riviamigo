@@ -64,6 +64,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   }),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: mockConfig, isLoading: false }),
+  useDashboardById: () => ({ data: undefined, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),
   useCloneDashboard: () => ({ mutateAsync: vi.fn() }),

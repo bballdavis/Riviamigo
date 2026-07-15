@@ -23,7 +23,8 @@ const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
 static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
 const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools before creating a full recovery package";
-const BACKUP_DRIVER_UNSUPPORTED_MESSAGE: &str = "manifest-only JSON backups are not valid recovery packages; use BACKUP_DRIVER=pg_dump";
+const BACKUP_DRIVER_UNSUPPORTED_MESSAGE: &str =
+    "manifest-only JSON backups are not valid recovery packages; use BACKUP_DRIVER=pg_dump";
 const RECOVERY_PACKAGE_FORMAT: &str = "riviamigo-recovery-v1";
 
 #[derive(Debug, Clone, Copy)]
@@ -278,7 +279,7 @@ async fn run_backup_inner(
             fs::create_dir_all(parent).await?;
         }
 
-        execute_recovery_package(pool, config, &artifact_path, trigger, created_at).await?;
+        let package_manifest = execute_recovery_package(pool, config, &artifact_path, trigger, created_at).await?;
 
         let storage_path = artifact_path.to_string_lossy().into_owned();
         let file_name = artifact_path
@@ -293,6 +294,7 @@ async fn run_backup_inner(
         let manifest = json!({
             "artifact_kind": driver.label(),
             "format": RECOVERY_PACKAGE_FORMAT,
+            "package": package_manifest,
             "created_at": created_at,
             "database": database_name,
             "timescale_version": timescale_version,
@@ -472,7 +474,7 @@ async fn execute_recovery_package(
     artifact_path: &Path,
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
-) -> Result<(), AppError> {
+) -> Result<serde_json::Value, AppError> {
     let temp_root = std::env::temp_dir().join(format!("riviamigo-recovery-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_root).await?;
     let dump_path = temp_root.join("database.dump");
@@ -480,10 +482,12 @@ async fn execute_recovery_package(
 
     let result = async {
         execute_pg_dump(config, &dump_path).await?;
-        let manifest = build_recovery_manifest(pool, &dump_path, &cache_root, trigger, created_at).await?;
+        let manifest =
+            build_recovery_manifest(pool, &dump_path, &cache_root, trigger, created_at).await?;
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-        write_recovery_archive(artifact_path, &dump_path, &cache_root, &manifest_bytes).await
+        write_recovery_archive(artifact_path, &dump_path, &cache_root, &manifest_bytes).await?;
+        Ok::<serde_json::Value, AppError>(manifest)
     }
     .await;
 
@@ -651,12 +655,11 @@ async fn build_recovery_manifest(
 ) -> Result<serde_json::Value, AppError> {
     let current_database = current_database_name(pool).await?;
     let timescale_version = current_timescale_version(pool).await?;
-    let migration_version: Option<i64> = sqlx::query_scalar(
-        "SELECT max(version) FROM _sqlx_migrations WHERE success = TRUE",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(AppError::from)?;
+    let migration_version: Option<i64> =
+        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(pool)
+            .await
+            .map_err(AppError::from)?;
     let database_checksum = compute_sha256(dump_path).await?;
     let cache_files = collect_cache_files(cache_root).await?;
 
@@ -729,7 +732,10 @@ async fn collect_cache_files(cache_root: &Path) -> Result<Vec<serde_json::Value>
                 .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
             let relative = relative.to_string_lossy().replace('\\', "/");
             let sha256 = sha256_file(entry.path())?;
-            let size_bytes = entry.metadata()?.len();
+            let size_bytes = entry
+                .metadata()
+                .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
+                .len();
             files.push(json!({
                 "path": format!("vehicle-image-cache/{relative}"),
                 "sha256": sha256,
@@ -1006,9 +1012,14 @@ fn should_log_scheduler_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_dependency_error_if_unavailable, should_log_scheduler_failure, BackupDriver,
+        runtime_dependency_error_if_unavailable, should_log_scheduler_failure, write_recovery_archive,
+        BackupDriver,
     };
     use crate::errors::AppError;
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    use tar::Archive;
+    use uuid::Uuid;
 
     #[test]
     fn scheduler_failure_logging_is_deduplicated() {
@@ -1048,4 +1059,35 @@ mod tests {
         assert!(matches!(err, AppError::DependencyUnavailable(_)));
     }
 
+    #[tokio::test]
+    async fn recovery_archive_contains_manifest_database_and_artwork() {
+        let root = std::env::temp_dir().join(format!("riviamigo-backup-test-{}", Uuid::new_v4()));
+        let cache = root.join("cache");
+        let dump = root.join("database.dump");
+        let archive = root.join("backup.rma.tar.gz");
+        std::fs::create_dir_all(cache.join("vehicle-1")).expect("cache directory");
+        std::fs::write(cache.join("vehicle-1/artwork.webp"), b"artwork").expect("artwork");
+        std::fs::write(&dump, b"database").expect("dump");
+
+        write_recovery_archive(&archive, &dump, &cache, br#"{"format":"riviamigo-recovery-v1"}"#)
+            .await
+            .expect("archive");
+
+        let file = std::fs::File::open(&archive).expect("open archive");
+        let decoder = GzDecoder::new(file);
+        let mut tar = Archive::new(decoder);
+        let mut names = Vec::new();
+        for entry in tar.entries().expect("entries") {
+            let mut entry = entry.expect("entry");
+            names.push(entry.path().expect("path").to_string_lossy().replace('\\', "/"));
+            let mut contents = Vec::new();
+            entry.read_to_end(&mut contents).expect("read entry");
+            assert!(!contents.is_empty() || names.last().is_some_and(|name| name.ends_with('/')));
+        }
+
+        assert!(names.iter().any(|name| name == "manifest.json"));
+        assert!(names.iter().any(|name| name == "database.dump"));
+        assert!(names.iter().any(|name| name.ends_with("vehicle-1/artwork.webp")));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

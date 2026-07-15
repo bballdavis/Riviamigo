@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 const apiKey = import.meta.env.VITE_RIVIAMIGO_DEV_API_KEY as string | undefined;
 const baseUrl = (import.meta.env.VITE_RIVIAMIGO_API_BASE_URL as string | undefined) ?? 'http://localhost:3001';
+const runLiveContract = import.meta.env.VITE_RIVIAMIGO_RUN_LIVE_CONTRACT === 'true';
 
-const runIfConfigured = apiKey ? describe : describe.skip;
+const runIfConfigured = apiKey && runLiveContract ? describe : describe.skip;
 
 async function liveGet(path: string) {
   const response = await fetch(`${baseUrl}${path}`, {

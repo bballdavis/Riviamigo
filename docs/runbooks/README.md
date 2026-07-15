@@ -18,6 +18,8 @@ This directory is canonical for operational and process runbooks. Update it when
   Required authenticated-gateway posture, production secret requirements, and verification steps for shared instances.
 - [`release-images.md`](./release-images.md)
   Calendar Version releases, public GHCR images, development-image retention, and recovery steps.
+- [`backup-restore.md`](./backup-restore.md)
+  Recovery-package validation, clean-install restore, and incident recovery steps.
 - [`parallax-capture.md`](./parallax-capture.md)
   How to inspect, retain, disable, and remove the experimental Parallax protobuf capture.
 

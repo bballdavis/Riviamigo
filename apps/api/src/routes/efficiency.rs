@@ -3,7 +3,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -83,9 +83,9 @@ struct VsTempPoint {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct TrendPoint {
-    day: NaiveDate,
-    day_avg_wh_mi: Option<f64>,
-    rolling_7d_wh_mi: Option<f64>,
+    ts: DateTime<Utc>,
+    trip_efficiency_wh_mi: Option<f64>,
+    rolling_24h_wh_mi: Option<f64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -236,29 +236,21 @@ async fn get_trend(
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
     let rows = sqlx::query_as::<_, TrendPoint>(
-        "WITH daily AS (
-           SELECT
-             started_at::date AS day,
-             SUM(distance_miles)::float8 AS total_distance_miles,
-             SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi
-           FROM riviamigo.trips
-           WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-             AND efficiency_wh_per_mile IS NOT NULL
-             AND distance_miles > 0
-           GROUP BY started_at::date
-         )
-         SELECT
-           day,
-           weighted_efficiency_wh_mi / NULLIF(total_distance_miles, 0) AS day_avg_wh_mi,
-           SUM(weighted_efficiency_wh_mi) OVER (
-             ORDER BY day
-             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-           ) / NULLIF(SUM(total_distance_miles) OVER (
-             ORDER BY day
-             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-           ), 0) AS rolling_7d_wh_mi
-         FROM daily
-         ORDER BY 1",
+        "SELECT
+             started_at AS ts,
+             efficiency_wh_per_mile AS trip_efficiency_wh_mi,
+             SUM(distance_miles * efficiency_wh_per_mile) OVER (
+               ORDER BY started_at
+               RANGE BETWEEN INTERVAL '24 hours' PRECEDING AND CURRENT ROW
+             ) / NULLIF(SUM(distance_miles) OVER (
+               ORDER BY started_at
+               RANGE BETWEEN INTERVAL '24 hours' PRECEDING AND CURRENT ROW
+             ), 0) AS rolling_24h_wh_mi
+         FROM riviamigo.trips
+         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
+           AND efficiency_wh_per_mile IS NOT NULL
+           AND distance_miles > 0
+         ORDER BY started_at",
     )
     .bind(vid)
     .bind(from)
@@ -363,7 +355,7 @@ mod tests {
                 .join("riviamigo-route-test-vehicle-images")
                 .to_string_lossy()
                 .into_owned(),
-            backup_driver: "json".into(),
+            backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,

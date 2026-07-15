@@ -342,7 +342,7 @@ const mockChargeCurveAnalysis = vi.fn(() => ({
   isLoading: false,
 }));
 const mockEfficiencyTrend = vi.fn(() => ({
-  data: [{ day: '2024-01-01', day_avg_wh_mi: 320, rolling_7d_wh_mi: 315 }],
+  data: [{ ts: '2024-01-01T08:00:00Z', trip_efficiency_wh_mi: 320, rolling_24h_wh_mi: 315 }],
   isLoading: false,
 }));
 const mockEfficiencyByMode = vi.fn(() => ({

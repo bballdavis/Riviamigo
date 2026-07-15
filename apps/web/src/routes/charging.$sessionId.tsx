@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { useAuth, useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSessionLocation } from '@riviamigo/hooks';
+import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSessionLocation } from '@riviamigo/hooks';
 import type { Place } from '@riviamigo/types';
 import {
   PageLayout, StatCardGrid, StatCard, Card,

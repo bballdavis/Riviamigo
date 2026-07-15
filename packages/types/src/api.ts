@@ -55,6 +55,8 @@ export interface MetricBatchRequest {
   to?: string | null;
   lifetime?: boolean;
   bucket?: string;
+  /** `full` returns every retained source point in the requested range. */
+  density?: 'compact' | 'full';
   max_points?: number;
 }
 
@@ -67,7 +69,9 @@ export interface MetricBatchResponse {
   values: MetricValueResponse[];
   series: MetricBatchSeriesResponse[];
   bucket: string;
-  max_points: number;
+  density: 'compact' | 'full';
+  /** Present only for compact responses; full responses are intentionally uncapped. */
+  max_points?: number;
 }
 
 export interface DataQualityResponse {
@@ -378,6 +382,7 @@ export interface ChargeCurvePoint {
   minutes_elapsed?: number | null;
   soc_pct: number;
   power_kw: number;
+  sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
 }
 
 export interface ChargeCurveAnalysisPoint {
@@ -639,6 +644,29 @@ export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore';
 
 export type BackupArtifactStorageType = 'local';
 
+export interface BackupArtifactManifest {
+  artifact_kind?: string;
+  format?: string;
+  package?: {
+    format?: string;
+    format_version?: number;
+    source?: {
+      app_version?: string;
+      database?: string;
+      timescale_version?: string | null;
+      migration_version?: number | null;
+    };
+    scope?: {
+      included?: string[];
+      redacted?: string[];
+      excluded?: string[];
+    };
+    components?: Record<string, unknown>;
+    restore?: Record<string, unknown>;
+  };
+  [key: string]: unknown;
+}
+
 export type BackupRestoreRequestStatus =
   | 'pending'
   | 'approved'
@@ -685,7 +713,7 @@ export interface BackupArtifact {
   storage_path: string;
   size_bytes: number;
   checksum_sha256: string;
-  manifest: Record<string, unknown>;
+  manifest: BackupArtifactManifest;
   created_at: string;
 }
 
