@@ -61,6 +61,23 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let public_ledger_exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut *transaction)
+            .await?;
+    if public_ledger_exists {
+        let public_ledger_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public._sqlx_migrations")
+                .fetch_one(&mut *transaction)
+                .await?;
+        if public_ledger_rows != 0 {
+            bail!("public._sqlx_migrations already contains migration records");
+        }
+        sqlx::query("DROP TABLE public._sqlx_migrations")
+            .execute(&mut *transaction)
+            .await?;
+    }
+
     sqlx::query("ALTER TABLE riviamigo._sqlx_migrations SET SCHEMA public")
         .execute(&mut *transaction)
         .await?;
@@ -68,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "INSERT INTO public._sqlx_migrations +         (version, description, success, checksum, execution_time) +         VALUES (1, 'initial schema', TRUE, $1, 0)",
+        "INSERT INTO public._sqlx_migrations
+         (version, description, success, checksum, execution_time)
+         VALUES (1, 'initial schema', TRUE, $1, 0)",
     )
     .bind(checksum)
     .execute(&mut *transaction)

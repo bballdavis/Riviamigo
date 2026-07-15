@@ -137,6 +137,103 @@ async function installDependencies() {
   }
 }
 
+async function findAvailablePort(start, label, maxTries = 50) {
+  for (let attempt = 0; attempt < maxTries; attempt += 1) {
+    const candidate = start + attempt;
+    const pids = await getListeningPids(candidate);
+    if (pids.length === 0) {
+      if (attempt > 0) {
+        log(`[dev] ${label} port ${start} was busy, using ${candidate}`);
+      }
+      return candidate;
+    }
+
+    log(`[dev] ${label} port ${candidate} is in use; trying ${candidate + 1}`);
+  }
+
+  throw new Error(`[dev] Could not find an available ${label} port after ${maxTries} attempts from ${start}.`);
+}
+
+async function allocateRuntimePorts() {
+  const [api, web, postgres, redis, garageApi, garageAdmin] = await Promise.all([
+    findAvailablePort(requestedPorts.api, 'API'),
+    findAvailablePort(requestedPorts.web, 'Web'),
+    findAvailablePort(requestedPorts.postgres, 'PostgreSQL'),
+    findAvailablePort(requestedPorts.redis, 'Redis'),
+    findAvailablePort(requestedPorts.garageApi, 'Garage API'),
+    findAvailablePort(requestedPorts.garageAdmin, 'Garage admin'),
+  ]);
+
+  ports = { api, web, postgres, redis, garageApi, garageAdmin };
+
+  process.env.DEV_API_PORT = String(api);
+  process.env.DEV_WEB_PORT = String(web);
+  process.env.DEV_POSTGRES_PORT = String(postgres);
+  process.env.DEV_REDIS_PORT = String(redis);
+  process.env.DEV_GARAGE_PORT = String(garageApi);
+  process.env.DEV_GARAGE_ADMIN_PORT = String(garageAdmin);
+  process.env.DEV_WEB_ORIGINS = webOrigins().join(',');
+  process.env.COMPOSE_PROJECT_NAME = composeProjectName;
+}
+
+async function assertPortAvailable(port, label) {
+  const pids = await getListeningPids(port);
+  if (pids.length > 0) {
+    throw new Error(`${label} port ${port} became occupied before startup by PID(s): ${pids.join(', ')}`);
+  }
+}
+
+async function waitForHttp(url, child, label, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (child && child.exitCode !== null) {
+      throw new Error(`${label} exited before it became ready.`);
+    }
+
+    const { code } = await capture('curl', ['-fsS', '--max-time', '2', url]);
+    if (code === 0) {
+      if (child && child.exitCode !== null) {
+        throw new Error(`${label} health check was answered by another process; the managed process exited.`);
+      }
+      return;
+    }
+
+    await sleep(500);
+  }
+
+  throw new Error(`Timed out waiting for ${label} at ${url}`);
+}
+
+async function startInfrastructure() {
+  log(`Starting infrastructure (TimescaleDB, Redis, Garage) for ${composeProjectName}...`);
+  await run('docker', ['compose', '-f', composeFile, 'up', '-d', 'timescaledb', 'redis', 'garage']);
+
+  const deadline = Date.now() + 60000;
+  let dbReady = false;
+  while (Date.now() < deadline) {
+    const { code } = await capture('docker', [
+      'compose', '-f', composeFile, 'exec', '-T', 'timescaledb', 'pg_isready', '-U', 'riviamigo',
+    ]);
+    if (code === 0) {
+      dbReady = true;
+      break;
+    }
+    await sleep(1000);
+  }
+
+  if (!dbReady) {
+    throw new Error('Timed out waiting for TimescaleDB to accept connections.');
+  }
+
+  log('');
+  log('Infrastructure is running');
+  log(`   TimescaleDB: postgresql://localhost:${ports.postgres}`);
+  log(`   Redis: redis://localhost:${ports.redis}`);
+  log(`   S3 (Garage): http://localhost:${ports.garageApi}`);
+  log('');
+}
+
 async function getListeningPids(port) {
   if (isWindows) {
     const command = [
