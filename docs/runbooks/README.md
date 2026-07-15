@@ -1,5 +1,7 @@
 # Runbooks
 
+- [Release database cutover](./release-database-cutover.md)
+
 ## Audience
 
 Maintainers and agents handling recurring maintenance, publishing, or troubleshooting work.

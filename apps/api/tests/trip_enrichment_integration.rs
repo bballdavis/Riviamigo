@@ -1,6 +1,4 @@
-use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
@@ -24,7 +22,7 @@ use riviamigo_api::{
     },
 };
 use serde_json::{json, Value};
-use sqlx::{migrate::Migrator, Executor, PgPool};
+use sqlx::{Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -57,33 +55,12 @@ impl TestApp {
 
         let db_url = replace_database_name(&base_db_url, &db_name);
         let pool = PgPool::connect(&db_url).await.expect("db connect");
-        let migrator = Migrator::new(Path::new("./migrations"))
+        sqlx::migrate!("./migrations")
+            .run(&pool)
             .await
-            .expect("load migrations");
-        let (before_0047, after_0047): (Vec<_>, Vec<_>) = migrator
-            .iter()
-            .cloned()
-            .partition(|migration| migration.version < 47);
-
-        Migrator {
-            migrations: Cow::Owned(before_0047),
-            ignore_missing: false,
-            locking: true,
-        }
-        .run(&pool)
-        .await
-        .expect("migrate pre-0047");
+            .expect("migrate schema");
 
         seed_super_user(&pool).await.expect("seed super user");
-
-        Migrator {
-            migrations: Cow::Owned(after_0047),
-            ignore_missing: false,
-            locking: true,
-        }
-        .run(&pool)
-        .await
-        .expect("migrate post-0047");
 
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
