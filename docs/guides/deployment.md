@@ -46,7 +46,12 @@ docker compose --env-file .env -f compose/docker-compose.yml pull
 docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```
 
-The API applies its database migrations on startup. Back up before a significant update and review the release notes for breaking changes.
+The API applies its database migrations on startup. The first public release
+uses one initial schema baseline; later releases add normal forward-only
+migrations. Back up before a significant update and review the release notes
+for breaking changes. Maintainers adopting the pre-release development database
+must follow the [release database cutover](../runbooks/release-database-cutover.md)
+before running the release build.
 
 To pin a deployment, set `IMAGE_TAG` in `.env` to an exact Calendar Version such as `2026.07.0`, then run the same pull and up commands. `latest` remains the default and tracks the newest stable release.
 

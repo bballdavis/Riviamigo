@@ -1,3 +1,4 @@
+use sqlx::postgres::PgPoolOptions;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -23,27 +24,21 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let pool = create_pool(&config.database_url).await?;
 
-    if let Err(error) = sqlx::migrate!("./migrations").run(&pool).await {
-        let should_skip_migration_errors = std::env::var("RIVIAMIGO_SKIP_SQLX_MIGRATIONS").ok();
-        let error_text = error.to_string();
-
-        if should_skip_migration_errors.as_deref() == Some("1")
-            || should_skip_migration_errors.as_deref() == Some("true")
-        {
-            if error_text.contains("migration 1 was previously applied but has been modified") {
-                tracing::warn!(
-                    "Skipping SQLx checksum enforcement for existing dev stack: {}",
-                    error_text
-                );
-            } else {
-                return Err(error.into());
-            }
-        } else {
-            return Err(error.into());
-        }
-    } else {
-        tracing::info!("migrations applied");
-    }
+    let migration_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET search_path = public")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    sqlx::migrate!("./migrations").run(&migration_pool).await?;
+    migration_pool.close().await;
+    tracing::info!("database schema is current");
 
     routes::dashboards::seed_defaults(&pool).await?;
     tracing::info!("dashboard defaults seeded");

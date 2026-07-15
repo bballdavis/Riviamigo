@@ -16,7 +16,7 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
 
 COPY . .
 # Force rebuild of the actual crate after the dependency cache layer.
-RUN touch src/lib.rs src/main.rs migrations/0001_schema_init.sql && cargo build --release
+RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql && cargo build --release
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM postgres:16-bookworm AS runtime

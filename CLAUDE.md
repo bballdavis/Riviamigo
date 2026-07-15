@@ -55,6 +55,7 @@ cargo fmt --all --check
 ```bash
 pnpm db:migrate
 pnpm db:reset
+pnpm db:rebaseline
 ```
 
 ## Architecture Reminders
