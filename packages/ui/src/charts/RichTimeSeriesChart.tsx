@@ -8,7 +8,9 @@ import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
 import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
-import { clampedControlPoints, DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, splitCurveSegments, type CurvePoint, type CurveSmoothness } from './curveSmoothness';
+import { DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, type CurveSmoothness } from './curveSmoothness';
+
+const NATIVE_SPLINE_PATH = uPlot.paths.spline!();
 
 export interface RichSeries {
   key: string;
@@ -66,6 +68,8 @@ export interface RichTimeSeriesChartProps {
   cursorSyncKey?: string | undefined;
   /** Receives the aligned sample index without forcing the chart to re-render. */
   onCursorIndexChange?: ((index: number | null) => void) | undefined;
+  /** Receives the currently rendered numeric Y-axis ranges for settings affordances. */
+  onResolvedAxisRanges?: ((ranges: { y?: [number, number]; y2?: [number, number] }) => void) | undefined;
   /** Connect line/area paths across null samples and carry the last value in tooltips. */
   connectGaps?: boolean | undefined;
   /** Enables touch-first pan and pinch exploration for a dedicated mobile chart view. */
@@ -304,6 +308,7 @@ export function buildRichTimeSeriesUPlotSeries(
     connectGaps?: boolean;
     stepInterpolation?: boolean;
     smoothness?: CurveSmoothness;
+    timeFilter?: TimeFilterWindow;
   } = {},
 ): Series[] {
   return [
@@ -336,58 +341,18 @@ export function buildRichTimeSeriesUPlotSeries(
         });
       }
       if (seriesMode === 'scatter') next.paths = () => null;
-      if (smoothness === 'smooth' && item.smoothable !== false && (seriesMode === 'line' || seriesMode === 'area')) {
-        next.paths = buildStandardSplinePath();
-      } else if (smoothness === 'gentle' && item.smoothable !== false && (seriesMode === 'line' || seriesMode === 'area')) {
-        next.paths = uPlot.paths.spline!();
-      } else if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
+      if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
         next.paths = uPlot.paths.stepped!({ align: 1 });
+      } else if (
+        normalizeCurveSmoothness(smoothness) !== 'straight'
+        && item.smoothable !== false
+        && (seriesMode === 'line' || seriesMode === 'area')
+      ) {
+        next.paths = NATIVE_SPLINE_PATH;
       }
       return next;
     }),
   ];
-}
-
-function buildStandardSplinePath(): NonNullable<Series['paths']> {
-  return (u, seriesIdx, idx0, idx1) => {
-    const series = u.series[seriesIdx]!;
-    const scaleKey = series.scale ?? 'y';
-    const values = u.data[seriesIdx] as Array<number | null>;
-    const xValues = u.data[0] as number[];
-    const points: Array<CurvePoint | null> = [];
-    for (let index = idx0; index <= idx1; index += 1) {
-      const value = values[index];
-      points.push(value == null || !Number.isFinite(value)
-        ? null
-        : { x: u.valToPos(xValues[index]!, 'x', true), y: u.valToPos(value, scaleKey, true) });
-    }
-    const stroke = new Path2D();
-    const segments = splitCurveSegments(points);
-    for (const segment of segments) {
-      stroke.moveTo(segment[0]!.x, segment[0]!.y);
-      if (segment.length < 2) continue;
-      for (let index = 0; index < segment.length - 1; index += 1) {
-        const [controlOne, controlTwo] = clampedControlPoints(segment, index, 'smooth');
-        const point = segment[index + 1]!;
-        stroke.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
-      }
-    }
-    if (!series.fill) return { stroke, fill: null, clip: null };
-    const fill = new Path2D(stroke);
-    const fillTo = typeof series.fillTo === 'function'
-      ? series.fillTo(u, seriesIdx, series.min, series.max, 0)
-      : series.fillTo;
-    const baseline = u.valToPos(fillTo ?? 0, scaleKey, true);
-    for (const segment of segments) {
-      if (segment.length === 0) continue;
-      const first = segment[0]!;
-      const last = segment[segment.length - 1]!;
-      fill.lineTo(last.x, baseline);
-      fill.lineTo(first.x, baseline);
-      fill.closePath();
-    }
-    return { stroke, fill, clip: null };
-  };
 }
 
 export function RichTimeSeriesChart({
@@ -416,6 +381,7 @@ export function RichTimeSeriesChart({
   xSplits,
   cursorSyncKey,
   onCursorIndexChange,
+  onResolvedAxisRanges,
   connectGaps = false,
   interactionMode = 'standard',
 }: RichTimeSeriesChartProps) {
@@ -436,6 +402,7 @@ export function RichTimeSeriesChart({
   const xValueFormatterRef = React.useRef(xValueFormatter);
   const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
   const onCursorIndexChangeRef = React.useRef(onCursorIndexChange);
+  const onResolvedAxisRangesRef = React.useRef(onResolvedAxisRanges);
   const tooltipValuesRef = React.useRef<Array<Array<number | null>>>([]);
   const tooltipDetailsRef = React.useRef<Array<Array<string | null | undefined>>>([]);
   const yPrecisionRef = React.useRef(0);
@@ -452,6 +419,7 @@ export function RichTimeSeriesChart({
   xValueFormatterRef.current = xValueFormatter;
   xSecondaryFormatterRef.current = xSecondaryFormatter;
   onCursorIndexChangeRef.current = onCursorIndexChange;
+  onResolvedAxisRangesRef.current = onResolvedAxisRanges;
 
   const alignedData = React.useMemo<AlignedData>(() => {
     const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
@@ -652,6 +620,7 @@ export function RichTimeSeriesChart({
         connectGaps,
         stepInterpolation,
         smoothness: normalizeCurveSmoothness(smoothness),
+        timeFilter,
       }),
       hooks: {
         setScale: [
@@ -726,6 +695,15 @@ export function RichTimeSeriesChart({
     setIsZoomed(false);
 
     const chart = chartRef.current;
+    const rangeFromScale = (scale: uPlot.Scale | undefined): [number, number] | undefined => (
+      scale?.min != null && scale.max != null && Number.isFinite(scale.min) && Number.isFinite(scale.max)
+        ? [scale.min, scale.max]
+        : undefined
+    );
+    onResolvedAxisRangesRef.current?.({
+      ...(rangeFromScale(chart.scales.y) ? { y: rangeFromScale(chart.scales.y)! } : {}),
+      ...(rangeFromScale(chart.scales.y2) ? { y2: rangeFromScale(chart.scales.y2)! } : {}),
+    });
     const touchCleanup = interactionMode === 'touch-explore'
       ? attachTouchExploration(root, chart, fullXRange)
       : undefined;
