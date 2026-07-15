@@ -11,7 +11,7 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ActiveChargeSessionSnapshot, ChargeDetectorState, ChargeEvent},
-        parallax::{self, ParallaxEvent},
+        parallax::ParallaxEvent,
         rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
@@ -179,12 +179,18 @@ pub async fn run_vehicle_worker(
         let tokens_clone = tokens.clone();
         let riv_id_clone = rivian_vehicle_id.clone();
         let ws_config = config.clone();
+        let parallax_tx_ws = if ws_config.rivian_parallax_capture_enabled {
+            Some(parallax_tx.clone())
+        } else {
+            None
+        };
         tokio::spawn(async move {
             ws_client::run_ws_loop(
                 vehicle_id,
                 riv_id_clone,
                 tokens_clone,
                 ev_tx_ws,
+                parallax_tx_ws,
                 ws_shutdown,
                 ws_config,
             )
@@ -193,28 +199,7 @@ pub async fn run_vehicle_worker(
     };
     let mut ws_handle = spawn_ws_loop();
 
-    let mut parallax_capture_enabled = config.rivian_parallax_capture_enabled;
-    let parallax_handle = if parallax_capture_enabled {
-        let parallax_shutdown = shutdown.resubscribe();
-        let parallax_vehicle_id = rivian_vehicle_id.clone();
-        let parallax_tokens = tokens.clone();
-        let reconnect_initial = config.rivian_ws_reconnect_initial_seconds;
-        let reconnect_max = config.rivian_ws_reconnect_max_seconds;
-        Some(tokio::spawn(async move {
-            parallax::run_loop(
-                vehicle_id,
-                parallax_vehicle_id,
-                parallax_tokens,
-                parallax_tx,
-                parallax_shutdown,
-                reconnect_initial,
-                reconnect_max,
-            )
-            .await;
-        }))
-    } else {
-        None
-    };
+    let parallax_capture_enabled = config.rivian_parallax_capture_enabled;
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -347,11 +332,7 @@ pub async fn run_vehicle_worker(
                         }
                         continue;
                     }
-                    None => {
-                        parallax_capture_enabled = false;
-                        tracing::warn!(vehicle_id=%vehicle_id, "Parallax capture task stopped; disabling capture for this worker");
-                        continue;
-                    }
+                    None => continue,
                 }
             },
             // Monitor the WS task; log if it exits unexpectedly.
@@ -549,10 +530,6 @@ pub async fn run_vehicle_worker(
     counter_batch.flush(&pool).await;
     ws_handle.abort();
     let _ = (&mut ws_handle).await;
-    if let Some(mut handle) = parallax_handle {
-        handle.abort();
-        let _ = (&mut handle).await;
-    }
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
 }
 
@@ -1221,7 +1198,7 @@ async fn handle_inbound_accounting(
             .await;
         }
         Some("reconnect") => batch.increment("ws_reconnects"),
-        Some("connection_init" | "subscribe") => {
+        Some("connection_init" | "subscribe" | "parallax_subscribe") => {
             batch.increment("outbound_messages_sent");
         }
         _ => {}
@@ -1261,6 +1238,7 @@ fn is_synthetic_control(message_type: Option<&str>) -> bool {
             "connection_open"
                 | "connection_init"
                 | "subscribe"
+                | "parallax_subscribe"
                 | "reconnect"
                 | "ws_handshake_rejected"
                 | "ws_schema_rejected"
@@ -1320,6 +1298,14 @@ fn runtime_health_update_for_ws_control(inbound: &WsInboundEvent) -> Option<Runt
             }),
             auth_state: "authorized",
             auth_reason_code: Some("rivian_ws_no_active_subscriptions"),
+        }),
+        Some("parallax_subscription_rejected") => Some(RuntimeHealthUpdate {
+            online: false,
+            worker_health: "degraded",
+            worker_health_msg: read_ws_detail_message(&inbound.raw)
+                .unwrap_or_else(|| "Rivian Parallax subscription rejected".into()),
+            auth_state: "authorized",
+            auth_reason_code: Some("rivian_parallax_subscription_rejected"),
         }),
         _ => None,
     }

@@ -151,10 +151,15 @@ async fn get_capacity(
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let points = sqlx::query_as!(TimeSeriesPoint,
-        "SELECT bucket AS \"ts!\", battery_capacity_wh AS value FROM timeseries.telemetry_1day \
-         WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND battery_capacity_wh IS NOT NULL ORDER BY bucket",
-        vid, from, to).fetch_all(&state.pool).await?;
+    let points = sqlx::query_as::<_, TimeSeriesPoint>(
+        "SELECT ts, battery_capacity_wh AS value FROM timeseries.telemetry \
+         WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND battery_capacity_wh IS NOT NULL ORDER BY ts",
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(points))
 }
 
@@ -192,67 +197,6 @@ struct BatteryMileageSampleRow {
     battery_capacity_wh: Option<f64>,
     distance_to_empty_mi: Option<f64>,
     battery_level: Option<f64>,
-}
-
-#[derive(Debug, Default)]
-struct BatteryMileageBucket {
-    odometer_mi: Option<f64>,
-    usable_kwh: Option<f64>,
-    range_sum: f64,
-    range_count: usize,
-    projected_sum: f64,
-    projected_count: usize,
-}
-
-impl BatteryMileageBucket {
-    fn observe(&mut self, sample: &BatteryMileageSampleRow) {
-        if let Some(odometer_miles) = sample.odometer_miles.filter(|value| value.is_finite()) {
-            self.odometer_mi = Some(
-                self.odometer_mi
-                    .map_or(odometer_miles, |current| current.max(odometer_miles)),
-            );
-        }
-
-        if let Some(capacity_wh) = sample
-            .battery_capacity_wh
-            .filter(|value| value.is_finite() && *value > 0.0)
-        {
-            let capacity_kwh = if capacity_wh > 1000.0 {
-                capacity_wh / 1000.0
-            } else {
-                capacity_wh
-            };
-            self.usable_kwh = Some(
-                self.usable_kwh
-                    .map_or(capacity_kwh, |current| current.max(capacity_kwh)),
-            );
-        }
-
-        let normalized_remaining_range = normalize_remaining_range_miles_strict(
-            sample.distance_to_empty_mi,
-            sample.battery_level,
-            sample.battery_capacity_wh,
-        );
-        if let Some(range_mi) = normalized_remaining_range {
-            self.range_sum += range_mi;
-            self.range_count += 1;
-        }
-
-        if let Some(projected_max_range_mi) =
-            projected_full_charge_range_miles(normalized_remaining_range, sample.battery_level)
-        {
-            self.projected_sum += projected_max_range_mi;
-            self.projected_count += 1;
-        }
-    }
-
-    fn average_range(&self) -> Option<f64> {
-        (self.range_count > 0).then_some(self.range_sum / self.range_count as f64)
-    }
-
-    fn average_projected_range(&self) -> Option<f64> {
-        (self.projected_count > 0).then_some(self.projected_sum / self.projected_count as f64)
-    }
 }
 
 async fn get_degradation(
@@ -397,16 +341,26 @@ async fn get_mileage(
     .fetch_all(&state.pool)
     .await?;
 
-    let mut buckets: BTreeMap<DateTime<Utc>, BatteryMileageBucket> = BTreeMap::new();
-    for sample in &samples {
-        buckets.entry(sample.bucket).or_default().observe(sample);
-    }
-
     let usable_new_wh = usable_new_wh.unwrap_or(0.0);
-    let rows = buckets
-        .into_iter()
-        .map(|(ts, bucket)| {
-            let degradation_pct = match (bucket.usable_kwh, usable_new_wh > 0.0) {
+    let rows = samples
+        .iter()
+        .map(|sample| {
+            let usable_kwh = sample
+                .battery_capacity_wh
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|capacity_wh| {
+                    if capacity_wh > 1000.0 {
+                        capacity_wh / 1000.0
+                    } else {
+                        capacity_wh
+                    }
+                });
+            let range_mi = normalize_remaining_range_miles_strict(
+                sample.distance_to_empty_mi,
+                sample.battery_level,
+                sample.battery_capacity_wh,
+            );
+            let degradation_pct = match (usable_kwh, usable_new_wh > 0.0) {
                 (Some(usable_kwh), true) => {
                     Some((100.0 - (usable_kwh * 1000.0 / usable_new_wh * 100.0)).max(0.0))
                 }
@@ -414,11 +368,14 @@ async fn get_mileage(
             };
 
             BatteryMileagePoint {
-                ts,
-                odometer_mi: bucket.odometer_mi,
-                usable_kwh: bucket.usable_kwh,
-                range_mi: bucket.average_range(),
-                projected_max_range_mi: bucket.average_projected_range(),
+                ts: sample.bucket,
+                odometer_mi: sample.odometer_miles.filter(|value| value.is_finite()),
+                usable_kwh,
+                range_mi,
+                projected_max_range_mi: projected_full_charge_range_miles(
+                    range_mi,
+                    sample.battery_level,
+                ),
                 degradation_pct,
             }
         })
@@ -624,39 +581,5 @@ mod tests {
             from,
             chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap()
         );
-    }
-
-    #[test]
-    fn mileage_bucket_projects_from_normalized_range() {
-        use super::{BatteryMileageBucket, BatteryMileageSampleRow};
-
-        let mut bucket = BatteryMileageBucket::default();
-        bucket.observe(&BatteryMileageSampleRow {
-            bucket: chrono::Utc::now(),
-            odometer_miles: Some(10_500.0),
-            battery_capacity_wh: Some(135_000.0),
-            distance_to_empty_mi: Some(210.0),
-            battery_level: Some(70.0),
-        });
-
-        assert_eq!(bucket.average_range(), Some(210.0));
-        assert_eq!(bucket.average_projected_range(), Some(300.0));
-    }
-
-    #[test]
-    fn mileage_bucket_drops_impossible_outliers_in_strict_mode() {
-        use super::{BatteryMileageBucket, BatteryMileageSampleRow};
-
-        let mut bucket = BatteryMileageBucket::default();
-        bucket.observe(&BatteryMileageSampleRow {
-            bucket: chrono::Utc::now(),
-            odometer_miles: Some(10_500.0),
-            battery_capacity_wh: Some(135_000.0),
-            distance_to_empty_mi: Some(620.0),
-            battery_level: Some(65.0),
-        });
-
-        assert_eq!(bucket.average_range(), None);
-        assert_eq!(bucket.average_projected_range(), None);
     }
 }

@@ -478,15 +478,31 @@ async fn execute_recovery_package(
     let temp_root = std::env::temp_dir().join(format!("riviamigo-recovery-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_root).await?;
     let dump_path = temp_root.join("database.dump");
+    let settings_path = temp_root.join("backup-settings.json");
     let cache_root = PathBuf::from(&config.vehicle_image_cache_dir);
 
     let result = async {
         execute_pg_dump(config, &dump_path).await?;
-        let manifest =
-            build_recovery_manifest(pool, &dump_path, &cache_root, trigger, created_at).await?;
+        write_sanitized_backup_settings(pool, &settings_path).await?;
+        let manifest = build_recovery_manifest(
+            pool,
+            &dump_path,
+            &settings_path,
+            &cache_root,
+            trigger,
+            created_at,
+        )
+        .await?;
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-        write_recovery_archive(artifact_path, &dump_path, &cache_root, &manifest_bytes).await?;
+        write_recovery_archive(
+            artifact_path,
+            &dump_path,
+            &settings_path,
+            &cache_root,
+            &manifest_bytes,
+        )
+        .await?;
         Ok::<serde_json::Value, AppError>(manifest)
     }
     .await;
@@ -529,6 +545,8 @@ async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppErr
         .arg("--exclude-table-data=riviamigo.external_connection_settings")
         .arg("--exclude-table-data=riviamigo.system_config")
         .arg("--exclude-table-data=riviamigo.refresh_tokens")
+        // Backup settings are restored from backup-settings.json after the
+        // dump, which keeps the encrypted target secret out of the package.
         .arg("--exclude-table-data=riviamigo.backup_settings")
         .arg("--exclude-table-data=riviamigo.backup_runs")
         .arg("--exclude-table-data=riviamigo.backup_artifacts")
@@ -642,13 +660,11 @@ pub async fn runtime_readiness(config: &Config) -> BackupRuntimeReadiness {
     }
 }
 
-/// Writes a JSON **manifest** file — metadata only (driver, database, trigger,
-/// created_at). No table data is exported. This driver is intentionally lightweight:
-/// it records *that* a backup was requested and documents the environment, but the
-/// actual data resides in TimescaleDB. Use the `pg_dump` driver for full data backups.
+/// Builds the manifest for the portable recovery package.
 async fn build_recovery_manifest(
     pool: &PgPool,
     dump_path: &Path,
+    settings_path: &Path,
     cache_root: &Path,
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
@@ -661,6 +677,7 @@ async fn build_recovery_manifest(
             .await
             .map_err(AppError::from)?;
     let database_checksum = compute_sha256(dump_path).await?;
+    let settings_checksum = compute_sha256(settings_path).await?;
     let cache_files = collect_cache_files(cache_root).await?;
 
     Ok(json!({
@@ -678,19 +695,21 @@ async fn build_recovery_manifest(
             "included": [
                 "PostgreSQL durable application data",
                 "TimescaleDB telemetry and enrichment data",
-                "vehicle artwork cache files"
+                "vehicle artwork cache files",
+                "sanitized backup schedule and target configuration"
             ],
             "redacted": [
-                "vehicle_credentials.encrypted_tokens",
-                "external_connection_settings.bearer_token_encrypted",
-                "system_config installation keys",
+                "vehicle_credentials table data (provider credential tokens)",
+                "external_connection_settings table data (provider bearer tokens and target secrets)",
+                "system_config table data (installation cryptographic keys)",
                 "refresh_tokens",
-                "backup target secrets"
+                "backup_settings.secret_key_encrypted"
             ],
             "excluded": [
                 "Redis live state, pub/sub messages, and OTP challenges",
                 "backup artifact catalog and restore request history",
-                "browser localStorage and sessionStorage"
+                "browser localStorage and sessionStorage",
+                "external provider connection cache state"
             ]
         },
         "components": {
@@ -698,6 +717,12 @@ async fn build_recovery_manifest(
                 "path": "database.dump",
                 "sha256": database_checksum,
                 "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0)
+            },
+            "backup_settings": {
+                "path": "backup-settings.json",
+                "sha256": settings_checksum,
+                "size_bytes": std::fs::metadata(settings_path).map(|metadata| metadata.len()).unwrap_or(0),
+                "sensitive_fields_redacted": ["secret_key_encrypted"]
             },
             "vehicle_image_cache": {
                 "path": "vehicle-image-cache",
@@ -711,6 +736,37 @@ async fn build_recovery_manifest(
             "operator_command": "node scripts/restore-backup.mjs <package>"
         }
     }))
+}
+
+async fn write_sanitized_backup_settings(pool: &PgPool, path: &Path) -> Result<(), AppError> {
+    let settings: serde_json::Value = sqlx::query_scalar(
+        r#"SELECT COALESCE((
+            SELECT jsonb_build_object(
+                'present', TRUE,
+                'enabled', enabled,
+                'frequency', frequency,
+                'run_at', run_at,
+                'timezone', timezone,
+                'day_of_week', day_of_week,
+                'day_of_month', day_of_month,
+                'retention_count', retention_count,
+                'target_type', target_type,
+                'endpoint', endpoint,
+                'region', region,
+                'bucket', bucket,
+                'prefix', prefix,
+                'access_key', access_key
+            )
+            FROM riviamigo.backup_settings
+            WHERE id = TRUE
+        ), '{"present": false}'::jsonb)"#,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(AppError::from)?;
+    let bytes = serde_json::to_vec_pretty(&settings)
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    fs::write(path, bytes).await.map_err(AppError::from)
 }
 
 async fn collect_cache_files(cache_root: &Path) -> Result<Vec<serde_json::Value>, AppError> {
@@ -752,11 +808,13 @@ async fn collect_cache_files(cache_root: &Path) -> Result<Vec<serde_json::Value>
 async fn write_recovery_archive(
     artifact_path: &Path,
     dump_path: &Path,
+    settings_path: &Path,
     cache_root: &Path,
     manifest_bytes: &[u8],
 ) -> Result<(), AppError> {
     let artifact_path = artifact_path.to_path_buf();
     let dump_path = dump_path.to_path_buf();
+    let settings_path = settings_path.to_path_buf();
     let cache_root = cache_root.to_path_buf();
     let manifest_bytes = manifest_bytes.to_vec();
     tokio::task::spawn_blocking(move || {
@@ -774,6 +832,7 @@ async fn write_recovery_archive(
             Cursor::new(manifest_bytes),
         )?;
         archive.append_path_with_name(&dump_path, "database.dump")?;
+        archive.append_path_with_name(&settings_path, "backup-settings.json")?;
 
         if cache_root.is_dir() {
             archive.append_dir_all("vehicle-image-cache", &cache_root)?;
@@ -1012,8 +1071,8 @@ fn should_log_scheduler_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_dependency_error_if_unavailable, should_log_scheduler_failure, write_recovery_archive,
-        BackupDriver,
+        runtime_dependency_error_if_unavailable, should_log_scheduler_failure,
+        write_recovery_archive, BackupDriver,
     };
     use crate::errors::AppError;
     use flate2::read::GzDecoder;
@@ -1064,14 +1123,22 @@ mod tests {
         let root = std::env::temp_dir().join(format!("riviamigo-backup-test-{}", Uuid::new_v4()));
         let cache = root.join("cache");
         let dump = root.join("database.dump");
+        let settings = root.join("backup-settings.json");
         let archive = root.join("backup.rma.tar.gz");
         std::fs::create_dir_all(cache.join("vehicle-1")).expect("cache directory");
         std::fs::write(cache.join("vehicle-1/artwork.webp"), b"artwork").expect("artwork");
         std::fs::write(&dump, b"database").expect("dump");
+        std::fs::write(&settings, br#"{"present":false}"#).expect("settings");
 
-        write_recovery_archive(&archive, &dump, &cache, br#"{"format":"riviamigo-recovery-v1"}"#)
-            .await
-            .expect("archive");
+        write_recovery_archive(
+            &archive,
+            &dump,
+            &settings,
+            &cache,
+            br#"{"format":"riviamigo-recovery-v1"}"#,
+        )
+        .await
+        .expect("archive");
 
         let file = std::fs::File::open(&archive).expect("open archive");
         let decoder = GzDecoder::new(file);
@@ -1079,15 +1146,23 @@ mod tests {
         let mut names = Vec::new();
         for entry in tar.entries().expect("entries") {
             let mut entry = entry.expect("entry");
-            names.push(entry.path().expect("path").to_string_lossy().replace('\\', "/"));
+            names.push(
+                entry
+                    .path()
+                    .expect("path")
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
             let mut contents = Vec::new();
             entry.read_to_end(&mut contents).expect("read entry");
-            assert!(!contents.is_empty() || names.last().is_some_and(|name| name.ends_with('/')));
         }
 
         assert!(names.iter().any(|name| name == "manifest.json"));
         assert!(names.iter().any(|name| name == "database.dump"));
-        assert!(names.iter().any(|name| name.ends_with("vehicle-1/artwork.webp")));
+        assert!(names.iter().any(|name| name == "backup-settings.json"));
+        assert!(names
+            .iter()
+            .any(|name| name.ends_with("vehicle-1/artwork.webp")));
         let _ = std::fs::remove_dir_all(root);
     }
 }

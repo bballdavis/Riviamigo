@@ -16,12 +16,17 @@ import {
 } from '@riviamigo/hooks';
 import {
   CHART_COLORS,
+  DEFAULT_CHART_TIME_FILTER,
   DailyChargeSessionsChart,
   DailyEnergyBarChart,
   EfficiencyPillBarChart,
   formatChartNumber,
   getAdaptiveDecimalPrecision,
+  normalizeTimeFilter,
   RichTimeSeriesChart,
+  TIME_FILTER_OPTIONS,
+  timeFilterLabel,
+  type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { ChartPicker } from '@riviamigo/ui/primitives';
 import { cn } from '@riviamigo/ui/lib/utils';
@@ -75,6 +80,8 @@ interface DashboardChartAxisRangeSetting {
 }
 
 interface DashboardChartDisplaySettings {
+  timeFilter?: TimeFilterWindow;
+  /** Legacy geometric interpolation setting, retained only while reading saved dashboards. */
   smoothing?: number;
   axes?: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>>;
 }
@@ -84,7 +91,7 @@ interface ResolvedDashboardChartOptions {
   chartIds: string[];
   page?: DashboardChartPage;
   showPicker: boolean;
-  legacyCurveSmoothing: number;
+  legacyTimeFilter: TimeFilterWindow;
   chartSettings: Record<string, DashboardChartDisplaySettings>;
   headerSubtitle?: string;
 }
@@ -156,15 +163,13 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
     chartId,
     chartIds: fallbackIds,
     showPicker: options.showPicker ?? fallbackIds.length > 1,
-    legacyCurveSmoothing: normalizeCurveSmoothing(options.curveSmoothing),
+    legacyTimeFilter: legacySmoothingToTimeFilter(options.curveSmoothing),
     chartSettings: normalizeChartSettingsMap(options.chartSettings),
     ...(page ? { page } : {}),
     ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
   };
 }
 
-const DEFAULT_SMOOTHING = 0.2;
-const MIN_ENABLED_SMOOTHING = 0.05;
 const AXIS_ORDER: DashboardChartAxisId[] = ['x', 'y', 'y2'];
 const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
   smoothing: false,
@@ -185,7 +190,6 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   ));
   const previousDefaultStorageKeyRef = React.useRef(defaultStorageKey);
   const [search, setSearch] = React.useState('');
-  // smoothing: 0 = off, >0 = smoothing amount (0–1)
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [viewerOpen, setViewerOpen] = React.useState(false);
@@ -211,14 +215,8 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const activeChartId = options.chartIds.includes(chartId) ? chartId : options.chartId;
   const activeChartDefinition = getChartDefinition(activeChartId);
   const activeCapabilities = activeChartDefinition ? getChartSettingsCapabilities(activeChartDefinition) : EMPTY_CAPABILITIES;
-  const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyCurveSmoothing);
+  const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyTimeFilter);
   const activeChartTitle = activeChartDefinition?.title ?? instance.title ?? 'Chart';
-  const smoothing = activeSettings.smoothing;
-  const smoothingOn = smoothing > 0;
-  const smoothingTrackPercent = Math.min(
-    100,
-    Math.max(0, ((smoothing - MIN_ENABLED_SMOOTHING) / (1 - MIN_ENABLED_SMOOTHING)) * 100),
-  );
 
   function updateActiveChartSettings(
     updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings,
@@ -229,14 +227,6 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
       ctx.updateWidgetOptions?.(instance.id, { chartSettings: nextMap });
       return nextMap;
     });
-  }
-
-  function setSmoothing(next: number | ((current: number) => number)) {
-    const resolvedNext = typeof next === 'function' ? next(activeSettings.smoothing) : next;
-    updateActiveChartSettings((current) => ({
-      ...current,
-      smoothing: normalizeCurveSmoothing(resolvedNext),
-    }));
   }
 
   function setChartAsDefault(nextChartId: string) {
@@ -383,19 +373,10 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         settings={activeSettings}
         persistent={Boolean(ctx.updateWidgetOptions)}
         onClose={() => setSettingsOpen(false)}
-        onToggleSmoothing={() =>
+        onTimeFilterChange={(next) =>
           updateActiveChartSettings((current) => ({
             ...current,
-            smoothing:
-              activeSettings.smoothing > 0
-                ? 0
-                : Math.max(current.smoothing ?? options.legacyCurveSmoothing, MIN_ENABLED_SMOOTHING),
-          }))
-        }
-        onSmoothingChange={(next) =>
-          updateActiveChartSettings((current) => ({
-            ...current,
-            smoothing: normalizeCurveSmoothing(next),
+            timeFilter: next,
           }))
         }
         onAxisModeChange={(axisId, mode) =>

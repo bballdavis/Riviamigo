@@ -137,7 +137,15 @@ Use hooks for:
 
 Widgets read provider data through selector adapters so a status update only re-renders chips that select the changed field. Outside a dashboard provider, adapters retain their direct-hook fallback for detail pages and integrations. Live status remains memory-only and fast-refreshing; bounded historical metric summaries may use the normal persisted cache while refreshing.
 
-The batch API is intentionally limited to compact dashboard-chip values and sparklines (at most 96 adaptive points per metric). Maps, tables, trip geometry, and trip-detail synchronized samples stay on their specialized endpoints. Chart widgets mount exactly one query source: the active picker selection. Offscreen charts, maps, and tables mount through an intersection boundary with a small preload margin, preserving their existing loading shapes and interaction contracts once visible.
+The batch API combines dashboard-chip values with the complete retained series
+needed by visible sparklines. Dashboard requests use `density: "full"`, which
+returns raw trip/telemetry/session points without an automatic point cap; the
+legacy `compact` mode remains available to external callers that explicitly
+need a bounded response. Maps, tables, trip geometry, and trip-detail
+synchronized samples stay on their specialized endpoints. Chart widgets mount
+exactly one query source: the active picker selection. Offscreen charts, maps,
+and tables mount through an intersection boundary with a small preload margin,
+preserving their existing loading shapes and interaction contracts once visible.
 
 ### High-density data rules
 
@@ -145,8 +153,8 @@ Pages that render many trips or long telemetry histories must keep the browser w
 
 - Fetch one page-level aggregate for a map or coordinated detail view instead of one request per route or metric.
 - Persist compact route previews with the trip record; generate a preview from linked telemetry only when a legacy row is missing one.
-- Return long detail histories as adaptive columnar samples with a server-enforced point budget. Keep raw compatibility endpoints for integrations, but do not compose them in the page.
-- For normalized vehicle history, prefer the bounded telemetry-lanes contract: one server-owned time spine, allowlisted typed lanes, explicit bucket resolution, and null-preserving sparse values. Use the compatibility raw-data route only for search, record selection, and detail-on-demand.
+- Return complete retained dashboard history through typed chart/batch contracts; do not replace points with range-dependent averages or a display cap. Keep raw compatibility endpoints for integrations, but do not compose their untyped records in the page.
+- For normalized vehicle history, prefer typed, allowlisted series with null-preserving sparse values. The Settings telemetry lanes contract may remain explicitly bucketed because it is a density inspector, not a dashboard chart.
 - Use canvas-backed charts for dense series. Shared uPlot charts may use a `cursorSyncKey` so synchronized cursors stay inside the chart layer instead of re-rendering the page on every pointer movement.
 - For intentionally sparse telemetry detail series, opt into `connectGaps`: line/area paths span null samples while tooltips carry the last finite reading until the next valid sample. Keep the opt-in local to views where that interpolation is semantically safe.
 - When an adaptive sample count is presented as a distribution, convert it with the server-reported sample interval and label the result as approximate time rather than raw sample count.

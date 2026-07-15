@@ -45,6 +45,20 @@ function capture(command, commandArgs, options = {}) {
   return execFileSync(command, commandArgs, { cwd: root, encoding: 'utf8', ...options }).trim();
 }
 
+async function waitForDatabase(postgresUser) {
+  const deadline = Date.now() + 120000;
+  const args = [
+    ...composeArgs(), 'exec', '-T', 'timescaledb',
+    'pg_isready', '-U', postgresUser, '-d', 'riviamigo',
+  ];
+  while (Date.now() < deadline) {
+    const result = spawnSync('docker', args, { cwd: root, stdio: 'ignore' });
+    if (result.status === 0) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+  }
+  throw new Error('Timed out waiting for PostgreSQL to become ready.');
+}
+
 function composeArgs() {
   return [
     'compose', '-p', project, '--env-file', envFile,
@@ -72,7 +86,7 @@ function validateArchiveEntries(entries) {
     if (normalized.split('/').includes('..')) {
       throw new Error(`Unsafe parent archive path: ${entry}`);
     }
-    if (!['manifest.json', 'database.dump'].includes(normalized)
+    if (!['manifest.json', 'database.dump', 'backup-settings.json'].includes(normalized)
       && !normalized.startsWith('vehicle-image-cache/')) {
       throw new Error(`Unexpected recovery package member: ${entry}`);
     }
@@ -101,6 +115,13 @@ function verifyManifest(staging) {
   if (!database?.sha256) throw new Error('Recovery manifest is missing the database checksum.');
   assertEqual(sha256(dumpPath), database.sha256, 'Database dump checksum mismatch');
 
+  const settings = manifest.components?.backup_settings;
+  const settingsPath = join(staging, 'backup-settings.json');
+  if (!settings?.sha256 || !existsSync(settingsPath)) {
+    throw new Error('Recovery manifest is missing backup-settings.json or its checksum.');
+  }
+  assertEqual(sha256(settingsPath), settings.sha256, 'Backup settings checksum mismatch');
+
   const cacheFiles = manifest.components?.vehicle_image_cache?.files ?? [];
   for (const file of cacheFiles) {
     const relative = file.path?.replace(/^vehicle-image-cache\//, '');
@@ -112,6 +133,41 @@ function verifyManifest(staging) {
     assertEqual(sha256(path), file.sha256, `Cache checksum mismatch for ${file.path}`);
   }
   return manifest;
+}
+
+function restoreBackupSettings(postgresUser, staging) {
+  const settings = JSON.parse(readFileSync(join(staging, 'backup-settings.json'), 'utf8'));
+  if (!settings.present) return;
+
+  const jsonLiteral = JSON.stringify(settings).replaceAll("'", "''");
+  const sql = `
+    INSERT INTO riviamigo.backup_settings (
+      id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
+      retention_count, target_type, endpoint, region, bucket, prefix, access_key,
+      secret_key_encrypted, updated_at, updated_by
+    )
+    SELECT TRUE, enabled, frequency, run_at::time, timezone, day_of_week, day_of_month,
+      retention_count, target_type, endpoint, region, bucket, prefix, access_key,
+      NULL, now(), NULL
+    FROM jsonb_to_record('${jsonLiteral}'::jsonb) AS x(
+      enabled boolean, frequency text, run_at text, timezone text,
+      day_of_week smallint, day_of_month smallint, retention_count integer,
+      target_type text, endpoint text, region text, bucket text, prefix text,
+      access_key text
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      enabled = EXCLUDED.enabled, frequency = EXCLUDED.frequency,
+      run_at = EXCLUDED.run_at, timezone = EXCLUDED.timezone,
+      day_of_week = EXCLUDED.day_of_week, day_of_month = EXCLUDED.day_of_month,
+      retention_count = EXCLUDED.retention_count, target_type = EXCLUDED.target_type,
+      endpoint = EXCLUDED.endpoint, region = EXCLUDED.region, bucket = EXCLUDED.bucket,
+      prefix = EXCLUDED.prefix, access_key = EXCLUDED.access_key,
+      secret_key_encrypted = NULL, updated_at = now(), updated_by = NULL;
+  `;
+  run('docker', [
+    ...composeArgs(), 'exec', '-T', 'timescaledb', 'psql', '-U', postgresUser,
+    '-d', 'riviamigo', '-v', 'ON_ERROR_STOP=1', '-c', sql,
+  ]);
 }
 
 function ensureDatabaseState(postgresUser) {
@@ -177,9 +233,11 @@ try {
 
   run('docker', [...composeArgs(), 'stop', 'api', 'nginx']);
   run('docker', [...composeArgs(), 'up', '-d', 'timescaledb']);
+  await waitForDatabase(postgresUser);
   ensureDatabaseState(postgresUser);
   if (force) clearApplicationDatabase(postgresUser);
   restoreDatabase(postgresUser, join(staging, 'database.dump'));
+  restoreBackupSettings(postgresUser, staging);
   restoreArtwork(staging);
   run('docker', [...composeArgs(), 'up', ...(sourceBuild ? ['--build'] : []), '-d', 'api', 'nginx']);
 
