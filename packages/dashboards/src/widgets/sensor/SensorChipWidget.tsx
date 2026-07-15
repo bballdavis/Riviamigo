@@ -10,12 +10,13 @@ import {
   useMetricValue,
 } from '@riviamigo/hooks';
 import {
-  DEFAULT_CURVE_SMOOTHING,
+  DEFAULT_SPRITE_TIME_FILTER,
   getChartColor,
   MiniSparkline,
-  normalizeCurveSmoothing,
+  normalizeTimeFilter,
   type ChartColorKey,
   type MiniSparklineType,
+  type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { Badge, Card, Tooltip } from '@riviamigo/ui/primitives';
 import {
@@ -81,6 +82,7 @@ interface SensorChipOptions {
   valueSize?: 'sm' | 'md' | 'lg';
   valueColor?: SensorValueColor;
   valueMode?: 'latest' | 'sum' | 'avg' | 'count';
+  timeFilter?: TimeFilterWindow;
   curveSmoothing?: number | boolean;
   curveColor?: ChartColorKey;
   windowDays?: number;
@@ -124,7 +126,8 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     curveColor: options.curveColor ?? 'accent',
     timeframeScope: options.timeframeScope ?? definition.timeframeScope ?? 'range',
     tripSelectionAware: options.tripSelectionAware ?? false,
-    curveSmoothing: normalizeCurveSmoothing(options.curveSmoothing, defaultCurveSmoothing(chartType)),
+    curveSmoothing: options.curveSmoothing ?? 0,
+    timeFilter: normalizeTimeFilter(options.timeFilter, legacySmoothingToTimeFilter(options.curveSmoothing, chartType)),
     windowDays:
       typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
         ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
@@ -285,7 +288,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             height={36}
             color={getChartColor(options.curveColor)}
             showFallback
-            curveSmoothing={options.curveSmoothing}
+            timeFilter={options.timeFilter}
           />
           <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
         </div>
@@ -654,8 +657,9 @@ function statusToneClass(tone: StatusTone) {
   return 'text-fg';
 }
 
-function defaultCurveSmoothing(chartType: SensorChartType | 'none') {
-  return chartType === 'line' || chartType === 'area' ? DEFAULT_CURVE_SMOOTHING : 0;
+function legacySmoothingToTimeFilter(value: unknown, chartType: SensorChartType | 'none'): TimeFilterWindow {
+  if (chartType !== 'line' && chartType !== 'area') return 'raw';
+  return value === false || value === 0 ? 'raw' : DEFAULT_SPRITE_TIME_FILTER;
 }
 
 function sensorDataRequirements(instance: WidgetInstance): DashboardDataRequirements {
@@ -705,7 +709,9 @@ for (const definition of SENSOR_DEFINITIONS) {
       valueColor: definition.valueColor ?? 'accent',
       showSprite: definition.chartType !== 'none',
       curveColor: 'accent',
-      curveSmoothing: defaultCurveSmoothing(definition.chartType),
+      timeFilter: definition.chartType === 'line' || definition.chartType === 'area'
+        ? DEFAULT_SPRITE_TIME_FILTER
+        : 'raw',
       showSubtitle: false,
       accentBorder: definition.accent ?? false,
       valueSize: 'md',

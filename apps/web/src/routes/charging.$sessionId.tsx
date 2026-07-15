@@ -56,7 +56,7 @@ function ChargeSessionContentInner() {
       chartId: 'charge-session-curve',
       chartIds: ['charge-session-curve'],
       showPicker: false,
-      curveSmoothing: 0.2,
+      timeFilter: '15m',
       headerSubtitle: 'Charge rate (kW) and cumulative energy (kWh) over time',
     },
   };
