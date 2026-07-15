@@ -177,7 +177,7 @@ describe('dashboard API wiring', () => {
       widgets: [
         {
           ...dashboardConfig.widgets[0]!,
-          options: { chartType: 'line', curveSmoothing: 0.65 },
+          options: { chartType: 'line', timeFilter: '24h' },
         },
       ],
     };
@@ -197,6 +197,6 @@ describe('dashboard API wiring', () => {
       },
     });
     expect(body.config.widgets).toHaveLength(1);
-    expect(body.config.widgets[0].options.curveSmoothing).toBe(0.65);
+    expect(body.config.widgets[0].options.timeFilter).toBe('24h');
   });
 });

@@ -124,7 +124,6 @@ export function PhantomDrainChart({
       yUnit={yUnit}
       {...(yRange ? { yRange } : {})}
       mode="bar"
-      smoothing={0}
       interactionMode={interactionMode}
     />
   );

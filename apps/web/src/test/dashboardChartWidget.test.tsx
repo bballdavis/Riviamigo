@@ -94,7 +94,7 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
   });
 
-  it('shows smoothing settings without a chart picker and reveals the slider after toggle-on', () => {
+  it('shows the display-filter slider without a chart picker', () => {
     const instance = {
       ...makeInstance('soc-history', false),
       options: {
@@ -102,22 +102,16 @@ describe('DashboardChartWidget - smoothing controls', () => {
         chartIds: ['soc-history'],
         page: undefined,
         showPicker: false,
-        curveSmoothing: 0,
+        timeFilter: 'raw',
       },
     };
 
     render(<DashboardChartWidget instance={instance} ctx={CTX} />);
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
-    const toggle = screen.getByRole('switch');
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
-    expect(screen.queryByRole('slider')).toBeNull();
-
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
     const slider = screen.getByRole('slider');
     expect(slider).toBeTruthy();
-    expect(slider.getAttribute('value')).toBe('0.05');
+    expect(slider.getAttribute('value')).toBe('0');
     expect(screen.queryByLabelText('Time minimum')).toBeNull();
   });
 
@@ -288,8 +282,8 @@ describe('DashboardChartWidget mobile viewer', () => {
   });
 });
 
-describe('DashboardChartRenderer - smoothing data flow', () => {
-  it('passes the smoothing amount through to the chart renderer', () => {
+describe('DashboardChartRenderer - display-filter data flow', () => {
+  it('passes the time filter through to the chart renderer', () => {
     mockSoc.mockReturnValueOnce({
       data: [
         { ts: '2024-01-01T00:00:00Z', value: 10 },
@@ -299,9 +293,9 @@ describe('DashboardChartRenderer - smoothing data flow', () => {
       isLoading: false,
     });
 
-    render(<DashboardChartRenderer chartId="soc-history" ctx={CTX} height={300} smoothing={1} />);
+    render(<DashboardChartRenderer chartId="soc-history" ctx={CTX} height={300} timeFilter="1h" />);
 
-    expect(screen.getByTestId('rich-chart').getAttribute('data-smoothing')).toBe('1');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-time-filter')).toBe('1h');
   });
 });
 
@@ -477,7 +471,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       points,
       series,
       emptyTitle,
-      smoothing,
+      timeFilter,
       xRange,
       yRange,
       yRightRange,
@@ -487,7 +481,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       points: Array<{ ts: string | number | Date }>;
       series: Array<{ label: string; tooltipOnly?: boolean }>;
       emptyTitle: string;
-      smoothing?: number;
+      timeFilter?: string;
       xRange?: [number, number];
       yRange?: [number, number];
       yRightRange?: [number, number];
@@ -499,7 +493,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       ) : (
         <div
           data-testid="rich-chart"
-          data-smoothing={String(smoothing ?? 0)}
+          data-time-filter={timeFilter ?? 'raw'}
           data-series={series.map((item) => item.label).join('|')}
           data-tooltip-only-series={series.filter((item) => item.tooltipOnly).map((item) => item.label).join('|')}
           data-x-range={xRange ? xRange.join('|') : ''}

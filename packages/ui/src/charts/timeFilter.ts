@@ -89,7 +89,7 @@ export function filterTimeSeriesValues(
         count -= 1;
         left += 1;
       }
-      result[index] = count > 0 ? sum / count : result[index];
+      result[index] = count > 0 ? sum / count : result[index] ?? null;
     }
     segmentStart = segmentEnd;
   }

@@ -129,7 +129,7 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
             height={36}
             color={getChartColor('accent')}
             showFallback
-            curveSmoothing={0.45}
+            timeFilter="24h"
           />
           <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
         </div>

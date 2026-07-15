@@ -190,33 +190,32 @@ describe('dashboard sensor chips', () => {
     expect(layer).toHaveStyle({ bottom: '0px', left: '0px', right: '0px' });
     expect(layer.querySelector('canvas')).not.toBeNull();
     expect(layer.querySelector('[data-sparkline-renderer="canvas"]')).not.toBeNull();
-    expect(layer.querySelector('[data-sparkline-curve="smooth"]')).not.toBeNull();
+    expect(layer.querySelector('[data-sparkline-filter="24h"]')).not.toBeNull();
     expect(screen.queryByText('miles per day')).not.toBeInTheDocument();
   });
 
-  it('allows line sprite smoothing to be disabled', () => {
+  it('allows line sprite filtering to be disabled', () => {
     render(
-      <DashboardRenderer config={config(true, false, { curveSmoothing: 0 })} ctx={defaultCtx} />
+      <DashboardRenderer config={config(true, false, { timeFilter: 'raw' })} ctx={defaultCtx} />
     );
 
     const layer = screen.getByTestId('sensor-sprite-layer');
-    expect(layer.querySelector('[data-sparkline-curve="straight"]')).not.toBeNull();
+    expect(layer.querySelector('[data-sparkline-filter="raw"]')).not.toBeNull();
     expect(layer.querySelector('canvas')).not.toBeNull();
   });
 
-  it('changes the rendered curve geometry when the smoothing amount changes', () => {
+  it('records the selected timestamp filter on the sprite renderer', () => {
     const { unmount } = render(
       <MiniSparkline
         data={metricMocks.series}
         type="line"
-        curveSmoothing={0.05}
+        timeFilter="15m"
         height={36}
       />
     );
 
-    const lowSmoothing = document.querySelector('[data-sparkline-state="series"]');
-    expect(lowSmoothing).toHaveAttribute('data-sparkline-curve', 'smooth');
-    expect(lowSmoothing).toHaveAttribute('data-sparkline-smoothing', '0.05');
+    const lowFilter = document.querySelector('[data-sparkline-state="series"]');
+    expect(lowFilter).toHaveAttribute('data-sparkline-filter', '15m');
 
     unmount();
 
@@ -224,18 +223,17 @@ describe('dashboard sensor chips', () => {
       <MiniSparkline
         data={metricMocks.series}
         type="line"
-        curveSmoothing={1}
+        timeFilter="7d"
         height={36}
       />
     );
 
-    const highSmoothing = document.querySelector('[data-sparkline-state="series"]');
-    expect(highSmoothing).toHaveAttribute('data-sparkline-curve', 'smooth');
-    expect(highSmoothing).toHaveAttribute('data-sparkline-smoothing', '1.00');
-    expect(highSmoothing?.querySelector('canvas')).not.toBeNull();
+    const highFilter = document.querySelector('[data-sparkline-state="series"]');
+    expect(highFilter).toHaveAttribute('data-sparkline-filter', '7d');
+    expect(highFilter?.querySelector('canvas')).not.toBeNull();
   });
 
-  it('reports sparse line data as straight when smoothing cannot change the path', () => {
+  it('keeps a raw timestamp filter available for sparse data', () => {
     render(
       <MiniSparkline
         data={[
@@ -243,13 +241,13 @@ describe('dashboard sensor chips', () => {
           { ts: '2026-05-02T00:00:00Z', value: 18 },
         ]}
         type="line"
-        curveSmoothing={1}
+        timeFilter="raw"
         height={36}
       />
     );
 
     const sparkline = document.querySelector('[data-sparkline-state="series"]');
-    expect(sparkline).toHaveAttribute('data-sparkline-curve', 'straight');
+    expect(sparkline).toHaveAttribute('data-sparkline-filter', 'raw');
     expect(sparkline?.querySelector('canvas')).not.toBeNull();
   });
 
