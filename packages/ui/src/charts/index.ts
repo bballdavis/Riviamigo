@@ -13,7 +13,7 @@ export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
 export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
-export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatChartNumber, clampExplorationRange } from './RichTimeSeriesChart';
+export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatChartNumber, clampExplorationRange, isZoomedXRange } from './RichTimeSeriesChart';
 export { MiniSparkline, resolveCanvasColor } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
 export {
@@ -28,6 +28,16 @@ export {
   timeFilterMilliseconds,
 } from './timeFilter';
 export type { TimeBucketPoint, TimeFilterWindow } from './timeFilter';
+export {
+  CURVE_SMOOTHNESS_OPTIONS,
+  DEFAULT_CURVE_SMOOTHNESS,
+  clampedControlPoints,
+  curveSmoothnessLabel,
+  curveTension,
+  normalizeCurveSmoothness,
+  splitCurveSegments,
+} from './curveSmoothness';
+export type { CurvePoint, CurveSmoothness } from './curveSmoothness';
 export { ChargeCurveChart } from './ChargeCurveChart';
 export type { ChargeCurveChartProps, ChargeCurvePoint } from './ChargeCurveChart';
 export { ChargeSessionDistributionChart } from './ChargeSessionDistributionChart';

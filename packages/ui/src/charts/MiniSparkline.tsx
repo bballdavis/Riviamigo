@@ -7,6 +7,14 @@ import {
   normalizeTimeFilter,
   type TimeFilterWindow,
 } from './timeFilter';
+import {
+  clampedControlPoints,
+  DEFAULT_CURVE_SMOOTHNESS,
+  normalizeCurveSmoothness,
+  splitCurveSegments,
+  type CurvePoint,
+  type CurveSmoothness,
+} from './curveSmoothness';
 
 export type MiniSparklineType = 'none' | 'line' | 'area' | 'bar';
 
@@ -17,6 +25,7 @@ export interface MiniSparklineProps {
   color?: string;
   showFallback?: boolean;
   timeFilter?: TimeFilterWindow;
+  smoothness?: CurveSmoothness;
 }
 
 export function MiniSparkline({
@@ -26,6 +35,7 @@ export function MiniSparkline({
   color = CHART_COLORS.accent,
   showFallback = true,
   timeFilter = DEFAULT_SPRITE_TIME_FILTER,
+  smoothness = DEFAULT_CURVE_SMOOTHNESS,
 }: MiniSparklineProps) {
   if (type === 'none') return null;
 
@@ -60,6 +70,7 @@ export function MiniSparkline({
         height={height}
         color={color}
         timeFilter={resolvedFilter}
+        smoothness={normalizeCurveSmoothness(smoothness)}
       />
     );
   }
@@ -72,6 +83,7 @@ export function MiniSparkline({
       color={color}
       fill={type === 'area'}
       timeFilter={resolvedFilter}
+      smoothness={normalizeCurveSmoothness(smoothness)}
     />
   );
 }
@@ -115,6 +127,7 @@ function CanvasSparkline({
   color,
   fill,
   timeFilter,
+  smoothness,
 }: {
   data: Array<{ x: string; value: number | null }>;
   type: Exclude<MiniSparklineType, 'none' | 'area'>;
@@ -122,6 +135,7 @@ function CanvasSparkline({
   color: string;
   fill?: boolean;
   timeFilter: TimeFilterWindow;
+  smoothness: CurveSmoothness;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
 
@@ -177,16 +191,16 @@ function CanvasSparkline({
 
       const points = data.map((point, index) => point.value == null ? null : pointAt({ value: point.value }, index));
       const drawLinePaths = () => {
-        let previousPoint: { x: number; y: number } | null = null;
-        for (const point of points) {
-          if (!point) {
-            previousPoint = null;
-          } else if (!previousPoint) {
-            context.moveTo(point.x, point.y);
-            previousPoint = point;
-          } else {
-            context.lineTo(point.x, point.y);
-            previousPoint = point;
+        for (const segment of splitCurveSegments(points as Array<CurvePoint | null>)) {
+          context.moveTo(segment[0]!.x, segment[0]!.y);
+          if (smoothness === 'straight' || segment.length < 2) {
+            for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
+            continue;
+          }
+          for (let index = 0; index < segment.length - 1; index += 1) {
+            const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
+            const point = segment[index + 1]!;
+            context.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
           }
         }
       };
@@ -197,24 +211,22 @@ function CanvasSparkline({
 
       if (fill) {
         context.beginPath();
-        let segmentStart: { x: number; y: number } | null = null;
-        let previousPoint: { x: number; y: number } | null = null;
-        for (const point of [...points, null]) {
-          if (point) {
-            if (!segmentStart) {
-              segmentStart = point;
-              context.moveTo(point.x, height);
-              context.lineTo(point.x, point.y);
-            } else {
-              context.lineTo(point.x, point.y);
+        for (const segment of splitCurveSegments(points as Array<CurvePoint | null>)) {
+          const first = segment[0]!;
+          const last = segment[segment.length - 1]!;
+          context.moveTo(first.x, height);
+          context.lineTo(first.x, first.y);
+          if (smoothness === 'straight' || segment.length < 2) {
+            for (const point of segment.slice(1)) context.lineTo(point.x, point.y);
+          } else {
+            for (let index = 0; index < segment.length - 1; index += 1) {
+              const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
+              const point = segment[index + 1]!;
+              context.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
             }
-            previousPoint = point;
-          } else if (segmentStart && previousPoint) {
-            context.lineTo(previousPoint.x, height);
-            context.closePath();
-            segmentStart = null;
-            previousPoint = null;
           }
+          context.lineTo(last.x, height);
+          context.closePath();
         }
         context.globalAlpha = 0.16;
         context.fillStyle = canvasColor;
@@ -230,7 +242,7 @@ function CanvasSparkline({
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
     observer?.observe(canvas);
     return () => observer?.disconnect();
-  }, [color, data, fill, height, type]);
+  }, [color, data, fill, height, smoothness, type]);
 
   return (
     <div
@@ -241,6 +253,7 @@ function CanvasSparkline({
       data-sparkline-filter={timeFilter}
       data-sparkline-point-count={data.length}
       data-sparkline-aggregation={type === 'bar' && timeFilter !== 'raw' ? 'sum' : 'none'}
+      data-sparkline-smoothness={smoothness}
     >
       <canvas ref={canvasRef} style={{ display: 'block', height: '100%', width: '100%' }} aria-hidden="true" />
     </div>

@@ -383,6 +383,7 @@ export interface ChargeCurvePoint {
   soc_pct: number;
   power_kw: number;
   sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
+  power_method?: 'recorded' | 'soc_delta' | string;
 }
 
 export interface ChargeCurveAnalysisPoint {
@@ -392,6 +393,7 @@ export interface ChargeCurveAnalysisPoint {
   charge_rate_kw: number;
   charger_type: ChargerType | null;
   sample_source?: 'telemetry' | 'telemetry_1min' | 'rivian_charge_curve_points' | string;
+  power_method?: 'recorded' | 'soc_delta' | string;
 }
 
 export interface ChargingChartDailyPoint {

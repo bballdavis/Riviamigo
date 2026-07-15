@@ -207,6 +207,7 @@ fn build_fallback_curve_samples(
                 soc,
                 sample_source: "rivian_charge_curve_points",
                 charger_type: charger_type.map(ToOwned::to_owned),
+                power_method: "recorded",
             }
         })
         .collect()
@@ -248,6 +249,8 @@ struct CurveRow {
     minutes_elapsed: Option<f64>,
     charge_rate_kw: Option<f64>,
     soc: Option<f64>,
+    #[sqlx(default)]
+    power_method: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -268,6 +271,7 @@ struct CurveSampleRow {
     soc: Option<f64>,
     sample_source: &'static str,
     charger_type: Option<String>,
+    power_method: &'static str,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -283,6 +287,8 @@ struct CurveAnalysisValueRow {
     minutes_elapsed: f64,
     charge_rate_kw: Option<f64>,
     soc: Option<f64>,
+    #[sqlx(default)]
+    power_method: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -552,35 +558,7 @@ async fn get_curve_analysis(
                cs.id,
                cs.started_at,
                cs.ended_at,
-               COALESCE(cs.charger_type,
-                 CASE
-                   WHEN lower(COALESCE(cs.network_vendor, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
-                   WHEN COALESCE(
-                       cs.max_charge_rate_kw,
-                       cs.avg_charge_rate_kw,
-                       CASE
-                           WHEN cs.duration_minutes > 0
-                           THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0)
-                       END
-                   ) < 20 THEN 'ac'
-                   WHEN COALESCE(
-                       cs.max_charge_rate_kw,
-                       cs.avg_charge_rate_kw,
-                       CASE
-                           WHEN cs.duration_minutes > 0
-                           THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0)
-                       END
-                   ) < 50 THEN 'ac_l2'
-                   WHEN COALESCE(
-                       cs.max_charge_rate_kw,
-                       cs.avg_charge_rate_kw,
-                       CASE
-                           WHEN cs.duration_minutes > 0
-                           THEN COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) / (cs.duration_minutes::float8 / 60.0)
-                       END
-                   ) IS NOT NULL THEN 'dc'
-                 END
-               ) AS charger_type,
+               'dc'::text AS charger_type,
                cs.soc_start,
                cs.soc_end
            FROM riviamigo.charge_sessions cs
@@ -588,7 +566,9 @@ async fn get_curve_analysis(
              AND cs.started_at >= $2
              AND cs.started_at <= $3
              AND cs.ended_at IS NOT NULL
-           ORDER BY cs.started_at ASC, cs.id ASC"#
+             AND cs.is_home IS DISTINCT FROM true
+             AND lower(COALESCE(cs.charger_type, '')) = ANY(ARRAY['dc', 'dcfc'])
+           ORDER BY cs.started_at ASC, cs.id ASC"#,
     )
     .bind(vehicle_id)
     .bind(from)
@@ -628,6 +608,7 @@ async fn get_curve_analysis(
             "charge_rate_kw": row.charge_rate_kw,
             "sample_source": row.sample_source,
             "charger_type": row.charger_type,
+            "power_method": row.power_method,
         }))
         .collect::<Vec<_>>())))
 }
@@ -1475,7 +1456,10 @@ async fn load_curve(
     // offline periods) corrupt the curve.  Unknown/null types get the AC cap as
     // a conservative default; misclassifying a DC session as AC is unlikely
     // since the charge_detector's AC-spike filter already screens those.
-    let is_dc = charger_type == Some("dc");
+    let is_dc = matches!(
+        charger_type.map(str::to_ascii_lowercase).as_deref(),
+        Some("dc" | "dcfc")
+    );
 
     let linked_sample_count = sqlx::query_scalar::<_, i64>(
         r#"SELECT COUNT(*)::int8
@@ -1509,29 +1493,38 @@ async fn load_curve(
                    ) AS default_cap_wh
                ),
                 samples AS (
-                    SELECT t.ts AS bucket,
-                           t.battery_level AS avg_soc,
-                           ABS(t.power_kw) AS avg_power_kw,
-                           t.battery_capacity_wh AS bucket_cap_wh
+                    SELECT time_bucket('1 minute', t.ts) AS bucket,
+                           AVG(t.battery_level) AS avg_soc,
+                           AVG(ABS(t.power_kw)) FILTER (WHERE t.power_kw IS NOT NULL) AS avg_power_kw,
+                           AVG(t.battery_capacity_wh) AS bucket_cap_wh
                     FROM timeseries.telemetry t
                    WHERE t.vehicle_id=$1
                      AND t.charge_session_id=$2
                      AND t.ts >= $3
                      AND t.ts <= $4
+                   GROUP BY 1
                 )
                SELECT EXTRACT(EPOCH FROM (bucket - $3))::float8 / 60.0 AS minutes_elapsed,
                       LEAST(
                           CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
                           GREATEST(
                               0.0,
-                              COALESCE(
-                                  avg_power_kw,
-                                  60.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
+                              COALESCE(avg_power_kw, CASE
+                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
+                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
+                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
                                       * COALESCE(bucket_cap_wh, cap.default_cap_wh) / 1000.0
-                              )
+                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
+                              END)
                           )
                       ) AS charge_rate_kw,
-                      avg_soc AS soc
+                      avg_soc AS soc,
+                      CASE
+                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
+                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
+                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
+                          THEN 'soc_delta'
+                      END AS power_method
                FROM samples
                CROSS JOIN cap
                WHERE avg_soc IS NOT NULL
@@ -1577,14 +1570,22 @@ async fn load_curve(
                           CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
                           GREATEST(
                               0.0,
-                              COALESCE(
-                                  ABS(avg_power_kw),
-                                  60.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
+                              COALESCE(ABS(avg_power_kw), CASE
+                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
+                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
+                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
                                       * COALESCE(battery_capacity_wh, cap.default_cap_wh) / 1000.0
-                              )
+                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
+                              END)
                           )
                       ) AS charge_rate_kw,
-                      avg_soc AS soc
+                      avg_soc AS soc,
+                      CASE
+                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
+                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
+                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
+                          THEN 'soc_delta'
+                      END AS power_method
                FROM samples
                CROSS JOIN cap
                WHERE avg_soc IS NOT NULL
@@ -1611,7 +1612,8 @@ async fn load_curve(
             r#"SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
                       LEAST(CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
                             GREATEST(0.0, power_kw)) AS charge_rate_kw,
-                      NULL::float8 AS soc
+                      NULL::float8 AS soc,
+                      'recorded'::text AS power_method
                FROM riviamigo.rivian_charge_curve_points
                WHERE charge_session_id = $3
                  AND power_kw IS NOT NULL
@@ -1633,6 +1635,7 @@ async fn load_curve(
                         "charge_rate_kw": r.charge_rate_kw,
                         "soc": r.soc,
                         "sample_source": "rivian_charge_curve_points",
+                        "power_method": r.power_method,
                     })
                 })
                 .collect());
@@ -1647,6 +1650,7 @@ async fn load_curve(
                 "charge_rate_kw": r.charge_rate_kw,
                 "soc": r.soc,
                 "sample_source": sample_source,
+                "power_method": r.power_method,
             })
         })
         .collect())
@@ -1667,7 +1671,13 @@ async fn load_curve_analysis_samples(
         return Ok(vec![]);
     };
 
-    let is_dc = charger_type.as_deref() == Some("dc");
+    let is_dc = matches!(
+        charger_type
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("dc" | "dcfc")
+    );
     let cap_kw = if is_dc { 300.0 } else { 22.0 };
 
     let linked_sample_count = sqlx::query_scalar::<_, i64>(
@@ -1702,33 +1712,70 @@ async fn load_curve_analysis_samples(
                ),
                 samples AS (
                     SELECT t.ts AS bucket,
-                           t.battery_level AS avg_soc,
-                           ABS(t.power_kw) AS avg_power_kw,
-                           t.battery_capacity_wh AS bucket_cap_wh
+                           t.battery_level AS soc,
+                           ABS(t.power_kw) AS power_kw,
+                           t.battery_capacity_wh AS capacity_wh
                     FROM timeseries.telemetry t
                    WHERE t.vehicle_id=$1
                      AND t.charge_session_id=$2
                      AND t.ts >= $3
                      AND t.ts <= $4
+                ),
+                intervals AS (
+                    SELECT bucket,
+                           soc,
+                           power_kw,
+                           capacity_wh,
+                           LAG(bucket) OVER (ORDER BY bucket) AS previous_bucket,
+                           LAG(soc) OVER (ORDER BY bucket) AS previous_soc
+                    FROM samples
+                    WHERE soc IS NOT NULL
+                ),
+                calculated AS (
+                    SELECT bucket,
+                           soc,
+                           power_kw,
+                           CASE
+                               WHEN power_kw IS NULL
+                                AND soc > previous_soc
+                                AND EXTRACT(EPOCH FROM (bucket - previous_bucket)) BETWEEN 10 AND 300
+                               THEN 3600.0 * (soc - previous_soc) / 100.0
+                                   * COALESCE(capacity_wh, cap.default_cap_wh) / 1000.0
+                                   / EXTRACT(EPOCH FROM (bucket - previous_bucket))
+                           END AS derived_power_kw
+                    FROM intervals
+                    CROSS JOIN cap
+                ),
+                session_soc_points AS (
+                    SELECT MIN(bucket) AS ts,
+                           EXTRACT(EPOCH FROM (MIN(bucket) - $3))::float8 / 60.0 AS minutes_elapsed,
+                           soc,
+                           CASE
+                               WHEN COUNT(*) FILTER (WHERE power_kw IS NOT NULL) > 0
+                               THEN AVG(power_kw) FILTER (WHERE power_kw IS NOT NULL)
+                               ELSE AVG(derived_power_kw)
+                           END AS charge_rate_kw,
+                           CASE
+                               WHEN COUNT(*) FILTER (WHERE power_kw IS NOT NULL) > 0 THEN 'recorded'
+                               WHEN COUNT(*) FILTER (WHERE derived_power_kw IS NOT NULL) > 0 THEN 'soc_delta'
+                           END AS power_method
+                    FROM calculated
+                    WHERE power_kw IS NOT NULL OR derived_power_kw IS NOT NULL
+                    GROUP BY soc
                 )
-               SELECT bucket AS ts,
-                      EXTRACT(EPOCH FROM (bucket - $3))::float8 / 60.0 AS minutes_elapsed,
+               SELECT ts,
+                      minutes_elapsed,
                       LEAST(
                           CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
                           GREATEST(
                               0.0,
-                              COALESCE(
-                                  avg_power_kw,
-                                  60.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
-                                      * COALESCE(bucket_cap_wh, cap.default_cap_wh) / 1000.0
-                              )
+                              charge_rate_kw
                           )
                       ) AS charge_rate_kw,
-                      avg_soc AS soc
-               FROM samples
-               CROSS JOIN cap
-               WHERE avg_soc IS NOT NULL
-               ORDER BY bucket"#,
+                      soc,
+                      power_method
+               FROM session_soc_points
+               ORDER BY ts"#,
         )
         .bind(vehicle_id)
         .bind(session_id)
@@ -1751,6 +1798,11 @@ async fn load_curve_analysis_samples(
                 soc: row.soc,
                 sample_source: "telemetry",
                 charger_type: charger_type.clone(),
+                power_method: if row.power_method.as_deref() == Some("recorded") {
+                    "recorded"
+                } else {
+                    "soc_delta"
+                },
             })
             .collect());
     }
@@ -1800,14 +1852,22 @@ async fn load_curve_analysis_samples(
                           CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
                           GREATEST(
                               0.0,
-                              COALESCE(
-                                  ABS(avg_power_kw),
-                                  60.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
+                              COALESCE(ABS(avg_power_kw), CASE
+                                  WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
+                                   AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
+                                  THEN 3600.0 * (avg_soc - LAG(avg_soc) OVER (ORDER BY bucket)) / 100.0
                                       * COALESCE(battery_capacity_wh, cap.default_cap_wh) / 1000.0
-                              )
+                                      / EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket)))
+                              END)
                           )
                       ) AS charge_rate_kw,
-                      avg_soc AS soc
+                      avg_soc AS soc,
+                      CASE
+                          WHEN avg_power_kw IS NOT NULL THEN 'recorded'
+                          WHEN avg_soc > LAG(avg_soc) OVER (ORDER BY bucket)
+                           AND EXTRACT(EPOCH FROM (bucket - LAG(bucket) OVER (ORDER BY bucket))) BETWEEN 30 AND 300
+                          THEN 'soc_delta'
+                      END AS power_method
                FROM samples
                CROSS JOIN cap
                WHERE avg_soc IS NOT NULL
@@ -1833,6 +1893,11 @@ async fn load_curve_analysis_samples(
                 soc: row.soc,
                 sample_source: "telemetry_1min",
                 charger_type: charger_type.clone(),
+                power_method: if row.power_method.as_deref() == Some("recorded") {
+                    "recorded"
+                } else {
+                    "soc_delta"
+                },
             })
             .collect());
     }

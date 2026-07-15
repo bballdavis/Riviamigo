@@ -45,6 +45,7 @@ telemetry contract.
 
 - `Energy Charged` (`charging-weekly-energy`) is a daily total-energy bar chart. Each bar is one local charge day and hover shows the day plus total kWh.
 - `Daily Charge Sessions` (`charging-sessions-energy`) is a daily stacked bar chart. Each local-day bar is composed of AC, DC, and Unknown session groups, with legend, grouped hover details including the sum of recorded USD costs per charger type, and optional day selection for the charging table.
+- `DC Charging Curve Trend` uses only completed, non-home sessions canonically classified as DC. It shows every telemetry-backed session/SoC point, collapsing only duplicate readings from the same session at the same exact SoC. Evidence points fade from accent orange at lower power to green at higher power. The in-chart trend control can show a smooth local observed regression or a local upper-quartile best-observed regression, or hide that line entirely. Direct Rivian kW is preferred; when unavailable, power is derived from observed SoC change and elapsed time. Saved Rivian curve points with interpolated SoC remain visibly marked as estimated history and never affect either summary.
 - Both charts use the shared filled-bar treatment; the stacked chart retains its segmentation because it answers a different question from the daily total chart.
 
 TeslaMate-style dashboards generally cover these data families:

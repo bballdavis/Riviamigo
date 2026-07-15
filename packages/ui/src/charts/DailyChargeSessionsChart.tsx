@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { RotateCcw } from 'lucide-react';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatCurrency, formatSmartNumber } from '../lib/utils';
@@ -29,6 +30,8 @@ export interface DailyChargeSessionsChartProps {
   emptyTitle?: string | undefined;
   selectedDayLocal?: string | null;
   onDayClick?: (dayLocal: string | null) => void;
+  /** Enables touch-safe range selection in the expanded chart viewer. */
+  interactionMode?: 'standard' | 'touch-explore' | undefined;
 }
 
 export interface DailyEnergyBarChartProps {
@@ -37,6 +40,7 @@ export interface DailyEnergyBarChartProps {
   loading?: boolean;
   emptyTitle?: string | undefined;
   yRange?: [number, number] | undefined;
+  interactionMode?: 'standard' | 'touch-explore' | undefined;
 }
 
 export interface DailyChargingBarChartProps extends Omit<DailyChargeSessionsChartProps, 'dailySessions'> {
@@ -131,9 +135,14 @@ export function DailyChargingBarChart({
   onDayClick,
   variant,
   yRange,
+  interactionMode = 'standard',
 }: DailyChargingBarChartProps) {
   const chartRef = React.useRef<HTMLDivElement | null>(null);
+  const selectionRef = React.useRef<{ pointerId: number; start: number; current: number } | null>(null);
+  const suppressDayClickRef = React.useRef(false);
   const [hoverState, setHoverState] = React.useState<HoverState | null>(null);
+  const [zoomRange, setZoomRange] = React.useState<[number, number] | null>(null);
+  const [selection, setSelection] = React.useState<[number, number] | null>(null);
   const clipPathPrefix = React.useId().replace(/:/g, '');
 
   const days = React.useMemo<PreparedDay[]>(() => {
@@ -185,6 +194,20 @@ export function DailyChargingBarChart({
       .filter((day) => day.totalEnergyKwh > 0 || day.groups.length > 0);
   }, [daily, dailySessions]);
 
+  React.useEffect(() => {
+    setZoomRange((current) => {
+      if (!current) return current;
+      const lastIndex = days.length - 1;
+      if (lastIndex < 1) return null;
+      const next: [number, number] = [Math.min(current[0], lastIndex), Math.min(current[1], lastIndex)];
+      return next[0] < next[1] ? next : null;
+    });
+  }, [days.length]);
+
+  const visibleStartIndex = zoomRange?.[0] ?? 0;
+  const visibleDays = zoomRange ? days.slice(zoomRange[0], zoomRange[1] + 1) : days;
+  const isZoomed = zoomRange != null;
+
   const legendItems = React.useMemo(() => {
     const presentKeys = new Set<ChargerGroupKey>();
     for (const day of days) {
@@ -201,8 +224,8 @@ export function DailyChargingBarChart({
   }, [days, variant]);
 
   const activeDay = React.useMemo(
-    () => (hoverState ? days.find((day) => day.day_local === hoverState.dayLocal) ?? null : null),
-    [days, hoverState],
+    () => (hoverState ? visibleDays.find((day) => day.day_local === hoverState.dayLocal) ?? null : null),
+    [visibleDays, hoverState],
   );
 
   const setDayHoverFromEvent = React.useCallback(
@@ -230,6 +253,10 @@ export function DailyChargingBarChart({
 
   const handleDaySelect = React.useCallback(
     (dayLocal: string) => {
+      if (suppressDayClickRef.current) {
+        suppressDayClickRef.current = false;
+        return;
+      }
       if (!onDayClick) return;
       onDayClick(isDaySelected(dayLocal) ? null : dayLocal);
     },
@@ -256,7 +283,7 @@ export function DailyChargingBarChart({
   const margin = { top: 20, right: 24, bottom: 64, left: 70 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = chartHeight - margin.top - margin.bottom;
-  const maxEnergy = Math.max(1, ...days.map((day) => day.totalEnergyKwh));
+  const maxEnergy = Math.max(1, ...visibleDays.map((day) => day.totalEnergyKwh));
   const axisMinEnergy = Math.min(0, yRange?.[0] ?? 0);
   const axisMaxEnergy = Math.max(
     axisMinEnergy + 1,
@@ -266,7 +293,7 @@ export function DailyChargingBarChart({
   const axisSpan = axisMaxEnergy - axisMinEnergy;
   const topPaddingPx = 8;
   const renderHeight = Math.max(1, innerHeight - topPaddingPx);
-  const slotWidth = innerWidth / Math.max(days.length, 1);
+  const slotWidth = innerWidth / Math.max(visibleDays.length, 1);
   const barWidth = Math.min(CHART_BAR_STYLE.maxWidth, slotWidth * CHART_BAR_STYLE.slotRatio);
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
   const tooltipHeight = activeDay
@@ -275,11 +302,66 @@ export function DailyChargingBarChart({
       : 74
     : 0;
   const tooltipWidth = 288;
+  const getDayIndexFromEvent = (event: React.PointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0) return null;
+    const chartX = ((event.clientX - bounds.left) / bounds.width) * width;
+    if (!Number.isFinite(chartX)) return null;
+    const index = Math.floor((chartX - margin.left) / slotWidth);
+    return Math.max(0, Math.min(visibleDays.length - 1, index));
+  };
+  const selectionBounds = selection
+    ? [Math.min(selection[0], selection[1]), Math.max(selection[0], selection[1])] as [number, number]
+    : null;
+  const selectionX = selectionBounds ? margin.left + selectionBounds[0] * slotWidth : 0;
+  const selectionWidth = selectionBounds ? (selectionBounds[1] - selectionBounds[0] + 1) * slotWidth : 0;
+
+  const onChartPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (visibleDays.length < 2) return;
+    const index = getDayIndexFromEvent(event);
+    if (index == null) return;
+    selectionRef.current = { pointerId: event.pointerId, start: index, current: index };
+    setSelection([index, index]);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const onChartPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const active = selectionRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const index = getDayIndexFromEvent(event);
+    if (index == null || index === active.current) return;
+    active.current = index;
+    setSelection([active.start, index]);
+    event.preventDefault();
+  };
+  const finishChartSelection = (event: React.PointerEvent<SVGSVGElement>) => {
+    const active = selectionRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    selectionRef.current = null;
+    setSelection(null);
+    const end = getDayIndexFromEvent(event) ?? active.current;
+    if (Math.abs(end - active.start) < 1) return;
+    suppressDayClickRef.current = true;
+    setZoomRange([
+      visibleStartIndex + Math.min(active.start, end),
+      visibleStartIndex + Math.max(active.start, end),
+    ]);
+  };
 
   return (
     <div ref={chartRef} className="relative rounded-lg border border-border bg-bg-surface p-3 shadow-[inset_0_-1px_0_var(--rm-border)]">
+      {isZoomed ? (
+        <button
+          type="button"
+          onClick={() => setZoomRange(null)}
+          className="absolute right-3 top-3 z-30 flex h-8 w-8 items-center justify-center rounded-md border border-border bg-bg-surface/95 text-fg-secondary shadow-sm transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+          aria-label="Return to full chart view"
+          title="Return to full chart view"
+        >
+          <RotateCcw className="h-4 w-4" aria-hidden="true" />
+        </button>
+      ) : null}
       {legendItems.length > 0 ? (
-        <div className="pointer-events-none absolute right-3 top-3 z-20 flex flex-wrap justify-end gap-2 rounded-full border border-border bg-bg-surface/95 px-2 py-1 text-[11px] text-fg-secondary shadow-sm backdrop-blur">
+        <div className="pointer-events-none absolute right-14 top-3 z-20 flex flex-wrap justify-end gap-2 rounded-full border border-border bg-bg-surface/95 px-2 py-1 text-[11px] text-fg-secondary shadow-sm backdrop-blur">
           {legendItems.map((item) => (
             <span key={item.key} className="inline-flex items-center gap-1.5 whitespace-nowrap">
               <span
@@ -352,9 +434,17 @@ export function DailyChargingBarChart({
         width="100%"
         height={chartHeight}
         data-testid={variant === 'stacked' ? 'daily-charge-sessions-chart' : 'daily-energy-chart'}
+        className={interactionMode === 'touch-explore' ? 'touch-none' : undefined}
+        onPointerDown={onChartPointerDown}
+        onPointerMove={onChartPointerMove}
+        onPointerUp={finishChartSelection}
+        onPointerCancel={() => {
+          selectionRef.current = null;
+          setSelection(null);
+        }}
       >
         <defs>
-          {days.map((day, dayIndex) => {
+          {visibleDays.map((day, dayIndex) => {
             const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
             const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
             if (barHeight <= 0) return null;
@@ -389,7 +479,7 @@ export function DailyChargingBarChart({
           );
         })}
 
-        {days.map((day, dayIndex) => {
+        {visibleDays.map((day, dayIndex) => {
           const x = margin.left + slotWidth * dayIndex + (slotWidth - barWidth) / 2;
           const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
           const clippedBarHeight = Math.max(0, barHeight);
@@ -493,6 +583,20 @@ export function DailyChargingBarChart({
           );
         })}
 
+        {selectionBounds ? (
+          <rect
+            x={selectionX}
+            y={margin.top}
+            width={selectionWidth}
+            height={innerHeight}
+            fill="var(--rm-accent)"
+            fillOpacity={0.14}
+            stroke="var(--rm-accent)"
+            strokeDasharray="4 4"
+            pointerEvents="none"
+          />
+        ) : null}
+
         <text
           x={24}
           y={margin.top + innerHeight / 2}
@@ -520,6 +624,7 @@ export function DailyEnergyBarChart({
   loading,
   emptyTitle = 'No charging energy for this period',
   yRange,
+  interactionMode,
 }: DailyEnergyBarChartProps) {
   return (
     <DailyChargingBarChart
@@ -529,6 +634,7 @@ export function DailyEnergyBarChart({
       {...(height !== undefined ? { height } : {})}
       {...(loading !== undefined ? { loading } : {})}
       {...(yRange !== undefined ? { yRange } : {})}
+      {...(interactionMode !== undefined ? { interactionMode } : {})}
     />
   );
 }

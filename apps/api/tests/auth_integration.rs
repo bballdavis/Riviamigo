@@ -1351,6 +1351,143 @@ async fn charging_curve_analysis_uses_fallback_history_for_longer_windows() {
     assert!(rows
         .iter()
         .all(|row| row["sample_source"] == json!("rivian_charge_curve_points")));
+    assert!(rows
+        .iter()
+        .all(|row| row["power_method"] == json!("recorded")));
+}
+
+#[tokio::test]
+async fn charging_curve_analysis_uses_elapsed_time_and_strict_dc_sessions() {
+    let app = TestApp::new().await;
+    let token = register_and_login(&app, "charging-curve-interval@example.com").await;
+    let user_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM riviamigo.users WHERE email = $1",
+        "charging-curve-interval@example.com"
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("user id");
+    let vehicle_id = insert_vehicle(
+        &app.pool,
+        user_id,
+        "charging-curve-interval-vehicle",
+        "Interval Truck",
+    )
+    .await;
+
+    sqlx::query!(
+        r#"INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+           VALUES ($1, $2, 'owner', TRUE)"#,
+        vehicle_id,
+        user_id,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("vehicle membership");
+
+    let started_at = chrono::Utc::now() - chrono::Duration::days(2);
+    let ended_at = started_at + chrono::Duration::minutes(20);
+    let dc_session_id: uuid::Uuid = sqlx::query_scalar(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (vehicle_id, started_at, ended_at, charger_type, is_home, soc_start, soc_end)
+           VALUES ($1, $2, $3, 'dc', FALSE, 10.0, 30.0)
+           RETURNING id"#,
+    )
+    .bind(vehicle_id)
+    .bind(started_at)
+    .bind(ended_at)
+    .fetch_one(&app.pool)
+    .await
+    .expect("dc session");
+
+    let home_session_id: uuid::Uuid = sqlx::query_scalar(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (vehicle_id, started_at, ended_at, charger_type, is_home, soc_start, soc_end)
+           VALUES ($1, $2, $3, 'dc', TRUE, 10.0, 30.0)
+           RETURNING id"#,
+    )
+    .bind(vehicle_id)
+    .bind(started_at + chrono::Duration::minutes(30))
+    .bind(ended_at + chrono::Duration::minutes(30))
+    .fetch_one(&app.pool)
+    .await
+    .expect("home session");
+
+    let vendor_only_session_id: uuid::Uuid = sqlx::query_scalar(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (vehicle_id, started_at, ended_at, charger_type, network_vendor, is_home, soc_start, soc_end)
+           VALUES ($1, $2, $3, NULL, 'Tesla', FALSE, 10.0, 30.0)
+           RETURNING id"#,
+    )
+    .bind(vehicle_id)
+    .bind(started_at + chrono::Duration::minutes(60))
+    .bind(ended_at + chrono::Duration::minutes(60))
+    .fetch_one(&app.pool)
+    .await
+    .expect("vendor-only session");
+
+    for (offset_seconds, battery_level, power_kw) in [
+        (0_i64, 10.0_f64, None),
+        (15, 10.5, None),
+        (30, 10.5, Some(100.0_f64)),
+        (45, 10.5, Some(120.0_f64)),
+        (60, 11.0, None),
+    ] {
+        sqlx::query(
+            r#"INSERT INTO timeseries.telemetry
+               (ts, vehicle_id, charge_session_id, battery_level, battery_capacity_wh, power_kw)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
+        )
+        .bind(started_at + chrono::Duration::seconds(offset_seconds))
+        .bind(vehicle_id)
+        .bind(dc_session_id)
+        .bind(battery_level)
+        .bind(110_000.0_f64)
+        .bind(power_kw)
+        .execute(&app.pool)
+        .await
+        .expect("curve telemetry");
+    }
+
+    let query_time = |value: chrono::DateTime<chrono::Utc>| value.to_rfc3339().replace('+', "%2B");
+    let res = app
+        .request(
+            Method::GET,
+            &format!(
+                "/v1/charging/curve-analysis?vehicle_id={vehicle_id}&from={}&to={}",
+                query_time(chrono::Utc::now() - chrono::Duration::days(7)),
+                query_time(chrono::Utc::now())
+            ),
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(res.status, StatusCode::OK);
+    let rows = res.body.as_array().expect("curve rows");
+    assert!(rows
+        .iter()
+        .all(|row| row["session_id"] == json!(dc_session_id)));
+    assert_eq!(rows.len(), 2, "one point per session and exact SoC");
+    let recorded = rows
+        .iter()
+        .find(|row| row["soc_pct"] == json!(10.5))
+        .expect("recorded same-SoC point");
+    assert_eq!(recorded["power_method"], json!("recorded"));
+    assert!((recorded["charge_rate_kw"].as_f64().unwrap_or_default() - 110.0).abs() < 0.01);
+    let derived = rows
+        .iter()
+        .find(|row| row["soc_pct"] == json!(11.0))
+        .expect("15-second derived point");
+    assert_eq!(derived["power_method"], json!("soc_delta"));
+    assert!((derived["charge_rate_kw"].as_f64().unwrap_or_default() - 132.0).abs() < 0.01);
+    assert!(!rows
+        .iter()
+        .any(|row| row["session_id"] == json!(home_session_id)));
+    assert!(!rows
+        .iter()
+        .any(|row| row["session_id"] == json!(vendor_only_session_id)));
 }
 
 #[tokio::test]

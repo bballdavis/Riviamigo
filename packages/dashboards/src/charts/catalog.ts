@@ -41,8 +41,13 @@ export interface DashboardChartAxisCapability {
 
 export interface DashboardChartSettingsCapabilities {
   timeFilter: boolean;
+  smoothness?: boolean;
   axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisCapability>>;
   xDomainSource: DashboardChartXDomainSource;
+}
+
+export function supportsDashboardChartSmoothness(definition: DashboardChartDefinition): boolean {
+  return definition.mode === 'line' || definition.mode === 'area';
 }
 
 const rawModules = import.meta.glob<DashboardChartDefinition>('./definitions/*.chart.json', {
@@ -134,12 +139,12 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'battery_capacity_mileage':
       return {
-        timeFilter: false,
+        timeFilter: true,
         axes: {
-          x: { label: 'Mileage', unit: 'mi' },
           y: axisCapability('Usable capacity', definition.yUnit),
+          y2: { label: 'Mileage', unit: 'mi' },
         },
-        xDomainSource: 'chart-local',
+        xDomainSource: 'dashboard-timeframe',
       };
     case 'projected_range_mileage':
       return {

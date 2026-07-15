@@ -200,4 +200,36 @@ describe('DailyChargeSessionsChart', () => {
     fireEvent.click(bar);
     expect(screen.getByTestId('selected-day').textContent).toBe('none');
   });
+
+  it('zooms a dragged day range and restores the full chart from the icon control', () => {
+    render(
+      <DailyEnergyBarChart
+        daily={Array.from({ length: 4 }, (_, index) => ({
+          day_local: `2024-01-0${index + 1}`,
+          day_start: `2024-01-0${index + 1}T00:00:00Z`,
+          total_energy_kwh: 10 + index,
+          session_count: 1,
+        }))}
+      />,
+    );
+
+    const chart = screen.getByTestId('daily-energy-chart');
+    Object.defineProperty(chart, 'getBoundingClientRect', {
+      value: () => ({ left: 0, width: 960 }),
+    });
+
+    const pointerEvent = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX });
+      Object.defineProperty(event, 'pointerId', { value: 1 });
+      fireEvent(chart, event);
+    };
+    pointerEvent('pointerdown', 90);
+    pointerEvent('pointermove', 700);
+    pointerEvent('pointerup', 700);
+
+    const reset = screen.getByRole('button', { name: 'Return to full chart view' });
+    expect(reset.querySelector('svg')).toBeTruthy();
+    fireEvent.click(reset);
+    expect(screen.queryByRole('button', { name: 'Return to full chart view' })).toBeNull();
+  });
 });

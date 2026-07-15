@@ -3,12 +3,16 @@ import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
 import {
   CHART_COLOR_OPTIONS,
+  CURVE_SMOOTHNESS_OPTIONS,
   DEFAULT_SPRITE_TIME_FILTER,
+  curveSmoothnessLabel,
   getChartColor,
+  normalizeCurveSmoothness,
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
   type ChartColorKey,
+  type CurveSmoothness,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { SelectPicker } from '@riviamigo/ui/primitives';
@@ -67,6 +71,9 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
     legacySmoothingToTimeFilter(options.curveSmoothing, chartType),
   );
   const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === timeFilter));
+  const smoothnessSupported = chartType === 'line' || chartType === 'area';
+  const smoothness = normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, chartType));
+  const smoothnessIndex = Math.max(0, CURVE_SMOOTHNESS_OPTIONS.findIndex((option) => option.value === smoothness));
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
   const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
   const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : sensorDefinition?.icon);
@@ -155,6 +162,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
           ? timeFilter
           : DEFAULT_SPRITE_TIME_FILTER
         : 'raw',
+      smoothness: nextType === 'line' || nextType === 'area' ? smoothness : 'straight',
     });
   }
 
@@ -489,6 +497,20 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     ) : null}
                   </div>
                 ) : null}
+                {smoothnessSupported ? (
+                  <Field label={`Curve smoothness - ${curveSmoothnessLabel(smoothness)}`}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
+                      step={1}
+                      value={smoothnessIndex}
+                      onChange={(e) => patch({ smoothness: CURVE_SMOOTHNESS_OPTIONS[Number(e.target.value)]!.value })}
+                      className="rm-accent-range w-full"
+                      aria-label="Curve smoothness"
+                    />
+                  </Field>
+                ) : null}
                 <Field label="Color">
                   <div className="flex items-center gap-2">
                     <span
@@ -732,6 +754,11 @@ function legacySmoothingToTimeFilter(value: unknown, chartType: string): TimeFil
   if (chartType === 'bar' || chartType === 'daily_delta') return DEFAULT_SPRITE_TIME_FILTER;
   if ((chartType !== 'line' && chartType !== 'area') || value === false || value === 0) return 'raw';
   return DEFAULT_SPRITE_TIME_FILTER;
+}
+
+function legacyCurveSmoothingToSmoothness(value: unknown, chartType: string): CurveSmoothness {
+  if (chartType !== 'line' && chartType !== 'area') return 'straight';
+  return normalizeCurveSmoothness(value);
 }
 
 function isSensorDataSource(value: unknown): value is SensorDataSource {

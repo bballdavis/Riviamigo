@@ -179,8 +179,13 @@ Used to ensure full parity with the best-in-class EV trackers.
   `trip_efficiency_wh_mi`, and `rolling_24h_wh_mi` values. It does not group
   trips by local day.
 - Battery and charge-curve time-series routes return their direct normalized
-  telemetry samples when retained. Charge curves identify fallback samples with
-  `sample_source`.
+  telemetry samples when retained. Cross-session DC curves preserve raw
+  session/SoC evidence, collapsing only duplicate readings at the same SoC in
+  the same session. Charge curves identify storage provenance with
+  `sample_source` and rate provenance with `power_method`: `recorded` is a
+  Rivian-supplied kW reading, while `soc_delta` is calculated from observed SoC,
+  capacity, and elapsed time. `rivian_charge_curve_points` use interpolated SoC
+  and are estimated history rather than true-curve inputs.
 
 ### Historical API inventory
 - `GET /v1/battery/degradation` — capacity trend over time
