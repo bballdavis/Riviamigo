@@ -70,7 +70,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 | Regen braking % | % of energy | Per trip | regen_kWh / total_kWh |
 | Trips per week | count | Aggregate | |
 | Miles per week | mi | Aggregate | |
-| Efficiency trend | Wh/mi over time | Aggregate | Rolling 7/30-day |
+| Efficiency trend | Wh/mi over time | Per trip | Every completed trip plus a distance-weighted rolling 24-hour line |
 | Efficiency by drive mode | Wh/mi | Aggregate | Grouped |
 | Efficiency vs temp | Wh/mi @ temp | Aggregate | Scatter / binned |
 | Efficiency vs speed | Wh/mi @ speed | Aggregate | Binned speed buckets |
@@ -111,7 +111,7 @@ Used to ensure full parity with the best-in-class EV trackers.
 | Efficiency by drive mode | Wh/mi | Aggregate | Grouped bar chart |
 | Efficiency vs temperature | Wh/mi | Aggregate | Cold/warm correction insight |
 | Avg outside temperature | °C | Trip weather timeline | Time-weighted merged vehicle/Open-Meteo samples; estimated provenance is shown in the UI |
-| Efficiency trend (rolling) | Wh/mi | Time-series | 7-day rolling avg |
+| Efficiency trend (rolling) | Wh/mi | Per trip time-series | 24-hour distance-weighted rolling average |
 | Cost per mile | $/mi | Derived | From kWh rate setting |
 | Energy cost total (period) | $ | Aggregate | |
 | Regen recovered (period) | kWh | Aggregate | |
@@ -169,11 +169,24 @@ Used to ensure full parity with the best-in-class EV trackers.
 - `outside_temp_c` FLOAT8 (already in schema ✓)
 - `outside_temp_source` TEXT and route-aware `trip_weather_samples` (implemented)
 
-### New API endpoints needed
+### Time-series API density
+
+- `POST /v1/metrics/batch` accepts `density: "full"` for dashboard chart and
+  sparkline requests. Full responses contain every retained source point in the
+  requested timeframe and omit `max_points`; `compact` retains the legacy
+  capped response for compatibility callers.
+- `GET /v1/efficiency/trend` returns per-trip `ts`,
+  `trip_efficiency_wh_mi`, and `rolling_24h_wh_mi` values. It does not group
+  trips by local day.
+- Battery and charge-curve time-series routes return their direct normalized
+  telemetry samples when retained. Charge curves identify fallback samples with
+  `sample_source`.
+
+### Historical API inventory
 - `GET /v1/battery/degradation` — capacity trend over time
 - `GET /v1/efficiency/vs-temp` — efficiency binned by temperature
 - `GET /v1/efficiency/vs-speed` — efficiency binned by avg speed
-- `GET /v1/efficiency/trend` — rolling 7/30-day Wh/mi
+- `GET /v1/efficiency/trend` — per-trip Wh/mi with a rolling 24-hour trend
 - `GET /v1/stats/lifetime` — lifetime cumulative stats
 - `GET /v1/trips/:id/elevation` — altitude profile for a trip
 - `GET /v1/vehicles/:id/raw-data` — raw telemetry coverage and recent samples for acquisition debugging

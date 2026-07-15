@@ -664,6 +664,7 @@ describe('DashboardChartWidget — efficiency_trend', () => {
   it('renders chart when trend data is present', () => {
     renderChart('efficiency-trend');
     expectChartHasData('No efficiency data for this period');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('Trip efficiency|24-hour avg');
   });
 
   it('shows empty state when no trend data', () => {

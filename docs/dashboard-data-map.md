@@ -24,14 +24,20 @@ Sources:
 | Trips | trip list, route map, synchronized detail charts, speed, elevation, signed net power | completed trip detector, persisted route previews, adaptive telemetry samples, SoC/capacity telemetry | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Drive power uses direct fields when available, otherwise a bounded SoC-derived estimate with provenance and coverage metadata. |
 | Settings Raw Data | bounded telemetry lanes, searchable normalized records, per-field coverage, selected-record inspection, and owner/manager-only retained inbound events | bucketed Timescale telemetry for dense views, compatibility raw records for detail, plus short-lived Rivian websocket payload retention | Use lanes for history visualization and the normalized record path for search/detail; original payloads are troubleshooting evidence, not a stable dashboard contract. |
 
-## High-density telemetry rule
+## Full-density dashboard time-series rule
 
-Vehicle history should follow the map and trip-detail pattern: one bounded
-server-owned time window, a typed response with an explicit point budget, and
-detail requests only after the user selects a time or record. The telemetry
-lane endpoint is the preferred visualization contract. The compatibility raw
-record endpoint remains searchable and inspectable, but pages should not build
-large dashboard views by composing raw JSON records or arbitrary field blobs.
+Dashboard time-series charts and sparklines return every retained normalized
+telemetry, trip, or charge-session point in the selected range. They must not
+silently switch to minute/hour/day/week averages or impose a display-point cap.
+The typed batch and chart routes remain the only delivery seams; raw-event JSON
+is still a troubleshooting contract, not a dashboard data source. Where older
+raw history is unavailable, a chart may use the highest-resolution retained
+aggregate and must retain its source provenance.
+
+Intentional aggregation remains valid when it is the chart's meaning: charging
+and Phantom Drain bars use local days, while drive-mode and temperature charts
+use categories/bins. Trip-detail charts retain their 10-second synchronized
+telemetry contract.
 
 ## TeslaMate parity targets
 

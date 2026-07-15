@@ -1088,7 +1088,7 @@ async fn validate_endpoint(value: Option<&str>, allow_private: bool) -> Result<(
         }
         private |= match ip {
             IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(),
-            IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
+            IpAddr::V6(ip) => ip.is_loopback() || is_ipv6_unique_local(ip),
         };
     }
     if private && !allow_private {
@@ -1117,7 +1117,7 @@ fn endpoint_is_private(value: &str) -> bool {
     IpAddr::from_str(host)
         .map(|ip| match ip {
             IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(),
-            IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
+            IpAddr::V6(ip) => ip.is_loopback() || is_ipv6_unique_local(ip),
         })
         .unwrap_or(false)
 }
@@ -1132,8 +1132,16 @@ fn is_link_local_or_metadata(host: &str) -> bool {
 fn is_forbidden_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => ip.is_link_local() || ip.octets() == [169, 254, 169, 254],
-        IpAddr::V6(ip) => ip.is_unicast_link_local(),
+        IpAddr::V6(ip) => is_ipv6_unicast_link_local(ip),
     }
+}
+
+fn is_ipv6_unique_local(ip: std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
+}
+
+fn is_ipv6_unicast_link_local(ip: std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xffc0) == 0xfe80
 }
 
 fn active_endpoint(settings: &ConnectionSettingsRow) -> Option<String> {

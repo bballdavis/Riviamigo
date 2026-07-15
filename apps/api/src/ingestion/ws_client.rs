@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::models::telemetry::TelemetryEvent;
 use crate::{
     config::Config,
-    ingestion::{parser, session_store::RivianTokenBundle},
+    ingestion::{parallax, parser, session_store::RivianTokenBundle},
 };
 
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
@@ -525,6 +525,7 @@ pub async fn run_ws_loop(
     rivian_veh_id: String,
     tokens: RivianTokenBundle,
     tx: mpsc::Sender<WsInboundEvent>,
+    parallax_tx: Option<mpsc::Sender<parallax::ParallaxEvent>>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     config: Config,
 ) {
@@ -550,6 +551,7 @@ pub async fn run_ws_loop(
             &mut shutdown,
             &subscription_query,
             subscription_health.disabled_count(),
+            parallax_tx.as_ref(),
         )
         .await
         {
@@ -619,6 +621,7 @@ async fn connect_and_subscribe(
     shutdown: &mut tokio::sync::broadcast::Receiver<()>,
     subscription_query: &str,
     disabled_field_count: usize,
+    parallax_tx: Option<&mpsc::Sender<parallax::ParallaxEvent>>,
 ) -> anyhow::Result<WsLoopEnd> {
     let request = build_rivian_ws_request()?;
 
@@ -738,6 +741,29 @@ async fn connect_and_subscribe(
         })
         .await;
 
+    if parallax_tx.is_some() {
+        ws.send(Message::Text(parallax::subscription_message(rivian_veh_id)))
+            .await?;
+        tracing::info!(
+            vehicle_id = %vehicle_id,
+            rvm_count = parallax::CAPTURE_RVMS.len(),
+            "Parallax subscription submitted on existing Rivian WS connection"
+        );
+        let _ = tx
+            .send(WsInboundEvent {
+                kind: WsInboundKind::Control,
+                received_at: Utc::now(),
+                raw: json!({
+                    "type": "parallax_subscribe",
+                    "rvm_count": parallax::CAPTURE_RVMS.len(),
+                })
+                .to_string(),
+                message_type: Some("parallax_subscribe".into()),
+                telemetry: None,
+            })
+            .await;
+    }
+
     loop {
         tokio::select! {
             _ = shutdown.recv() => { return Ok(WsLoopEnd::Shutdown); }
@@ -746,6 +772,65 @@ async fn connect_and_subscribe(
                     Some(Ok(Message::Text(text))) => {
                         let value: Value = serde_json::from_str(&text).unwrap_or_default();
                         let message_type = message_type(&value);
+                        let message_id = value.get("id").and_then(Value::as_str);
+                        if message_id == Some(parallax::PARALLAX_SUBSCRIPTION_ID) {
+                            match message_type.as_deref() {
+                                Some("next") => {
+                                    let received_at = Utc::now();
+                                    let event = parallax::parse_next_message(&value, received_at)?;
+                                    if let Some(event) = event {
+                                        if let Some(parallax_tx) = parallax_tx {
+                                            parallax_tx.send(event).await.map_err(|_| {
+                                                anyhow::anyhow!("Parallax capture channel closed")
+                                            })?;
+                                        }
+                                    } else {
+                                        tracing::warn!(
+                                            vehicle_id = %vehicle_id,
+                                            "Parallax message did not match the expected envelope"
+                                        );
+                                    }
+                                    let _ = tx
+                                        .send(WsInboundEvent {
+                                            kind: WsInboundKind::Control,
+                                            received_at,
+                                            raw: text,
+                                            message_type: Some("parallax_next".into()),
+                                            telemetry: None,
+                                        })
+                                        .await;
+                                    continue;
+                                }
+                                Some("error") => {
+                                    let reason = truncate_ws_message(&text);
+                                    tracing::error!(
+                                        vehicle_id = %vehicle_id,
+                                        message = %reason,
+                                        "Rivian Parallax subscription rejected"
+                                    );
+                                    let _ = tx
+                                        .send(WsInboundEvent {
+                                            kind: WsInboundKind::Control,
+                                            received_at: Utc::now(),
+                                            raw: json!({
+                                                "type": "parallax_subscription_rejected",
+                                                "reason": reason,
+                                            })
+                                            .to_string(),
+                                            message_type: Some(
+                                                "parallax_subscription_rejected".into(),
+                                            ),
+                                            telemetry: None,
+                                        })
+                                        .await;
+                                    anyhow::bail!("Parallax subscription rejected");
+                                }
+                                Some("complete") => {
+                                    anyhow::bail!("Parallax subscription completed by server");
+                                }
+                                _ => {}
+                            }
+                        }
                         if matches!(message_type.as_deref(), Some("error") | Some("complete")) {
                             // Rivian sometimes rejects a single field by name in the error body.
                             // Surface the full message so we can diagnose which field is at fault

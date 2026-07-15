@@ -6,6 +6,7 @@ import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
+import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
 
 export interface RichSeries {
   key: string;
@@ -19,6 +20,8 @@ export interface RichSeries {
   tooltipFormatter?: (value: number | null | undefined) => string;
   /** Which Y scale this series is drawn on. Default 'y' (left). Use 'y2' for a right axis. */
   yScale?: 'y' | 'y2';
+  /** Keep cumulative or derived supporting series raw while filtering the primary line. */
+  filterable?: boolean;
 }
 
 export interface RichTimeSeriesChartProps {
@@ -38,7 +41,7 @@ export interface RichTimeSeriesChartProps {
   /** Secondary X axis shown at the top of the chart (same scale as primary X, different label format). */
   xSecondaryFormatter?: ((value: number) => string) | undefined;
   yValueFormatter?: ((value: number | null | undefined, unit?: string) => string) | undefined;
-  smoothing?: number | undefined;
+  timeFilter?: TimeFilterWindow | undefined;
   xRange?: [number, number] | undefined;
   yRange?: [number, number] | undefined;
   yRightRange?: [number, number] | undefined;
@@ -441,14 +444,12 @@ export function buildRichTimeSeriesUPlotSeries(
     barCount = 0,
     hiddenKeys = new Set<string>(),
     connectGaps = false,
-    smoothingAmount = 0,
     stepInterpolation = false,
   }: {
     mode?: RichTimeSeriesChartProps['mode'];
     barCount?: number;
     hiddenKeys?: ReadonlySet<string>;
     connectGaps?: boolean;
-    smoothingAmount?: number;
     stepInterpolation?: boolean;
   } = {},
 ): Series[] {
@@ -481,8 +482,6 @@ export function buildRichTimeSeriesUPlotSeries(
       if (seriesMode === 'scatter') next.paths = () => null;
       if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
         next.paths = uPlot.paths.stepped!({ align: 1 });
-      } else if (smoothingAmount > 0 && (seriesMode === 'line' || seriesMode === 'area')) {
-        next.paths = createVariableSplinePathBuilder(smoothingAmount);
       }
       return next;
     }),
@@ -504,7 +503,7 @@ export function RichTimeSeriesChart({
   xValueFormatter,
   xSecondaryFormatter,
   yValueFormatter,
-  smoothing = 0,
+  timeFilter = 'raw',
   xRange,
   yRange,
   yRightRange,
@@ -543,13 +542,15 @@ export function RichTimeSeriesChart({
   xSecondaryFormatterRef.current = xSecondaryFormatter;
   onCursorIndexChangeRef.current = onCursorIndexChange;
 
-  const smoothingAmount = smoothing ?? 0;
-
   const alignedData = React.useMemo<AlignedData>(() => {
     const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
-    const seriesData = series.map((item) => item.values.map((value) => value ?? null));
+    const seriesData = series.map((item) => (
+      xTime && item.filterable !== false
+        ? filterTimeSeriesValues(points.map((point) => point.ts), item.values, timeFilter)
+        : item.values.map((value) => value ?? null)
+    ));
     return [x, ...seriesData] as AlignedData;
-  }, [points, series, xTime, smoothingAmount, mode]);
+  }, [points, series, timeFilter, xTime]);
   alignedDataRef.current = alignedData;
   const tooltipValues = React.useMemo<Array<Array<number | null>>>(
     () => alignedData.slice(1).map((values) => (
@@ -569,14 +570,14 @@ export function RichTimeSeriesChart({
 
   const structureKey = React.useMemo(
     () =>
-      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${smoothingAmount}|${stepInterpolation}|` +
+      `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${timeFilter}|${stepInterpolation}|` +
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
       `${interactionMode}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, smoothingAmount, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, timeFilter, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
   );
 
   React.useEffect(() => {
@@ -730,7 +731,6 @@ export function RichTimeSeriesChart({
         barCount: xValues.length,
         hiddenKeys,
         connectGaps,
-        smoothingAmount,
         stepInterpolation,
       }),
       hooks: {

@@ -189,6 +189,28 @@ fn resolve_bucket(
     }
 }
 
+fn resolve_batch_density(
+    density: Option<&str>,
+    requested_bucket: Option<&str>,
+    requested_max_points: Option<usize>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<(&'static str, &'static str, Option<usize>), AppError> {
+    match density.unwrap_or("compact") {
+        "full" => Ok(("full", "raw", None)),
+        "compact" => Ok((
+            "compact",
+        resolve_bucket(requested_bucket, from, to)?,
+        Some(
+            requested_max_points
+                .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
+                .clamp(2, DASHBOARD_METRIC_MAX_POINTS),
+        ),
+        )),
+        other => Err(AppError::Validation(format!("unsupported density: {other}"))),
+    }
+}
+
 const METRICS: &[MetricDef] = &[
     MetricDef {
         id: "total_miles",
@@ -516,20 +538,13 @@ async fn get_batch(
     require_vehicle_access(&auth, p.vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, p.vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
-    let density = p.density.as_deref().unwrap_or("compact");
-    if !matches!(density, "compact" | "full") {
-        return Err(AppError::Validation(format!("unsupported density: {density}")));
-    }
-    let bucket = if density == "full" {
-        "raw"
-    } else {
-        resolve_bucket(p.bucket.as_deref(), from, to)?
-    };
-    let max_points = (density == "compact").then(|| {
-        p.max_points
-            .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
-            .clamp(2, DASHBOARD_METRIC_MAX_POINTS)
-    });
+    let (density, bucket, max_points) = resolve_batch_density(
+        p.density.as_deref(),
+        p.bucket.as_deref(),
+        p.max_points,
+        from,
+        to,
+    )?;
 
     let mut values = Vec::new();
     let mut series = Vec::new();
@@ -1105,7 +1120,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_point_cap_keeps_the_first_and_last_samples() {
+    fn compact_batch_point_cap_keeps_the_first_and_last_samples() {
         let start = Utc::now();
         let points = (0..200)
             .map(|offset| MetricSeriesPoint {
@@ -1126,5 +1141,24 @@ mod tests {
             128usize.clamp(2, DASHBOARD_METRIC_MAX_POINTS),
             DASHBOARD_METRIC_MAX_POINTS
         );
+    }
+
+    #[test]
+    fn full_batch_density_selects_raw_rows_without_a_point_cap() {
+        let to = Utc::now();
+        let from = to - chrono::Duration::days(365);
+        let (density, bucket, max_points) =
+            resolve_batch_density(Some("full"), Some("day"), Some(2), from, to).unwrap();
+
+        assert_eq!(density, "full");
+        assert_eq!(bucket, "raw");
+        assert_eq!(max_points, None);
+    }
+
+    #[test]
+    fn raw_bucket_is_available_to_the_singular_series_endpoint() {
+        let to = Utc::now();
+        let from = to - chrono::Duration::days(30);
+        assert_eq!(resolve_bucket(Some("raw"), from, to).unwrap(), "raw");
     }
 }

@@ -2,7 +2,7 @@
 
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
 
-Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, and old backup catalog entries are intentionally not restored. Reconnect providers after a restore.
+Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, backup target secrets, and old backup catalog entries are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore.
 
 ## Create and download a recovery package
 
@@ -12,6 +12,7 @@ Every package contains:
 
 - `manifest.json` with the package format, source release, migration version, scope, redactions, and checksums.
 - `database.dump`, a custom-format PostgreSQL dump with sensitive and ephemeral data excluded.
+- `backup-settings.json`, containing non-secret backup schedule and target configuration.
 - `vehicle-image-cache/`, containing the persistent first-party vehicle artwork mirror.
 
 The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid recovery mode and is rejected as manifest-only metadata.

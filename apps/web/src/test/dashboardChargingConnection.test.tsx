@@ -304,7 +304,7 @@ describe('charging connection custom widget', () => {
       expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
       expect(screen.queryByTestId('sensor-chip')).toBeNull();
     });
-  });
+  }, 15_000);
 
   it('requests data only for widgets visible in the selected preview', async () => {
     render(

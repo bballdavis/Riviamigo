@@ -5,6 +5,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use uuid::Uuid;
 
 use crate::{
@@ -54,6 +55,30 @@ mod timeframe_tests {
             (from, to)
         );
     }
+
+    #[test]
+    fn trend_keeps_each_same_day_trip_and_weights_the_24_hour_average_by_distance() {
+        let first = Utc.with_ymd_and_hms(2026, 7, 1, 9, 0, 0).unwrap();
+        let second = Utc.with_ymd_and_hms(2026, 7, 1, 17, 0, 0).unwrap();
+        let points = super::with_rolling_24h(vec![
+            super::TrendSample {
+                ts: first,
+                trip_efficiency_wh_mi: 300.0,
+                distance_miles: 10.0,
+            },
+            super::TrendSample {
+                ts: second,
+                trip_efficiency_wh_mi: 400.0,
+                distance_miles: 30.0,
+            },
+        ]);
+
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].ts, first);
+        assert_eq!(points[1].ts, second);
+        assert_eq!(points[0].rolling_24h_wh_mi, Some(300.0));
+        assert_eq!(points[1].rolling_24h_wh_mi, Some(375.0));
+    }
 }
 
 fn resolve_time_bounds(
@@ -86,6 +111,48 @@ struct TrendPoint {
     ts: DateTime<Utc>,
     trip_efficiency_wh_mi: Option<f64>,
     rolling_24h_wh_mi: Option<f64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TrendSample {
+    ts: DateTime<Utc>,
+    trip_efficiency_wh_mi: f64,
+    distance_miles: f64,
+}
+
+fn with_rolling_24h(samples: Vec<TrendSample>) -> Vec<TrendPoint> {
+    let mut window = VecDeque::new();
+    let mut distance_total = 0.0;
+    let mut weighted_efficiency_total = 0.0;
+
+    samples
+        .into_iter()
+        .map(|sample| {
+            window.push_back((
+                sample.ts,
+                sample.distance_miles,
+                sample.trip_efficiency_wh_mi,
+            ));
+            distance_total += sample.distance_miles;
+            weighted_efficiency_total += sample.distance_miles * sample.trip_efficiency_wh_mi;
+
+            while window
+                .front()
+                .is_some_and(|(ts, _, _)| *ts < sample.ts - chrono::Duration::hours(24))
+            {
+                let (_, distance_miles, efficiency_wh_mi) = window.pop_front().unwrap();
+                distance_total -= distance_miles;
+                weighted_efficiency_total -= distance_miles * efficiency_wh_mi;
+            }
+
+            TrendPoint {
+                ts: sample.ts,
+                trip_efficiency_wh_mi: Some(sample.trip_efficiency_wh_mi),
+                rolling_24h_wh_mi: (distance_total > 0.0)
+                    .then_some(weighted_efficiency_total / distance_total),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -235,17 +302,11 @@ async fn get_trend(
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
-    let rows = sqlx::query_as::<_, TrendPoint>(
+    let samples = sqlx::query_as::<_, TrendSample>(
         "SELECT
              started_at AS ts,
              efficiency_wh_per_mile AS trip_efficiency_wh_mi,
-             SUM(distance_miles * efficiency_wh_per_mile) OVER (
-               ORDER BY started_at
-               RANGE BETWEEN INTERVAL '24 hours' PRECEDING AND CURRENT ROW
-             ) / NULLIF(SUM(distance_miles) OVER (
-               ORDER BY started_at
-               RANGE BETWEEN INTERVAL '24 hours' PRECEDING AND CURRENT ROW
-             ), 0) AS rolling_24h_wh_mi
+             distance_miles
          FROM riviamigo.trips
          WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
            AND efficiency_wh_per_mile IS NOT NULL
@@ -258,7 +319,7 @@ async fn get_trend(
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(rows))
+    Ok(Json(with_rolling_24h(samples)))
 }
 
 async fn get_range_vs_temp(

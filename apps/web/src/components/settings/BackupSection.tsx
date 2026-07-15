@@ -796,6 +796,40 @@ export function BackupSection() {
                             <p className="mt-1 font-mono text-xs text-fg">{new Date(artifact.created_at).toLocaleString()}</p>
                           </div>
                         </div>
+                        {artifact.manifest.package && (
+                          <div className="mt-4 border-t border-border pt-3">
+                            <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Recovery package</p>
+                            <div className="mt-2 grid gap-3 md:grid-cols-2">
+                              <div>
+                                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Format</p>
+                                <p className="mt-1 font-mono text-xs text-fg">
+                                  {artifact.manifest.package.format ?? 'Unknown'} v{artifact.manifest.package.format_version ?? '?'}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Source release</p>
+                                <p className="mt-1 font-mono text-xs text-fg">
+                                  {artifact.manifest.package.source?.app_version ?? 'Unknown'}
+                                </p>
+                              </div>
+                              {(['included', 'redacted', 'excluded'] as const).map((scopeKey) => {
+                                const values = artifact.manifest.package?.scope?.[scopeKey] ?? [];
+                                return (
+                                  <div key={scopeKey} className="md:col-span-2">
+                                    <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">{capitalizeFirstLetter(scopeKey)}</p>
+                                    <p className="mt-1 text-xs text-fg">{values.join(' · ') || 'None listed'}</p>
+                                  </div>
+                                );
+                              })}
+                              <div className="md:col-span-2">
+                                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Restore instruction</p>
+                                <p className="mt-1 text-xs text-fg">
+                                  {String(artifact.manifest.package.restore?.requires ?? 'Use the restore script')}; provider credentials require re-authentication.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

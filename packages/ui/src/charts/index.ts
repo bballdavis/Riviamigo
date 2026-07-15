@@ -14,8 +14,19 @@ export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
 export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
 export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatChartNumber, clampExplorationRange } from './RichTimeSeriesChart';
-export { DEFAULT_CURVE_SMOOTHING, MiniSparkline, normalizeCurveSmoothing } from './MiniSparkline';
+export { MiniSparkline } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
+export {
+  DEFAULT_CHART_TIME_FILTER,
+  DEFAULT_SPRITE_TIME_FILTER,
+  filterTimeSeriesValues,
+  isTimeFilterWindow,
+  normalizeTimeFilter,
+  TIME_FILTER_OPTIONS,
+  timeFilterLabel,
+  timeFilterMilliseconds,
+} from './timeFilter';
+export type { TimeFilterWindow } from './timeFilter';
 export { ChargeCurveChart } from './ChargeCurveChart';
 export type { ChargeCurveChartProps, ChargeCurvePoint } from './ChargeCurveChart';
 export { ChargeSessionDistributionChart } from './ChargeSessionDistributionChart';
