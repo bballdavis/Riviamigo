@@ -49,7 +49,10 @@ mod timeframe_tests {
         let from = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
         let to = Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap();
 
-        assert_eq!(super::resolve_time_bounds(Some(from), Some(to), false, 90), (from, to));
+        assert_eq!(
+            super::resolve_time_bounds(Some(from), Some(to), false, 90),
+            (from, to)
+        );
     }
 }
 

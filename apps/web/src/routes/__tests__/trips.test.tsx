@@ -59,6 +59,12 @@ vi.mock('@riviamigo/hooks', () => ({
   }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Forest R1S' }] }),
+  useResolvedVehicleSelection: () => ({
+    authReady: true,
+    effectiveVehicleId: 'vehicle-1',
+    vehicleSelectionReady: true,
+    vehicles: [{ id: 'vehicle-1', display_name: 'Forest R1S' }],
+  }),
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({

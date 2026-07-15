@@ -77,6 +77,7 @@ services:
       RIVIAMIGO_ENV: development
       RUST_LOG: riviamigo_api=info,tower_http=info
       VEHICLE_IMAGE_CACHE_DIR: /data/vehicle-image-cache
+      BACKUP_ARTIFACT_DIR: /backups
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -87,6 +88,7 @@ services:
     restart: unless-stopped
     volumes:
       - vehicle_image_cache_dev:/data/vehicle-image-cache
+      - backup_artifacts_dev:/backups
     deploy:
       resources:
         limits:
@@ -99,3 +101,4 @@ volumes:
   garage_meta:
   garage_data:
   vehicle_image_cache_dev:
+  backup_artifacts_dev:

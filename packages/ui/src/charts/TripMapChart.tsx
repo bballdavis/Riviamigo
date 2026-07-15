@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { CHART_COLORS } from './ChartProvider';
 
 export interface LatLng { lat: number; lng: number; }
 
@@ -56,8 +57,15 @@ interface MapApi {
   setStyle(style: unknown): void;
 }
 
-const FALLBACK_ROUTE_COLORS = ['#38BDF8', '#34D399', '#A78BFA', '#F472B6', '#F59E0B', '#F87171'];
-const FALLBACK_ACTIVE_POINT_COLOR = '#F59E0B';
+const FALLBACK_ROUTE_COLORS = [
+  CHART_COLORS.sky,
+  CHART_COLORS.emerald,
+  CHART_COLORS.violet,
+  CHART_COLORS.rose,
+  CHART_COLORS.amber,
+  CHART_COLORS.danger,
+];
+const FALLBACK_ACTIVE_POINT_COLOR = CHART_COLORS.warning;
 const ACTIVE_POINT_SOURCE_ID = 'trip-active-point';
 const ACTIVE_POINT_LAYER_ID = 'trip-active-point-layer';
 const ROUTE_SOURCE_ID = 'trip-routes';
@@ -80,7 +88,7 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
       layers: [{
         id: 'neutral-background',
         type: 'background' as const,
-        paint: { 'background-color': getCssColor('--rm-bg-elevated', '#111827') },
+        paint: { 'background-color': getCssColor('--rm-bg-elevated', CHART_COLORS.muted) },
       }],
     };
   }
@@ -538,7 +546,7 @@ function syncActivePoint(
         'circle-radius': 6,
         'circle-color': getCssColor('--rm-accent', FALLBACK_ACTIVE_POINT_COLOR),
         'circle-stroke-width': 2,
-        'circle-stroke-color': '#FFFFFF',
+        'circle-stroke-color': getCssColor('--rm-bg', CHART_COLORS.muted),
       },
     });
   }

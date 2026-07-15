@@ -76,10 +76,7 @@ fn default_port() -> u16 {
 }
 
 fn default_backup_artifact_dir() -> String {
-    std::env::temp_dir()
-        .join("riviamigo-backups")
-        .to_string_lossy()
-        .into_owned()
+    "/backups".into()
 }
 
 fn default_backup_driver() -> String {

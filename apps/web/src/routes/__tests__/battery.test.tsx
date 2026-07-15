@@ -10,6 +10,12 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'v1', accessToken: 'tok' }),
   useMe: () => ({ data: { role: 'user' } }),
   useVehicles: () => ({ data: [{ id: 'v1', display_name: 'Forest R1S' }] }),
+  useResolvedVehicleSelection: () => ({
+    authReady: true,
+    effectiveVehicleId: 'v1',
+    vehicleSelectionReady: true,
+    vehicles: [{ id: 'v1', display_name: 'Forest R1S' }],
+  }),
   useCurrentVehicleStatus: () => ({
     data: {
       vehicle_id: 'v1',

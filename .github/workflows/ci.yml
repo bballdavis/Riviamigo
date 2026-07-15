@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          forbidden=$(git ls-files | grep -E '(^|/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(/|$)|(^|/)package-lock\.json$' || true)
+          forbidden=$(git ls-files | grep -E '(^|/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(/|$)|(^|/)package-lock\.json$|(^|/)[^/]+\.tmp$' || true)
           if [[ -n "$forbidden" ]]; then
             echo "Generated or local-only files are tracked:"
             echo "$forbidden"
@@ -181,8 +181,14 @@ jobs:
         with:
           workspaces: apps/api
 
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+
       - name: Format
         run: cargo fmt --all --check
+
+      - name: Run migrations for SQLx metadata validation
+        run: cargo sqlx migrate run
 
       - name: Check sqlx offline metadata
         run: cargo sqlx prepare --check --workspace

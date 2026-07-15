@@ -13,24 +13,9 @@ import { ChartTooltip } from './ChartTooltip';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatDuration } from '../lib/utils';
 
-function hexToRgb(hex: string) {
-  const normalized = hex.replace('#', '').trim();
-  if (normalized.length !== 6) return { r: 56, g: 189, b: 248 };
-  return {
-    r: Number.parseInt(normalized.slice(0, 2), 16),
-    g: Number.parseInt(normalized.slice(2, 4), 16),
-    b: Number.parseInt(normalized.slice(4, 6), 16),
-  };
-}
-
-function blendColor(fromHex: string, toHex: string, ratio: number) {
-  const from = hexToRgb(fromHex);
-  const to = hexToRgb(toHex);
+function blendColor(fromColor: string, toColor: string, ratio: number) {
   const t = Math.max(0, Math.min(1, ratio));
-  const r = Math.round(from.r + (to.r - from.r) * t);
-  const g = Math.round(from.g + (to.g - from.g) * t);
-  const b = Math.round(from.b + (to.b - from.b) * t);
-  return `rgb(${r}, ${g}, ${b})`;
+  return `color-mix(in oklab, ${fromColor} ${(1 - t) * 100}%, ${toColor} ${t * 100}%)`;
 }
 
 export interface SpeedHistogramBin {

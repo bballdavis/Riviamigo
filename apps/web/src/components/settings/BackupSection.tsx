@@ -230,7 +230,7 @@ export function BackupSection() {
   });
   const [draft, setDraft] = React.useState<BackupDraft | null>(null);
   const [localEnabled, setLocalEnabled] = React.useState(true);
-  const [s3Enabled, setS3Enabled] = React.useState(false);
+  const s3Enabled = false;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -241,7 +241,6 @@ export function BackupSection() {
     if (!overview.data) return;
     setDraft(buildDraft(overview.data));
     setLocalEnabled(true);
-    setS3Enabled(!!overview.data.settings.endpoint);
     setSecretKey('');
     setClearSecretKey(false);
   }, [overview.data?.settings.updated_at]);
@@ -259,7 +258,7 @@ export function BackupSection() {
   const saveSettings = useMutation({
     mutationFn: async () => {
       if (!draft) throw new Error('Backup settings are not ready yet.');
-      const payload = buildPayload(draft, secretKey, clearSecretKey, s3Enabled);
+      const payload = buildPayload(draft, secretKey, clearSecretKey, false);
       if (!payload) throw new Error('Retention must be a whole number greater than zero.');
       return api.updateBackupSettings(payload);
     },
@@ -371,7 +370,7 @@ export function BackupSection() {
         </CardHeader>
         <CardContent className="grid gap-4">
           {!runNowAllowed && runNowReason && (
-            <div className="rounded-lg border border-orange-400/40 bg-orange-500/10 px-3 py-2 text-xs text-orange-200">
+            <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
               Manual backup unavailable: {runNowReason}
             </div>
           )}
@@ -514,10 +513,10 @@ export function BackupSection() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Server className="h-4 w-4 text-fg-secondary" />
-            <CardTitle>S3 upload</CardTitle>
+            <CardTitle>Off-site storage</CardTitle>
             <span className="text-xs text-fg-tertiary">Optional — uploads in addition to local storage</span>
           </div>
-          <Toggle checked={s3Enabled} onChange={setS3Enabled} />
+          <Badge variant="default">Not configured</Badge>
         </CardHeader>
 
         {s3Enabled ? (
