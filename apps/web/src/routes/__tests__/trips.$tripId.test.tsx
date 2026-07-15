@@ -19,6 +19,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/ui/charts', () => ({
   DEFAULT_CURVE_SMOOTHING: 0.2,
+  DEFAULT_CHART_TIME_FILTER: '15m',
+  DEFAULT_SPRITE_TIME_FILTER: '24h',
   TripMapChart:           () => <div data-testid="trip-map-chart">map</div>,
   RichTimeSeriesChart:    ({ series, height }: { series: Array<{ label: string }>; height?: number }) => <div data-testid="trip-drive-chart" data-height={height}>{series.map((item) => item.label).join(', ')}</div>,
   CHART_COLORS:           { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },

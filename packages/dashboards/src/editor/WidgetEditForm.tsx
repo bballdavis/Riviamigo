@@ -61,7 +61,7 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
   const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
   const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
-  const timeFilterSupported = supportsCurveSmoothing(chartType);
+  const timeFilterSupported = supportsSpriteTimeFilter(chartType);
   const timeFilter = normalizeTimeFilter(
     options.timeFilter,
     legacySmoothingToTimeFilter(options.curveSmoothing, chartType),
@@ -150,8 +150,8 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   function handleChartTypeChange(nextType: string) {
     patch({
       chartType: nextType,
-      timeFilter: supportsCurveSmoothing(nextType)
-        ? supportsCurveSmoothing(chartType)
+      timeFilter: supportsSpriteTimeFilter(nextType)
+        ? supportsSpriteTimeFilter(chartType)
           ? timeFilter
           : DEFAULT_SPRITE_TIME_FILTER
         : 'raw',
@@ -470,17 +470,24 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                   </Field>
                 ) : null}
                 {timeFilterSupported ? (
-                  <Field label={`Display filter - ${timeFilterLabel(timeFilter)}`}>
-                    <input
-                      type="range"
-                      min={0}
-                      max={TIME_FILTER_OPTIONS.length - 1}
-                      step={1}
-                      value={timeFilterIndex}
-                      onChange={(e) => patch({ timeFilter: TIME_FILTER_OPTIONS[Number(e.target.value)]!.value })}
-                      className="rm-accent-range w-full"
-                    />
-                  </Field>
+                  <div>
+                    <Field label={`Display filter - ${timeFilterLabel(timeFilter)}`}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={TIME_FILTER_OPTIONS.length - 1}
+                        step={1}
+                        value={timeFilterIndex}
+                        onChange={(e) => patch({ timeFilter: TIME_FILTER_OPTIONS[Number(e.target.value)]!.value })}
+                        className="rm-accent-range w-full"
+                      />
+                    </Field>
+                    {chartType === 'bar' || chartType === 'daily_delta' ? (
+                      <p className="-mt-1 text-xs text-fg-tertiary">
+                        Non-raw windows sum bars within each time bin.
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 <Field label="Color">
                   <div className="flex items-center gap-2">
@@ -722,7 +729,8 @@ function isChartColorKey(value: unknown): value is ChartColorKey {
 }
 
 function legacySmoothingToTimeFilter(value: unknown, chartType: string): TimeFilterWindow {
-  if (!supportsCurveSmoothing(chartType) || value === false || value === 0) return 'raw';
+  if (chartType === 'bar' || chartType === 'daily_delta') return DEFAULT_SPRITE_TIME_FILTER;
+  if ((chartType !== 'line' && chartType !== 'area') || value === false || value === 0) return 'raw';
   return DEFAULT_SPRITE_TIME_FILTER;
 }
 
@@ -739,6 +747,6 @@ function isSensorValueColor(value: unknown): value is SensorValueColor {
   return value === 'accent' || value === 'default';
 }
 
-function supportsCurveSmoothing(chartType: string) {
-  return chartType === 'line' || chartType === 'area';
+function supportsSpriteTimeFilter(chartType: string) {
+  return chartType === 'line' || chartType === 'area' || chartType === 'bar' || chartType === 'daily_delta';
 }

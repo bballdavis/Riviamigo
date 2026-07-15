@@ -40,7 +40,7 @@ import {
   type DashboardDataRequirements,
 } from '../../dashboardData';
 import { resolveIconId } from '../../editor/iconMigration';
-import { seriesToDailyDeltas } from '../../editor/dailyDelta';
+import { seriesToDailyDeltas, seriesToDailyTotals } from '../../editor/dailyDelta';
 import type { TripRow } from '@riviamigo/ui/tables';
 import { useTripSelection } from '../table/tripSelectionStore';
 import {
@@ -257,7 +257,9 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
     ? 'bar'
     : (options.chartType as MiniSparklineType);
   const spriteData = isDailyDelta
-    ? seriesToDailyDeltas(series, options.windowDays)
+    ? isEventTotalMetric(metric ?? '')
+      ? seriesToDailyTotals(series, options.windowDays)
+      : seriesToDailyDeltas(series, options.windowDays)
     : deriveSpriteData(
         series,
         allowLatestFallback ? resolvedValue : null,
@@ -589,6 +591,13 @@ function deriveSpriteData(
   return [];
 }
 
+function isEventTotalMetric(metric: string) {
+  return metric === 'total_miles'
+    || metric === 'total_trips'
+    || metric === 'energy_charged'
+    || metric === 'total_cost';
+}
+
 function formatMetricValue(value: number | null | undefined, unit: string | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-';
   if (unit === 'mi') return formatMiles(value);
@@ -658,6 +667,7 @@ function statusToneClass(tone: StatusTone) {
 }
 
 function legacySmoothingToTimeFilter(value: unknown, chartType: SensorChartType | 'none'): TimeFilterWindow {
+  if (chartType === 'bar' || chartType === 'daily_delta') return DEFAULT_SPRITE_TIME_FILTER;
   if (chartType !== 'line' && chartType !== 'area') return 'raw';
   return value === false || value === 0 ? 'raw' : DEFAULT_SPRITE_TIME_FILTER;
 }
@@ -709,7 +719,7 @@ for (const definition of SENSOR_DEFINITIONS) {
       valueColor: definition.valueColor ?? 'accent',
       showSprite: definition.chartType !== 'none',
       curveColor: 'accent',
-      timeFilter: definition.chartType === 'line' || definition.chartType === 'area'
+      timeFilter: definition.chartType === 'line' || definition.chartType === 'area' || definition.chartType === 'bar' || definition.chartType === 'daily_delta'
         ? DEFAULT_SPRITE_TIME_FILTER
         : 'raw',
       showSubtitle: false,

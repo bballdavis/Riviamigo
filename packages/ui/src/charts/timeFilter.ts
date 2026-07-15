@@ -96,3 +96,42 @@ export function filterTimeSeriesValues(
 
   return result;
 }
+
+export interface TimeBucketPoint {
+  timestamp: string | number | Date;
+  value: number;
+}
+
+/**
+ * Bins finite samples into fixed, non-overlapping time windows and sums their
+ * values. This is for compact bar displays, where retaining a bar per source
+ * row obscures the magnitude of activity in a period. `Raw` is a strict
+ * bypass that keeps every original finite sample.
+ */
+export function bucketTimeSeriesValues(
+  timestamps: Array<string | number | Date>,
+  values: Array<number | null | undefined>,
+  window: TimeFilterWindow,
+): TimeBucketPoint[] {
+  const samples = timestamps.flatMap((timestamp, index) => {
+    const value = values[index];
+    return typeof value === 'number' && Number.isFinite(value)
+      ? [{ timestamp, value }]
+      : [];
+  });
+  const windowMilliseconds = timeFilterMilliseconds(window);
+  if (windowMilliseconds === 0 || timestamps.length !== values.length) return samples;
+
+  const datedSamples = samples.map((sample) => ({ ...sample, milliseconds: toMilliseconds(sample.timestamp) }));
+  if (datedSamples.some((sample) => sample.milliseconds == null)) return samples;
+
+  const buckets = new Map<number, number>();
+  for (const sample of datedSamples) {
+    const bucketStart = Math.floor(sample.milliseconds! / windowMilliseconds) * windowMilliseconds;
+    buckets.set(bucketStart, (buckets.get(bucketStart) ?? 0) + sample.value);
+  }
+
+  return [...buckets.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([timestamp, value]) => ({ timestamp: new Date(timestamp).toISOString(), value }));
+}

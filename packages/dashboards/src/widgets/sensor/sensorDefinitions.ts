@@ -4,7 +4,7 @@ import type { TimeframeScope } from '@riviamigo/types';
 /** Iconify-style id (e.g. "lucide:battery") OR legacy short key (resolved at render time). */
 export type SensorIconKey = string;
 
-/** Background-graph mode. `daily_delta` renders per-day change for cumulative metrics. */
+/** Background-graph mode. `daily_delta` renders per-day activity or change. */
 export type SensorChartType = MiniSparklineType | 'daily_delta' | 'none';
 export type SensorDataSource = 'metric' | 'batteryHealth' | 'chargingSummary' | 'efficiencySummary' | 'vehicleStatus';
 export type SensorValueColor = 'accent' | 'default';
@@ -38,7 +38,7 @@ export interface SensorDefinition {
 
 export const SENSOR_DEFINITIONS: SensorDefinition[] = [
   { id: 'total_miles', title: 'Total Miles', metric: 'total_miles', icon: 'lucide:route', chartType: 'daily_delta', valueMode: 'latest', accent: true, cumulative: true },
-  { id: 'total_trips', title: 'Total Trips', metric: 'total_trips', icon: 'lucide:calendar-days', chartType: 'daily_delta', valueMode: 'latest', cumulative: true },
+  { id: 'total_trips', title: 'Total Trips', metric: 'total_trips', icon: 'lucide:calendar-days', chartType: 'bar', valueMode: 'latest', cumulative: true },
   { id: 'energy_charged', title: 'Energy Charged', metric: 'energy_charged', icon: 'lucide:bolt', chartType: 'daily_delta', valueMode: 'latest', cumulative: true },
   { id: 'avg_efficiency', title: 'Avg Consumption', metric: 'avg_efficiency', icon: 'lucide:gauge', chartType: 'line', valueMode: 'latest', helpText: 'Total estimated battery energy used ÷ miles driven, distance-weighted for the selected range.' },
   { id: 'avg_gross_efficiency', title: 'Avg Consumption (gross)', metric: 'avg_gross_efficiency', icon: 'lucide:zap', chartType: 'line', valueMode: 'latest' },
