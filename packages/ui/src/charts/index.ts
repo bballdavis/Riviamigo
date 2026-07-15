@@ -22,6 +22,7 @@ export {
   bucketTimeSeriesValues,
   filterTimeSeriesValues,
   isTimeFilterWindow,
+  maximumContinuousTimeGapMilliseconds,
   normalizeTimeFilter,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
@@ -31,9 +32,8 @@ export type { TimeBucketPoint, TimeFilterWindow } from './timeFilter';
 export {
   CURVE_SMOOTHNESS_OPTIONS,
   DEFAULT_CURVE_SMOOTHNESS,
-  clampedControlPoints,
   curveSmoothnessLabel,
-  curveTension,
+  clampedControlPoints,
   normalizeCurveSmoothness,
   splitCurveSegments,
 } from './curveSmoothness';

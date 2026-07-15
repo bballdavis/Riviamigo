@@ -86,7 +86,7 @@ describe('GridEditor overlays', () => {
       />
     );
 
-    const slider = screen.getByRole('slider');
+    const slider = screen.getByLabelText(/Display filter/);
     fireEvent.change(slider, { target: { value: '1' } });
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -94,6 +94,39 @@ describe('GridEditor overlays', () => {
       })
     );
 
+  });
+
+  it('persists all three sensor smoothing positions independently from the display filter', () => {
+    const onChange = vi.fn();
+    const widget = {
+      ...BASE_CONFIG.widgets[0]!,
+      options: {
+        chartType: 'line',
+        timeFilter: '24h',
+        smoothness: 'gentle',
+      },
+    };
+
+    render(
+      <WidgetEditForm
+        widget={widget}
+        onChange={onChange}
+        onClose={() => undefined}
+      />
+    );
+
+    const smoothness = screen.getByLabelText('Curve smoothness');
+    expect(smoothness).toHaveAttribute('min', '0');
+    expect(smoothness).toHaveAttribute('max', '2');
+    expect(smoothness).toHaveValue('1');
+    fireEvent.change(smoothness, { target: { value: '2' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      options: expect.objectContaining({ smoothness: 'smooth', timeFilter: '24h' }),
+    }));
+    fireEvent.change(smoothness, { target: { value: '0' } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      options: expect.objectContaining({ smoothness: 'straight', timeFilter: '24h' }),
+    }));
   });
 
   it('offers the display filter for bar sprites and persists a time bin', () => {
@@ -115,7 +148,7 @@ describe('GridEditor overlays', () => {
     );
 
     expect(screen.getByText(/non-raw windows sum bars within each time bin/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('slider'), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText(/Display filter/), { target: { value: '4' } });
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         options: expect.objectContaining({ timeFilter: '24h' }),

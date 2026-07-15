@@ -172,17 +172,23 @@ describe('DashboardChartWidget - smoothing controls', () => {
       'test-soc-history',
       expect.objectContaining({ chartSettings: { 'soc-history': { smoothness: 'smooth' } } }),
     );
+
+    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-soc-history',
+      expect.objectContaining({ chartSettings: { 'soc-history': { smoothness: 'smooth', timeFilter: '1h' } } }),
+    );
   });
 
-  it('uses a bottom-sheet layout on mobile viewports', () => {
+  it('uses the same centered dialog layout on mobile viewports', () => {
     setMatchMedia(true);
     renderChart('soc-history');
 
     fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
 
     const dialog = screen.getByRole('dialog', { name: /chart settings/i });
-    expect(dialog.className).toContain('inset-x-2');
-    expect(dialog.className).toContain('bottom-2');
+    expect(dialog.className).toContain('max-w-xl');
+    expect(dialog.className).toContain('max-h-[calc(100dvh-1.5rem)]');
   });
 
   it('shows an empty shared-settings state for unsupported chart families', () => {
@@ -1029,6 +1035,7 @@ describe('DashboardChartWidget — projected_range_mileage', () => {
   it('renders chart when mileage data is present', () => {
     renderChart('projected-range-mileage');
     expectChartHasData('No projected range mileage data recorded yet');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-connect-gaps')).toBe('true');
   });
 
   it('shows empty state when no mileage data', () => {

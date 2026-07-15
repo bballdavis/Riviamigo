@@ -87,6 +87,8 @@ interface DashboardChartAxisRangeSetting {
   max?: number;
 }
 
+type DashboardChartResolvedAxisRanges = Partial<Record<'y' | 'y2', [number, number]>>;
+
 interface DashboardChartDisplaySettings {
   timeFilter?: TimeFilterWindow;
   smoothness?: CurveSmoothness;
@@ -207,6 +209,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [viewerOpen, setViewerOpen] = React.useState(false);
+  const [activeAxisRanges, setActiveAxisRanges] = React.useState<DashboardChartResolvedAxisRanges>({});
   const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const expandTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const { ref, height } = useMeasuredWidgetHeight(260, 160);
@@ -233,6 +236,10 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     : EMPTY_CAPABILITIES;
   const activeSettings = resolveChartDisplaySettings(draftChartSettings, activeChartId, options.legacyTimeFilter, options.legacySmoothness);
   const activeChartTitle = activeChartDefinition?.title ?? instance.title ?? 'Chart';
+
+  React.useEffect(() => {
+    setActiveAxisRanges((current) => Object.keys(current).length === 0 ? current : {});
+  }, [activeChartId]);
 
   function updateActiveChartSettings(
     updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings,
@@ -320,7 +327,15 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
       )}
       {!viewerOpen ? (
         <div ref={ref} className="min-h-0 flex-1 overflow-hidden">
-          <DashboardChartRenderer chartId={activeChartId} ctx={ctx} height={height} settings={activeSettings} />
+          <DashboardChartRenderer
+            chartId={activeChartId}
+            ctx={ctx}
+            height={height}
+            settings={activeSettings}
+            onResolvedAxisRanges={(ranges) => setActiveAxisRanges((current) => (
+              sameResolvedAxisRanges(current, ranges) ? current : ranges
+            ))}
+          />
         </div>
       ) : null}
       <ChartSettingsPanel
@@ -329,6 +344,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         chartTitle={activeChartTitle}
         capabilities={activeCapabilities}
         settings={activeSettings}
+        suggestedRanges={activeAxisRanges}
         persistent={Boolean(ctx.updateWidgetOptions)}
         onClose={() => setSettingsOpen(false)}
         onTimeFilterChange={(next) =>
@@ -351,6 +367,10 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
               [axisId]: {
                 ...(current.axes?.[axisId] ?? {}),
                 mode,
+                ...(mode === 'manual' && axisId !== 'x' ? {
+                  ...(current.axes?.[axisId]?.min == null && activeAxisRanges[axisId] ? { min: activeAxisRanges[axisId]![0] } : {}),
+                  ...(current.axes?.[axisId]?.max == null && activeAxisRanges[axisId] ? { max: activeAxisRanges[axisId]![1] } : {}),
+                } : {}),
               },
             },
           }))
@@ -404,6 +424,7 @@ export function DashboardChartRenderer({
   timeFilter = 'raw',
   settings,
   presentation = 'embedded',
+  onResolvedAxisRanges,
 }: {
   chartId: string;
   ctx: WidgetCtx;
@@ -411,6 +432,7 @@ export function DashboardChartRenderer({
   timeFilter?: TimeFilterWindow;
   settings?: DashboardChartDisplaySettings;
   presentation?: 'embedded' | 'mobile-viewer';
+  onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
 }) {
   const definition = getChartDefinition(normalizeChartId(chartId));
   if (!definition) {
@@ -428,6 +450,7 @@ export function DashboardChartRenderer({
       timeFilter={settings?.timeFilter ?? timeFilter}
       smoothness={settings?.smoothness ?? DEFAULT_CURVE_SMOOTHNESS}
       presentation={presentation}
+      {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})}
       {...(settings ? { settings } : {})}
     />
   );
@@ -441,6 +464,7 @@ type ActiveDashboardChartSourceProps = {
   smoothness: CurveSmoothness;
   settings?: DashboardChartDisplaySettings;
   presentation: 'embedded' | 'mobile-viewer';
+  onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
 };
 
 function ActiveDashboardChartSource(props: ActiveDashboardChartSourceProps) {
@@ -572,16 +596,16 @@ function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data
   }));
 }
 
-function BatteryMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
+function BatteryMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
-  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
+  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
 }
 
-function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
+function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
-  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
+  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
 }
 
 function renderSocHistoryChart(
@@ -1331,6 +1355,7 @@ function BatteryCapacityMileageChart({
   yRange,
   yRightRange,
   interactionMode,
+  onResolvedAxisRanges,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ ts: string; x: number | null; y: number | null; degradationPct: number | null }>;
@@ -1340,6 +1365,7 @@ function BatteryCapacityMileageChart({
   yRange?: [number, number];
   yRightRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
+  onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
 }) {
   const rows = points
     .filter((point) => point.x != null || point.y != null)
@@ -1385,6 +1411,7 @@ function BatteryCapacityMileageChart({
       yRightAxisValueFormatter={(value, unit) => formatChartNumber(value, unit, 0)}
       yValueFormatter={(value, unit) => formatChartNumber(value, unit, yPrecision)}
       interactionMode={interactionMode}
+      onResolvedAxisRanges={onResolvedAxisRanges}
     />
   );
 }
@@ -1406,6 +1433,7 @@ function ProjectedRangeMileageChart({
   yRange: manualYRange,
   yRightRange,
   interactionMode,
+  onResolvedAxisRanges,
 }: {
   definition: DashboardChartDefinition;
   points: Array<{ ts: string; rangeMi: number | null; projectedMaxRangeMi: number | null; x: number | null }>;
@@ -1415,6 +1443,7 @@ function ProjectedRangeMileageChart({
   yRange?: [number, number];
   yRightRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
+  onResolvedAxisRanges?: (ranges: DashboardChartResolvedAxisRanges) => void;
 }) {
   const rows = points
     .filter((point) => point.x != null)
@@ -1456,7 +1485,9 @@ function ProjectedRangeMileageChart({
       yRightRange={yRightRange}
       mode={definition.mode}
       timeFilter={timeFilter}
+      connectGaps
       interactionMode={interactionMode}
+      onResolvedAxisRanges={onResolvedAxisRanges}
     />
   );
 }
@@ -1628,6 +1659,16 @@ function getManualAxisRange(setting: DashboardChartAxisRangeSetting | undefined)
   return [setting.min, setting.max] as [number, number];
 }
 
+function sameResolvedAxisRanges(
+  left: DashboardChartResolvedAxisRanges,
+  right: DashboardChartResolvedAxisRanges,
+) {
+  return left.y?.[0] === right.y?.[0]
+    && left.y?.[1] === right.y?.[1]
+    && left.y2?.[0] === right.y2?.[0]
+    && left.y2?.[1] === right.y2?.[1];
+}
+
 function isMobileViewport() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return false;
@@ -1641,6 +1682,7 @@ interface ChartSettingsPanelProps {
   chartTitle: string;
   capabilities: DashboardChartSettingsCapabilities;
   settings: DashboardChartDisplaySettings & { timeFilter: TimeFilterWindow; axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> };
+  suggestedRanges: DashboardChartResolvedAxisRanges;
   persistent: boolean;
   onClose: () => void;
   onTimeFilterChange: (next: TimeFilterWindow) => void;
@@ -1655,6 +1697,7 @@ function ChartSettingsPanel({
   chartTitle,
   capabilities,
   settings,
+  suggestedRanges,
   persistent,
   onClose,
   onTimeFilterChange,
@@ -1662,8 +1705,6 @@ function ChartSettingsPanel({
   onAxisModeChange,
   onAxisValueChange,
 }: ChartSettingsPanelProps) {
-  const [isMobile, setIsMobile] = React.useState(isMobileViewport);
-  const [position, setPosition] = React.useState({ top: 0, left: 0, visibility: 'hidden' as 'hidden' | 'visible' });
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === settings.timeFilter));
   const smoothnessIndex = Math.max(0, CURVE_SMOOTHNESS_OPTIONS.findIndex((option) => option.value === (settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)));
@@ -1671,20 +1712,6 @@ function ChartSettingsPanel({
     capabilities.axes[axisId] ? [[axisId, capabilities.axes[axisId]] as const] : [],
   );
   const hasControls = capabilities.timeFilter || capabilities.smoothness === true || axisEntries.length > 0;
-
-  React.useEffect(() => {
-    const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 639px)')
-      : null;
-    const handleViewportChange = () => setIsMobile(mediaQuery ? mediaQuery.matches : false);
-    handleViewportChange();
-    mediaQuery?.addEventListener?.('change', handleViewportChange);
-    mediaQuery?.addListener?.(handleViewportChange);
-    return () => {
-      mediaQuery?.removeEventListener?.('change', handleViewportChange);
-      mediaQuery?.removeListener?.(handleViewportChange);
-    };
-  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -1707,69 +1734,23 @@ function ChartSettingsPanel({
     };
   }, [open, onClose, triggerRef]);
 
-  React.useLayoutEffect(() => {
-    if (!open || isMobile) return;
-
-    const updatePosition = () => {
-      const trigger = triggerRef.current;
-      const panel = panelRef.current;
-      if (!trigger || !panel) return;
-
-      const gap = 8;
-      const padding = 8;
-      const triggerRect = trigger.getBoundingClientRect();
-      const panelRect = panel.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-
-      let top = triggerRect.bottom + gap;
-      if (top + panelRect.height > viewportHeight - padding) {
-        top = triggerRect.top - panelRect.height - gap;
-      }
-      top = Math.min(Math.max(top, padding), Math.max(padding, viewportHeight - padding - panelRect.height));
-
-      let left = triggerRect.right - panelRect.width;
-      left = Math.min(Math.max(left, padding), Math.max(padding, viewportWidth - padding - panelRect.width));
-
-      setPosition({ top, left, visibility: 'visible' });
-    };
-
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [isMobile, open, triggerRef]);
-
   if (!open || typeof document === 'undefined') return null;
 
   return createPortal(
     <>
-      {isMobile ? (
-        <button
-          type="button"
-          aria-label="Close chart settings"
-          className="fixed inset-0 z-40 bg-bg-page/70 backdrop-blur-sm"
-          onClick={onClose}
-        />
-      ) : null}
       <div
-        ref={panelRef}
-        role="dialog"
-        aria-label="Chart settings"
-        className={cn(
-          'fixed z-50 overflow-hidden rounded-2xl border border-border bg-bg-surface shadow-xl',
-          isMobile ? 'inset-x-2 bottom-2 max-h-[calc(100vh-1rem)] w-auto' : 'w-[min(22rem,calc(100vw-1rem))]',
-        )}
-        style={
-          isMobile
-            ? { paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' }
-            : { top: position.top, left: position.left, visibility: position.visibility }
-        }
+        className="fixed inset-0 z-40 flex items-center justify-center bg-bg-page/70 p-3 backdrop-blur-sm"
+        onMouseDown={onClose}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-border px-3 py-3">
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Chart settings"
+          className="max-h-[calc(100dvh-1.5rem)] w-full max-w-xl overflow-y-auto rounded-2xl border border-border bg-bg-surface shadow-xl"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-border bg-bg-surface px-4 py-3">
           <div className="min-w-0">
             <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Chart settings</p>
             <h3 className="truncate text-sm font-semibold text-fg">{chartTitle}</h3>
@@ -1783,7 +1764,7 @@ function ChartSettingsPanel({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="grid gap-3 p-3">
+        <div className="grid gap-3 p-4">
           {capabilities.timeFilter ? (
             <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
               <div>
@@ -1845,6 +1826,7 @@ function ChartSettingsPanel({
                     axisId={axisId}
                     capability={capability}
                     setting={settings.axes[axisId]}
+                    {...(axisId !== 'x' && suggestedRanges[axisId] ? { suggestedRange: suggestedRanges[axisId] } : {})}
                     onModeChange={onAxisModeChange}
                     onValueChange={onAxisValueChange}
                   />
@@ -1863,6 +1845,7 @@ function ChartSettingsPanel({
             </p>
           ) : null}
         </div>
+        </div>
       </div>
     </>,
     document.body,
@@ -1873,12 +1856,14 @@ function ChartAxisRangeField({
   axisId,
   capability,
   setting,
+  suggestedRange,
   onModeChange,
   onValueChange,
 }: {
   axisId: DashboardChartAxisId;
   capability: DashboardChartAxisCapability;
   setting: DashboardChartAxisRangeSetting | undefined;
+  suggestedRange?: [number, number];
   onModeChange: (axisId: DashboardChartAxisId, mode: DashboardChartAxisMode) => void;
   onValueChange: (axisId: DashboardChartAxisId, bound: 'min' | 'max', value: number | undefined) => void;
 }) {
@@ -1909,33 +1894,33 @@ function ChartAxisRangeField({
         </div>
       </div>
       {mode === 'manual' ? (
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <label className="grid min-w-0 gap-1 text-xs font-medium text-fg-secondary">
             <span>Min</span>
             <input
               aria-label={`${capability.label} minimum`}
               type="number"
               inputMode="decimal"
               step={getAxisInputStep(capability.unit)}
-              value={setting?.min ?? ''}
+              value={setting?.min ?? suggestedRange?.[0] ?? ''}
               onChange={(event) => onValueChange(axisId, 'min', parseAxisInputValue(event.target.value))}
               className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
             />
           </label>
-          <label className="grid gap-1 text-xs font-medium text-fg-secondary">
+          <label className="grid min-w-0 gap-1 text-xs font-medium text-fg-secondary">
             <span>Max</span>
             <input
               aria-label={`${capability.label} maximum`}
               type="number"
               inputMode="decimal"
               step={getAxisInputStep(capability.unit)}
-              value={setting?.max ?? ''}
+              value={setting?.max ?? suggestedRange?.[1] ?? ''}
               onChange={(event) => onValueChange(axisId, 'max', parseAxisInputValue(event.target.value))}
               className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
             />
           </label>
           {!hasValidRange ? (
-            <p className="text-[11px] text-fg-tertiary sm:col-span-2">
+            <p className="col-span-2 text-[11px] text-fg-tertiary">
               Manual range applies after both values are valid and max is greater than min.
             </p>
           ) : null}

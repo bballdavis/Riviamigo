@@ -25,6 +25,15 @@ export function timeFilterMilliseconds(window: TimeFilterWindow): number {
   return TIME_FILTER_OPTIONS.find((option) => option.value === window)?.milliseconds ?? 0;
 }
 
+/**
+ * Largest interval a compact sparkline will render as one visual observation.
+ * Rich dashboard history charts do not use this guard: their valid samples
+ * remain connected across elapsed time.
+ */
+export function maximumContinuousTimeGapMilliseconds(window: TimeFilterWindow): number {
+  return Math.max(2 * 60 * 60 * 1000, timeFilterMilliseconds(window) * 4);
+}
+
 export function timeFilterLabel(window: TimeFilterWindow): string {
   return TIME_FILTER_OPTIONS.find((option) => option.value === window)?.label ?? 'Raw';
 }

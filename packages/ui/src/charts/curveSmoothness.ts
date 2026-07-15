@@ -55,13 +55,14 @@ export function clampedControlPoints(
   const tension = curveTension(smoothness);
   const minY = Math.min(first.y, second.y);
   const maxY = Math.max(first.y, second.y);
-  const controlOne = {
-    x: first.x + (second.x - before.x) * tension,
-    y: Math.min(maxY, Math.max(minY, first.y + (second.y - before.y) * tension)),
-  };
-  const controlTwo = {
-    x: second.x - (after.x - first.x) * tension,
-    y: Math.min(maxY, Math.max(minY, second.y - (after.y - first.y) * tension)),
-  };
-  return [controlOne, controlTwo];
+  return [
+    {
+      x: first.x + (second.x - before.x) * tension,
+      y: Math.min(maxY, Math.max(minY, first.y + (second.y - before.y) * tension)),
+    },
+    {
+      x: second.x - (after.x - first.x) * tension,
+      y: Math.min(maxY, Math.max(minY, second.y - (after.y - first.y) * tension)),
+    },
+  ];
 }
