@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { carryForwardTooltipValues, formatChartNumber, getAdaptiveDecimalPrecision, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { carryForwardTooltipValues, formatChartNumber, getAdaptiveDecimalPrecision, isZoomedXRange, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 
 describe('RichTimeSeriesChart layout safety', () => {
   it('keeps a left gutter so y-axis labels are not clipped', async () => {
@@ -46,5 +46,12 @@ describe('RichTimeSeriesChart numeric precision', () => {
 describe('RichTimeSeriesChart gap handling', () => {
   it('carries the last finite reading through gaps without inventing a leading value', () => {
     expect(carryForwardTooltipValues([null, 12, null, null, 15, null])).toEqual([null, 12, 12, 12, 15, 15]);
+  });
+});
+
+describe('RichTimeSeriesChart zoom state', () => {
+  it('only treats a changed x-range as zoomed', () => {
+    expect(isZoomedXRange([0, 100], [0, 100])).toBe(false);
+    expect(isZoomedXRange([20, 80], [0, 100])).toBe(true);
   });
 });

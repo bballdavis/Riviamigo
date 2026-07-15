@@ -10,11 +10,14 @@ import {
   useMetricValue,
 } from '@riviamigo/hooks';
 import {
+  DEFAULT_CURVE_SMOOTHNESS,
   DEFAULT_SPRITE_TIME_FILTER,
   getChartColor,
   MiniSparkline,
+  normalizeCurveSmoothness,
   normalizeTimeFilter,
   type ChartColorKey,
+  type CurveSmoothness,
   type MiniSparklineType,
   type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
@@ -83,6 +86,7 @@ interface SensorChipOptions {
   valueColor?: SensorValueColor;
   valueMode?: 'latest' | 'sum' | 'avg' | 'count';
   timeFilter?: TimeFilterWindow;
+  smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
   curveColor?: ChartColorKey;
   windowDays?: number;
@@ -128,6 +132,7 @@ function readOptions(instance: WidgetInstance): Required<SensorChipOptions> {
     tripSelectionAware: options.tripSelectionAware ?? false,
     curveSmoothing: options.curveSmoothing ?? 0,
     timeFilter: normalizeTimeFilter(options.timeFilter, legacySmoothingToTimeFilter(options.curveSmoothing, chartType)),
+    smoothness: normalizeCurveSmoothness(options.smoothness, legacyCurveSmoothingToSmoothness(options.curveSmoothing, chartType)),
     windowDays:
       typeof options.windowDays === 'number' && Number.isFinite(options.windowDays)
         ? Math.max(1, Math.min(365, Math.round(options.windowDays)))
@@ -291,6 +296,7 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
             color={getChartColor(options.curveColor)}
             showFallback
             timeFilter={options.timeFilter}
+            smoothness={options.smoothness}
           />
           <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
         </div>
@@ -670,6 +676,11 @@ function legacySmoothingToTimeFilter(value: unknown, chartType: SensorChartType 
   if (chartType === 'bar' || chartType === 'daily_delta') return DEFAULT_SPRITE_TIME_FILTER;
   if (chartType !== 'line' && chartType !== 'area') return 'raw';
   return value === false || value === 0 ? 'raw' : DEFAULT_SPRITE_TIME_FILTER;
+}
+
+function legacyCurveSmoothingToSmoothness(value: unknown, chartType: SensorChartType | 'none'): CurveSmoothness {
+  if (chartType !== 'line' && chartType !== 'area') return 'straight';
+  return normalizeCurveSmoothness(value, DEFAULT_CURVE_SMOOTHNESS);
 }
 
 function sensorDataRequirements(instance: WidgetInstance): DashboardDataRequirements {

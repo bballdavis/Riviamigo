@@ -1,10 +1,10 @@
 {
   "id": "battery-capacity-mileage",
   "title": "Battery Capacity by Mileage",
-  "description": "Usable battery capacity scatter by odometer mileage with degradation color buckets and trend line.",
+  "description": "Usable battery capacity over time with a filled trend and a secondary mileage axis.",
   "pages": ["overview", "battery"],
   "source": "battery_capacity_mileage",
-  "mode": "scatter",
+  "mode": "line",
   "yUnit": "kWh",
   "defaultSize": { "w": 6, "h": 4 },
   "minSize": { "w": 4, "h": 3 },
