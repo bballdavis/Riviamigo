@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::Read,
+    io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration as StdDuration,
@@ -8,18 +8,23 @@ use std::{
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
+use flate2::{write::GzEncoder, Compression};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
+use tar::Builder;
 use tokio::{fs, process::Command, time::MissedTickBehavior};
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 use crate::{config::Config, errors::AppError};
 
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
 static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
-const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools or set BACKUP_DRIVER=json (manifest-only backups)";
+const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools before creating a full recovery package";
+const BACKUP_DRIVER_UNSUPPORTED_MESSAGE: &str = "manifest-only JSON backups are not valid recovery packages; use BACKUP_DRIVER=pg_dump";
+const RECOVERY_PACKAGE_FORMAT: &str = "riviamigo-recovery-v1";
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -98,29 +103,16 @@ impl TryFrom<&str> for BackupFrequency {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackupDriver {
     PgDump,
-    Json,
 }
 
 impl BackupDriver {
     fn from_config(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "json" => Self::Json,
-            _ => Self::PgDump,
-        }
-    }
-
-    fn extension(self) -> &'static str {
-        match self {
-            Self::PgDump => "dump",
-            Self::Json => "json",
-        }
+        let _ = value;
+        Self::PgDump
     }
 
     fn label(self) -> &'static str {
-        match self {
-            Self::PgDump => "pg_dump",
-            Self::Json => "json",
-        }
+        "recovery_package"
     }
 }
 
@@ -279,17 +271,14 @@ async fn run_backup_inner(
 
     let driver = BackupDriver::from_config(&config.backup_driver);
     let created_at = Utc::now();
-    let artifact_path = build_artifact_path(config, &settings.prefix, created_at, run_id, driver);
+    let artifact_path = build_artifact_path(config, &settings.prefix, created_at, run_id);
 
     let execution = async {
         if let Some(parent) = artifact_path.parent() {
             fs::create_dir_all(parent).await?;
         }
 
-        match driver {
-            BackupDriver::PgDump => execute_pg_dump(config, &artifact_path).await?,
-            BackupDriver::Json => execute_json_backup(pool, config, &artifact_path, trigger, created_at).await?,
-        }
+        execute_recovery_package(pool, config, &artifact_path, trigger, created_at).await?;
 
         let storage_path = artifact_path.to_string_lossy().into_owned();
         let file_name = artifact_path
@@ -303,6 +292,7 @@ async fn run_backup_inner(
         let timescale_version = current_timescale_version(pool).await?;
         let manifest = json!({
             "artifact_kind": driver.label(),
+            "format": RECOVERY_PACKAGE_FORMAT,
             "created_at": created_at,
             "database": database_name,
             "timescale_version": timescale_version,
@@ -373,6 +363,10 @@ async fn maybe_run_scheduled_backup(
     pool: &PgPool,
     config: &Config,
 ) -> Result<Option<Uuid>, AppError> {
+    if config.backup_driver.trim().eq_ignore_ascii_case("json") {
+        return Ok(None);
+    }
+
     if BackupDriver::from_config(&config.backup_driver) == BackupDriver::PgDump {
         if !is_pg_dump_available().await {
             if !PG_DUMP_UNAVAILABLE_LOGGED.swap(true, Ordering::Relaxed) {
@@ -457,7 +451,6 @@ fn build_artifact_path(
     prefix: &str,
     created_at: DateTime<Utc>,
     run_id: Uuid,
-    driver: BackupDriver,
 ) -> PathBuf {
     let mut path = PathBuf::from(&config.backup_artifact_dir);
     for segment in prefix.split('/').filter(|segment| !segment.is_empty()) {
@@ -466,15 +459,39 @@ fn build_artifact_path(
     path.push(created_at.format("%Y").to_string());
     path.push(created_at.format("%m").to_string());
     path.push(format!(
-        "backup-{}-{}.{}",
+        "backup-{}-{}.rma.tar.gz",
         created_at.format("%Y%m%dT%H%M%SZ"),
         run_id.simple(),
-        driver.extension()
     ));
     path
 }
 
-async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), AppError> {
+async fn execute_recovery_package(
+    pool: &PgPool,
+    config: &Config,
+    artifact_path: &Path,
+    trigger: BackupRunTrigger,
+    created_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    let temp_root = std::env::temp_dir().join(format!("riviamigo-recovery-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_root).await?;
+    let dump_path = temp_root.join("database.dump");
+    let cache_root = PathBuf::from(&config.vehicle_image_cache_dir);
+
+    let result = async {
+        execute_pg_dump(config, &dump_path).await?;
+        let manifest = build_recovery_manifest(pool, &dump_path, &cache_root, trigger, created_at).await?;
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+        write_recovery_archive(artifact_path, &dump_path, &cache_root, &manifest_bytes).await
+    }
+    .await;
+
+    let _ = fs::remove_dir_all(&temp_root).await;
+    result
+}
+
+async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppError> {
     // Parse connection components from the URL so the password is not exposed
     // on the process command line (visible via `ps`).
     let url = url::Url::parse(&config.database_url)
@@ -504,7 +521,15 @@ async fn execute_pg_dump(config: &Config, artifact_path: &Path) -> Result<(), Ap
         .arg("--format=custom")
         .arg("--no-owner")
         .arg("--no-privileges")
-        .arg(format!("--file={}", artifact_path.display()))
+        .arg("--exclude-table-data=riviamigo.vehicle_credentials")
+        .arg("--exclude-table-data=riviamigo.external_connection_settings")
+        .arg("--exclude-table-data=riviamigo.system_config")
+        .arg("--exclude-table-data=riviamigo.refresh_tokens")
+        .arg("--exclude-table-data=riviamigo.backup_settings")
+        .arg("--exclude-table-data=riviamigo.backup_runs")
+        .arg("--exclude-table-data=riviamigo.backup_artifacts")
+        .arg("--exclude-table-data=riviamigo.backup_restore_requests")
+        .arg(format!("--file={}", dump_path.display()))
         .output()
         .await
         .map_err(|error| AppError::Internal(anyhow::anyhow!("failed to spawn pg_dump: {error}")))?;
@@ -562,6 +587,12 @@ fn find_windows_pg_dump_executable() -> Option<PathBuf> {
 }
 
 async fn ensure_backup_runtime_available(config: &Config) -> Result<(), AppError> {
+    if config.backup_driver.trim().eq_ignore_ascii_case("json") {
+        return Err(AppError::DependencyUnavailable(
+            BACKUP_DRIVER_UNSUPPORTED_MESSAGE.to_string(),
+        ));
+    }
+
     let driver = BackupDriver::from_config(&config.backup_driver);
     let pg_dump_available = is_pg_dump_available().await;
     if let Some(error) = runtime_dependency_error_if_unavailable(driver, pg_dump_available) {
@@ -583,6 +614,14 @@ fn runtime_dependency_error_if_unavailable(
 }
 
 pub async fn runtime_readiness(config: &Config) -> BackupRuntimeReadiness {
+    if config.backup_driver.trim().eq_ignore_ascii_case("json") {
+        return BackupRuntimeReadiness {
+            pg_dump_available: false,
+            run_now_allowed: false,
+            reason: Some(BACKUP_DRIVER_UNSUPPORTED_MESSAGE.to_string()),
+        };
+    }
+
     if BackupDriver::from_config(&config.backup_driver) != BackupDriver::PgDump {
         return BackupRuntimeReadiness {
             pg_dump_available: false,
@@ -603,27 +642,169 @@ pub async fn runtime_readiness(config: &Config) -> BackupRuntimeReadiness {
 /// created_at). No table data is exported. This driver is intentionally lightweight:
 /// it records *that* a backup was requested and documents the environment, but the
 /// actual data resides in TimescaleDB. Use the `pg_dump` driver for full data backups.
-async fn execute_json_backup(
+async fn build_recovery_manifest(
     pool: &PgPool,
-    config: &Config,
-    artifact_path: &Path,
+    dump_path: &Path,
+    cache_root: &Path,
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
-) -> Result<(), AppError> {
+) -> Result<serde_json::Value, AppError> {
     let current_database = current_database_name(pool).await?;
     let timescale_version = current_timescale_version(pool).await?;
-    let payload = json!({
-        "driver": "json",
+    let migration_version: Option<i64> = sqlx::query_scalar(
+        "SELECT max(version) FROM _sqlx_migrations WHERE success = TRUE",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(AppError::from)?;
+    let database_checksum = compute_sha256(dump_path).await?;
+    let cache_files = collect_cache_files(cache_root).await?;
+
+    Ok(json!({
+        "format": RECOVERY_PACKAGE_FORMAT,
+        "format_version": 1,
         "created_at": created_at,
-        "database": current_database,
-        "timescale_version": timescale_version,
         "trigger": trigger.as_str(),
-        "artifact_dir": config.backup_artifact_dir,
-    });
-    let bytes = serde_json::to_vec_pretty(&payload)
-        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
-    fs::write(artifact_path, bytes).await?;
-    Ok(())
+        "source": {
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "database": current_database,
+            "timescale_version": timescale_version,
+            "migration_version": migration_version,
+        },
+        "scope": {
+            "included": [
+                "PostgreSQL durable application data",
+                "TimescaleDB telemetry and enrichment data",
+                "vehicle artwork cache files"
+            ],
+            "redacted": [
+                "vehicle_credentials.encrypted_tokens",
+                "external_connection_settings.bearer_token_encrypted",
+                "system_config installation keys",
+                "refresh_tokens",
+                "backup target secrets"
+            ],
+            "excluded": [
+                "Redis live state, pub/sub messages, and OTP challenges",
+                "backup artifact catalog and restore request history",
+                "browser localStorage and sessionStorage"
+            ]
+        },
+        "components": {
+            "database": {
+                "path": "database.dump",
+                "sha256": database_checksum,
+                "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0)
+            },
+            "vehicle_image_cache": {
+                "path": "vehicle-image-cache",
+                "file_count": cache_files.len(),
+                "files": cache_files
+            }
+        },
+        "restore": {
+            "requires": "same or newer Riviamigo release",
+            "provider_credentials": "re-authenticate after restore",
+            "operator_command": "node scripts/restore-backup.mjs <package>"
+        }
+    }))
+}
+
+async fn collect_cache_files(cache_root: &Path) -> Result<Vec<serde_json::Value>, AppError> {
+    let cache_root = cache_root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        if !cache_root.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut files = Vec::new();
+        for entry in WalkDir::new(&cache_root) {
+            let entry = entry.map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(&cache_root)
+                .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            let sha256 = sha256_file(entry.path())?;
+            let size_bytes = entry.metadata()?.len();
+            files.push(json!({
+                "path": format!("vehicle-image-cache/{relative}"),
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+            }));
+        }
+        files.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+        Ok(files)
+    })
+    .await
+    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
+}
+
+async fn write_recovery_archive(
+    artifact_path: &Path,
+    dump_path: &Path,
+    cache_root: &Path,
+    manifest_bytes: &[u8],
+) -> Result<(), AppError> {
+    let artifact_path = artifact_path.to_path_buf();
+    let dump_path = dump_path.to_path_buf();
+    let cache_root = cache_root.to_path_buf();
+    let manifest_bytes = manifest_bytes.to_vec();
+    tokio::task::spawn_blocking(move || {
+        let file = File::create(&artifact_path)?;
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+
+        let mut manifest_header = tar::Header::new_gnu();
+        manifest_header.set_size(manifest_bytes.len() as u64);
+        manifest_header.set_mode(0o600);
+        manifest_header.set_cksum();
+        archive.append_data(
+            &mut manifest_header,
+            "manifest.json",
+            Cursor::new(manifest_bytes),
+        )?;
+        archive.append_path_with_name(&dump_path, "database.dump")?;
+
+        if cache_root.is_dir() {
+            archive.append_dir_all("vehicle-image-cache", &cache_root)?;
+        } else {
+            let mut directory_header = tar::Header::new_gnu();
+            directory_header.set_entry_type(tar::EntryType::Directory);
+            directory_header.set_size(0);
+            directory_header.set_mode(0o700);
+            directory_header.set_cksum();
+            archive.append_data(
+                &mut directory_header,
+                "vehicle-image-cache",
+                Cursor::new(Vec::<u8>::new()),
+            )?;
+        }
+
+        let encoder = archive.into_inner()?;
+        encoder.finish()?.sync_all()?;
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
+    .map_err(AppError::from)
+}
+
+fn sha256_file(path: &Path) -> Result<String, anyhow::Error> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 async fn current_database_name(pool: &PgPool) -> Result<String, AppError> {
@@ -867,9 +1048,4 @@ mod tests {
         assert!(matches!(err, AppError::DependencyUnavailable(_)));
     }
 
-    #[test]
-    fn runtime_dependency_error_not_returned_for_json_driver() {
-        let err = runtime_dependency_error_if_unavailable(BackupDriver::Json, false);
-        assert!(err.is_none());
-    }
 }

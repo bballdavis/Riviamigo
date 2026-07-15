@@ -112,9 +112,9 @@ async fn list_api_keys(
     require_session_auth(&auth)?;
 
     let rows = sqlx::query(LIST_API_KEYS_QUERY)
-    .bind(auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(auth.user_id)
+        .fetch_all(&state.pool)
+        .await?;
 
     let records = rows
         .into_iter()
@@ -161,13 +161,13 @@ async fn create_api_key(
     let key_hash = hash_api_key(&secret);
 
     let row = sqlx::query(CREATE_API_KEY_QUERY)
-    .bind(auth.user_id)
-    .bind(body.vehicle_id)
-    .bind(key_hash.as_slice())
-    .bind(body.name.trim())
-    .bind(ApiAccessLevel::Read.as_str())
-    .fetch_one(&state.pool)
-    .await?;
+        .bind(auth.user_id)
+        .bind(body.vehicle_id)
+        .bind(key_hash.as_slice())
+        .bind(body.name.trim())
+        .bind(ApiAccessLevel::Read.as_str())
+        .fetch_one(&state.pool)
+        .await?;
 
     let record = ApiKeyRecord {
         id: row.try_get("id")?,

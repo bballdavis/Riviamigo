@@ -93,7 +93,8 @@ export function setVehicleConnectionVisibility(
     : remaining;
 
   if (visibility.length === 0) {
-    const { visibility: _visibility, ...next } = widget;
+    const next = { ...widget };
+    delete next.visibility;
     return next;
   }
 

@@ -799,9 +799,7 @@ mod tests {
             .uri(format!("/v1/admin/dashboards/{}", uuid::Uuid::nil()))
             .header("authorization", format!("Bearer {access_token}"))
             .header("content-type", "application/json")
-            .body(Body::from(
-                r#"{"name":"Test"}"#,
-            ))
+            .body(Body::from(r#"{"name":"Test"}"#))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
