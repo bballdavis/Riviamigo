@@ -545,7 +545,7 @@ class ApiClient {
     return res.invitations ?? [];
   }
 
-  async createAccountInvitation(body: CreateAccountInvitationBody): Promise<{ id: string; invitee_email: string; expires_at: string; activation_token: string }> {
+  async createAccountInvitation(body: CreateAccountInvitationBody): Promise<{ id: string; invitee_email: string; vehicle_id: string | null; expires_at: string; activation_token: string }> {
     return this.request('POST', '/v1/admin/account-invitations', body);
   }
 

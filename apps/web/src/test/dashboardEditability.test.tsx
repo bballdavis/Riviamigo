@@ -54,6 +54,12 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useVehicles: () => ({
       data: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }],
     }),
+    useResolvedVehicleSelection: () => ({
+      authReady: true,
+      effectiveVehicleId: 'vehicle-1',
+      vehicleSelectionReady: true,
+      vehicles: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }],
+    }),
     useMe: () => ({ data: { role: 'user' } }),
     useMetricCatalog: () => ({ data: [] }),
     useMetricBatch: () => ({ data: emptyMetricBatch, isFetching: false }),

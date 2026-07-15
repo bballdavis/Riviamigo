@@ -18,7 +18,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: () => ({ defaultVehicleId: 'v1' }),
+  useAuth: () => ({ defaultVehicleId: null }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'v1', vehicleSelectionReady: true }),
   useChargeSession: () => ({
     data: {
       id: 'session-xyz',

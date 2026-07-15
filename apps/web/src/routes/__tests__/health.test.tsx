@@ -9,7 +9,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 
 const healthPageMocks = vi.hoisted(() => ({
   auth: {
-    defaultVehicleId: 'veh-1',
+    defaultVehicleId: 'veh-1' as string | null,
     activeVehicleId: null as string | null,
     setActiveVehicleId: vi.fn(),
   },
@@ -370,8 +370,19 @@ const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => healthPageMocks.auth,
-  useAuthReady: () => true,
-  useVehicles: () => ({ data: healthPageMocks.vehicles }),
+  AuthenticatedVehicleArtwork: ({ source, alt, className }: { source: string; alt: string; className?: string }) => (
+    <img src={source} alt={alt} className={className} />
+  ),
+  useResolvedVehicleSelection: () => ({
+    authReady: true,
+    effectiveVehicleId:
+      healthPageMocks.auth.activeVehicleId
+      ?? healthPageMocks.auth.defaultVehicleId
+      ?? healthPageMocks.vehicles[0]?.id
+      ?? null,
+    vehicleSelectionReady: true,
+    vehicles: healthPageMocks.vehicles,
+  }),
   useVehicleHealth: (vehicleId?: string | null) => mockUseVehicleHealth(vehicleId),
   useCurrentVehicleStatus: (vehicleId?: string | null) => mockUseCurrentVehicleStatus(vehicleId),
   api: { vehicleImages: vi.fn() },
@@ -395,6 +406,7 @@ const HealthContent = healthRoute.options.component as React.ComponentType;
 
 describe('/health page cleanup', () => {
   beforeEach(() => {
+    healthPageMocks.auth.defaultVehicleId = 'veh-1';
     healthPageMocks.auth.activeVehicleId = null;
     healthPageMocks.auth.setActiveVehicleId.mockReset();
     healthPageMocks.imagesByVehicleId['veh-1'] = {
@@ -503,6 +515,13 @@ describe('/health page cleanup', () => {
       'src',
       'https://example.com/demo-side.png'
     );
+  });
+
+  it('uses the first accessible vehicle when the user has no default vehicle', () => {
+    healthPageMocks.auth.defaultVehicleId = null;
+    render(<HealthContent />);
+
+    expect(mockUseVehicleHealth).toHaveBeenLastCalledWith('veh-1');
   });
 
   it('renders a vehicle picker and routes selection changes through the session vehicle setter', () => {
