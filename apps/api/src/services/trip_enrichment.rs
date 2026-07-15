@@ -10,10 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     db::vehicles::get_vehicle_owner_id,
-    services::{
-        geofences::match_geofence,
-        nominatim,
-    },
+    services::{geofences::match_geofence, nominatim},
 };
 
 const ADDRESS_CACHE_RADIUS_METERS: f64 = 100.0;

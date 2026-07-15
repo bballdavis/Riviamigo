@@ -4554,7 +4554,9 @@ fn open_closures_json(closures: &[(&str, Option<bool>)]) -> serde_json::Value {
     )
 }
 
-const TELEMETRY_LANES: &[&str] = &["battery", "drive", "location", "climate", "charging", "health"];
+const TELEMETRY_LANES: &[&str] = &[
+    "battery", "drive", "location", "climate", "charging", "health",
+];
 
 const TELEMETRY_LANES_QUERY: &str = r#"
         SELECT date_bin(make_interval(secs => $4::double precision), t.ts, $2) AS bucket,
@@ -4607,20 +4609,16 @@ async fn telemetry_lanes(
     }
 
     let max_points = params.max_points.unwrap_or(256).clamp(64, 512);
-    let resolution_seconds = resolve_telemetry_resolution(
-        params.resolution.as_deref(),
-        from,
-        to,
-        max_points,
-    )?;
+    let resolution_seconds =
+        resolve_telemetry_resolution(params.resolution.as_deref(), from, to, max_points)?;
     let rows = sqlx::query_as::<_, TelemetryLaneRow>(TELEMETRY_LANES_QUERY)
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(resolution_seconds as f64)
-    .bind(max_points)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(resolution_seconds as f64)
+        .bind(max_points)
+        .fetch_all(&state.pool)
+        .await?;
 
     let mut lanes = BTreeMap::new();
     for lane in requested_lanes {
@@ -4663,7 +4661,9 @@ async fn telemetry_lanes(
             "charging" => telemetry_lane(
                 &rows,
                 &[
-                    ("time_to_end_of_charge_min", |row| row.time_to_end_of_charge_min),
+                    ("time_to_end_of_charge_min", |row| {
+                        row.time_to_end_of_charge_min
+                    }),
                     ("power_kw", |row| row.power_kw),
                     ("regen_power_kw", |row| row.regen_power_kw),
                 ],
@@ -4699,9 +4699,15 @@ async fn telemetry_lanes(
 fn parse_telemetry_lanes(value: Option<&str>) -> Result<Vec<&'static str>, AppError> {
     let requested = value.unwrap_or("battery,drive");
     let mut lanes = Vec::new();
-    for lane in requested.split(',').map(str::trim).filter(|lane| !lane.is_empty()) {
+    for lane in requested
+        .split(',')
+        .map(str::trim)
+        .filter(|lane| !lane.is_empty())
+    {
         let Some(&known) = TELEMETRY_LANES.iter().find(|known| **known == lane) else {
-            return Err(AppError::Validation(format!("unknown telemetry lane: {lane}")));
+            return Err(AppError::Validation(format!(
+                "unknown telemetry lane: {lane}"
+            )));
         };
         if !lanes.contains(&known) {
             lanes.push(known);
@@ -4722,9 +4728,11 @@ fn resolve_telemetry_resolution(
     max_points: i64,
 ) -> Result<i64, AppError> {
     match value.unwrap_or("auto") {
-        "auto" => Ok(((to - from).num_seconds().max(1) as f64 / max_points as f64)
-            .ceil()
-            .max(1.0) as i64),
+        "auto" => Ok(
+            ((to - from).num_seconds().max(1) as f64 / max_points as f64)
+                .ceil()
+                .max(1.0) as i64,
+        ),
         "1m" => Ok(60),
         "5m" => Ok(300),
         "1h" => Ok(3600),
@@ -4853,15 +4861,14 @@ async fn raw_vehicle_data(
     .fetch_one(&state.pool)
     .await?;
 
-    let field_coverage = sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(
-        &raw_field_coverage_query(&where_clause),
-    )
-    .bind(vid)
-    .bind(params.from.clone())
-    .bind(params.to.clone())
-    .bind(search)
-    .fetch_all(&state.pool)
-    .await?;
+    let field_coverage =
+        sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(&raw_field_coverage_query(&where_clause))
+            .bind(vid)
+            .bind(params.from.clone())
+            .bind(params.to.clone())
+            .bind(search)
+            .fetch_all(&state.pool)
+            .await?;
 
     Ok(Json(serde_json::json!({
         "vehicle_id": vid,
@@ -5463,7 +5470,10 @@ mod tests {
 
         let from = "2026-07-14T00:00:00Z".parse().expect("valid timestamp");
         let to = "2026-07-14T01:00:00Z".parse().expect("valid timestamp");
-        assert_eq!(resolve_telemetry_resolution(Some("5m"), from, to, 256).unwrap(), 300);
+        assert_eq!(
+            resolve_telemetry_resolution(Some("5m"), from, to, 256).unwrap(),
+            300
+        );
     }
 
     #[test]

@@ -17,6 +17,12 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: 'vehicle-1', activeVehicleId: null, setActiveVehicleId }),
   useMe: () => ({ data: { role: 'user' } }),
   useVehicles: () => ({ data: vehiclesData }),
+  useResolvedVehicleSelection: () => ({
+    authReady: true,
+    effectiveVehicleId: 'vehicle-1',
+    vehicleSelectionReady: true,
+    vehicles: vehiclesData,
+  }),
 }));
 
 const mockConfig = {

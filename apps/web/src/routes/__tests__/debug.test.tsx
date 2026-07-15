@@ -16,6 +16,12 @@ vi.mock('@riviamigo/hooks', () => ({
   useMe: () => ({ data: { role: 'user' } }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [{ id: 'v1', display_name: 'Forest R1S' }] }),
+  useResolvedVehicleSelection: () => ({
+    authReady: true,
+    effectiveVehicleId: 'v1',
+    vehicleSelectionReady: true,
+    vehicles: [{ id: 'v1', display_name: 'Forest R1S' }],
+  }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));

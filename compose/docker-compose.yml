@@ -14,7 +14,7 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
       RUST_LOG: ${RUST_LOG:-info}
       BACKUP_DRIVER: ${BACKUP_DRIVER:-pg_dump}
-      BACKUP_ARTIFACT_DIR: ${BACKUP_ARTIFACT_DIR:-/tmp/riviamigo-backups}
+      BACKUP_ARTIFACT_DIR: ${BACKUP_ARTIFACT_DIR:-/backups}
       BACKUP_POLL_INTERVAL_SECONDS: ${BACKUP_POLL_INTERVAL_SECONDS:-60}
       # Managed persistent storage for Rivian artwork mirrors. The API root is
       # read-only, so this must never be under /tmp.
@@ -61,6 +61,7 @@ services:
       - /tmp
     volumes:
       - vehicle_image_cache:/data/vehicle-image-cache
+      - backup_artifacts:/backups
     deploy:
       resources:
         limits:
@@ -150,6 +151,7 @@ volumes:
   pgdata:
   redisdata:
   vehicle_image_cache:
+  backup_artifacts:
 
 networks:
   internal:

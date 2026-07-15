@@ -23,6 +23,12 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
   return {
     ...actual,
     useAuth: () => ({ defaultVehicleId: 'vehicle-1' }),
+    useResolvedVehicleSelection: () => ({
+      authReady: true,
+      effectiveVehicleId: 'vehicle-1',
+      vehicleSelectionReady: true,
+      vehicles: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images }],
+    }),
     useCurrentVehicleStatus: () => ({
       data: {
         vehicle_id: 'vehicle-1',

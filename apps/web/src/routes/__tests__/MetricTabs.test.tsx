@@ -49,7 +49,7 @@ describe('MetricTabs', () => {
         <div>content</div>
       </MetricTabs>
     );
-    expect(screen.getByRole('combobox')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select metric' })).toBeInTheDocument();
   });
 
   it('renders pill tabs when below threshold', () => {
@@ -58,7 +58,7 @@ describe('MetricTabs', () => {
         <div>content</div>
       </MetricTabs>
     );
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Select metric' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(3);
   });
 
@@ -89,7 +89,8 @@ describe('MetricTabs', () => {
         <div />
       </MetricTabs>
     );
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 't3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Select metric' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Tab 3' }));
     expect(onChange).toHaveBeenCalledWith('t3');
   });
 });
