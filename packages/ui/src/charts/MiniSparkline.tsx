@@ -200,7 +200,11 @@ function CanvasSparkline({
           for (let index = 0; index < segment.length - 1; index += 1) {
             const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
             const point = segment[index + 1]!;
-            context.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
+            if (typeof context.bezierCurveTo === 'function') {
+              context.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
+            } else {
+              context.lineTo(point.x, point.y);
+            }
           }
         }
       };
@@ -222,7 +226,11 @@ function CanvasSparkline({
             for (let index = 0; index < segment.length - 1; index += 1) {
               const [controlOne, controlTwo] = clampedControlPoints(segment, index, smoothness);
               const point = segment[index + 1]!;
-              context.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
+              if (typeof context.bezierCurveTo === 'function') {
+                context.bezierCurveTo(controlOne.x, controlOne.y, controlTwo.x, controlTwo.y, point.x, point.y);
+              } else {
+                context.lineTo(point.x, point.y);
+              }
             }
           }
           context.lineTo(last.x, height);
