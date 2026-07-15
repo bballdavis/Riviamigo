@@ -1,3 +1,4 @@
+import React from 'react';
 import { CHART_COLORS } from './ChartProvider';
 
 export type MiniSparklineType = 'none' | 'line' | 'area' | 'bar';
@@ -41,12 +42,13 @@ export function MiniSparkline({
   }
 
   if (type === 'bar') {
-    return <BarSparkline data={chartData} height={height} color={color} />;
+    return <CanvasSparkline data={chartData} type="bar" height={height} color={color} />;
   }
 
   return (
-    <LineSparkline
+    <CanvasSparkline
       data={chartData}
+      type="line"
       height={height}
       color={color}
       fill={type === 'area'}
@@ -81,141 +83,109 @@ function EmptySparkline({ height, color }: { height: number; color: string }) {
   );
 }
 
-function LineSparkline({
+function CanvasSparkline({
   data,
+  type,
   height,
   color,
   fill,
   curveSmoothing,
 }: {
-  data: Array<{ value: number }>;
+  data: Array<{ x: string; value: number }>;
+  type: Exclude<MiniSparklineType, 'none' | 'area'>;
   height: number;
   color: string;
-  fill: boolean;
-  curveSmoothing: number;
+  fill?: boolean;
+  curveSmoothing?: number;
 }) {
-  const points = normalizeLinePoints(data);
-  const linePath = pointsToPath(points, curveSmoothing);
-  const areaPath = `${linePath} L100 36 L0 36 Z`;
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const draw = () => {
+      const width = Math.max(1, Math.round(canvas.clientWidth));
+      const pixelRatio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(width * pixelRatio);
+      canvas.height = Math.round(height * pixelRatio);
+
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.clearRect(0, 0, width, height);
+
+      const values = data.map((point) => point.value);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min;
+      const parsedTimes = data.map((point) => Date.parse(point.x));
+      const usesTime = parsedTimes.every(Number.isFinite) && parsedTimes.length > 1 && parsedTimes[0] !== parsedTimes[parsedTimes.length - 1];
+      const start = usesTime ? parsedTimes[0]! : 0;
+      const end = usesTime ? parsedTimes[parsedTimes.length - 1]! : Math.max(1, data.length - 1);
+      const pointAt = (point: { value: number }, index: number) => ({
+        x: usesTime ? ((parsedTimes[index]! - start) / (end - start)) * width : (index / Math.max(1, data.length - 1)) * width,
+        y: span === 0 ? height * 0.62 : height - 4 - ((point.value - min) / span) * Math.max(1, height - 8),
+      });
+
+      if (type === 'bar') {
+        const maxValue = Math.max(0, ...values);
+        const barWidth = Math.max(1, width / data.length);
+        context.fillStyle = color;
+        for (let index = 0; index < data.length; index += 1) {
+          const normalized = maxValue > 0 ? data[index]!.value / maxValue : 0;
+          const barHeight = normalized > 0 ? Math.max(2, normalized * (height - 6)) : 1;
+          context.globalAlpha = normalized > 0 ? 0.72 : 0.26;
+          context.fillRect(index * barWidth + barWidth * 0.18, height - 2 - barHeight, Math.max(1, barWidth * 0.64), barHeight);
+        }
+        context.globalAlpha = 1;
+        return;
+      }
+
+      const points = data.map(pointAt);
+      context.strokeStyle = color;
+      context.lineWidth = 1.6;
+      context.lineJoin = 'round';
+      context.lineCap = 'round';
+      context.beginPath();
+      points.forEach((point, index) => {
+        if (index === 0) context.moveTo(point.x, point.y);
+        else context.lineTo(point.x, point.y);
+      });
+
+      if (fill) {
+        context.lineTo(width, height);
+        context.lineTo(0, height);
+        context.closePath();
+        context.globalAlpha = 0.16;
+        context.fillStyle = color;
+        context.fill();
+        context.globalAlpha = 1;
+        context.beginPath();
+        points.forEach((point, index) => {
+          if (index === 0) context.moveTo(point.x, point.y);
+          else context.lineTo(point.x, point.y);
+        });
+      }
+      context.stroke();
+    };
+
+    draw();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
+    observer?.observe(canvas);
+    return () => observer?.disconnect();
+  }, [color, data, fill, height, type]);
 
   return (
     <div
       style={{ height, width: '100%' }}
       className="overflow-hidden"
       data-sparkline-state={data.length === 1 ? 'single' : 'series'}
-      data-sparkline-curve={curveSmoothing > 0 && data.length >= 3 ? 'smooth' : 'straight'}
-      data-sparkline-smoothing={curveSmoothing.toFixed(2)}
+      data-sparkline-renderer="canvas"
+      data-sparkline-curve={curveSmoothing && curveSmoothing > 0 && data.length >= 3 ? 'smooth' : 'straight'}
+      data-sparkline-smoothing={(curveSmoothing ?? 0).toFixed(2)}
     >
-      <svg
-        style={{ display: 'block', height: '100%', width: '100%' }}
-        viewBox="0 0 100 36"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        {fill ? <path d={areaPath} fill={color} fillOpacity="0.16" /> : null}
-        <path
-          d={linePath}
-          fill="none"
-          stroke={color}
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
+      <canvas ref={canvasRef} style={{ display: 'block', height: '100%', width: '100%' }} aria-hidden="true" />
     </div>
   );
-}
-
-function BarSparkline({
-  data,
-  height,
-  color,
-}: {
-  data: Array<{ value: number }>;
-  height: number;
-  color: string;
-}) {
-  const maxValue = Math.max(0, ...data.map((point) => point.value));
-  const width = 100 / data.length;
-
-  return (
-    <div
-      style={{ height, width: '100%' }}
-      className="overflow-hidden"
-      data-sparkline-state={data.length === 1 ? 'single' : 'series'}
-    >
-      <svg
-        style={{ display: 'block', height: '100%', width: '100%' }}
-        viewBox="0 0 100 36"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        {data.map((point, index) => {
-          const normalized = maxValue > 0 ? point.value / maxValue : 0;
-          const barHeight = normalized > 0 ? Math.max(4, normalized * 28) : 1;
-          return (
-            <rect
-              key={`${index}-${point.value}`}
-              x={index * width + width * 0.18}
-              y={34 - barHeight}
-              width={Math.max(2, width * 0.64)}
-              height={barHeight}
-              rx="1.2"
-              fill={color}
-              fillOpacity={normalized > 0 ? 0.72 : 0.26}
-            />
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function normalizeLinePoints(data: Array<{ value: number }>) {
-  const expanded = data.length === 1 ? [data[0]!, data[0]!] : data;
-  const values = expanded.map((point) => point.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-
-  return expanded.map((point, index) => {
-    const x = expanded.length === 1 ? 50 : (index / (expanded.length - 1)) * 100;
-    const y = span === 0 ? 22 : 32 - ((point.value - min) / span) * 24;
-    return { x, y };
-  });
-}
-
-function pointsToPath(points: Array<{ x: number; y: number }>, curveSmoothing: number) {
-  if (points.length < 3 || curveSmoothing <= 0) {
-    return straightPointsToPath(points);
-  }
-
-  const tension = curveSmoothing / 6;
-  let path = `M${formatPoint(points[0]!)}`;
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const previous = points[index - 1] ?? points[index]!;
-    const current = points[index]!;
-    const next = points[index + 1]!;
-    const after = points[index + 2] ?? next;
-    const cp1 = {
-      x: current.x + (next.x - previous.x) * tension,
-      y: current.y + (next.y - previous.y) * tension,
-    };
-    const cp2 = {
-      x: next.x - (after.x - current.x) * tension,
-      y: next.y - (after.y - current.y) * tension,
-    };
-    path += ` C${formatPoint(cp1)} ${formatPoint(cp2)} ${formatPoint(next)}`;
-  }
-
-  return path;
-}
-
-function straightPointsToPath(points: Array<{ x: number; y: number }>) {
-  return points.map((point, index) => `${index === 0 ? 'M' : 'L'}${formatPoint(point)}`).join(' ');
-}
-
-function formatPoint(point: { x: number; y: number }) {
-  return `${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
 }

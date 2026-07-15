@@ -229,8 +229,8 @@ test.describe('mobile dashboard chart viewer', () => {
       const path = new URL(route.request().url()).pathname;
       if (path === '/v1/efficiency/trend') {
         return json(route, [
-          { day: '2026-07-01', day_avg_wh_mi: 315, rolling_7d_wh_mi: 320 },
-          { day: '2026-07-02', day_avg_wh_mi: 305, rolling_7d_wh_mi: 315 },
+          { ts: '2026-07-01T08:00:00Z', trip_efficiency_wh_mi: 315, rolling_24h_wh_mi: 320 },
+          { ts: '2026-07-02T08:00:00Z', trip_efficiency_wh_mi: 305, rolling_24h_wh_mi: 315 },
         ]);
       }
       if (path === '/v1/efficiency/vs-temp') {

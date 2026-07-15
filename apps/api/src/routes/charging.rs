@@ -1252,7 +1252,7 @@ mod tests {
                 .join("riviamigo-route-test-image-cache")
                 .to_string_lossy()
                 .into_owned(),
-            backup_driver: "json".into(),
+            backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
@@ -1492,7 +1492,8 @@ async fn load_curve(
     .fetch_one(pool)
     .await?;
 
-    let rows = if linked_sample_count >= 2 {
+    let (rows, sample_source) = if linked_sample_count >= 2 {
+        (
         sqlx::query_as::<_, CurveRow>(
             r#"WITH cap AS (
                    SELECT COALESCE(
@@ -1507,18 +1508,17 @@ async fn load_curve(
                           AND battery_capacity_wh IS NOT NULL)
                    ) AS default_cap_wh
                ),
-               samples AS (
-                   SELECT time_bucket('1 minute', t.ts) AS bucket,
-                          avg(t.battery_level) AS avg_soc,
-                          avg(ABS(t.power_kw)) FILTER (WHERE t.power_kw IS NOT NULL) AS avg_power_kw,
-                          max(t.battery_capacity_wh) AS bucket_cap_wh
-                   FROM timeseries.telemetry t
+                samples AS (
+                    SELECT t.ts AS bucket,
+                           t.battery_level AS avg_soc,
+                           ABS(t.power_kw) AS avg_power_kw,
+                           t.battery_capacity_wh AS bucket_cap_wh
+                    FROM timeseries.telemetry t
                    WHERE t.vehicle_id=$1
                      AND t.charge_session_id=$2
                      AND t.ts >= $3
                      AND t.ts <= $4
-                   GROUP BY 1
-               )
+                )
                SELECT EXTRACT(EPOCH FROM (bucket - $3))::float8 / 60.0 AS minutes_elapsed,
                       LEAST(
                           CASE WHEN $5 THEN 300.0 ELSE 22.0 END,
@@ -1543,8 +1543,11 @@ async fn load_curve(
         .bind(ended_at)
         .bind(is_dc)
         .fetch_all(pool)
-        .await?
+        .await?,
+        "telemetry",
+        )
     } else {
+        (
         sqlx::query_as::<_, CurveRow>(
             r#"WITH cap AS (
                    SELECT COALESCE(
@@ -1592,7 +1595,9 @@ async fn load_curve(
         .bind(ended_at)
         .bind(is_dc)
         .fetch_all(pool)
-        .await?
+        .await?,
+        "telemetry_1min",
+        )
     };
 
     if rows.len() < 2 {
@@ -1627,6 +1632,7 @@ async fn load_curve(
                         "minutes_elapsed": r.minutes_elapsed,
                         "charge_rate_kw": r.charge_rate_kw,
                         "soc": r.soc,
+                        "sample_source": "rivian_charge_curve_points",
                     })
                 })
                 .collect());
@@ -1640,6 +1646,7 @@ async fn load_curve(
                 "minutes_elapsed": r.minutes_elapsed,
                 "charge_rate_kw": r.charge_rate_kw,
                 "soc": r.soc,
+                "sample_source": sample_source,
             })
         })
         .collect())
@@ -1693,18 +1700,17 @@ async fn load_curve_analysis_samples(
                           AND battery_capacity_wh IS NOT NULL)
                    ) AS default_cap_wh
                ),
-               samples AS (
-                   SELECT time_bucket('1 minute', t.ts) AS bucket,
-                          avg(t.battery_level) AS avg_soc,
-                          avg(ABS(t.power_kw)) FILTER (WHERE t.power_kw IS NOT NULL) AS avg_power_kw,
-                          max(t.battery_capacity_wh) AS bucket_cap_wh
-                   FROM timeseries.telemetry t
+                samples AS (
+                    SELECT t.ts AS bucket,
+                           t.battery_level AS avg_soc,
+                           ABS(t.power_kw) AS avg_power_kw,
+                           t.battery_capacity_wh AS bucket_cap_wh
+                    FROM timeseries.telemetry t
                    WHERE t.vehicle_id=$1
                      AND t.charge_session_id=$2
                      AND t.ts >= $3
                      AND t.ts <= $4
-                   GROUP BY 1
-               )
+                )
                SELECT bucket AS ts,
                       EXTRACT(EPOCH FROM (bucket - $3))::float8 / 60.0 AS minutes_elapsed,
                       LEAST(

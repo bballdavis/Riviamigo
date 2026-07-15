@@ -95,9 +95,9 @@ struct SeriesParams {
     bucket: Option<String>,
 }
 
-/// A compact dashboard-oriented metric request.  The singular metric routes
-/// remain the public compatibility surface; this route avoids one HTTP request
-/// per sensor chip when a dashboard needs several values and sparklines.
+/// A dashboard-oriented metric request. The singular metric routes remain the
+/// public compatibility surface; this route avoids one HTTP request per sensor
+/// chip when a dashboard needs several values and sparklines.
 #[derive(Deserialize)]
 struct MetricBatchRequest {
     vehicle_id: Uuid,
@@ -106,8 +106,10 @@ struct MetricBatchRequest {
     to: Option<DateTime<Utc>>,
     lifetime: Option<bool>,
     bucket: Option<String>,
-    /// The response is intended for miniature dashboard charts, not detailed
-    /// explorers.  The server enforces this upper bound as a safety rail.
+    /// `full` returns every retained source point in the selected range. The
+    /// compact default preserves the legacy bounded-sparkline behavior for
+    /// external callers that have not opted into full density.
+    density: Option<String>,
     max_points: Option<usize>,
 }
 
@@ -131,7 +133,9 @@ struct MetricBatchResponse {
     values: Vec<MetricValueResponse>,
     series: Vec<MetricBatchSeriesResponse>,
     bucket: String,
-    max_points: usize,
+    density: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_points: Option<usize>,
 }
 
 const DASHBOARD_METRIC_MAX_POINTS: usize = 96;
@@ -180,6 +184,7 @@ fn resolve_bucket(
         "15min" => Ok("15min"),
         "hour" | "1h" => Ok("hour"),
         "day" | "1d" => Ok("day"),
+        "raw" | "full" => Ok("raw"),
         other => Err(AppError::Validation(format!("unsupported bucket: {other}"))),
     }
 }
@@ -511,11 +516,20 @@ async fn get_batch(
     require_vehicle_access(&auth, p.vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, p.vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
-    let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
-    let max_points = p
-        .max_points
-        .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
-        .clamp(2, DASHBOARD_METRIC_MAX_POINTS);
+    let density = p.density.as_deref().unwrap_or("compact");
+    if !matches!(density, "compact" | "full") {
+        return Err(AppError::Validation(format!("unsupported density: {density}")));
+    }
+    let bucket = if density == "full" {
+        "raw"
+    } else {
+        resolve_bucket(p.bucket.as_deref(), from, to)?
+    };
+    let max_points = (density == "compact").then(|| {
+        p.max_points
+            .unwrap_or(DASHBOARD_METRIC_MAX_POINTS)
+            .clamp(2, DASHBOARD_METRIC_MAX_POINTS)
+    });
 
     let mut values = Vec::new();
     let mut series = Vec::new();
@@ -534,7 +548,7 @@ async fn get_batch(
             let points = metric_series(&state.pool, p.vehicle_id, metric, from, to, bucket).await?;
             series.push(MetricBatchSeriesResponse {
                 metric: metric.id.to_string(),
-                points: cap_metric_points(points, max_points),
+                points: max_points.map_or(points.clone(), |limit| cap_metric_points(points, limit)),
             });
         }
     }
@@ -543,6 +557,7 @@ async fn get_batch(
         values,
         series,
         bucket: bucket.to_string(),
+        density: density.to_string(),
         max_points,
     }))
 }
@@ -785,6 +800,68 @@ async fn summary_series(
     to: DateTime<Utc>,
     bucket: &str,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
+    if bucket == "raw" {
+        let sql = match metric {
+            "total_miles" | "trip_miles" =>
+                "SELECT started_at AS ts, distance_miles::float8 AS value
+                 FROM riviamigo.trips
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 ORDER BY started_at",
+            "total_trips" =>
+                "SELECT started_at AS ts, 1.0::float8 AS value
+                 FROM riviamigo.trips
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 ORDER BY started_at",
+            "energy_charged" | "avg_session_energy" =>
+                "SELECT started_at AS ts, COALESCE(kwh_added, energy_added_wh / 1000.0)::float8 AS value
+                 FROM riviamigo.charge_sessions
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 ORDER BY started_at",
+            "charging_sessions" =>
+                "SELECT started_at AS ts, 1.0::float8 AS value
+                 FROM riviamigo.charge_sessions
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 ORDER BY started_at",
+            "total_cost" =>
+                "SELECT started_at AS ts, cost_usd::float8 AS value
+                 FROM riviamigo.charge_sessions
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 ORDER BY started_at",
+            "avg_efficiency" =>
+                "SELECT started_at AS ts, efficiency_wh_per_mile::float8 AS value
+                 FROM riviamigo.trips
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 AND efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0
+                 ORDER BY started_at",
+            "avg_gross_efficiency" =>
+                "SELECT started_at AS ts,
+                        (energy_wh + COALESCE(regen_wh, 0)) / NULLIF(distance_miles, 0)::float8 AS value
+                 FROM riviamigo.trips
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 AND energy_wh IS NOT NULL AND distance_miles > 0
+                 ORDER BY started_at",
+            "avg_outside_temp_c" =>
+                "SELECT started_at AS ts, outside_temp_c::float8 AS value
+                 FROM riviamigo.trips
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 AND outside_temp_c IS NOT NULL
+                 ORDER BY started_at",
+            "avg_trip_duration" =>
+                "SELECT started_at AS ts, (duration_seconds / 60.0)::float8 AS value
+                 FROM riviamigo.trips
+                 WHERE vehicle_id = $1 AND started_at >= $2 AND started_at <= $3
+                 AND duration_seconds IS NOT NULL
+                 ORDER BY started_at",
+            _ => return Ok(Vec::new()),
+        };
+        return Ok(sqlx::query_as::<_, MetricSeriesPoint>(sql)
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .fetch_all(pool)
+            .await?);
+    }
+
     let summary_bucket_expr = match bucket {
         "minute" => "date_trunc('minute', started_at)",
         "5min" => "time_bucket(INTERVAL '5 minutes', started_at)",
@@ -925,6 +1002,20 @@ async fn telemetry_daily_series(
         return Err(AppError::Validation(format!(
             "unknown telemetry column: {column}"
         )));
+    }
+    if bucket == "raw" {
+        let sql = format!(
+            "SELECT ts, {column}::float8 AS value \
+             FROM timeseries.telemetry \
+             WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3 AND {column} IS NOT NULL \
+             ORDER BY ts"
+        );
+        return Ok(sqlx::query_as::<_, MetricSeriesPoint>(&sql)
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .fetch_all(pool)
+            .await?);
     }
     let aggregate = match aggregation {
         "avg" | "mean" => "AVG",

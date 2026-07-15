@@ -41,6 +41,15 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
   };
 });
 
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return {
+    ...actual,
+    useQuery: () => ({ data: undefined, isLoading: false, isFetching: false }),
+    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  };
+});
+
 import { DashboardRenderer } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 

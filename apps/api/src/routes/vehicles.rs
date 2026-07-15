@@ -5217,7 +5217,7 @@ mod tests {
                 .join("riviamigo-route-test-vehicle-images")
                 .to_string_lossy()
                 .into_owned(),
-            backup_driver: "json".into(),
+            backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
@@ -5289,7 +5289,7 @@ mod tests {
                 .join("riviamigo-route-test-vehicle-images")
                 .to_string_lossy()
                 .into_owned(),
-            backup_driver: "json".into(),
+            backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
@@ -5535,7 +5535,7 @@ mod tests {
                 .join("riviamigo-test-missing-mirror")
                 .to_string_lossy()
                 .into_owned(),
-            backup_driver: "json".into(),
+            backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,

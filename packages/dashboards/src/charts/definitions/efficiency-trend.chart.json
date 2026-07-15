@@ -1,7 +1,7 @@
 {
   "id": "efficiency-trend",
   "title": "Efficiency Trend",
-  "description": "Daily driving efficiency and rolling trend.",
+  "description": "Per-trip driving efficiency and a distance-weighted rolling 24-hour trend.",
   "pages": ["overview", "efficiency", "trips"],
   "source": "efficiency_trend",
   "mode": "line",

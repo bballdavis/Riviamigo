@@ -514,7 +514,7 @@ export function BackupSection() {
           <div className="flex items-center gap-2">
             <Server className="h-4 w-4 text-fg-secondary" />
             <CardTitle>Off-site storage</CardTitle>
-            <span className="text-xs text-fg-tertiary">Optional — uploads in addition to local storage</span>
+            <span className="text-xs text-fg-tertiary">Package upload is not configured</span>
           </div>
           <Badge variant="default">Not configured</Badge>
         </CardHeader>
@@ -598,7 +598,7 @@ export function BackupSection() {
         ) : (
           <CardContent>
             <p className="text-sm text-fg-tertiary">
-              S3 upload is off — backups are stored locally only. Enable to configure an S3-compatible upload target.
+              Recovery packages are stored on the persistent local backup volume. Download a package and copy it to separate storage; S3 upload is not currently executed by the backup worker.
             </p>
           </CardContent>
         )}
@@ -816,8 +816,8 @@ export function BackupSection() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-fg">Restore this backup?</p>
                 <p className="mt-1 text-sm text-fg-tertiary">
-                  This will create a restore request for <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
-                  It does not overwrite the database immediately.
+                  This records an operator restore request for <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
+                  It does not overwrite the database. Use the downloaded package with <span className="font-mono text-fg">scripts/restore-backup.mjs</span> on a new install.
                 </p>
               </div>
               <button
@@ -839,7 +839,7 @@ export function BackupSection() {
                 loading={requestRestore.isPending}
                 onClick={() => requestRestore.mutate(pendingRestoreArtifact)}
               >
-                Restore backup
+                Record restore request
               </Button>
             </div>
           </div>

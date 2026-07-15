@@ -931,6 +931,7 @@ class ApiClient {
       minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
       soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? 0,
       power_kw: finiteNumber(row.power_kw) ?? finiteNumber(row.charge_rate_kw) ?? 0,
+      ...(typeof row.sample_source === 'string' ? { sample_source: row.sample_source } : {}),
     })) satisfies ChargeCurvePoint[];
   }
 
@@ -1147,7 +1148,7 @@ class ApiClient {
   }
 
   async getEfficiencyTrend(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    return this.request<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }[]>(
+    return this.request<{ ts: string; trip_efficiency_wh_mi: number | null; rolling_24h_wh_mi: number | null }[]>(
       'GET', '/v1/efficiency/trend', undefined, {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),

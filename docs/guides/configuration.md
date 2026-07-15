@@ -27,7 +27,7 @@ Weather, geocoding, basemap, and Iconify policies are configured in **Settings >
 - `IMAGE_TAG` chooses a published image. It defaults to `latest`; pin an exact Calendar Version such as `2026.07.0` for repeatable deployments.
 - `RIVIAMIGO_IMAGE_REGISTRY` defaults to the public `ghcr.io/bballdavis` registry namespace.
 - `S3_ENDPOINT`, `S3_ACCESS_KEY`, and `S3_SECRET_KEY` remain reserved configuration fields; the current backup workflow does not use an object-storage destination.
-- `BACKUP_DRIVER`, `BACKUP_ARTIFACT_DIR`, and `BACKUP_POLL_INTERVAL_SECONDS` control the backup worker; see [backup and restore](./backup-and-restore.md).
+- `BACKUP_DRIVER`, `BACKUP_ARTIFACT_DIR`, and `BACKUP_POLL_INTERVAL_SECONDS` control the recovery-package worker; `BACKUP_DRIVER=pg_dump` is required and artifacts default to `/backups`. See [backup and restore](./backup-and-restore.md).
 - `RUST_LOG` changes server logging verbosity.
 - The reconnect, telemetry-retention, and rate-limit settings in `compose/.env.full.example` are available when their defaults need tuning.
 
