@@ -56,6 +56,7 @@ struct ListUsersQuery {
 #[derive(Deserialize)]
 struct CreateAccountInvitationBody {
     email: String,
+    vehicle_id: Option<Uuid>,
     expires_in_days: Option<i32>,
 }
 
@@ -148,6 +149,8 @@ async fn list_admin_vehicle_options(
 struct AccountInvitationPayload {
     id: Uuid,
     invitee_email: String,
+    vehicle_id: Option<Uuid>,
+    vehicle_name: Option<String>,
     expires_at: chrono::DateTime<chrono::Utc>,
     accepted_at: Option<chrono::DateTime<chrono::Utc>>,
     revoked_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -172,6 +175,16 @@ async fn create_account_invitation(
     if exists {
         return Err(AppError::Validation("email already registered".into()));
     }
+    if let Some(vehicle_id) = body.vehicle_id {
+        let vehicle_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.vehicles WHERE id = $1)")
+                .bind(vehicle_id)
+                .fetch_one(&state.pool)
+                .await?;
+        if !vehicle_exists {
+            return Err(AppError::Validation("vehicle not found".into()));
+        }
+    }
     let days = body.expires_in_days.unwrap_or(7);
     if !(1..=30).contains(&days) {
         return Err(AppError::Validation(
@@ -182,11 +195,12 @@ async fn create_account_invitation(
     let token_hash = hash_token(&token);
     let expires_at = chrono::Utc::now() + chrono::Duration::days(i64::from(days));
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO riviamigo.account_invitations (invited_by, invitee_email, token_hash, expires_at)
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO riviamigo.account_invitations (invited_by, invitee_email, vehicle_id, token_hash, expires_at)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
     .bind(auth.user_id)
     .bind(&email)
+    .bind(body.vehicle_id)
     .bind(token_hash)
     .bind(expires_at)
     .fetch_one(&state.pool)
@@ -204,7 +218,7 @@ async fn create_account_invitation(
         format!("invite_id={id} email={email}"),
     );
     Ok(Json(
-        serde_json::json!({ "id": id, "invitee_email": email, "expires_at": expires_at, "activation_token": token }),
+        serde_json::json!({ "id": id, "invitee_email": email, "vehicle_id": body.vehicle_id, "expires_at": expires_at, "activation_token": token }),
     ))
 }
 
@@ -214,8 +228,12 @@ async fn list_account_invitations(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
     let invitations = sqlx::query_as::<_, AccountInvitationPayload>(
-        "SELECT id, invitee_email, expires_at, accepted_at, revoked_at, created_at
-         FROM riviamigo.account_invitations ORDER BY created_at DESC",
+        "SELECT ai.id, ai.invitee_email, ai.vehicle_id,
+                COALESCE(v.name, v.model) AS vehicle_name,
+                ai.expires_at, ai.accepted_at, ai.revoked_at, ai.created_at
+         FROM riviamigo.account_invitations ai
+         LEFT JOIN riviamigo.vehicles v ON v.id = ai.vehicle_id
+         ORDER BY ai.created_at DESC",
     )
     .fetch_all(&state.pool)
     .await?;

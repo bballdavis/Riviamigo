@@ -28,10 +28,9 @@ import {
   api,
   AuthenticatedVehicleArtwork,
   useAuth,
-  useAuthReady,
   useCurrentVehicleStatus,
+  useResolvedVehicleSelection,
   useVehicleHealth,
-  useVehicles,
 } from '@riviamigo/hooks';
 import type { VehicleHealthClosures, VehicleHealthTires, VehicleImages } from '@riviamigo/types';
 import {
@@ -85,13 +84,15 @@ function VehicleHealthPage() {
 }
 
 function VehicleHealthContent() {
-  const { accessToken, defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
-  const authReady = useAuthReady();
+  const { accessToken, setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
-  const { data: vehicles } = useVehicles();
-  const availableVehicles = vehicles ?? [];
+  const {
+    authReady,
+    effectiveVehicleId,
+    vehicleSelectionReady,
+    vehicles: availableVehicles,
+  } = useResolvedVehicleSelection();
   const hasVehicleChoices = availableVehicles.length > 1;
-  const effectiveVehicleId = activeVehicleId ?? defaultVehicleId;
   const { data, isLoading } = useVehicleHealth(effectiveVehicleId);
   const { data: status } = useCurrentVehicleStatus(effectiveVehicleId);
   const { data: images } = useQuery({
@@ -99,21 +100,6 @@ function VehicleHealthContent() {
     queryFn: () => api.vehicleImages(effectiveVehicleId!),
     enabled: authReady && Boolean(effectiveVehicleId) && !!accessToken,
   });
-
-  React.useEffect(() => {
-    if (!availableVehicles.length) {
-      if (activeVehicleId) setSessionVehicleId(null);
-      return;
-    }
-    if (activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === activeVehicleId)) {
-      setSessionVehicleId(null);
-      return;
-    }
-    if (!defaultVehicleId) return;
-    if (!activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === defaultVehicleId)) {
-      setSessionVehicleId(availableVehicles[0]?.id ?? null);
-    }
-  }, [activeVehicleId, availableVehicles, defaultVehicleId, setSessionVehicleId]);
 
   const diagnostics = summarizeDiagnostics(status);
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
@@ -176,7 +162,9 @@ function VehicleHealthContent() {
           ) : null
         }
       >
-        {!effectiveVehicleId ? (
+        {!authReady || !vehicleSelectionReady ? (
+          <div className="text-xs text-fg-tertiary p-4">Loading...</div>
+        ) : !effectiveVehicleId ? (
           <NoVehicleState
             title="No vehicle selected"
             description="Connect your Rivian account to view vehicle health."

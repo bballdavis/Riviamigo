@@ -19,6 +19,12 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useVehicles: () => ({
       data: [{ id: 'vehicle-1', display_name: 'Truck', model: 'R1T' }],
     }),
+    useResolvedVehicleSelection: () => ({
+      authReady: true,
+      effectiveVehicleId: 'vehicle-1',
+      vehicleSelectionReady: true,
+      vehicles: [{ id: 'vehicle-1', display_name: 'Truck', model: 'R1T' }],
+    }),
     useMe: () => ({ data: { role: 'user' } }),
   };
 });
@@ -49,6 +55,7 @@ vi.mock('@riviamigo/dashboards', () => ({
     widgets: [],
   }),
   useDashboardBySlug: () => ({ data: undefined, isLoading: false }),
+  useDashboardById: () => ({ data: undefined, isLoading: false, isError: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn(), isPending: false }),

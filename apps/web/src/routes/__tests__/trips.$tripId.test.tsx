@@ -18,6 +18,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/ui/charts', () => ({
+  DEFAULT_CURVE_SMOOTHING: 0.2,
   TripMapChart:           () => <div data-testid="trip-map-chart">map</div>,
   RichTimeSeriesChart:    ({ series, height }: { series: Array<{ label: string }>; height?: number }) => <div data-testid="trip-drive-chart" data-height={height}>{series.map((item) => item.label).join(', ')}</div>,
   CHART_COLORS:           { accent: '#fff', success: '#fff', sky: '#fff', emerald: '#fff', warning: '#fff', teal: '#fff' },
@@ -25,7 +26,8 @@ vi.mock('@riviamigo/ui/charts', () => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth:            () => ({ defaultVehicleId: 'v1' }),
+  useAuth:            () => ({ defaultVehicleId: null }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'v1', vehicleSelectionReady: true }),
   useDocumentTheme:   () => false,
   useTripDetailData:  () => ({
     data: {

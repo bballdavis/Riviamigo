@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
 import {
-  useAuth, useTripDetailData, useDocumentTheme,
+  useAuth, useResolvedVehicleSelection, useTripDetailData, useDocumentTheme,
 } from '@riviamigo/hooks';
 import {
   PageLayout,
@@ -43,7 +43,12 @@ function TripDetailPage() {
 }
 
 export function TripDetailContent() {
-  const { defaultVehicleId, accessToken } = useAuth();
+  const { accessToken } = useAuth();
+  const {
+    authReady,
+    effectiveVehicleId,
+    vehicleSelectionReady,
+  } = useResolvedVehicleSelection();
   const navigate = useNavigate();
   const { tripId } = useParams({ from: '/trips/$tripId' });
   const [activeIndex, setActiveIndex] = React.useState<number | null>(null);
@@ -71,10 +76,10 @@ export function TripDetailContent() {
     }
   }, []);
 
-  const { data: detailData, isLoading: detailLoading } = useTripDetailData(tripId, defaultVehicleId);
+  const { data: detailData, isLoading: detailLoading } = useTripDetailData(tripId, effectiveVehicleId);
   const trip = detailData?.trip;
   const samples = detailData?.samples;
-  const hasVehicle = !!defaultVehicleId;
+  const hasVehicle = !!effectiveVehicleId;
   const chartLoading = detailLoading;
   const trackLoading = detailLoading;
   const mapStyle = isDark ? 'dark' : 'light';
@@ -224,7 +229,9 @@ export function TripDetailContent() {
         titleAction={backButton}
         titleActionPosition="left"
       >
-        {!hasVehicle ? (
+        {!authReady || !vehicleSelectionReady ? (
+          <div className="p-4 text-xs text-fg-tertiary">Loading...</div>
+        ) : !hasVehicle ? (
           <NoVehicleState
             title="No vehicle selected"
             description="Connect your Rivian account before opening trip details."

@@ -88,12 +88,15 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
   return {
     ...actual,
     useAuth: () => ({
-      defaultVehicleId: 'vehicle-1',
+      defaultVehicleId: null,
       activeVehicleId: null,
       setActiveVehicleId: vi.fn(),
     }),
-    useVehicles: () => ({
-      data: [{ id: 'vehicle-1', display_name: 'Truck', model: 'R1T' }],
+    useResolvedVehicleSelection: () => ({
+      authReady: true,
+      effectiveVehicleId: 'vehicle-1',
+      vehicleSelectionReady: true,
+      vehicles: [{ id: 'vehicle-1', display_name: 'Truck', model: 'R1T' }],
     }),
     useMe: () => ({ data: { role: 'user' } }),
   };
@@ -235,6 +238,12 @@ describe('DashboardPageShell timeframe sync', () => {
       expect(widget.getAttribute('data-from')).toBe(expectedFrom);
       expect(widget.getAttribute('data-to')).toBe(expectedTo);
     }
+  });
+
+  it('renders an accessible vehicle when the user has no default vehicle', () => {
+    render(<DashboardPageShell navKey="dashboard" slug="dashboard" title="Overview" />);
+
+    expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
   });
 
   it('switches battery range-aware content to lifetime bounds together', async () => {

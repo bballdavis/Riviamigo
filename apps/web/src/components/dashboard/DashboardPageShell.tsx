@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useAuth, useMe, useVehicles } from '@riviamigo/hooks';
+import { useAuth, useMe, useResolvedVehicleSelection } from '@riviamigo/hooks';
 import { DateRangePicker, PageLayout, SelectPicker, Tooltip } from '@riviamigo/ui/primitives';
 import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
 import {
@@ -172,9 +172,14 @@ function DashboardPageShellContent({
   enableDashboardEditing = true,
   showEfficiencyDisplayToggle = false,
 }: DashboardPageShellProps) {
-  const { defaultVehicleId, activeVehicleId, setActiveVehicleId } = useAuth();
+  const { setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
-  const { data: vehicles } = useVehicles();
+  const {
+    authReady,
+    effectiveVehicleId,
+    vehicleSelectionReady,
+    vehicles: availableVehicles,
+  } = useResolvedVehicleSelection();
   const updateDashboard = useUpdateDashboard();
   const updateAdminDashboard = useUpdateAdminDashboard();
   const createDashboard = useCreateDashboard();
@@ -191,9 +196,7 @@ function DashboardPageShellContent({
   const range = useMemo(() => getTimeframeRange(timeframe), [timeframe]);
   const { from, to } = useMemo(() => timeframeToQuery(timeframe), [timeframe]);
 
-  const availableVehicles = vehicles ?? [];
   const hasVehicleChoices = availableVehicles.length > 1;
-  const effectiveVehicleId = activeVehicleId ?? defaultVehicleId;
   const bySlug = useDashboardBySlug(dashboardId ? null : slug);
   const byId = useDashboardById(dashboardId ?? null);
   const apiConfig = dashboardId ? byId.data : bySlug.data;
@@ -306,21 +309,6 @@ function DashboardPageShellContent({
   useEffect(() => {
     saveDashboardTimeframe(timeframe);
   }, [timeframe]);
-
-  useEffect(() => {
-    if (!availableVehicles.length) {
-      if (activeVehicleId) setSessionVehicleId(null);
-      return;
-    }
-    if (activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === activeVehicleId)) {
-      setSessionVehicleId(null);
-      return;
-    }
-    if (!defaultVehicleId) return;
-    if (!activeVehicleId && !availableVehicles.some((vehicle) => vehicle.id === defaultVehicleId)) {
-      setSessionVehicleId(availableVehicles[0]?.id ?? null);
-    }
-  }, [activeVehicleId, availableVehicles, defaultVehicleId, setSessionVehicleId]);
 
   const shellState: DashboardPageShellRenderState = {
     activeConfig,
@@ -446,6 +434,8 @@ function DashboardPageShellContent({
               Back to Dashboards
             </button>
           </div>
+        ) : !authReady || !vehicleSelectionReady ? (
+          <div className="text-xs text-fg-tertiary p-4">Loading...</div>
         ) : !effectiveVehicleId ? (
           <NoVehicleState />
         ) : dashboardIsLoading && !activeConfig ? (

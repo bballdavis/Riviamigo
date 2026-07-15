@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { rootRoute } from './__root';
-import { useAuth, useChargeSession, useSavedPlaces, useUpdateChargeSessionLocation } from '@riviamigo/hooks';
+import { useAuth, useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSessionLocation } from '@riviamigo/hooks';
 import type { Place } from '@riviamigo/types';
 import {
   PageLayout, StatCardGrid, StatCard, Card,
@@ -25,20 +25,20 @@ export function ChargeSessionContent() {
 }
 
 function ChargeSessionContentInner() {
-  const { defaultVehicleId } = useAuth();
+  const { effectiveVehicleId, authReady, vehicleSelectionReady } = useResolvedVehicleSelection();
   const navigate = useNavigate();
   const { sessionId } = useParams({ from: '/charging/$sessionId' });
 
-  const { data: session } = useChargeSession(sessionId, defaultVehicleId);
+  const { data: session } = useChargeSession(sessionId, effectiveVehicleId);
   const {
     data: places = [],
     isLoading: placesLoading,
     isFetching: placesFetching,
     isError: placesError,
   } = useSavedPlaces();
-  const { mutate: updateLocation, isPending: isUpdatingLocation } = useUpdateChargeSessionLocation(defaultVehicleId);
+  const { mutate: updateLocation, isPending: isUpdatingLocation } = useUpdateChargeSessionLocation(effectiveVehicleId);
   const [selectedLocationName, setSelectedLocationName] = useState<string | null>(null);
-  const hasVehicle = !!defaultVehicleId;
+  const hasVehicle = !!effectiveVehicleId;
   const isPlacesLoading = placesLoading || placesFetching;
 
   useEffect(() => {
@@ -120,7 +120,9 @@ function ChargeSessionContentInner() {
         titleAction={backButton}
         titleActionPosition="left"
       >
-        {!hasVehicle ? (
+        {!authReady || !vehicleSelectionReady ? (
+          <div className="p-4 text-xs text-fg-tertiary">Loading...</div>
+        ) : !hasVehicle ? (
           <NoVehicleState
             title="No vehicle selected"
             description="Connect your Rivian account before opening charging session details."
@@ -158,7 +160,7 @@ function ChargeSessionContentInner() {
                   <DashboardChartWidget
                     instance={chargeCurveInstance}
                     ctx={{
-                      vehicleId: defaultVehicleId,
+                      vehicleId: effectiveVehicleId,
                       timeframe: {
                         kind: 'custom',
                         from: new Date(session.started_at),
