@@ -68,13 +68,13 @@ function getEditorStyles() {
 }
 
 describe('GridEditor overlays', () => {
-  it('writes sensor curve smoothing changes back through the widget options contract', () => {
+  it('writes sensor display-filter changes back through the widget options contract', () => {
     const onChange = vi.fn();
     const widget = {
       ...BASE_CONFIG.widgets[0]!,
       options: {
         chartType: 'line',
-        curveSmoothing: 0.45,
+        timeFilter: '24h',
       },
     };
 
@@ -90,16 +90,10 @@ describe('GridEditor overlays', () => {
     fireEvent.change(slider, { target: { value: '1' } });
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        options: expect.objectContaining({ curveSmoothing: 1 }),
+        options: expect.objectContaining({ timeFilter: '15m' }),
       })
     );
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Smooth curves' }));
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        options: expect.objectContaining({ curveSmoothing: 0 }),
-      })
-    );
   });
 
   it('keeps edit-only overlays out of the view grid chrome', () => {

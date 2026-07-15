@@ -65,6 +65,7 @@ interface DashboardChartOptions {
   chartIds?: string[];
   page?: DashboardChartPage;
   showPicker?: boolean;
+  timeFilter?: TimeFilterWindow;
   curveSmoothing?: number | boolean;
   chartSettings?: Record<string, DashboardChartDisplaySettings>;
   /** Optional subtitle shown in the compact header when showPicker is false. */
@@ -163,7 +164,10 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
     chartId,
     chartIds: fallbackIds,
     showPicker: options.showPicker ?? fallbackIds.length > 1,
-    legacyTimeFilter: legacySmoothingToTimeFilter(options.curveSmoothing),
+    legacyTimeFilter: normalizeTimeFilter(
+      options.timeFilter,
+      legacySmoothingToTimeFilter(options.curveSmoothing),
+    ),
     chartSettings: normalizeChartSettingsMap(options.chartSettings),
     ...(page ? { page } : {}),
     ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
@@ -171,8 +175,9 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
 }
 
 const AXIS_ORDER: DashboardChartAxisId[] = ['x', 'y', 'y2'];
+const MIN_ENABLED_SMOOTHING = 0.05;
 const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
-  smoothing: false,
+  timeFilter: false,
   axes: {},
   xDomainSource: 'dashboard-timeframe',
 };
@@ -233,6 +238,13 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
     saveStoredChartDefault(defaultStorageKey, nextChartId);
     setDefaultChartId(nextChartId);
   }
+
+  // The retired inline popover remains inert until its removal can be folded
+  // into the next editor-layout cleanup; the active panel below owns filtering.
+  const smoothingOn = false;
+  const smoothing = 0;
+  const smoothingTrackPercent = 0;
+  const setSmoothing = (_next: number | ((current: number) => number)) => {};
 
   const settingsButton = (
     <div className="relative">
@@ -437,14 +449,14 @@ export function DashboardChartRenderer({
   chartId,
   ctx,
   height,
-  smoothing = 0,
+  timeFilter = 'raw',
   settings,
   presentation = 'embedded',
 }: {
   chartId: string;
   ctx: WidgetCtx;
   height: number;
-  smoothing?: number;
+  timeFilter?: TimeFilterWindow;
   settings?: DashboardChartDisplaySettings;
   presentation?: 'embedded' | 'mobile-viewer';
 }) {
@@ -461,7 +473,7 @@ export function DashboardChartRenderer({
       definition={definition}
       ctx={ctx}
       height={height}
-      smoothing={settings?.smoothing ?? smoothing}
+      timeFilter={settings?.timeFilter ?? timeFilter}
       presentation={presentation}
       {...(settings ? { settings } : {})}
     />
@@ -472,7 +484,7 @@ type ActiveDashboardChartSourceProps = {
   definition: DashboardChartDefinition;
   ctx: WidgetCtx;
   height: number;
-  smoothing: number;
+  timeFilter: TimeFilterWindow;
   settings?: DashboardChartDisplaySettings;
   presentation: 'embedded' | 'mobile-viewer';
 };
@@ -506,7 +518,7 @@ function sourceAxisRanges(settings?: DashboardChartDisplaySettings) {
   };
 }
 
-function SocHistorySource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+function SocHistorySource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data: soc = [], isLoading: socLoading } = useSocHistory(ctx.vehicleId, ctx.from, ctx.to);
   const { data: range = [], isLoading: rangeLoading } = useRangeHistory(ctx.vehicleId, ctx.from, ctx.to);
   return renderSocHistoryChart(
@@ -515,7 +527,7 @@ function SocHistorySource({ definition, ctx, height, smoothing, settings, presen
     socLoading || rangeLoading,
     soc.map((point) => ({ ts: point.ts, value: point.value })),
     range.map((point) => ({ ts: point.ts, value: point.value })),
-    smoothing,
+    timeFilter,
     sourceAxisRanges(settings).yRange,
     chartInteractionMode(presentation),
   );
@@ -541,7 +553,7 @@ function ChargingSeriesSource({ definition, ctx, height, settings, sessions }: A
   return <DailyEnergyChart definition={definition} daily={daily} loading={isLoading} height={height} {...(yRange ? { yRange } : {})} />;
 }
 
-function ChargeSessionCurveSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+function ChargeSessionCurveSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useChargeCurve(ctx.chargeSessionId ?? null, ctx.vehicleId);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return (
@@ -550,7 +562,7 @@ function ChargeSessionCurveSource({ definition, ctx, height, smoothing, settings
       data={data}
       loading={isLoading}
       height={height}
-      smoothing={smoothing}
+      timeFilter={timeFilter}
       startedAt={ctx.from || null}
       sessionEnergyKwh={ctx.chargeSessionEnergyKwh ?? null}
       interactionMode={chartInteractionMode(presentation)}
@@ -566,10 +578,10 @@ function ChargingCurveAnalysisSource({ definition, ctx, height, settings, presen
   return <ChargingCurveAnalysisChart definition={definition} data={data} loading={isLoading} height={height} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
 }
 
-function EfficiencyTrendSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+function EfficiencyTrendSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange } = sourceAxisRanges(settings);
-  return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} smoothing={smoothing} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
+  return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
 }
 
 function EfficiencyTemperatureSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
@@ -587,9 +599,9 @@ function PhantomDrainSource({ definition, ctx, height, settings, presentation }:
   return <PhantomDrainChart periods={data?.periods ?? []} loading={isLoading} height={height} emptyTitle={definition.emptyTitle} yUnit={definition.yUnit} yRange={sourceAxisRanges(settings).yRange ?? definition.yRange} interactionMode={chartInteractionMode(presentation)} />;
 }
 
-function BatteryDegradationSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+function BatteryDegradationSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data = [], isLoading } = useDegradation(ctx.vehicleId, ctx.from, ctx.to);
-  return renderSingleChart(definition, height, isLoading, data.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), smoothing, sourceAxisRanges(settings).yRange, chartInteractionMode(presentation));
+  return renderSingleChart(definition, height, isLoading, data.map((point) => ({ ts: point.ts, value: point.capacity_pct ?? null })), timeFilter, sourceAxisRanges(settings).yRange, chartInteractionMode(presentation));
 }
 
 function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data']) {
@@ -603,16 +615,16 @@ function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data
   }));
 }
 
-function BatteryMileageSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+function BatteryMileageSource({ definition, ctx, height, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { xRange, yRange } = sourceAxisRanges(settings);
-  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} smoothing={smoothing} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
+  return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} interactionMode={chartInteractionMode(presentation)} {...(xRange ? { xRange } : {})} {...(yRange ? { yRange } : {})} />;
 }
 
-function ProjectedRangeMileageSource({ definition, ctx, height, smoothing, settings, presentation }: ActiveDashboardChartSourceProps) {
+function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, settings, presentation }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
-  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} smoothing={smoothing} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
+  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} />;
 }
 
 function renderSocHistoryChart(
@@ -621,7 +633,7 @@ function renderSocHistoryChart(
   loading: boolean,
   soc: Array<{ ts: string; value: number | null }>,
   range: Array<{ ts: string; value: number | null }>,
-  smoothing = 0,
+  timeFilter: TimeFilterWindow = 'raw',
   manualYRange?: [number, number],
   interactionMode: 'standard' | 'touch-explore' = 'standard',
 ) {
@@ -650,9 +662,9 @@ function renderSocHistoryChart(
       height={height}
       yUnit={definition.yUnit}
       yRange={manualYRange ?? definition.yRange}
-      stepInterpolation={definition.stepInterpolation && smoothing <= 0}
+      stepInterpolation={definition.stepInterpolation}
       mode={definition.mode}
-      smoothing={smoothing}
+      timeFilter={timeFilter}
       interactionMode={interactionMode}
     />
   );
@@ -663,7 +675,7 @@ function renderSingleChart(
   height: number,
   loading: boolean,
   data: Array<{ ts: string; value: number | null }>,
-  smoothing = 0,
+  timeFilter: TimeFilterWindow = 'raw',
   manualYRange?: [number, number],
   interactionMode: 'standard' | 'touch-explore' = 'standard',
 ) {
@@ -676,9 +688,9 @@ function renderSingleChart(
       height={height}
       yUnit={definition.yUnit}
       yRange={manualYRange ?? definition.yRange}
-      stepInterpolation={definition.stepInterpolation && smoothing <= 0}
+      stepInterpolation={definition.stepInterpolation}
       mode={definition.mode}
-      smoothing={smoothing}
+      timeFilter={timeFilter}
       interactionMode={interactionMode}
     />
   );
@@ -728,7 +740,7 @@ function ChargeSessionCurveChart({
   data,
   loading,
   height,
-  smoothing,
+  timeFilter,
   startedAt,
   sessionEnergyKwh,
   yRange,
@@ -739,7 +751,7 @@ function ChargeSessionCurveChart({
   data: ChargeCurvePoint[];
   loading: boolean;
   height: number;
-  smoothing: number;
+  timeFilter: TimeFilterWindow;
   startedAt: string | null;
   sessionEnergyKwh: number | null;
   yRange?: [number, number];
@@ -856,6 +868,7 @@ function ChargeSessionCurveChart({
           values: energyValues,
           mode: 'area',
           yScale: 'y2',
+          filterable: false,
         },
         {
           key: 'rate',
@@ -877,7 +890,7 @@ function ChargeSessionCurveChart({
       mode="line"
       xValueFormatter={useTime ? undefined : (value) => `${Math.round(value)}%`}
       xSplits={xSplits}
-      smoothing={smoothing}
+      timeFilter={timeFilter}
       interactionMode={interactionMode}
     />
   );
@@ -958,7 +971,6 @@ function ChargingCurveAnalysisChart({
       yRange={yRange}
       mode="scatter"
       xValueFormatter={(value) => `${Math.round(value)}%`}
-      smoothing={0}
       interactionMode={interactionMode}
     />
   );
@@ -1096,7 +1108,7 @@ function EfficiencyTrendChart({
   trend,
   loading,
   height,
-  smoothing,
+  timeFilter,
   yRange,
   interactionMode,
 }: {
@@ -1104,7 +1116,7 @@ function EfficiencyTrendChart({
   trend: Array<{ ts: string; trip_efficiency_wh_mi: number | null; rolling_24h_wh_mi: number | null }>;
   loading: boolean;
   height: number;
-  smoothing?: number;
+  timeFilter: TimeFilterWindow;
   yRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
 }) {
@@ -1122,7 +1134,7 @@ function EfficiencyTrendChart({
       yUnit={unit}
       yRange={yRange}
       mode={definition.mode}
-      smoothing={smoothing}
+      timeFilter={timeFilter}
       interactionMode={interactionMode}
     />
   );
@@ -1200,7 +1212,6 @@ function BatteryCapacityMileageChart({
   points,
   loading,
   height,
-  smoothing,
   xRange,
   yRange,
   interactionMode,
@@ -1209,7 +1220,6 @@ function BatteryCapacityMileageChart({
   points: Array<{ x: number | null; y: number | null; degradationPct: number | null }>;
   loading: boolean;
   height: number;
-  smoothing?: number;
   xRange?: [number, number];
   yRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
@@ -1273,7 +1283,6 @@ function BatteryCapacityMileageChart({
       mode="scatter"
       xValueFormatter={(value) => formatMiles(value).replace(/\s.*/, '')}
       yValueFormatter={(value, unit) => formatChartNumber(value, unit, yPrecision)}
-      smoothing={smoothing}
       interactionMode={interactionMode}
     />
   );
@@ -1284,7 +1293,7 @@ function ProjectedRangeMileageChart({
   points,
   loading,
   height,
-  smoothing,
+  timeFilter,
   yRange: manualYRange,
   yRightRange,
   interactionMode,
@@ -1293,7 +1302,7 @@ function ProjectedRangeMileageChart({
   points: Array<{ ts: string; rangeMi: number | null; projectedMaxRangeMi: number | null; x: number | null }>;
   loading: boolean;
   height: number;
-  smoothing?: number;
+  timeFilter: TimeFilterWindow;
   yRange?: [number, number];
   yRightRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
@@ -1326,6 +1335,7 @@ function ProjectedRangeMileageChart({
           color: CHART_COLORS.emerald,
           mode: 'line',
           yScale: 'y2',
+          filterable: false,
         },
       ]}
       loading={loading}
@@ -1336,7 +1346,7 @@ function ProjectedRangeMileageChart({
       yRightUnit="mi"
       yRightRange={yRightRange}
       mode={definition.mode}
-      smoothing={smoothing}
+      timeFilter={timeFilter}
       interactionMode={interactionMode}
     />
   );
@@ -1390,10 +1400,9 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
   return value === 'overview' || value === 'battery' || value === 'charging' || value === 'efficiency' || value === 'trips';
 }
 
-function normalizeCurveSmoothing(value: unknown) {
-  if (typeof value === 'boolean') return value ? DEFAULT_SMOOTHING : 0;
-  if (typeof value === 'number' && Number.isFinite(value)) return Math.min(1, Math.max(0, value));
-  return DEFAULT_SMOOTHING;
+function legacySmoothingToTimeFilter(value: unknown): TimeFilterWindow {
+  if (value === false || value === 0) return 'raw';
+  return DEFAULT_CHART_TIME_FILTER;
 }
 
 function normalizeChartSettingsMap(value: unknown): Record<string, DashboardChartDisplaySettings> {
@@ -1424,9 +1433,8 @@ function normalizeChartDisplaySettings(value: unknown): DashboardChartDisplaySet
   const normalizedAxes = normalizeChartAxisSettingsMap(settings.axes);
   const normalized: DashboardChartDisplaySettings = {};
 
-  if ('smoothing' in settings) {
-    normalized.smoothing = normalizeCurveSmoothing(settings.smoothing);
-  }
+  if ('timeFilter' in settings) normalized.timeFilter = normalizeTimeFilter(settings.timeFilter, DEFAULT_CHART_TIME_FILTER);
+  if ('smoothing' in settings && typeof settings.smoothing === 'number') normalized.smoothing = settings.smoothing;
   if (Object.keys(normalizedAxes).length > 0) {
     normalized.axes = normalizedAxes;
   }
@@ -1464,12 +1472,12 @@ function normalizeChartAxisRangeSetting(value: unknown): DashboardChartAxisRange
 function resolveChartDisplaySettings(
   allSettings: Record<string, DashboardChartDisplaySettings>,
   chartId: string,
-  legacyCurveSmoothing: number,
+  legacyTimeFilter: TimeFilterWindow,
 ) {
   const chartSettings = allSettings[chartId] ?? {};
   const axes = chartSettings.axes ?? {};
   return {
-    smoothing: chartSettings.smoothing ?? legacyCurveSmoothing,
+    timeFilter: chartSettings.timeFilter ?? legacyTimeFilter,
     axes,
   };
 }
@@ -1511,11 +1519,10 @@ interface ChartSettingsPanelProps {
   triggerRef: React.RefObject<HTMLButtonElement | null>;
   chartTitle: string;
   capabilities: DashboardChartSettingsCapabilities;
-  settings: DashboardChartDisplaySettings & { smoothing: number; axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> };
+  settings: DashboardChartDisplaySettings & { timeFilter: TimeFilterWindow; axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisRangeSetting>> };
   persistent: boolean;
   onClose: () => void;
-  onToggleSmoothing: () => void;
-  onSmoothingChange: (next: number) => void;
+  onTimeFilterChange: (next: TimeFilterWindow) => void;
   onAxisModeChange: (axisId: DashboardChartAxisId, mode: DashboardChartAxisMode) => void;
   onAxisValueChange: (axisId: DashboardChartAxisId, bound: 'min' | 'max', value: number | undefined) => void;
 }
@@ -1528,23 +1535,18 @@ function ChartSettingsPanel({
   settings,
   persistent,
   onClose,
-  onToggleSmoothing,
-  onSmoothingChange,
+  onTimeFilterChange,
   onAxisModeChange,
   onAxisValueChange,
 }: ChartSettingsPanelProps) {
   const [isMobile, setIsMobile] = React.useState(isMobileViewport);
   const [position, setPosition] = React.useState({ top: 0, left: 0, visibility: 'hidden' as 'hidden' | 'visible' });
   const panelRef = React.useRef<HTMLDivElement | null>(null);
-  const smoothingOn = settings.smoothing > 0;
-  const smoothingTrackPercent = Math.min(
-    100,
-    Math.max(0, ((settings.smoothing - MIN_ENABLED_SMOOTHING) / (1 - MIN_ENABLED_SMOOTHING)) * 100),
-  );
+  const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === settings.timeFilter));
   const axisEntries = AXIS_ORDER.flatMap((axisId) =>
     capabilities.axes[axisId] ? [[axisId, capabilities.axes[axisId]] as const] : [],
   );
-  const hasControls = capabilities.smoothing || axisEntries.length > 0;
+  const hasControls = capabilities.timeFilter || axisEntries.length > 0;
 
   React.useEffect(() => {
     const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -1658,54 +1660,31 @@ function ChartSettingsPanel({
           </button>
         </div>
         <div className="grid gap-3 p-3">
-          {capabilities.smoothing ? (
+          {capabilities.timeFilter ? (
             <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve</p>
-                  <p className="text-sm text-fg">Smooth curves</p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-label="Toggle smooth curves"
-                  aria-checked={smoothingOn}
-                  onClick={onToggleSmoothing}
-                  className={cn(
-                    'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border px-0.5 transition-all duration-200 ease-in-out',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2',
-                    smoothingOn
-                      ? 'border-accent bg-accent shadow-[0_0_0_1px_var(--rm-accent)]'
-                      : 'border-border-strong bg-bg-elevated',
-                  )}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      'pointer-events-none inline-block h-4 w-4 rounded-full border bg-white shadow-sm transition-transform duration-200 ease-in-out',
-                      smoothingOn ? 'translate-x-5 border-accent' : 'translate-x-0 border-border-strong',
-                    )}
-                  />
-                </button>
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display filter</p>
+                <p className="text-sm text-fg">Time window</p>
               </div>
-              {smoothingOn ? (
+              <div>
+                <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                  <span>Raw points stay at their recorded timestamps.</span>
+                  <span>{timeFilterLabel(settings.timeFilter)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={TIME_FILTER_OPTIONS.length - 1}
+                  step={1}
+                  value={timeFilterIndex}
+                  onChange={(event) => onTimeFilterChange(TIME_FILTER_OPTIONS[Number(event.target.value)]!.value)}
+                  className="rm-accent-range w-full"
+                />
+              </div>
+              {/* Time filtering replaces spline interpolation without reducing point density. */}
+              {false ? (
                 <div>
-                  <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                    <span>Amount</span>
-                    <span>{settings.smoothing < 0.25 ? 'Light' : settings.smoothing < 0.6 ? 'Medium' : 'Heavy'}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={MIN_ENABLED_SMOOTHING}
-                    max={1}
-                    step={0.05}
-                    value={settings.smoothing}
-                    onChange={(event) => onSmoothingChange(Number(event.target.value))}
-                    className="rm-accent-range w-full"
-                    style={{
-                      background: `linear-gradient(to right, var(--rm-accent) 0%, var(--rm-accent) ${smoothingTrackPercent}%, var(--rm-border-strong) ${smoothingTrackPercent}%, var(--rm-border-strong) 100%)`,
-                    }}
-                  />
+                  Legacy control placeholder.
                 </div>
               ) : null}
             </section>
@@ -1843,7 +1822,7 @@ registerWidget({
     page: 'overview',
     chartId: 'soc-history',
     showPicker: true,
-    curveSmoothing: DEFAULT_SMOOTHING,
+    timeFilter: DEFAULT_CHART_TIME_FILTER,
   },
   component: DashboardChartWidget,
 });

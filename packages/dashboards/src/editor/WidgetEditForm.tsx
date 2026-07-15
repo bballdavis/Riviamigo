@@ -3,10 +3,13 @@ import { Save, Trash2 } from 'lucide-react';
 import { useMetricCatalog } from '@riviamigo/hooks';
 import {
   CHART_COLOR_OPTIONS,
-  DEFAULT_CURVE_SMOOTHING,
+  DEFAULT_SPRITE_TIME_FILTER,
   getChartColor,
-  normalizeCurveSmoothing,
+  normalizeTimeFilter,
+  TIME_FILTER_OPTIONS,
+  timeFilterLabel,
   type ChartColorKey,
+  type TimeFilterWindow,
 } from '@riviamigo/ui/charts';
 import { SelectPicker } from '@riviamigo/ui/primitives';
 import { getWidgetForInstance } from '../registry';
@@ -25,7 +28,6 @@ import {
 import { IconPicker } from './IconPicker';
 import { resolveIconId } from './iconMigration';
 
-const MIN_CURVE_SMOOTHING = 0.05;
 const DEFAULT_WINDOW_DAYS = 30;
 
 /** Drawer background color — matches EditorDrawer's --rm-bg. Fields stack on top. */
@@ -59,12 +61,12 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   const metric = typeof options.metric === 'string' ? options.metric : sensorDefinition?.metric ?? 'total_miles';
   const chartType = typeof options.chartType === 'string' ? options.chartType : sensorDefinition?.chartType ?? 'line';
   const curveColor = isChartColorKey(options.curveColor) ? options.curveColor : 'accent';
-  const curveSmoothingSupported = supportsCurveSmoothing(chartType);
-  const curveSmoothing = normalizeCurveSmoothing(
-    options.curveSmoothing,
-    curveSmoothingSupported ? DEFAULT_CURVE_SMOOTHING : 0,
+  const timeFilterSupported = supportsCurveSmoothing(chartType);
+  const timeFilter = normalizeTimeFilter(
+    options.timeFilter,
+    legacySmoothingToTimeFilter(options.curveSmoothing, chartType),
   );
-  const curveSmoothingOn = curveSmoothingSupported && curveSmoothing > 0;
+  const timeFilterIndex = Math.max(0, TIME_FILTER_OPTIONS.findIndex((option) => option.value === timeFilter));
   const valueSize = typeof options.valueSize === 'string' ? options.valueSize : 'md';
   const valueMode = typeof options.valueMode === 'string' ? options.valueMode : sensorDefinition?.valueMode ?? 'latest';
   const iconId = resolveIconId(typeof options.icon === 'string' ? options.icon : sensorDefinition?.icon);
@@ -148,11 +150,11 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
   function handleChartTypeChange(nextType: string) {
     patch({
       chartType: nextType,
-      curveSmoothing: supportsCurveSmoothing(nextType)
+      timeFilter: supportsCurveSmoothing(nextType)
         ? supportsCurveSmoothing(chartType)
-          ? curveSmoothing
-          : DEFAULT_CURVE_SMOOTHING
-        : 0,
+          ? timeFilter
+          : DEFAULT_SPRITE_TIME_FILTER
+        : 'raw',
     });
   }
 
@@ -467,30 +469,15 @@ export function WidgetEditForm({ widget, onChange, onClose, onRemove }: WidgetEd
                     />
                   </Field>
                 ) : null}
-                {curveSmoothingSupported ? (
-                    <ToggleSwitch
-                    label="Smooth curves"
-                    checked={curveSmoothingOn}
-                    onChange={(checked) =>
-                      patch({
-                        curveSmoothing: checked
-                          ? curveSmoothing > 0
-                            ? curveSmoothing
-                            : MIN_CURVE_SMOOTHING
-                          : 0,
-                      })
-                    }
-                  />
-                ) : null}
-                {curveSmoothingOn ? (
-                  <Field label={`Curve smoothing - ${Math.round(curveSmoothing * 100)}%`}>
+                {timeFilterSupported ? (
+                  <Field label={`Display filter - ${timeFilterLabel(timeFilter)}`}>
                     <input
                       type="range"
-                      min={0.05}
-                      max={1}
-                      step={0.05}
-                      value={curveSmoothing}
-                      onChange={(e) => patch({ curveSmoothing: Number(e.target.value) })}
+                      min={0}
+                      max={TIME_FILTER_OPTIONS.length - 1}
+                      step={1}
+                      value={timeFilterIndex}
+                      onChange={(e) => patch({ timeFilter: TIME_FILTER_OPTIONS[Number(e.target.value)]!.value })}
                       className="rm-accent-range w-full"
                     />
                   </Field>
@@ -732,6 +719,11 @@ function isDashboardChartPage(value: unknown): value is DashboardChartPage {
 
 function isChartColorKey(value: unknown): value is ChartColorKey {
   return typeof value === 'string' && CHART_COLOR_OPTIONS.some((opt) => opt.value === value);
+}
+
+function legacySmoothingToTimeFilter(value: unknown, chartType: string): TimeFilterWindow {
+  if (!supportsCurveSmoothing(chartType) || value === false || value === 0) return 'raw';
+  return DEFAULT_SPRITE_TIME_FILTER;
 }
 
 function isSensorDataSource(value: unknown): value is SensorDataSource {

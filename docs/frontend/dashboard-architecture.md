@@ -154,6 +154,7 @@ Pages that render many trips or long telemetry histories must keep the browser w
 - Fetch one page-level aggregate for a map or coordinated detail view instead of one request per route or metric.
 - Persist compact route previews with the trip record; generate a preview from linked telemetry only when a legacy row is missing one.
 - Return complete retained dashboard history through typed chart/batch contracts; do not replace points with range-dependent averages or a display cap. Keep raw compatibility endpoints for integrations, but do not compose their untyped records in the page.
+- Dashboard line and area views may apply a user-selected display-only time filter (`Raw` through `7 days`). The filter preserves each retained timestamp and changes only rendered values; it never changes API density, chart spacing, or intentionally binned bar/category charts.
 - For normalized vehicle history, prefer typed, allowlisted series with null-preserving sparse values. The Settings telemetry lanes contract may remain explicitly bucketed because it is a density inspector, not a dashboard chart.
 - Use canvas-backed charts for dense series. Shared uPlot charts may use a `cursorSyncKey` so synchronized cursors stay inside the chart layer instead of re-rendering the page on every pointer movement.
 - For intentionally sparse telemetry detail series, opt into `connectGaps`: line/area paths span null samples while tooltips carry the last finite reading until the next valid sample. Keep the opt-in local to views where that interpolation is semantically safe.

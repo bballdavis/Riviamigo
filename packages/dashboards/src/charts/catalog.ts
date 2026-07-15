@@ -40,7 +40,7 @@ export interface DashboardChartAxisCapability {
 }
 
 export interface DashboardChartSettingsCapabilities {
-  smoothing: boolean;
+  timeFilter: boolean;
   axes: Partial<Record<DashboardChartAxisId, DashboardChartAxisCapability>>;
   xDomainSource: DashboardChartXDomainSource;
 }
@@ -76,7 +76,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
   switch (definition.source) {
     case 'soc_history':
       return {
-        smoothing: true,
+        timeFilter: true,
         axes: {
           y: axisCapability('State of Charge', definition.yUnit),
         },
@@ -84,7 +84,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'charging_weekly_energy':
       return {
-        smoothing: false,
+        timeFilter: false,
         axes: {
           y: axisCapability('Energy charged', definition.yUnit),
         },
@@ -92,7 +92,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'charge_session_curve':
       return {
-        smoothing: true,
+        timeFilter: true,
         axes: {
           y: { label: 'Charge rate', unit: 'kW' },
           y2: { label: 'Energy added', unit: 'kWh' },
@@ -101,7 +101,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'charging_curve_analysis':
       return {
-        smoothing: false,
+        timeFilter: false,
         axes: {
           x: { label: 'Charge level', unit: '%' },
           y: { label: 'Charge rate', unit: 'kW' },
@@ -110,7 +110,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'efficiency_trend':
       return {
-        smoothing: true,
+        timeFilter: true,
         axes: {
           y: { label: 'Efficiency' },
         },
@@ -118,7 +118,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'phantom_drain':
       return {
-        smoothing: false,
+        timeFilter: false,
         axes: {
           y: axisCapability('Drain rate', definition.yUnit),
         },
@@ -126,7 +126,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'battery_degradation':
       return {
-        smoothing: true,
+        timeFilter: true,
         axes: {
           y: axisCapability('Battery health', definition.yUnit),
         },
@@ -134,7 +134,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'battery_capacity_mileage':
       return {
-        smoothing: true,
+        timeFilter: false,
         axes: {
           x: { label: 'Mileage', unit: 'mi' },
           y: axisCapability('Usable capacity', definition.yUnit),
@@ -143,7 +143,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     case 'projected_range_mileage':
       return {
-        smoothing: true,
+        timeFilter: true,
         axes: {
           y: axisCapability('Projected max range', definition.yUnit),
           y2: { label: 'Mileage', unit: 'mi' },
@@ -152,7 +152,7 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
       };
     default:
       return {
-        smoothing: false,
+        timeFilter: false,
         axes: {},
         xDomainSource: 'dashboard-timeframe',
       };
