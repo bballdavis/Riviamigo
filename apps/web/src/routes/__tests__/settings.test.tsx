@@ -731,7 +731,7 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('S3 upload')).toBeInTheDocument();
+      expect(screen.getByText('Package upload is not configured')).toBeInTheDocument();
       expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'Backups' })).toBeInTheDocument();
       expect(screen.getByText(/Page 1 of 1/)).toBeInTheDocument();
@@ -739,13 +739,12 @@ describe('Settings page', () => {
     });
 
     fireEvent.change(screen.getByDisplayValue('America/Chicago'), { target: { value: 'UTC' } });
-    fireEvent.change(screen.getByDisplayValue('riviamigo-backups'), { target: { value: 'nightly-backups' } });
     fireEvent.click(screen.getByText('Save settings'));
 
     await waitFor(() => {
       expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(expect.objectContaining({
         timezone: 'UTC',
-        bucket: 'nightly-backups',
+        bucket: '',
         retention_count: 8,
       }));
     });
@@ -769,7 +768,7 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByText('Restore backup'));
+    fireEvent.click(screen.getByText('Record restore request'));
 
     await waitFor(() => {
       expect(hooks.api.requestBackupRestore).toHaveBeenCalledWith({
@@ -790,7 +789,7 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('S3 upload')).toBeInTheDocument();
+      expect(screen.getByText('Package upload is not configured')).toBeInTheDocument();
       expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
     });
   });

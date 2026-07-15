@@ -3,7 +3,7 @@ import { api } from './api';
 import type { MetricBatchMetricRequest } from '@riviamigo/types';
 import { useAuthReady } from './useAuthState';
 
-export type MetricSeriesBucket = 'auto' | 'minute' | '5min' | '15min' | 'hour' | 'day';
+export type MetricSeriesBucket = 'auto' | 'raw' | 'minute' | '5min' | '15min' | 'hour' | 'day';
 
 export function chooseMetricSeriesBucket(from: string | null, to: string | null): MetricSeriesBucket {
   if (!from || !to) return 'day';
@@ -92,8 +92,8 @@ export function useMetricBatch(
       from,
       to,
       lifetime,
-      bucket: 'auto',
-      max_points: 96,
+      density: 'full',
+      bucket: 'raw',
     }),
     enabled: authReady && !!vehicleId && stableMetrics.length > 0,
     staleTime: 2 * 60 * 1000,

@@ -83,6 +83,7 @@ vi.mock('@riviamigo/dashboards', () => ({
   }),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
   useDashboardBySlug: () => ({ data: { schemaVersion: 1, slug: 'trips', name: 'Trips', controls: { dateRange: true }, widgets: [] }, isLoading: false }),
+  useDashboardById: () => ({ data: undefined, isLoading: false }),
   useUpdateDashboard: () => ({ mutateAsync: vi.fn() }),
   useUpdateAdminDashboard: () => ({ mutateAsync: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: vi.fn() }),

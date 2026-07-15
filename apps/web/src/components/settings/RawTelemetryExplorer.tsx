@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Braces, ChevronLeft, ChevronRight, Clipboard, Database, RefreshCw, Search, SlidersHorizontal,
+  ChevronLeft, ChevronRight, Clipboard, Database, RefreshCw, Search, SlidersHorizontal,
 } from 'lucide-react';
 import { api } from '@riviamigo/hooks';
 import type { RawEventDetail, RawTelemetrySample, Vehicle } from '@riviamigo/types';

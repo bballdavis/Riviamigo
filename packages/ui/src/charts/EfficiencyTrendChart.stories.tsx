@@ -11,16 +11,16 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function makeData(days = 60) {
-  return Array.from({ length: days }, (_, i) => {
+function makeData(trips = 60) {
+  return Array.from({ length: trips }, (_, i) => {
     const d = new Date('2024-01-01');
-    d.setDate(d.getDate() + i);
+    d.setHours(i * 5);
     const base = 320 + Math.sin(i / 10) * 40;
-    const dayAvg = base + (Math.random() - 0.5) * 60;
+    const tripEfficiency = base + (Math.random() - 0.5) * 60;
     return {
-      day: d.toISOString().slice(0, 10),
-      day_avg_wh_mi: +dayAvg.toFixed(1),
-      rolling_7d_wh_mi: i < 6 ? null : +(base + (Math.random() - 0.5) * 20).toFixed(1),
+      ts: d.toISOString(),
+      trip_efficiency_wh_mi: +tripEfficiency.toFixed(1),
+      rolling_24h_wh_mi: i < 4 ? null : +(base + (Math.random() - 0.5) * 20).toFixed(1),
     };
   });
 }

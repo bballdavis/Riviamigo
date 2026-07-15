@@ -83,7 +83,7 @@ impl TestApp {
                 s3_access_key: None,
                 s3_secret_key: None,
                 backup_artifact_dir: backup_dir.to_string_lossy().into_owned(),
-                backup_driver: "json".into(),
+                backup_driver: "pg_dump".into(),
                 backup_poll_interval_seconds: 60,
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,

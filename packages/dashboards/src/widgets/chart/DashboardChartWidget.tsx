@@ -1120,7 +1120,7 @@ function EfficiencyTrendChart({
   interactionMode,
 }: {
   definition: DashboardChartDefinition;
-  trend: Array<{ day: string; day_avg_wh_mi: number | null; rolling_7d_wh_mi: number | null }>;
+  trend: Array<{ ts: string; trip_efficiency_wh_mi: number | null; rolling_24h_wh_mi: number | null }>;
   loading: boolean;
   height: number;
   smoothing?: number;
@@ -1130,10 +1130,10 @@ function EfficiencyTrendChart({
   const unit = getEfficiencyUnit();
   return (
     <RichTimeSeriesChart
-      points={trend.map((point) => ({ ts: point.day }))}
+      points={trend.map((point) => ({ ts: point.ts }))}
       series={[
-        { key: 'daily', label: 'Daily', values: trend.map((point) => convertEfficiency(point.day_avg_wh_mi)) },
-        { key: 'rolling', label: '7-day avg', values: trend.map((point) => convertEfficiency(point.rolling_7d_wh_mi)) },
+        { key: 'trip', label: 'Trip efficiency', values: trend.map((point) => convertEfficiency(point.trip_efficiency_wh_mi)) },
+        { key: 'rolling', label: '24-hour avg', values: trend.map((point) => convertEfficiency(point.rolling_24h_wh_mi)) },
       ]}
       loading={loading}
       emptyTitle={definition.emptyTitle}

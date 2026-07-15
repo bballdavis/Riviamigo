@@ -1,17 +1,17 @@
 import * as React from 'react';
 import {
-  ResponsiveContainer, ComposedChart, Line, Bar,
+  ResponsiveContainer, ComposedChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Brush,
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_BAR_STYLE, CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 
 export interface EfficiencyTrendPoint {
-  day: string;
-  day_avg_wh_mi: number | null;
-  rolling_7d_wh_mi: number | null;
+  ts: string;
+  trip_efficiency_wh_mi: number | null;
+  rolling_24h_wh_mi: number | null;
 }
 
 export interface EfficiencyTrendChartProps {
@@ -35,7 +35,7 @@ export function EfficiencyTrendChart({
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
 
         <XAxis
-          dataKey="day"
+          dataKey="ts"
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
@@ -53,10 +53,10 @@ export function EfficiencyTrendChart({
 
         <Tooltip
           content={<ChartTooltip
-            labelFormatter={(v: string) => format(parseISO(v), 'MMM d, yyyy')}
+            labelFormatter={(v: string) => format(parseISO(v), 'MMM d, yyyy p')}
             formatter={(v, name) => [
               v !== undefined ? `${v.toFixed(0)} Wh/mi` : '—',
-              name === 'day_avg_wh_mi' ? 'Day avg' : '7-day avg',
+              name === 'trip_efficiency_wh_mi' ? 'Trip efficiency' : '24-hour avg',
             ]}
             multiLine
           />}
@@ -67,19 +67,21 @@ export function EfficiencyTrendChart({
           iconType="circle"
           iconSize={8}
           wrapperStyle={{ fontSize: 11, color: CHART_COLORS.muted, paddingTop: 8 }}
-          formatter={(v) => v === 'day_avg_wh_mi' ? 'Daily' : '7-day avg'}
+          formatter={(v) => v === 'trip_efficiency_wh_mi' ? 'Trip efficiency' : '24-hour avg'}
         />
 
-        <Bar
-          dataKey="day_avg_wh_mi"
-          fill={CHART_COLORS.sky}
-          fillOpacity={CHART_BAR_STYLE.fillOpacity}
-          radius={[CHART_BAR_STYLE.radius, CHART_BAR_STYLE.radius, 0, 0]}
+        <Line
+          type="linear"
+          dataKey="trip_efficiency_wh_mi"
+          stroke={CHART_COLORS.sky}
+          strokeWidth={1.5}
+          dot={{ r: 2 }}
+          activeDot={{ r: 4 }}
           isAnimationActive={false}
         />
         <Line
           type="monotone"
-          dataKey="rolling_7d_wh_mi"
+          dataKey="rolling_24h_wh_mi"
           stroke={CHART_COLORS.accent}
           strokeWidth={2}
           dot={false}
@@ -90,7 +92,7 @@ export function EfficiencyTrendChart({
 
         {showBrush && (
           <Brush
-            dataKey="day"
+            dataKey="ts"
             height={28}
             stroke={CHART_COLORS.muted}
             tickFormatter={(v: string) => format(parseISO(v), 'MMM d')}

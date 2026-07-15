@@ -72,17 +72,6 @@ pub struct TimeSeriesPoint {
     pub value: Option<f64>,
 }
 
-fn resolution(from: DateTime<Utc>, to: DateTime<Utc>) -> &'static str {
-    let hours = (to - from).num_hours();
-    if hours <= 48 {
-        "1min"
-    } else if hours <= 2160 {
-        "1hr"
-    } else {
-        "1day"
-    }
-}
-
 fn resolve_time_bounds(
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
@@ -110,20 +99,17 @@ async fn get_soc(
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 7);
 
-    let points = match resolution(from, to) {
-        "1min" => sqlx::query_as!(TimeSeriesPoint,
-            "SELECT bucket AS \"ts!\", avg_soc AS value FROM timeseries.telemetry_1min \
-             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_soc IS NOT NULL ORDER BY bucket",
-            vid, from, to).fetch_all(&state.pool).await?,
-        "1hr"  => sqlx::query_as!(TimeSeriesPoint,
-            "SELECT bucket AS \"ts!\", avg_soc AS value FROM timeseries.telemetry_1hr \
-             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_soc IS NOT NULL ORDER BY bucket",
-            vid, from, to).fetch_all(&state.pool).await?,
-        _      => sqlx::query_as!(TimeSeriesPoint,
-            "SELECT bucket AS \"ts!\", avg_soc AS value FROM timeseries.telemetry_1day \
-             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_soc IS NOT NULL ORDER BY bucket",
-            vid, from, to).fetch_all(&state.pool).await?,
-    };
+    let points = sqlx::query_as::<_, TimeSeriesPoint>(
+        "SELECT ts, battery_level AS value
+         FROM timeseries.telemetry
+         WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND battery_level IS NOT NULL
+         ORDER BY ts",
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(points))
 }
 
@@ -139,35 +125,17 @@ async fn get_range(
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
 
-    let points = match resolution(from, to) {
-        "1min" => sqlx::query_as::<_, TimeSeriesPoint>(
-            "SELECT bucket AS ts, avg_range_mi AS value FROM timeseries.telemetry_1min \
-             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
-        )
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .fetch_all(&state.pool)
-        .await?,
-        "1hr" => sqlx::query_as::<_, TimeSeriesPoint>(
-            "SELECT bucket AS ts, avg_range_mi AS value FROM timeseries.telemetry_1hr \
-             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
-        )
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .fetch_all(&state.pool)
-        .await?,
-        _ => sqlx::query_as::<_, TimeSeriesPoint>(
-            "SELECT bucket AS ts, avg_range_mi AS value FROM timeseries.telemetry_1day \
-             WHERE vehicle_id=$1 AND bucket>=$2 AND bucket<=$3 AND avg_range_mi IS NOT NULL ORDER BY bucket",
-        )
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .fetch_all(&state.pool)
-        .await?,
-    };
+    let points = sqlx::query_as::<_, TimeSeriesPoint>(
+        "SELECT ts, distance_to_empty_mi AS value
+         FROM timeseries.telemetry
+         WHERE vehicle_id=$1 AND ts>=$2 AND ts<=$3 AND distance_to_empty_mi IS NOT NULL
+         ORDER BY ts",
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(points))
 }
 
@@ -298,24 +266,27 @@ async fn get_degradation(
     require_vehicle_access(&auth, vid)?;
     require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
 
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
 
     let rows = sqlx::query_as::<_, DegradationPoint>(
         "SELECT
-             time_bucket('1 week', ts) AS ts,
-             max(odometer_miles) AS odometer_mi,
-             COALESCE(max(battery_capacity_wh) / 1000.0, 0.0) AS usable_kwh,
+             ts,
+             odometer_miles AS odometer_mi,
+             COALESCE(battery_capacity_wh / 1000.0, 0.0) AS usable_kwh,
              NULL::float8 AS rated_kwh,
              CASE WHEN $2 > 0
-                  THEN max(battery_capacity_wh) / $2 * 100.0
+                  THEN battery_capacity_wh / $2 * 100.0
                   ELSE NULL END AS capacity_pct
-         FROM timeseries.telemetry
-         WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
-         GROUP BY time_bucket('1 week', ts)
-         ORDER BY 1",
+          FROM timeseries.telemetry
+          WHERE vehicle_id = $1 AND battery_capacity_wh > 10000
+            AND ts >= $3 AND ts <= $4
+          ORDER BY ts",
     )
     .bind(vid)
     .bind(usable_new_wh.unwrap_or(0.0))
+    .bind(from)
+    .bind(to)
     .fetch_all(&state.pool)
     .await?;
 
@@ -408,7 +379,7 @@ async fn get_mileage(
 
     let samples = sqlx::query_as::<_, BatteryMileageSampleRow>(
         "SELECT
-             time_bucket('1 week', ts) AS bucket,
+             ts AS bucket,
              odometer_miles,
              battery_capacity_wh,
              distance_to_empty_mi,
@@ -418,7 +389,7 @@ async fn get_mileage(
            AND battery_capacity_wh > 10000
            AND ts >= $2
            AND ts <= $3
-         ORDER BY bucket, ts",
+          ORDER BY ts",
     )
     .bind(vid)
     .bind(from)
@@ -552,7 +523,7 @@ mod tests {
                 .join("riviamigo-route-test-vehicle-images")
                 .to_string_lossy()
                 .into_owned(),
-            backup_driver: "json".into(),
+            backup_driver: "pg_dump".into(),
             backup_poll_interval_seconds: 60,
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
@@ -641,30 +612,6 @@ mod tests {
     }
 
     // ── pure unit tests (no DB needed) ───────────────────────────────────────
-
-    #[test]
-    fn resolution_returns_1min_for_short_range() {
-        use super::resolution;
-        let from = chrono::Utc::now() - chrono::Duration::hours(24);
-        let to = chrono::Utc::now();
-        assert_eq!(resolution(from, to), "1min");
-    }
-
-    #[test]
-    fn resolution_returns_1hr_for_medium_range() {
-        use super::resolution;
-        let from = chrono::Utc::now() - chrono::Duration::days(30);
-        let to = chrono::Utc::now();
-        assert_eq!(resolution(from, to), "1hr");
-    }
-
-    #[test]
-    fn resolution_returns_1day_for_long_range() {
-        use super::resolution;
-        let from = chrono::Utc::now() - chrono::Duration::days(180);
-        let to = chrono::Utc::now();
-        assert_eq!(resolution(from, to), "1day");
-    }
 
     #[test]
     fn lifetime_time_bounds_use_epoch_instead_of_default_window() {

@@ -16,6 +16,10 @@ vi.mock('@tanstack/react-query', () => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   api: { listPlaces: vi.fn(() => []) },
+  useAuth: (selector?: (state: { accessToken: string | null }) => unknown) => {
+    const state = { accessToken: null };
+    return selector ? selector(state) : state;
+  },
   useTrips: vi.fn(() => ({ data: { items: [], total: 0, per_page: 15 } })),
   useTripMapRoutes: (...args: unknown[]) => mockUseTripMapRoutes(...args),
   useDocumentTheme: () => false,
