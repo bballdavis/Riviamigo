@@ -39,6 +39,10 @@ Some widgets appear only in a particular vehicle state. The Charging dashboard, 
 
 When a dashboard contains conditional widgets, edit mode shows a **Preview** control in the editor drawer. Switch between Plugged in and Unplugged to arrange and review both layouts. Always-visible widgets appear in both states.
 
+## Dashboard page edit button
+
+Dashboard page edit buttons are hidden by default. Owners can open **Settings > Dashboards** and enable **Show edit button on dashboard page** for a personal dashboard. Administrators can enable the same setting for system defaults. When it is off, the dashboard remains editable from Settings; only the page-level shortcut is hidden.
+
 Each widget's **Visibility** setting offers:
 
 - **Always**

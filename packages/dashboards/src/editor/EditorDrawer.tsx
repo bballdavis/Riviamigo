@@ -94,7 +94,10 @@ export function EditorDrawer({
         </header>
 
         {previewControls ? (
-          <div className="shrink-0 border-b border-border px-3 py-2.5">
+          <div
+            className="shrink-0 border-b border-border bg-bg-surface px-3 py-3 shadow-sm"
+            data-dashboard-preview-controls
+          >
             {previewControls}
           </div>
         ) : null}
