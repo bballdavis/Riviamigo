@@ -2,12 +2,13 @@
 """Build normalized, transparent fallback artwork for Riviamigo vehicle surfaces.
 
 The source renderings in ``assets/vehicles_generated`` are intentionally kept as
-received. This script removes their flat white matte and composes three stable
+received. This script removes their flat white matte and composes four stable
 presentation canvases per model:
 
 * overview: portrait overhead artwork that matches the API rotation contract
 * charging: a charge-port-end crop composed for the charging connection chip
 * health: a normalized three-quarter hero composition
+* vehicle-card: a compact full side profile for vehicle lists and pickers
 
 The output is deterministic and includes a machine-readable manifest plus an
 optional contact sheet for review.
@@ -28,18 +29,20 @@ from typing import Iterable, Literal
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 MODEL_NAMES = ("r1s", "r1t", "r2s")
-Usage = Literal["overview", "charging", "health"]
+Usage = Literal["overview", "charging", "health", "vehicle-card"]
 
 SOURCE_BY_USAGE: dict[Usage, str] = {
     "overview": "top.png",
     "charging": "charge.png",
     "health": "three_quarter.png",
+    "vehicle-card": "side.png",
 }
 
 CANVAS_BY_USAGE: dict[Usage, tuple[int, int]] = {
     "overview": (640, 1440),
     "charging": (1200, 900),
     "health": (1600, 900),
+    "vehicle-card": (1200, 560),
 }
 
 # Each charge source keeps its charge-port end on the left side of the image.
@@ -136,7 +139,8 @@ def build_all(root: Path, output: Path) -> list[AssetReport]:
             source_path = root / model / source_name
             cleaned = remove_white_matte(Image.open(source_path))
             composed = compose_usage(cleaned, model=model, usage=usage)
-            output_path = model_output / f"{usage}.webp"
+            output_name = "side" if usage == "vehicle-card" else usage
+            output_path = model_output / f"{output_name}.webp"
             composed.save(output_path, "WEBP", lossless=True, method=6, exact=True)
             reports.append(report_asset(root, output, model, usage, source_path, output_path, composed))
     return reports
@@ -242,6 +246,8 @@ def compose_usage(image: Image.Image, *, model: str, usage: Usage) -> Image.Imag
         return compose_charging(image, model=model)
     if usage == "health":
         return compose_health(image)
+    if usage == "vehicle-card":
+        return compose_vehicle_card(image)
     raise AssertionError(f"Unsupported usage: {usage}")
 
 
@@ -268,6 +274,19 @@ def compose_health(image: Image.Image) -> Image.Image:
         max_height_fraction=0.82,
         center_x_fraction=0.52,
         bottom_fraction=0.95,
+    )
+
+
+def compose_vehicle_card(image: Image.Image) -> Image.Image:
+    canvas_size = CANVAS_BY_USAGE["vehicle-card"]
+    content = crop_visible(image, padding_fraction=0.012)
+    return place_on_canvas(
+        content,
+        canvas_size,
+        max_width_fraction=0.94,
+        max_height_fraction=0.82,
+        center_x_fraction=0.50,
+        bottom_fraction=0.91,
     )
 
 

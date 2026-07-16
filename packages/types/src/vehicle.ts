@@ -31,6 +31,7 @@ export interface Vehicle {
   id: string;
   user_id: string;
   rivian_vehicle_id: string;
+  is_demo?: boolean;
   vin: string | null;
   model: string;
   year: number | null;

@@ -56,6 +56,57 @@ const EDIT_CONTROL_GEOMETRY = {
 };
 
 test.describe('dashboard editability in a browser', () => {
+  test('renders the R1T fallback overview with tailgate and side-bin cover states', async ({ page }) => {
+    await page.setViewportSize({ width: 1240, height: 760 });
+    await installApiMocks(page, {
+      vehicleStatus: {
+        vehicle_id: 'vehicle-1',
+        battery_level: 78,
+        range_miles: 248,
+        battery_limit: 85,
+        door_rear_left_locked: true,
+        door_front_left_locked: true,
+        door_rear_right_locked: true,
+        door_front_right_locked: true,
+        closure_tailgate_locked: true,
+        closure_liftgate_locked: false,
+        closure_frunk_locked: true,
+        side_bin_left_locked: false,
+        side_bin_right_locked: true,
+        side_bin_left_closed: true,
+        side_bin_right_closed: false,
+      },
+    });
+    await page.goto('/');
+
+    const fallbackArtwork = page.locator('img[src="/vehicle-images/fallbacks/r1t/overview.webp"]').first();
+    await expect(fallbackArtwork).toBeVisible();
+    await expect(fallbackArtwork).toHaveAttribute('data-artwork-fallback', 'true');
+    const fallbackTransform = await fallbackArtwork.evaluate((image) => image.style.transform);
+    expect(fallbackTransform).toContain('translate(-50%, -50%) rotate(90deg) scaleX(');
+    expect(Number(fallbackTransform.match(/scaleX\(([^)]+)\)/)?.[1])).toBeCloseTo(509 / 446);
+
+    await expect(page.getByTitle('Tailgate lock')).toHaveClass(/left-\[4%\]/);
+    await expect(page.getByTitle('Left side bin cover: closed')).toHaveClass(/left-\[36%\]/);
+    await expect(page.getByTitle('Left side bin cover: closed')).toHaveClass(/top-\[24%\]/);
+    await expect(page.getByTitle('Left side bin cover: closed')).toHaveClass(/text-status-positive/);
+    await expect(page.getByTitle('Right side bin cover: open')).toHaveClass(/left-\[36%\]/);
+    await expect(page.getByTitle('Right side bin cover: open')).toHaveClass(/top-\[76%\]/);
+    await expect(page.getByTitle('Right side bin cover: open')).toHaveClass(/text-accent/);
+    await expect(page.getByTitle('Tonneau lock')).toHaveCount(0);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    const leftCover = page.getByTitle('Left side bin cover: closed');
+    const rightCover = page.getByTitle('Right side bin cover: open');
+    await leftCover.scrollIntoViewIfNeeded();
+    await expect(leftCover).toBeVisible();
+    await expect(rightCover).toBeVisible();
+    const [leftBox, rightBox] = await Promise.all([leftCover.boundingBox(), rightCover.boundingBox()]);
+    expect(leftBox?.width).toBeGreaterThanOrEqual(24);
+    expect(rightBox?.width).toBeGreaterThanOrEqual(24);
+  });
+
   for (const routeCase of routeCases) {
     test(`${routeCase.slug} exposes visible, hit-testable widget editing`, async ({ page }) => {
       await installApiMocks(page);
@@ -308,7 +359,7 @@ function loadDashboard(slug: string): DashboardConfig {
   return JSON.parse(readFileSync(path, 'utf8')) as DashboardConfig;
 }
 
-async function installApiMocks(page: Page) {
+async function installApiMocks(page: Page, options: { vehicleStatus?: Record<string, unknown> } = {}) {
   const createdDashboards: Array<{ config: DashboardConfig }> = [];
 
   await page.routeWebSocket('**/v1/vehicles/live**', (socket) => socket.close());
@@ -336,7 +387,7 @@ async function installApiMocks(page: Page) {
       return json(route, { vehicles: [testVehicle()] });
     }
     if (/^\/v1\/vehicles\/[^/]+\/status$/.test(path)) {
-      return json(route, {});
+      return json(route, options.vehicleStatus ?? {});
     }
     if (/^\/v1\/vehicles\/[^/]+\/images$/.test(path)) {
       return json(route, { all: [] });

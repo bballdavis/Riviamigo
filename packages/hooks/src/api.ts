@@ -455,6 +455,10 @@ class ApiClient {
     return this.request('POST', '/v1/vehicles/demo', body);
   }
 
+  async refreshDemoVehicle(vehicleId: string): Promise<CreateDemoVehicleResult> {
+    return this.request('POST', `/v1/vehicles/${vehicleId}/demo/refresh`);
+  }
+
   async deleteVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string | null }> {
     return this.request('DELETE', `/v1/vehicles/${vehicleId}`);
   }
