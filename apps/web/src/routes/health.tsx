@@ -27,6 +27,7 @@ import {
 import {
   api,
   AuthenticatedVehicleArtwork,
+  getVehicleArtworkFallback,
   useAuth,
   useCurrentVehicleStatus,
   useResolvedVehicleSelection,
@@ -93,6 +94,7 @@ function VehicleHealthContent() {
     vehicles: availableVehicles,
   } = useResolvedVehicleSelection();
   const hasVehicleChoices = availableVehicles.length > 1;
+  const activeVehicle = availableVehicles.find((vehicle) => vehicle.id === effectiveVehicleId);
   const { data, isLoading } = useVehicleHealth(effectiveVehicleId);
   const { data: status } = useCurrentVehicleStatus(effectiveVehicleId);
   const { data: images } = useQuery({
@@ -123,6 +125,10 @@ function VehicleHealthContent() {
     currentSoftwareVersion
   );
   const heroImageUrl = selectHealthHeroImage(images);
+  const fallbackHeroImageUrl = getVehicleArtworkFallback(
+    data?.vehicle?.model ?? activeVehicle?.model,
+    'health',
+  );
   const closureStatusFallback = {
     closure_frunk_closed:
       status?.closure_frunk_closed ?? data?.closures?.closure_frunk_closed ?? null,
@@ -200,10 +206,14 @@ function VehicleHealthContent() {
                         ) : null}
                       </div>
                     </div>
-                    {heroImageUrl ? (
+                    {heroImageUrl || fallbackHeroImageUrl ? (
                       <div className="relative h-56 w-[24rem] shrink-0 overflow-hidden lg:h-64 lg:w-[30rem]">
                         <AuthenticatedVehicleArtwork
                           source={heroImageUrl}
+                          fallbackSource={fallbackHeroImageUrl}
+                          fallbackProps={{
+                            className: 'absolute inset-0 h-full w-full object-contain object-right-bottom',
+                          }}
                           alt="Vehicle three-quarter view"
                           className="absolute -right-2 -top-3 h-[110%] w-[110%] object-contain object-right-bottom lg:-right-3 lg:-top-4"
                         />
