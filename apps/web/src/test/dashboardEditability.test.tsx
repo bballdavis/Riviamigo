@@ -7,7 +7,6 @@ import type { DashboardConfig } from '@riviamigo/dashboards';
 const dashboardMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   routeSlug: 'custom-dashboard',
-  showEditButton: true,
   routeSearch: {} as { edit?: 1; dashboardId?: string },
   updateDashboard: vi.fn(),
   createDashboard: vi.fn(),
@@ -91,7 +90,6 @@ vi.mock('@riviamigo/dashboards', async () => {
     isDefault: false,
     isLocked: false,
     ownerId: 'user-1',
-    showEditButton: true,
     widgets: [
       {
         id: 'custom-widget',
@@ -106,7 +104,7 @@ vi.mock('@riviamigo/dashboards', async () => {
 
   function configForSlug(slug: string) {
     const config = slug === 'custom-dashboard' ? customDashboard : actual.getDefaultBySlug(slug);
-    return config ? { ...config, showEditButton: dashboardMocks.showEditButton } : config;
+    return config;
   }
 
   return {
@@ -211,7 +209,7 @@ describe('dashboard editability', () => {
     dashboardMocks.cloneDashboard.mockResolvedValue({ slug: 'custom-dashboard' });
     dashboardMocks.routeSlug = 'custom-dashboard';
     dashboardMocks.routeSearch = {};
-    dashboardMocks.showEditButton = true;
+    localStorage.setItem('rm-show-dashboard-edit-button:anonymous', 'true');
   });
 
   it.each([
@@ -255,7 +253,7 @@ describe('dashboard editability', () => {
   });
 
   it('hides the page edit shortcut when the dashboard setting is off', () => {
-    dashboardMocks.showEditButton = false;
+    localStorage.removeItem('rm-show-dashboard-edit-button:anonymous');
 
     render(<RouteComponent />);
 

@@ -41,7 +41,7 @@ When a dashboard contains conditional widgets, edit mode shows a **Preview** con
 
 ## Dashboard page edit button
 
-Dashboard page edit buttons are hidden by default. Owners can open **Settings > Dashboards** and enable **Show edit button on dashboard page** for a personal dashboard. Administrators can enable the same setting for system defaults. When it is off, the dashboard remains editable from Settings; only the page-level shortcut is hidden.
+Dashboard page edit buttons are hidden by default. Open **Settings > Dashboards** and enable **Show edit button on dashboard pages** to show the page-level shortcut across every dashboard. The preference is per signed-in user. When it is off, dashboards remain editable from Settings; only the page-level shortcuts are hidden.
 
 Each widget's **Visibility** setting offers:
 

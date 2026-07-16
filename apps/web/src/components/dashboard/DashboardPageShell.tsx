@@ -31,6 +31,7 @@ import {
   type DashboardTimeframe,
 } from '../../lib/dates';
 import { useDashboardEditDraft } from './useDashboardEditDraft';
+import { useDashboardEditButtonPreference } from './useDashboardEditButtonPreference';
 
 export interface DashboardPageShellRenderState {
   activeConfig: DashboardConfig | undefined;
@@ -185,6 +186,7 @@ function DashboardPageShellContent({
   const createDashboard = useCreateDashboard();
   const qc = useQueryClient();
   const me = useMe();
+  const [showEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
   const isAdmin = canManageSystemDashboards(me.data?.role);
   const storedTimeframe = useMemo(() => loadDashboardTimeframe(), []);
   const [timeframe, setTimeframe] = useState<DashboardTimeframe>(
@@ -396,7 +398,7 @@ function DashboardPageShellContent({
     })(shellState)
     : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
-  const defaultTitleAction = !currentEditMode && canEditDashboard && activeConfig?.showEditButton === true ? (
+  const defaultTitleAction = !currentEditMode && canEditDashboard && showEditButton ? (
     <button
       type="button"
       onClick={enterEdit}

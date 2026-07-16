@@ -13,8 +13,6 @@ import {
   useDeleteDashboard,
   useRestoreAdminDashboardDefault,
   useSetAdminDashboardLock,
-  useUpdateAdminDashboard,
-  useUpdateDashboard,
 } from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 import {
@@ -36,6 +34,7 @@ import { JobsSection } from '../components/settings/JobsSection';
 import { PlacesSection } from '../components/settings/PlacesSection';
 import { RawTelemetryExplorer } from '../components/settings/RawTelemetryExplorer';
 import { canManageSystemDashboards } from '../components/dashboard/DashboardPage';
+import { useDashboardEditButtonPreference } from '../components/dashboard/useDashboardEditButtonPreference';
 import {
   Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X,
 } from 'lucide-react';
@@ -148,9 +147,9 @@ function DashboardSettingsSection({
   deleteDashboard,
   setDashboardLock,
   restoreDefaultDashboard,
-  updateDashboard,
-  updateAdminDashboard,
   createDashboard,
+  showEditButton,
+  onShowEditButtonChange,
   onCustomize,
   onEdit,
 }: {
@@ -161,9 +160,9 @@ function DashboardSettingsSection({
   deleteDashboard: ReturnType<typeof useDeleteDashboard>;
   setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
   restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
-  updateDashboard: ReturnType<typeof useUpdateDashboard>;
-  updateAdminDashboard: ReturnType<typeof useUpdateAdminDashboard>;
   createDashboard: ReturnType<typeof useCreateDashboard>;
+  showEditButton: boolean;
+  onShowEditButtonChange: (next: boolean) => void;
   onCustomize: (dashboard: DashboardConfig) => Promise<void>;
   onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
 }) {
@@ -195,6 +194,10 @@ function DashboardSettingsSection({
               <p><strong className="text-fg">Customize</strong> creates that personal copy. <strong className="text-fg">Reset to default</strong> removes it, while <strong className="text-fg">Restore bundled</strong> returns a system dashboard to the version shipped with Riviamigo.</p>
             </div>
           </details>
+          <DashboardEditButtonPreference
+            checked={showEditButton}
+            onChange={onShowEditButtonChange}
+          />
           {isLoading ? (
             <div className="rounded-xl border border-border bg-bg-elevated/35 p-4 text-sm text-fg-tertiary">
               Loading dashboards...
@@ -209,8 +212,6 @@ function DashboardSettingsSection({
                 deleteDashboard={deleteDashboard}
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
-                updateDashboard={updateDashboard}
-                updateAdminDashboard={updateAdminDashboard}
                 createDashboard={createDashboard}
                 userBySlug={userBySlug}
                 defaultBySlug={defaultBySlug}
@@ -226,8 +227,6 @@ function DashboardSettingsSection({
                 deleteDashboard={deleteDashboard}
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
-                updateDashboard={updateDashboard}
-                updateAdminDashboard={updateAdminDashboard}
                 createDashboard={createDashboard}
                 userBySlug={userBySlug}
                 defaultBySlug={defaultBySlug}
@@ -243,6 +242,45 @@ function DashboardSettingsSection({
   );
 }
 
+function DashboardEditButtonPreference({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-bg-elevated/35 px-3 py-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-fg">Show edit button on dashboard pages</p>
+        <p className="mt-0.5 text-xs text-fg-tertiary">
+          Show the page-level edit shortcut on every dashboard. It is hidden by default; Settings can always open edit mode.
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label="Show edit button on dashboard pages"
+        onClick={() => onChange(!checked)}
+        className={[
+          'relative inline-flex h-[22px] w-10 shrink-0 rounded-full border transition-all duration-200',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+          checked ? 'border-accent/60 bg-accent' : 'border-border bg-bg-elevated',
+          'cursor-pointer',
+        ].join(' ')}
+      >
+        <span
+          className={[
+            'pointer-events-none absolute top-[2px] inline-block h-4 w-4 rounded-full shadow-sm transition-transform duration-200',
+            checked ? 'translate-x-[22px] bg-fg' : 'translate-x-[2px] bg-fg-tertiary',
+          ].join(' ')}
+        />
+      </button>
+    </div>
+  );
+}
+
 function DashboardSettingsList({
   title,
   dashboards,
@@ -251,8 +289,6 @@ function DashboardSettingsList({
   deleteDashboard,
   setDashboardLock,
   restoreDefaultDashboard,
-  updateDashboard,
-  updateAdminDashboard,
   createDashboard,
   userBySlug,
   defaultBySlug,
@@ -267,8 +303,6 @@ function DashboardSettingsList({
   deleteDashboard: ReturnType<typeof useDeleteDashboard>;
   setDashboardLock: ReturnType<typeof useSetAdminDashboardLock>;
   restoreDefaultDashboard: ReturnType<typeof useRestoreAdminDashboardDefault>;
-  updateDashboard: ReturnType<typeof useUpdateDashboard>;
-  updateAdminDashboard: ReturnType<typeof useUpdateAdminDashboard>;
   createDashboard: ReturnType<typeof useCreateDashboard>;
   userBySlug: Map<string, DashboardConfig>;
   defaultBySlug: Map<string, DashboardConfig>;
@@ -276,15 +310,6 @@ function DashboardSettingsList({
   onDuplicate: (dashboard: DashboardConfig) => void;
   onEdit: (dashboard: DashboardConfig, edit: boolean) => void;
 }) {
-  async function setEditButtonVisibility(dashboard: DashboardConfig, showEditButton: boolean) {
-    const next = { ...dashboard, showEditButton };
-    if (dashboard.isDefault) {
-      await updateAdminDashboard.mutateAsync(next);
-    } else {
-      await updateDashboard.mutateAsync(next);
-    }
-  }
-
   return (
     <section className="grid gap-2">
       <div className="flex items-center justify-between">
@@ -298,8 +323,6 @@ function DashboardSettingsList({
           dashboards.map((dashboard) => {
             const isUserOwned = dashboard.ownerId != null;
             const canEdit = isUserOwned || (dashboard.isDefault && canManageDefaults);
-            const editButtonSaving = (updateDashboard.isPending && updateDashboard.variables?.id === dashboard.id)
-              || (updateAdminDashboard.isPending && updateAdminDashboard.variables?.id === dashboard.id);
             const personalCopy = userBySlug.get(dashboard.slug);
             const systemDefault = defaultBySlug.get(dashboard.slug);
             const isActive = isUserOwned || !personalCopy;
@@ -320,45 +343,6 @@ function DashboardSettingsList({
                   <p className="mt-1 text-xs text-fg-tertiary">
                     {dashboard.slug} &middot; {dashboard.widgets.length} widgets
                   </p>
-                  {canEdit ? (
-                    <div className="mt-3 flex items-center gap-3">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={dashboard.showEditButton === true}
-                        aria-label={`Show edit button on ${dashboard.name}`}
-                        disabled={editButtonSaving}
-                        onClick={() => {
-                          void setEditButtonVisibility(dashboard, dashboard.showEditButton !== true);
-                        }}
-                        className={[
-                          'relative inline-flex h-[22px] w-10 shrink-0 rounded-full border transition-all duration-200',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-                          dashboard.showEditButton === true
-                            ? 'border-accent/60 bg-accent'
-                            : 'border-border bg-bg-elevated',
-                          editButtonSaving ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-                        ].join(' ')}
-                      >
-                        <span
-                          className={[
-                            'pointer-events-none absolute top-[2px] inline-block h-4 w-4 rounded-full shadow-sm transition-transform duration-200',
-                            dashboard.showEditButton === true
-                              ? 'translate-x-[22px] bg-fg'
-                              : 'translate-x-[2px] bg-fg-tertiary',
-                          ].join(' ')}
-                        />
-                      </button>
-                      <div>
-                        <p className="text-xs font-medium text-fg">Show edit button on dashboard page</p>
-                        <p className="text-[11px] text-fg-tertiary">
-                          {dashboard.showEditButton === true
-                            ? 'Visible to dashboard editors.'
-                            : 'Hidden by default; edit from Settings when needed.'}
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 [&>button]:min-h-11 sm:[&>button]:min-h-8">
                   <Button
@@ -473,6 +457,7 @@ export function SettingsContent() {
   const queryClient = useQueryClient();
   const { data: vehicles } = useVehicles();
   const me = useMe();
+  const [showEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
   const [activeSection, setActiveSection] = React.useState<SettingsSection>('vehicles');
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
@@ -530,8 +515,6 @@ export function SettingsContent() {
   const deleteDashboard = useDeleteDashboard();
   const setDashboardLock = useSetAdminDashboardLock();
   const restoreDefaultDashboard = useRestoreAdminDashboardDefault();
-  const updateDashboard = useUpdateDashboard();
-  const updateAdminDashboard = useUpdateAdminDashboard();
 
   const openDashboard = React.useCallback((dashboard: DashboardConfig, edit: boolean) => {
     navigate({
@@ -1405,9 +1388,9 @@ export function SettingsContent() {
                 deleteDashboard={deleteDashboard}
                 setDashboardLock={setDashboardLock}
                 restoreDefaultDashboard={restoreDefaultDashboard}
-                updateDashboard={updateDashboard}
-                updateAdminDashboard={updateAdminDashboard}
                 createDashboard={createDashboard}
+                showEditButton={showEditButton}
+                onShowEditButtonChange={setShowEditButton}
                 onCustomize={customizeDashboard}
                 onEdit={openDashboard}
               />
