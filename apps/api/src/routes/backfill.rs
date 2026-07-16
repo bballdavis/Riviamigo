@@ -12,9 +12,9 @@ use axum::{
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{require_vehicle_manager_access, require_vehicle_read_access},
     errors::AppError,
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    middleware::auth::{AppState, AuthUser},
     services::charge_backfill::{self, ChargeBackfillError},
 };
 
@@ -30,8 +30,7 @@ async fn get_backfill_status(
     auth: AuthUser,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<charge_backfill::ChargeBackfillStatus>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
     Ok(Json(
         charge_backfill::get_status(&state.pool, vehicle_id)
             .await
@@ -44,7 +43,7 @@ async fn trigger_backfill(
     auth: AuthUser,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<charge_backfill::ChargeBackfillStart>, AppError> {
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
     Ok(Json(
         charge_backfill::spawn(state.pool.clone(), state.age_key.clone(), vehicle_id)
             .await

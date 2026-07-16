@@ -13,6 +13,9 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 - Authorization: API-key hashing, expiry, revocation, access-level checks, and
   dashboard ownership checks were reviewed at their shared middleware/route
   seams.
+- Vehicle roles: viewers are read-only; managers may perform operational
+  schedule and history-backfill actions; owners retain credential and
+  membership administration.
 - Data handling: SQL access in the reviewed auth, API-key, backup, and key
   bootstrap paths uses parameter binding; durable Rivian credentials and
   short-lived connection material use age encryption.
@@ -41,7 +44,9 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 - The internal origin deliberately does not trust arbitrary forwarded client-IP
   headers. Configure client-IP trust only at the outer gateway after validating
   its network boundary.
-- CI runs cargo audit, pnpm audit, gitleaks, Semgrep, and Trivy. Local
+- CI runs cargo audit, pnpm audit, gitleaks, blocking Semgrep, and blocking
+  high/critical Trivy image scans. Fork pull requests run Semgrep without
+  repository secrets. Local
   dependency validation in this audit found no high-severity production npm
   vulnerabilities; the Rust/secret/SAST tools were not installed locally.
 - Before a wider exposure or multi-tenant use case, commission an independent
