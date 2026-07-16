@@ -347,6 +347,7 @@ function VehicleOverheadLayers({
     width: 'var(--vehicle-frame-height)',
     transform: 'translate(-50%, -50%) rotate(90deg)',
   } as React.CSSProperties;
+  const [usingFallback, setUsingFallback] = useState(false);
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
       <AuthenticatedVehicleArtwork
@@ -355,8 +356,19 @@ function VehicleOverheadLayers({
         alt={vehicleName ?? 'Rivian vehicle'}
         className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
         style={imageStyle}
+        onFallbackChange={setUsingFallback}
       />
-      {overlays.map((overlayUrl) => <AuthenticatedVehicleArtwork key={overlayUrl} source={overlayUrl} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />)}
+      {!usingFallback
+        ? overlays.map((overlayUrl) => (
+            <AuthenticatedVehicleArtwork
+              key={overlayUrl}
+              source={overlayUrl}
+              alt=""
+              className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
+              style={imageStyle}
+            />
+          ))
+        : null}
     </div>
   );
 }
