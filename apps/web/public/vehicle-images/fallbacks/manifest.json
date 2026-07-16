@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "background": "transparent",
+  "format": "lossless-webp",
+  "assets": [
+    {
+      "model": "R1S",
+      "usage": "overview",
+      "source": "vehicles_generated/r1s/top.png",
+      "output": "r1s/overview.webp",
+      "width": 640,
+      "height": 1440,
+      "alpha_coverage": 0.606679,
+      "visible_bbox": [
+        66,
+        86,
+        575,
+        1353
+      ],
+      "sha256": "7c8c814c36030c70bad97e7e5aa05643d90a40efc2e46b613d839b2e4c3d23e9"
+    },
+    {
+      "model": "R1S",
+      "usage": "charging",
+      "source": "vehicles_generated/r1s/charge.png",
+      "output": "r1s/charging.webp",
+      "width": 1200,
+      "height": 900,
+      "alpha_coverage": 0.261996,
+      "visible_bbox": [
+        396,
+        240,
+        1200,
+        835
+      ],
+      "sha256": "9563f8f9164cabb48a2ab9cf7f081571ce7bd8c65af03322a82398ec8ce17966"
+    },
+    {
+      "model": "R1S",
+      "usage": "health",
+      "source": "vehicles_generated/r1s/three_quarter.png",
+      "output": "r1s/health.webp",
+      "width": 1600,
+      "height": 900,
+      "alpha_coverage": 0.496772,
+      "visible_bbox": [
+        137,
+        152,
+        1526,
+        843
+      ],
+      "sha256": "5576468a5035f17c5cde6c435327b427b65c2e838670ab648f22ef1d2dbea361"
+    },
+    {
+      "model": "R1T",
+      "usage": "overview",
+      "source": "vehicles_generated/r1t/top.png",
+      "output": "r1t/overview.webp",
+      "width": 640,
+      "height": 1440,
+      "alpha_coverage": 0.531133,
+      "visible_bbox": [
+        97,
+        86,
+        543,
+        1353
+      ],
+      "sha256": "b5dcae8f6d4a2317c2705e8e4cd2ca1bebd17cc46b22e8051cb674cfb1366f6c"
+    },
+    {
+      "model": "R1T",
+      "usage": "charging",
+      "source": "vehicles_generated/r1t/charge.png",
+      "output": "r1t/charging.webp",
+      "width": 1200,
+      "height": 900,
+      "alpha_coverage": 0.237549,
+      "visible_bbox": [
+        396,
+        269,
+        1200,
+        837
+      ],
+      "sha256": "1716425e2019d59c639952a4bdbb7c0f1dfa8df5e7c726f68bb7e57063382aee"
+    },
+    {
+      "model": "R1T",
+      "usage": "health",
+      "source": "vehicles_generated/r1t/three_quarter.png",
+      "output": "r1t/health.webp",
+      "width": 1600,
+      "height": 900,
+      "alpha_coverage": 0.411562,
+      "visible_bbox": [
+        136,
+        233,
+        1527,
+        844
+      ],
+      "sha256": "95274b8b57f1e70545e45be4c73e2469ff1a00b321f2abe218c04cab231d9e1e"
+    }
+  ]
+}
