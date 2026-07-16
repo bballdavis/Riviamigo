@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_model": "R1S",
+  "window_days": 14,
+  "telemetry_rows": 5664,
+  "active_days": 12,
+  "trip_count": 31,
+  "charge_count": 4,
+  "weather_sample_count": 80,
+  "coverage": {
+    "location": 0.558,
+    "battery": 0.517,
+    "tires": 0.065,
+    "doors": 0.085,
+    "outside_temperature": 0.0
+  }
+}

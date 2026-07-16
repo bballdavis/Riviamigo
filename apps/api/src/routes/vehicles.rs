@@ -6,6 +6,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -25,6 +26,7 @@ use crate::{
     ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::range_normalization::normalize_remaining_range_miles,
+    services::demo_seed::seed_demo_vehicle,
 };
 
 pub fn router() -> Router<AppState> {
@@ -32,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles/demo", post(create_demo_vehicle))
+        .route("/vehicles/:id/demo/refresh", post(refresh_demo_vehicle))
         .route(
             "/vehicle-image-cache/:id/:image_key",
             get(vehicle_image_cache_asset),
@@ -296,7 +299,6 @@ fn demo_vehicle_telemetry_seed_insert_sql() -> &'static str {
      ON CONFLICT DO NOTHING"
 }
 
-#[cfg(test)]
 fn is_demo_vehicle_key(value: &str) -> bool {
     value.starts_with("demo-")
 }
@@ -2298,7 +2300,10 @@ async fn list_vehicles(
 
     let mut vehicles = Vec::with_capacity(rows.len());
     for r in rows {
-        queue_vehicle_artwork_repair(&state, r.id).await;
+        let is_demo = is_demo_vehicle_key(&r.rivian_vehicle_id);
+        if !is_demo {
+            queue_vehicle_artwork_repair(&state, r.id).await;
+        }
         let images = fetch_vehicle_images_json(&state.pool, &state.config, r.id)
             .await
             .unwrap_or_else(|_| serde_json::json!({ "all": [] }));
@@ -2310,6 +2315,7 @@ async fn list_vehicles(
             "id":                       r.id,
             "user_id":                  auth.user_id,
             "rivian_vehicle_id":        r.rivian_vehicle_id,
+            "is_demo":                  is_demo,
             "vin":                      r.vin,
             "model":                    r.model,
             "year":                     serde_json::Value::Null,
@@ -2360,7 +2366,7 @@ async fn create_demo_vehicle(
     let demo_key = format!("demo-{}-local", model.to_lowercase());
     let display_name = format!("Demo {model}");
     let vin = format!("DEMO-{model}-LOCAL-0001");
-    let (trim, battery_config, battery_capacity_wh, range_mi) = match model.as_str() {
+    let (trim, battery_config, battery_capacity_wh, _range_mi) = match model.as_str() {
         "R1S" => ("Adventure", "r1_large_g1", 135_000.0_f64, 260.0_f64),
         "R2S" => ("Adventure", "r2s", 82_000.0_f64, 300.0_f64),
         _ => ("Adventure", "r1_large_g1", 135_000.0_f64, 248.0_f64),
@@ -2425,100 +2431,60 @@ async fn create_demo_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(demo_vehicle_latest_status_upsert_sql())
-        .bind(vehicle_id)
-        .bind(battery_capacity_wh)
-        .bind(range_mi)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state
-          (vehicle_id, is_online, last_event_at, worker_health, worker_health_msg, updated_at)
-         VALUES
-          ($1, TRUE, now(), 'connected', 'Demo vehicle seeded', now())
-         ON CONFLICT (vehicle_id) DO UPDATE
-         SET is_online = EXCLUDED.is_online,
-             last_event_at = EXCLUDED.last_event_at,
-             worker_health = EXCLUDED.worker_health,
-             worker_health_msg = EXCLUDED.worker_health_msg,
-             updated_at = now()",
-    )
-    .bind(vehicle_id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query("DELETE FROM riviamigo.vehicle_images WHERE vehicle_id = $1")
-        .bind(vehicle_id)
-        .execute(&mut *tx)
-        .await?;
-
-    for image in demo_vehicle_image_seeds(&model)? {
-        sqlx::query(
-            "INSERT INTO riviamigo.vehicle_images
-              (vehicle_id, placement, design, size, resolution, url, overlays, metadata)
-             VALUES
-              ($1, $2, $3, $4, $5, $6, $7, $8)
-             ON CONFLICT (vehicle_id, url) DO UPDATE
-             SET placement = EXCLUDED.placement,
-                 design = EXCLUDED.design,
-                 size = EXCLUDED.size,
-                 resolution = EXCLUDED.resolution,
-                 overlays = EXCLUDED.overlays,
-                 metadata = EXCLUDED.metadata,
-                 updated_at = now()",
-        )
-        .bind(vehicle_id)
-        .bind(&image.placement)
-        .bind(image.design.as_deref())
-        .bind(image.size.as_deref())
-        .bind(image.resolution.as_deref())
-        .bind(&image.url)
-        .bind(image.overlays)
-        .bind(image.metadata)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    sqlx::query(demo_vehicle_software_history_seed_sql())
-        .bind(vehicle_id)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(demo_vehicle_telemetry_seed_insert_sql())
-        .bind(vehicle_id)
-        .bind(battery_capacity_wh)
-        .bind(range_mi)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(
-        "INSERT INTO riviamigo.trips
-          (vehicle_id, started_at, ended_at, distance_miles, duration_seconds, soc_start, soc_end, efficiency_wh_per_mile, max_speed_mph, drive_mode, outside_temp_c)
-         VALUES
-          ($1, now() - interval '70 minutes', now() - interval '50 minutes', 6.2, 1200, 80, 79, 420, 52, 'all_purpose', 19)
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(vehicle_id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT INTO riviamigo.charge_sessions
-          (vehicle_id, started_at, ended_at, charger_type, kwh_added, soc_start, soc_end, max_charge_rate_kw, duration_minutes, cost_usd, currency_code, source, data_confidence)
-         VALUES
-          ($1, now() - interval '10 days', now() - interval '10 days' + interval '42 minutes', 'ac', 12.4, 51, 63, 10.8, 42, 2.48, 'USD', 'telemetry', 'telemetry')
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(vehicle_id)
-    .execute(&mut *tx)
-    .await?;
+    let summary = if created {
+        Some(seed_demo_vehicle(&mut tx, vehicle_id, &model, Utc::now()).await?)
+    } else {
+        None
+    };
 
     tx.commit().await?;
     Ok(Json(serde_json::json!({
         "ok": true,
         "vehicle_id": vehicle_id,
-        "created": created
+        "created": created,
+        "seeded": summary.is_some(),
+        "refreshed": false,
+        "seeded_at": summary.as_ref().map(|value| value.seeded_at),
+        "window_start": summary.as_ref().map(|value| value.window_start),
+        "window_end": summary.as_ref().map(|value| value.window_end),
+        "counts": summary.as_ref().map(|value| &value.counts)
+    })))
+}
+
+async fn refresh_demo_vehicle(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    require_vehicle_access(&auth, vehicle_id)?;
+    let (demo_key, model) = sqlx::query_as::<_, (String, String)>(
+        "SELECT rivian_vehicle_id, model FROM riviamigo.vehicles WHERE id=$1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if !is_demo_vehicle_key(&demo_key) {
+        return Err(AppError::Validation(
+            "only demo vehicles can refresh demo data".into(),
+        ));
+    }
+
+    let mut tx = state.pool.begin().await?;
+    let summary = seed_demo_vehicle(&mut tx, vehicle_id, &model, Utc::now()).await?;
+    tx.commit().await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "vehicle_id": vehicle_id,
+        "created": false,
+        "seeded": true,
+        "refreshed": true,
+        "seeded_at": summary.seeded_at,
+        "window_start": summary.window_start,
+        "window_end": summary.window_end,
+        "counts": summary.counts
     })))
 }
 

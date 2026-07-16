@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { rootRoute } from './__root';
-import { api, AuthenticatedVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
+import { api, AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
 import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
@@ -116,25 +116,27 @@ function membershipBadgeVariant(role: VehicleMember['role'] | undefined): 'succe
 
 function ThemeVehicleImage({
   images,
+  model,
   placement,
   className,
   fallback,
 }: {
   images?: VehicleImages | null | undefined;
+  model?: string | null | undefined;
   placement: 'side' | 'overhead' | 'front' | 'rear';
   className?: string;
   fallback: React.ReactNode;
 }) {
-  const pair = images?.[placement];
-  const light = pair?.light ?? pair?.dark ?? images?.all?.find((image) => image.placement === placement)?.url;
-  const dark = pair?.dark ?? pair?.light ?? light;
+  const resolved = resolveVehicleArtwork(images, model, placement === 'side' ? 'vehicle-card' : 'health');
+  const light = resolved.light;
+  const dark = resolved.dark ?? light;
 
-  if (!light && !dark) return <>{fallback}</>;
+  if (!light && !dark && !resolved.fallback) return <>{fallback}</>;
 
   return (
     <>
-      {light && <AuthenticatedVehicleArtwork source={light} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />}
-      {dark && <AuthenticatedVehicleArtwork source={dark} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />}
+      <AuthenticatedVehicleArtwork source={light} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} dark:hidden` }} alt="" className={`${className ?? ''} dark:hidden`} loading="lazy" />
+      <AuthenticatedVehicleArtwork source={dark} fallbackSource={resolved.fallback} fallbackProps={{ className: `${className ?? ''} hidden dark:block` }} alt="" className={`${className ?? ''} hidden dark:block`} loading="lazy" />
     </>
   );
 }
@@ -473,6 +475,7 @@ export function SettingsContent() {
   const [editNameValue, setEditNameValue] = React.useState('');
   const [deleteConfirmId, setDeleteConfirmId] = React.useState<string | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState('');
+  const [demoRefreshConfirmId, setDemoRefreshConfirmId] = React.useState<string | null>(null);
   const [sharingVehicleId, setSharingVehicleId] = React.useState<string | null>(null);
   const [shareEmail, setShareEmail] = React.useState('');
   const [shareRole, setShareRole] = React.useState<VehicleMember['role']>('viewer');
@@ -643,6 +646,14 @@ export function SettingsContent() {
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
       void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
+    },
+  });
+
+  const refreshDemoVehicle = useMutation({
+    mutationFn: (vehicleId: string) => api.refreshDemoVehicle(vehicleId),
+    onSuccess: () => {
+      setDemoRefreshConfirmId(null);
+      void queryClient.invalidateQueries();
     },
   });
 
@@ -914,6 +925,33 @@ export function SettingsContent() {
                     );
                   })()}
 
+                  {demoRefreshConfirmId && (() => {
+                    const demo = vehicles?.find((vehicle) => vehicle.id === demoRefreshConfirmId);
+                    return (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/80 px-4 backdrop-blur-sm">
+                        <div className="w-full max-w-sm rounded-xl border border-border bg-bg-surface p-5 shadow-lg">
+                          <h3 className="text-sm font-semibold text-fg">Refresh {demo?.display_name ?? 'demo vehicle'}?</h3>
+                          <p className="mt-2 text-xs text-fg-tertiary">
+                            This replaces only the illustrative telemetry, trips, charging, and weather history with a fresh rolling 14-day demo window. Sharing and vehicle settings stay unchanged.
+                          </p>
+                          <div className="mt-4 flex justify-end gap-2">
+                            <Button variant="secondary" size="sm" onClick={() => setDemoRefreshConfirmId(null)}>
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              loading={refreshDemoVehicle.isPending}
+                              onClick={() => refreshDemoVehicle.mutate(demoRefreshConfirmId)}
+                            >
+                              Refresh Demo Data
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="divide-y divide-border">
                     {vehicles?.map((v) => {
                       const isActive = defaultVehicleId === v.id || (!defaultVehicleId && vehicles[0]?.id === v.id);
@@ -965,6 +1003,7 @@ export function SettingsContent() {
                             >
                               <ThemeVehicleImage
                                 images={v.images}
+                                model={v.model}
                                 placement="side"
                                 className="w-full object-contain"
                                 fallback={<Car className="h-6 w-6 text-fg-secondary" />}

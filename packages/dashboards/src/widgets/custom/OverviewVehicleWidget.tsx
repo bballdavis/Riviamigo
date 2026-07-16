@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
+import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Package, PackageOpen, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
@@ -16,10 +16,13 @@ type AnchorSet = {
   doorLocks: { rl: string; fl: string; rr: string; fr: string };
   frunkLock: string;
   rearGateLock: string;
-  tonneauLock?: string;
-  sideBinLeftLock?: string;
-  sideBinRightLock?: string;
+  sideBinLeftCover?: string;
+  sideBinRightCover?: string;
 };
+
+// The normalized R1T overview asset has a 446px visible cross-axis span versus
+// 509px for R1S. Compensate only while the packaged R1T fallback is active.
+const R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE = 509 / 446;
 
 const SHARED_OVERVIEW_ANCHORS: AnchorSet = {
   tire: { rl: 'left-[27%] top-[0%]', fl: 'left-[82%] top-[0%]', rr: 'left-[27%] top-[102%]', fr: 'left-[82%] top-[102%]' },
@@ -32,9 +35,8 @@ const OVERVIEW_ANCHORS: Record<string, AnchorSet> = {
   default: SHARED_OVERVIEW_ANCHORS,
   R1T: {
     ...SHARED_OVERVIEW_ANCHORS,
-    tonneauLock: 'left-[14%] top-[50%]',
-    sideBinLeftLock: 'left-[16%] top-[32%]',
-    sideBinRightLock: 'left-[16%] top-[68%]',
+    sideBinLeftCover: 'left-[36%] top-[24%]',
+    sideBinRightCover: 'left-[36%] top-[76%]',
   },
   R1S: SHARED_OVERVIEW_ANCHORS,
   R2S: SHARED_OVERVIEW_ANCHORS,
@@ -77,7 +79,7 @@ function CurrentVehicleStatePanel({
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
   const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark ?? findFirstOverheadImage(images?.all);
   const localOverheadFallback = getVehicleArtworkFallback(vehicleModel, 'overview');
-  const baseOverheadFallback = apiOverheadFallback ?? localOverheadFallback;
+  const overheadArtworkAvailable = Boolean(apiOverheadFallback ?? localOverheadFallback);
   const openDoorStates = getOpenDoorStates(status);
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
@@ -108,6 +110,10 @@ function CurrentVehicleStatePanel({
     : status?.last_updated
       ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
       : 'Awaiting telemetry';
+  const rearGateLock = vehicleModel === 'R1T'
+    ? status?.closure_tailgate_locked
+    : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
+  const rearGateLockTitle = vehicleModel === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
 
   useEffect(() => {
     const element = imageStageRef.current;
@@ -167,10 +173,10 @@ function CurrentVehicleStatePanel({
             {locksKnown ? (status?.doors_locked ? 'Locked' : 'Unlocked') : 'Locks pending'}
           </div>
           <div className="absolute inset-1 z-10 flex items-center justify-center">
-            {baseOverheadFallback ? (
-              <VehicleArtFrame source={baseOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} />
-                <VehicleOverheadLayers base={baseOverheadDark ?? baseOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" />
+            {overheadArtworkAvailable ? (
+              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
+                <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
+                <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -179,16 +185,13 @@ function CurrentVehicleStatePanel({
                 <LockLabel className={anchors.doorLocks.fl} locked={status?.door_front_left_locked} title="Front left door lock" />
                 <LockLabel className={anchors.doorLocks.rr} locked={status?.door_rear_right_locked} title="Rear right door lock" />
                 <LockLabel className={anchors.doorLocks.fr} locked={status?.door_front_right_locked} title="Front right door lock" />
-                <LockLabel className={anchors.rearGateLock} locked={status?.closure_liftgate_locked ?? status?.closure_tailgate_locked} title="Rear gate lock" />
+                <LockLabel className={anchors.rearGateLock} locked={rearGateLock} title={rearGateLockTitle} />
                 <LockLabel className={anchors.frunkLock} locked={status?.closure_frunk_locked} title="Frunk lock" />
-                {vehicleModel === 'R1T' && anchors.tonneauLock && (
-                  <LockLabel className={anchors.tonneauLock} locked={status?.tonneau_locked} title="Tonneau lock" />
+                {vehicleModel === 'R1T' && anchors.sideBinLeftCover && (
+                  <ClosureLabel className={anchors.sideBinLeftCover} closed={status?.side_bin_left_closed} title="Left side bin cover" />
                 )}
-                {vehicleModel === 'R1T' && anchors.sideBinLeftLock && (
-                  <LockLabel className={anchors.sideBinLeftLock} locked={status?.side_bin_left_locked} title="Left side bin lock" />
-                )}
-                {vehicleModel === 'R1T' && anchors.sideBinRightLock && (
-                  <LockLabel className={anchors.sideBinRightLock} locked={status?.side_bin_right_locked} title="Right side bin lock" />
+                {vehicleModel === 'R1T' && anchors.sideBinRightCover && (
+                  <ClosureLabel className={anchors.sideBinRightCover} closed={status?.side_bin_right_closed} title="Right side bin cover" />
                 )}
               </VehicleArtFrame>
             ) : (
@@ -281,6 +284,21 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
   );
 }
 
+function ClosureLabel({ className, closed, title }: { className: string; closed: boolean | null | undefined; title: string }) {
+  const known = closed !== null && closed !== undefined;
+  const open = known && closed === false;
+  const Icon = open ? PackageOpen : Package;
+  const stateLabel = known ? (open ? 'open' : 'closed') : 'unavailable';
+  return (
+    <span
+      title={`${title}: ${stateLabel}`}
+      className={`absolute z-30 inline-flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-sm backdrop-blur ${open ? 'border-accent/60 bg-bg-elevated/90 text-accent' : known ? 'border-status-positive/60 bg-bg-elevated/90 text-status-positive' : 'border-border bg-bg-elevated/60 text-fg-tertiary'} ${className}`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
 function VehicleArtFrame({
   source,
   fallbackSource,
@@ -288,7 +306,7 @@ function VehicleArtFrame({
   widthPx,
   children,
 }: {
-  source: string;
+  source: string | null | undefined;
   fallbackSource?: string | null | undefined;
   heightPx: number;
   widthPx: number;
@@ -335,18 +353,28 @@ function VehicleOverheadLayers({
   overlays,
   darkClassName,
   vehicleName,
+  isR1tFallback,
 }: {
-  base: string;
+  base: string | null | undefined;
   fallbackBase?: string | null | undefined;
   overlays: string[];
   darkClassName: string;
   vehicleName?: string | undefined;
+  isR1tFallback: boolean;
 }) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
     width: 'var(--vehicle-frame-height)',
     transform: 'translate(-50%, -50%) rotate(90deg)',
   } as React.CSSProperties;
+  const fallbackProps = isR1tFallback
+    ? {
+        style: {
+          ...imageStyle,
+          transform: `translate(-50%, -50%) rotate(90deg) scaleX(${R1T_OVERVIEW_FALLBACK_CROSS_AXIS_SCALE})`,
+        },
+      }
+    : undefined;
   const [usingFallback, setUsingFallback] = useState(false);
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
@@ -356,6 +384,7 @@ function VehicleOverheadLayers({
         alt={vehicleName ?? 'Rivian vehicle'}
         className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
         style={imageStyle}
+        {...(fallbackProps ? { fallbackProps } : {})}
         onFallbackChange={setUsingFallback}
       />
       {!usingFallback
