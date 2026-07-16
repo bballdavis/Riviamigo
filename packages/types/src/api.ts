@@ -823,6 +823,17 @@ export interface CreateDemoVehicleResult {
   ok: boolean;
   vehicle_id: string;
   created: boolean;
+  seeded: boolean;
+  refreshed: boolean;
+  seeded_at: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  counts: {
+    telemetry: number;
+    trips: number;
+    charges: number;
+    weather_samples: number;
+  } | null;
 }
 
 export interface CreateDemoVehicleBody {

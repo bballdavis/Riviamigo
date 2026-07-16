@@ -52,6 +52,22 @@
       "sha256": "02945694ff6be6f700db12fe69d19fc2eeee424a5e5350026a28902e2d88b6ab"
     },
     {
+      "model": "R1S",
+      "usage": "vehicle-card",
+      "source": "vehicles_generated/r1s/side.png",
+      "output": "r1s/side.webp",
+      "width": 1200,
+      "height": 560,
+      "alpha_coverage": 0.497193,
+      "visible_bbox": [
+        49,
+        77,
+        1151,
+        505
+      ],
+      "sha256": "66f9cece3342536d646ef5eb72bbd37e733b39cf64c1ffb225ea94443618bb1f"
+    },
+    {
       "model": "R1T",
       "usage": "overview",
       "source": "vehicles_generated/r1t/top.png",
@@ -100,6 +116,22 @@
       "sha256": "3f39ee86b60feb1020ae1bb564a97ba801655e14d6df10a466ea45dbd7533b84"
     },
     {
+      "model": "R1T",
+      "usage": "vehicle-card",
+      "source": "vehicles_generated/r1t/side.png",
+      "output": "r1t/side.webp",
+      "width": 1200,
+      "height": 560,
+      "alpha_coverage": 0.415635,
+      "visible_bbox": [
+        45,
+        113,
+        1151,
+        506
+      ],
+      "sha256": "b2052562fe8511a2104932be28ec479863e405e25cb1a9ba31e8b194750bdfcb"
+    },
+    {
       "model": "R2S",
       "usage": "overview",
       "source": "vehicles_generated/r2s/top.png",
@@ -146,6 +178,22 @@
         845
       ],
       "sha256": "27ce59003f99c9156a13cd68e5330973e9cfb8e32c4d5ebffc2da20dd7803bce"
+    },
+    {
+      "model": "R2S",
+      "usage": "vehicle-card",
+      "source": "vehicles_generated/r2s/side.png",
+      "output": "r2s/side.webp",
+      "width": 1200,
+      "height": 560,
+      "alpha_coverage": 0.520608,
+      "visible_bbox": [
+        56,
+        57,
+        1146,
+        504
+      ],
+      "sha256": "9a4ab158cfa9544df499e63847d603213e66b4a452573a7fcd3c4f61cedfa053"
     }
   ]
 }

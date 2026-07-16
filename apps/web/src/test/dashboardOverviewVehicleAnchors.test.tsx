@@ -6,6 +6,7 @@ const overviewMocks = vi.hoisted(() => ({
   model: 'R1T' as 'R1T' | 'R1S' | 'R2S',
   chargerState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
   batteryLevel: 64,
+  hasApiArtwork: true,
 }));
 
 const overheadImageFixtures = {
@@ -28,7 +29,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
       authReady: true,
       effectiveVehicleId: 'vehicle-1',
       vehicleSelectionReady: true,
-      vehicles: [{ id: 'vehicle-1', model: overviewMocks.model, images: overheadImageFixtures }],
+      vehicles: [{ id: 'vehicle-1', model: overviewMocks.model, images: overviewMocks.hasApiArtwork ? overheadImageFixtures : undefined }],
     }),
     useCurrentVehicleStatus: () => ({
       data: {
@@ -62,11 +63,13 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         closure_liftgate_locked: true,
         closure_frunk_locked: true,
         tonneau_locked: true,
-        side_bin_left_locked: true,
+        side_bin_left_locked: false,
         side_bin_right_locked: true,
+        side_bin_left_closed: true,
+        side_bin_right_closed: false,
       },
     }),
-    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: overviewMocks.model, images: overheadImageFixtures, target_tire_pressure_psi: 48 }] }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: overviewMocks.model, images: overviewMocks.hasApiArtwork ? overheadImageFixtures : undefined, target_tire_pressure_psi: 48 }] }),
   };
 });
 
@@ -118,6 +121,8 @@ const expectedAnchors = {
       fr: 'left-[60%] top-[102%]',
       rearGate: 'left-[4%] top-1/2',
       frunk: 'left-[102%] top-1/2',
+      sideBinLeft: 'left-[36%] top-[24%]',
+      sideBinRight: 'left-[36%] top-[76%]',
     },
   },
   R2S: {
@@ -153,6 +158,7 @@ describe('overview vehicle anchors', () => {
     overviewMocks.model = 'R1T';
     overviewMocks.chargerState = 'Disconnected';
     overviewMocks.batteryLevel = 64;
+    overviewMocks.hasApiArtwork = true;
   });
 
   it.each([
@@ -185,12 +191,22 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByTitle('Front left door lock')).toHaveClass(anchors.locks.fl);
     expect(screen.getByTitle('Rear right door lock')).toHaveClass(anchors.locks.rr);
     expect(screen.getByTitle('Front right door lock')).toHaveClass(anchors.locks.fr);
-    expect(screen.getByTitle('Rear gate lock')).toHaveClass(anchors.locks.rearGate);
+    const rearGateTitle = model === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
+    expect(screen.getByTitle(rearGateTitle)).toHaveClass(anchors.locks.rearGate);
     expect(screen.getByTitle('Frunk lock')).toHaveClass(anchors.locks.frunk);
+    expect(screen.queryByTitle('Tonneau lock')).not.toBeInTheDocument();
     expect(screen.getByTitle('Rear left door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Front left door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Rear right door lock')).toHaveClass('text-status-positive');
     expect(screen.getByTitle('Front right door lock')).toHaveClass('text-status-positive');
+
+    if (model === 'R1T') {
+      expect(screen.getByTitle('Left side bin cover: closed')).toHaveClass('left-[36%]', 'top-[24%]', 'text-status-positive');
+      expect(screen.getByTitle('Right side bin cover: open')).toHaveClass('left-[36%]', 'top-[76%]', 'text-accent');
+    } else {
+      expect(screen.queryByTitle('Left side bin cover: closed')).not.toBeInTheDocument();
+      expect(screen.queryByTitle('Right side bin cover: open')).not.toBeInTheDocument();
+    }
   });
 
   it('shows time to limit only while charging', () => {
@@ -207,6 +223,32 @@ describe('overview vehicle anchors', () => {
     expect(screen.getAllByRole('img').map((image) => image.getAttribute('src'))).toEqual(
       expect.arrayContaining(['/rivian/overhead-light.webp', '/rivian/overhead-dark.webp']),
     );
+  });
+
+  it('scales only the packaged R1T overview fallback across its short axis', () => {
+    overviewMocks.hasApiArtwork = false;
+    renderOverviewForModel('R1T');
+
+    const fallbackImages = Array.from(document.querySelectorAll<HTMLImageElement>('img[src="/vehicle-images/fallbacks/r1t/overview.webp"]'));
+    expect(fallbackImages).toHaveLength(2);
+    for (const image of fallbackImages) {
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image.style.transform).toContain('translate(-50%, -50%) rotate(90deg) scaleX(');
+      expect(Number(image.style.transform.match(/scaleX\(([^)]+)\)/)?.[1])).toBeCloseTo(509 / 446);
+    }
+  });
+
+  it('does not scale API overhead artwork or other-model fallbacks', () => {
+    renderOverviewForModel('R1T');
+    for (const image of Array.from(document.querySelectorAll('img[src^="/rivian/overhead"]'))) {
+      expect(image).toHaveStyle({ transform: 'translate(-50%, -50%) rotate(90deg)' });
+    }
+
+    overviewMocks.hasApiArtwork = false;
+    renderOverviewForModel('R2S');
+    for (const image of Array.from(document.querySelectorAll('img[src="/vehicle-images/fallbacks/r2s/overview.webp"]'))) {
+      expect(image).toHaveStyle({ transform: 'translate(-50%, -50%) rotate(90deg)' });
+    }
   });
 
   it('keeps the SOC rail inset at full charge', () => {
