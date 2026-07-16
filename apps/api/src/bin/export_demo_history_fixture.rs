@@ -109,7 +109,10 @@ mod tests {
             "started_at",
             "2026-",
         ] {
-            assert!(!json.contains(forbidden), "fixture leaked forbidden field {forbidden}");
+            assert!(
+                !json.contains(forbidden),
+                "fixture leaked forbidden field {forbidden}"
+            );
         }
     }
 
@@ -194,10 +197,7 @@ async fn main() -> Result<()> {
             battery: ratio(shape.battery_rows, shape.telemetry_rows),
             tires: ratio(shape.tire_rows, shape.telemetry_rows),
             doors: ratio(shape.door_rows, shape.telemetry_rows),
-            outside_temperature: ratio(
-                shape.outside_temperature_rows,
-                shape.telemetry_rows,
-            ),
+            outside_temperature: ratio(shape.outside_temperature_rows, shape.telemetry_rows),
         },
     };
 

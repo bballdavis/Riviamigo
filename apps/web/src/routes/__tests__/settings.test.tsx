@@ -614,7 +614,7 @@ describe('Settings page', () => {
     expect(screen.getByText(/illustrative telemetry, trips, charging, and weather history/i)).toBeInTheDocument();
 
     const confirmationButtons = screen.getAllByRole('button', { name: 'Refresh Demo Data' });
-    fireEvent.click(confirmationButtons[confirmationButtons.length - 1]);
+    fireEvent.click(confirmationButtons[confirmationButtons.length - 1]!);
 
     await waitFor(() => {
       expect(hooks.api.refreshDemoVehicle).toHaveBeenCalledWith('demo-v1');

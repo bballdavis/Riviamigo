@@ -48,6 +48,12 @@ Every non-trivial change follows the same review path, whether it was written by
 
 AI assistants may help with repository exploration, code, tests, documentation, or review preparation. They do not replace human ownership or approval. Never share secrets, tokens, private keys, production telemetry, or precise vehicle locations with an assistant. Use redacted or synthetic fixtures and record the human verification that supports the change.
 
+### Demo fixture workflow
+
+The checked-in demo profile is aggregate-only and versioned under `apps/api/fixtures/demo/`. A human may regenerate it with `export_demo_history_fixture`, selecting one reviewed development vehicle and a 14-day window. The exporter writes the sanitized fixture directly and must never create a raw intermediate file. Review the allowlisted JSON diff before accepting it; identifiers, absolute timestamps, addresses, coordinates, route geometry, raw payloads, and non-aggregate sensor values are prohibited.
+
+The API embeds the reviewed profile and owns all demo generation. Do not add parallel SQL seed scripts or make demo creation depend on web assets, external geocoding, weather providers, or a live Rivian session. Changes to fixture schema, public routes, model capability profiles, or density bounds require privacy review and the focused exporter/seeder tests.
+
 ## CI Coverage
 
 The main CI workflow is organized around these evidence groups:
