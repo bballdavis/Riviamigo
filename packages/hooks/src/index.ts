@@ -1,4 +1,4 @@
-﻿export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
+export { api, setApiBaseUrl, resolveApiBaseUrl } from './api';
 export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, DepartureScheduleInput, DepartureOccurrence, DepartureComfortSettings, LiveSession, BackfillStatus } from './api';
 export { useAuth } from './useAuth';
 export { useAuthReady, useResolvedVehicleSelection } from './useAuthState';
@@ -24,5 +24,7 @@ export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';
+export { getVehicleArtworkFallback, normalizeVehicleArtworkModel } from './vehicleArtworkFallback';
+export type { VehicleArtworkFallbackModel, VehicleArtworkUsage } from './vehicleArtworkFallback';
 
 
