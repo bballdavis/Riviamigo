@@ -799,6 +799,64 @@ async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
     .expect("vehicle settings count");
     assert_eq!(settings_count, 1);
 
+    let viewer_token = accepted.body["access_token"]
+        .as_str()
+        .expect("viewer access token");
+    let viewer_read = app
+        .request(
+            Method::GET,
+            &format!("/v1/vehicles/{vehicle_id}/charging-schedule"),
+            None,
+            Some(viewer_token),
+            None,
+        )
+        .await;
+    assert_eq!(viewer_read.status, StatusCode::OK);
+
+    for (method, path, body) in [
+        (
+            Method::PUT,
+            format!("/v1/vehicles/{vehicle_id}/charging-schedule"),
+            Some(json!({"enabled": false})),
+        ),
+        (
+            Method::POST,
+            format!("/v1/vehicles/{vehicle_id}/departure-schedules"),
+            Some(json!({"enabled": false})),
+        ),
+        (
+            Method::POST,
+            format!("/v1/vehicles/{vehicle_id}/backfill"),
+            None,
+        ),
+    ] {
+        let response = app
+            .request(method, &path, body, Some(viewer_token), None)
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::FORBIDDEN,
+            "viewer must not mutate {path}"
+        );
+    }
+
+    sqlx::query("UPDATE riviamigo.vehicle_memberships SET role = 'manager' WHERE vehicle_id = $1 AND user_id = $2")
+        .bind(vehicle_id)
+        .bind(invitee_id)
+        .execute(&app.pool)
+        .await
+        .expect("promote viewer to manager");
+    let manager_write = app
+        .request(
+            Method::PUT,
+            &format!("/v1/vehicles/{vehicle_id}/name"),
+            Some(json!({"name": "Manager-approved name"})),
+            Some(viewer_token),
+            None,
+        )
+        .await;
+    assert_eq!(manager_write.status, StatusCode::OK);
+
     let no_vehicle_created = app
         .request(
             Method::POST,

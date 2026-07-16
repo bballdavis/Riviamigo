@@ -1,8 +1,15 @@
-use crate::errors::AppError;
+use crate::{
+    errors::AppError,
+    middleware::auth::{require_vehicle_access, AuthUser},
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub async fn require_vehicle_owned(
+/// Require that a session user belongs to a vehicle.
+///
+/// This checks `vehicle_memberships`, not `vehicles.user_id`; role checks must
+/// be applied separately for mutations.
+pub async fn require_vehicle_membership(
     pool: &PgPool,
     user_id: Uuid,
     vehicle_id: Uuid,
@@ -24,6 +31,29 @@ pub async fn require_vehicle_owned(
     }
     Ok(())
 }
+
+/// Authorize a vehicle read for both a session member and a scoped API key.
+pub async fn require_vehicle_read_access(
+    pool: &PgPool,
+    auth: &AuthUser,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
+    require_vehicle_access(auth, vehicle_id)?;
+    require_vehicle_membership(pool, auth.user_id, vehicle_id).await
+}
+
+/// Authorize an operational vehicle change. Viewers are deliberately read-only.
+pub async fn require_vehicle_manager_access(
+    pool: &PgPool,
+    auth: &AuthUser,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
+    require_vehicle_access(auth, vehicle_id)?;
+    require_vehicle_role(pool, auth.user_id, vehicle_id, &["owner", "manager"]).await
+}
+
+#[deprecated(note = "use require_vehicle_membership or a composed access helper")]
+pub use require_vehicle_membership as require_vehicle_owned;
 
 pub async fn require_vehicle_role(
     pool: &PgPool,

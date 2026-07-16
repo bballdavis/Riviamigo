@@ -730,11 +730,29 @@ pub async fn finalize_charge_session_aliases(pool: &PgPool, charge_session_id: U
         return Ok(());
     };
 
-    sqlx::query("UPDATE riviamigo.charge_sessions SET rivian_session_id = $2 WHERE id = $1")
-        .bind(charge_session_id)
-        .bind(best_alias.external_id)
-        .execute(pool)
-        .await?;
+    // The alias table can temporarily contain an ID that is still stored as
+    // the canonical ID on an older API-only row.  Do not let that stale
+    // cross-row state turn an otherwise idempotent sync into a transaction
+    // failure.  Canonicalization will merge the rows and can promote the
+    // preferred ID once the duplicate row is gone.
+    sqlx::query(
+        "UPDATE riviamigo.charge_sessions
+         SET rivian_session_id = $2
+         WHERE id = $1
+           AND (
+               rivian_session_id = $2
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM riviamigo.charge_sessions existing
+                   WHERE existing.rivian_session_id = $2
+                     AND existing.id <> $1
+               )
+           )",
+    )
+    .bind(charge_session_id)
+    .bind(best_alias.external_id)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

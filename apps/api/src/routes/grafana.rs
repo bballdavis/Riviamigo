@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    middleware::auth::{AppState, AuthUser},
 };
 
 /// All telemetry columns that Grafana can request.
@@ -128,9 +128,7 @@ async fn query(
             .or(qp.vehicle_id)
             .ok_or_else(|| AppError::Validation("vehicleId is required".to_string()))?;
 
-        require_vehicle_access(&auth, vehicle_id)?;
-        // Verify the vehicle belongs to the authenticated user.
-        require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+        require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
         // Query with time-bucketing to respect maxDataPoints.
         // We use a simple approach: fetch all rows in range, client-side limited.
