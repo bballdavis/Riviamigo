@@ -308,6 +308,20 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
   });
 
+  it('refreshes demo history through the demo-only vehicle route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, vehicle_id: 'demo-1', refreshed: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await api.refreshDemoVehicle('demo-1');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/vehicles/demo-1/demo/refresh');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' });
+  });
+
   it('purges only the local vehicle artwork cache through the first-party vehicle route', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ ok: true, vehicle_id: 'vehicle-1' }), {

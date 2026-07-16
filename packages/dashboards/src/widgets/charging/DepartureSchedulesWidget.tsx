@@ -5,6 +5,7 @@ import {
   useCreateDepartureSchedule,
   useUpdateDepartureSchedule,
   useDeleteDepartureSchedule,
+  useVehicles,
 } from '@riviamigo/hooks';
 import type { DepartureSchedule, DepartureScheduleInput, DepartureComfortSettings } from '@riviamigo/hooks';
 import { Button, SelectPicker } from '@riviamigo/ui/primitives';
@@ -357,10 +358,12 @@ function DepartureSchedulesWidget({
   ctx: WidgetCtx;
 }) {
   const vehicleId = ctx.vehicleId ?? null;
+  const { data: vehicles } = useVehicles();
   const { data: schedules = [], isLoading } = useDepartureSchedules(vehicleId);
   const createSchedule = useCreateDepartureSchedule(vehicleId);
   const updateSchedule = useUpdateDepartureSchedule(vehicleId);
   const deleteSchedule = useDeleteDepartureSchedule(vehicleId);
+  const isDemo = vehicles?.find((vehicle) => vehicle.id === vehicleId)?.is_demo ?? false;
 
   const [showCreate, setShowCreate] = React.useState(false);
   const [newForm, setNewForm] = React.useState<NewForm>(emptyForm);
@@ -397,6 +400,16 @@ function DepartureSchedulesWidget({
     } finally {
       setDeletingId(null);
     }
+  }
+
+  if (isDemo) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <AlarmClock className="h-8 w-8 text-fg-tertiary" />
+        <p className="text-sm font-medium text-fg">Schedules are read-only for demos</p>
+        <p className="text-xs text-fg-tertiary">Demo vehicles include historical examples but do not simulate Rivian schedule changes.</p>
+      </div>
+    );
   }
 
   return (
