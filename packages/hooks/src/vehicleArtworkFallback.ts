@@ -55,12 +55,60 @@ function normalizedPlacement(image: VehicleImage) {
   return image.placement.trim().toLowerCase().replace(/[_\s]+/g, '-');
 }
 
-function findPlacement(images: VehicleImages | null | undefined, placements: string[], design: 'light' | 'dark') {
-  const requested = new Set(placements);
+function imageSearchText(image: VehicleImage) {
+  return `${image.placement} ${image.design ?? ''} ${image.url} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
+}
+
+function findSemanticImage(
+  images: VehicleImages | null | undefined,
+  predicate: (image: VehicleImage, text: string) => boolean,
+  design: 'light' | 'dark',
+) {
   return images?.all?.find((image) => (
-    requested.has(normalizedPlacement(image))
-    && (image.design?.toLowerCase() === design || image.design == null)
+    predicate(image, imageSearchText(image))
+    && (image.design?.toLowerCase().includes(design) || image.design == null)
   ))?.url ?? null;
+}
+
+function findChargingImage(images: VehicleImages | null | undefined, design: 'light' | 'dark') {
+  return findSemanticImage(images, (image, text) => {
+    const placement = normalizedPlacement(image);
+    return (placement.includes('side') && placement.includes('charg'))
+      || text.includes('side-charging')
+      || text.includes('side_charging')
+      || (placement === 'side' && (text.includes('charge port') || text.includes('port open')));
+  }, design);
+}
+
+function findHealthImage(
+  images: VehicleImages | null | undefined,
+  kind: 'hero' | 'three-quarter' | 'plain-side' | 'tagged-fallback' | 'front',
+  design: 'light' | 'dark',
+) {
+  return findSemanticImage(images, (image, text) => {
+    const placement = normalizedPlacement(image);
+    if (kind === 'hero') return text.includes('health-hero') && !text.includes('health-hero-fallback');
+    if (kind === 'three-quarter') {
+      return placement.includes('three-quarter')
+        || text.includes('three-quarter')
+        || text.includes('three_quarter')
+        || text.includes('3-quarter');
+    }
+    if (kind === 'plain-side') return placement === 'side' && !text.includes('charg');
+    if (kind === 'tagged-fallback') return text.includes('health-hero-fallback');
+    return placement === 'front';
+  }, design);
+}
+
+function findPlacement(images: VehicleImages | null | undefined, placements: string[], design: 'light' | 'dark') {
+  for (const placement of placements) {
+    const match = images?.all?.find((image) => (
+      normalizedPlacement(image) === placement
+      && (image.design?.toLowerCase() === design || image.design == null)
+    ));
+    if (match) return match.url;
+  }
+  return null;
 }
 
 export function resolveVehicleArtwork(
@@ -68,23 +116,57 @@ export function resolveVehicleArtwork(
   model: string | null | undefined,
   usage: VehicleArtworkUsage,
 ): ResolvedVehicleArtwork {
+  const typedPair = usage === 'overview'
+    ? images?.overhead
+    : usage === 'vehicle-card'
+      ? images?.side
+      : null;
   const placements = usage === 'overview'
     ? ['overhead']
     : usage === 'charging'
       ? ['side-charging', 'charging-side']
       : usage === 'health'
-        ? ['health-hero', 'three-quarter', 'side', 'front']
+        ? ['health-hero', 'three-quarter']
         : ['side'];
-  const typedPair = usage === 'overview'
-    ? images?.overhead
-    : usage === 'vehicle-card' || usage === 'health'
-      ? images?.side
-      : null;
-  const light = typedPair?.light
+  const healthLight = usage === 'health'
+    ? findHealthImage(images, 'hero', 'light')
+      ?? findHealthImage(images, 'hero', 'dark')
+      ?? findHealthImage(images, 'three-quarter', 'light')
+      ?? findHealthImage(images, 'three-quarter', 'dark')
+      ?? images?.side?.light
+      ?? images?.side?.dark
+      ?? findHealthImage(images, 'plain-side', 'light')
+      ?? findHealthImage(images, 'plain-side', 'dark')
+      ?? findHealthImage(images, 'tagged-fallback', 'light')
+      ?? findHealthImage(images, 'tagged-fallback', 'dark')
+      ?? findHealthImage(images, 'front', 'light')
+      ?? findHealthImage(images, 'front', 'dark')
+    : null;
+  const healthDark = usage === 'health'
+    ? findHealthImage(images, 'hero', 'dark')
+      ?? findHealthImage(images, 'hero', 'light')
+      ?? findHealthImage(images, 'three-quarter', 'dark')
+      ?? findHealthImage(images, 'three-quarter', 'light')
+      ?? images?.side?.dark
+      ?? images?.side?.light
+      ?? findHealthImage(images, 'plain-side', 'dark')
+      ?? findHealthImage(images, 'plain-side', 'light')
+      ?? findHealthImage(images, 'tagged-fallback', 'dark')
+      ?? findHealthImage(images, 'tagged-fallback', 'light')
+      ?? findHealthImage(images, 'front', 'dark')
+      ?? findHealthImage(images, 'front', 'light')
+    : null;
+  const chargingLight = usage === 'charging' ? findChargingImage(images, 'light') ?? findChargingImage(images, 'dark') : null;
+  const chargingDark = usage === 'charging' ? findChargingImage(images, 'dark') ?? findChargingImage(images, 'light') : null;
+  const light = healthLight
+    ?? chargingLight
+    ?? typedPair?.light
     ?? typedPair?.dark
     ?? findPlacement(images, placements, 'light')
     ?? findPlacement(images, placements, 'dark');
-  const dark = typedPair?.dark
+  const dark = healthDark
+    ?? chargingDark
+    ?? typedPair?.dark
     ?? typedPair?.light
     ?? findPlacement(images, placements, 'dark')
     ?? light;

@@ -385,11 +385,25 @@ vi.mock('@riviamigo/hooks', () => ({
   }),
   useVehicleHealth: (vehicleId?: string | null) => mockUseVehicleHealth(vehicleId),
   useCurrentVehicleStatus: (vehicleId?: string | null) => mockUseCurrentVehicleStatus(vehicleId),
-  getVehicleArtworkFallback: (model: string | null | undefined, usage: string) => {
+  resolveVehicleArtwork: (images: any, model: string | null | undefined) => {
     const normalized = (model ?? '').toLowerCase();
-    if (!normalized.includes('r1s') && !normalized.includes('r1t')) return null;
-    const vehicleModel = normalized.includes('r1s') ? 'r1s' : 'r1t';
-    return `/vehicle-images/fallbacks/${vehicleModel}/${usage}.webp`;
+    const vehicleModel = normalized.includes('r1s') ? 'r1s' : normalized.includes('r1t') ? 'r1t' : normalized.includes('r2s') ? 'r2s' : null;
+    const all = images?.all ?? [];
+    const text = (image: any) => `${image.placement ?? ''} ${image.url ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
+    const hero = all.find((image: any) => text(image).includes('health-hero') && !text(image).includes('health-hero-fallback'))
+      ?? all.find((image: any) => text(image).includes('three-quarter') || text(image).includes('three_quarter'));
+    const side = images?.side?.light
+      ? { url: images.side.light }
+      : all.find((image: any) => String(image.placement).toLowerCase() === 'side' && !text(image).includes('charg'));
+    const taggedFallback = all.find((image: any) => text(image).includes('health-hero-fallback'));
+    const front = images?.front?.light
+      ? { url: images.front.light }
+      : all.find((image: any) => String(image.placement).toLowerCase().includes('front'));
+    return {
+      light: hero?.url ?? side?.url ?? taggedFallback?.url ?? front?.url ?? null,
+      dark: hero?.url ?? side?.url ?? taggedFallback?.url ?? front?.url ?? null,
+      fallback: vehicleModel ? `/vehicle-images/fallbacks/${vehicleModel}/health.webp` : null,
+    };
   },
   api: { vehicleImages: vi.fn() },
 }));

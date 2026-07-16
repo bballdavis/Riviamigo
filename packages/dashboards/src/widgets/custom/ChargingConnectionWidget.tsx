@@ -1,12 +1,11 @@
 import React from 'react';
 import { Zap } from 'lucide-react';
-import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
-import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
 type ChargingCropFamily = 'R1T' | 'R1S' | 'default';
 
@@ -70,15 +69,11 @@ function ChargingConnectionWidget({
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
-  const chargingSideLight =
-    findSideChargingImage(activeVehicle?.images?.all, 'light') ??
-    findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');
-  const chargingSideDark =
-    findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
-    findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
-    chargingSideLight;
+  const resolvedChargingArtwork = resolveVehicleArtwork(activeVehicle?.images, activeVehicle?.model, 'charging');
+  const chargingSideLight = resolvedChargingArtwork.light;
+  const chargingSideDark = resolvedChargingArtwork.dark ?? chargingSideLight;
   const cropFamily = chargingCropFamily(activeVehicle?.model);
-  const fallbackChargingSource = getVehicleArtworkFallback(activeVehicle?.model, 'charging');
+  const fallbackChargingSource = resolvedChargingArtwork.fallback;
   const imageMode = 'side-charging';
   const displaySideLight = chargingSideLight ?? fallbackChargingSource;
   const displaySideDark = chargingSideDark ?? fallbackChargingSource;

@@ -22,6 +22,19 @@ const settingsMocks = vi.hoisted(() => ({
     role: 'user' as 'user' | 'admin' | 'super_user',
     default_vehicle_id: 'v1',
   },
+  vehicles: [{
+    id: 'v1',
+    display_name: 'Adventure Truck',
+    model: 'R1T',
+    year: null,
+    trim: null,
+    vin: null,
+    rivian_vehicle_id: 'rivian-1',
+    battery_capacity_kwh: 135,
+    target_tire_pressure_psi: 48,
+    membership_role: 'owner',
+    is_demo: false,
+  }],
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -205,6 +218,20 @@ vi.mock('@riviamigo/hooks', () => ({
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
     createDemoVehicle: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
+    refreshDemoVehicle: vi.fn().mockResolvedValue({
+      ok: true,
+      vehicle_id: 'demo-v1',
+      created: false,
+      seeded: true,
+      refreshed: true,
+      seeded_at: '2026-05-04T12:00:00Z',
+      window_start: '2026-04-20T12:00:00Z',
+      window_end: '2026-05-04T12:00:00Z',
+      telemetry_count: 5664,
+      trip_count: 31,
+      charge_count: 4,
+      weather_sample_count: 80,
+    }),
     updateVehicleSettings: vi.fn().mockResolvedValue({}),
     updateVehicleName: vi.fn().mockResolvedValue({}),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
@@ -212,20 +239,18 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth:    () => settingsMocks.auth,
   useAuthReady: () => true,
   useMe:      () => ({ data: settingsMocks.me }),
-  useVehicles: () => ({
-    data: [{
-      id: 'v1',
-      display_name: 'Adventure Truck',
-      model: 'R1T',
-      year: null,
-      trim: null,
-      vin: null,
-      rivian_vehicle_id: 'rivian-1',
-      battery_capacity_kwh: 135,
-      target_tire_pressure_psi: 48,
-      membership_role: 'owner',
-    }],
+  useVehicles: () => ({ data: settingsMocks.vehicles }),
+  resolveVehicleArtwork: (_images: unknown, model: string) => ({
+    light: null,
+    dark: null,
+    fallback: `/vehicle-images/fallbacks/${model.toLowerCase()}/side.webp`,
   }),
+  AuthenticatedVehicleArtwork: ({ source, fallbackSource, alt, className }: {
+    source?: string | null;
+    fallbackSource?: string | null;
+    alt?: string;
+    className?: string;
+  }) => <img src={source ?? fallbackSource ?? undefined} alt={alt} className={className} />,
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
@@ -313,11 +338,13 @@ function renderSettings() {
 
 describe('Settings page', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mockNavigate.mockReset();
     settingsMocks.auth.logout.mockReset();
     settingsMocks.auth.setDefaultVehicleId.mockReset();
     settingsMocks.auth.setActiveVehicleId.mockReset();
     settingsMocks.auth.accessToken = undefined;
+    settingsMocks.auth.defaultVehicleId = 'v1';
     dashboardMocks.dashboards = [];
     dashboardMocks.downloadDashboardYaml.mockReset();
     dashboardMocks.cloneMutateAsync.mockReset();
@@ -332,6 +359,19 @@ describe('Settings page', () => {
       role: 'user',
       default_vehicle_id: 'v1',
     };
+    settingsMocks.vehicles = [{
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: false,
+    }];
   });
 
   it('renders the Vehicles section heading', () => {
@@ -540,6 +580,46 @@ describe('Settings page', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'health', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['vehicles', 'images', 'demo-v1'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
+    invalidateSpy.mockRestore();
+  });
+
+  it('refreshes only demo history after confirmation and hides Rivian repair actions', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'demo-v1' };
+    settingsMocks.auth.defaultVehicleId = 'demo-v1';
+    settingsMocks.vehicles = [{
+      id: 'demo-v1',
+      display_name: 'Demo R1T',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'demo-r1t-local',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: true,
+    }];
+
+    renderSettings();
+
+    expect(screen.getAllByText('Demo data').length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText('Refresh Rivian login for Demo R1T')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Clear local artwork cache for Demo R1T')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Refresh vehicle artwork for Demo R1T')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh demo data for Demo R1T' }));
+    expect(screen.getByText('Refresh Demo R1T?')).toBeInTheDocument();
+    expect(screen.getByText(/illustrative telemetry, trips, charging, and weather history/i)).toBeInTheDocument();
+
+    const confirmationButtons = screen.getAllByRole('button', { name: 'Refresh Demo Data' });
+    fireEvent.click(confirmationButtons[confirmationButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(hooks.api.refreshDemoVehicle).toHaveBeenCalledWith('demo-v1');
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith();
     invalidateSpy.mockRestore();
   });
 
