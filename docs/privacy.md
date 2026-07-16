@@ -23,6 +23,12 @@ These are feature requests, not product analytics. Their operators may have thei
 
 Riviamigo does not forward browser cookies, authorization headers, referrers, usernames, vehicle names, VINs, or unrelated telemetry to optional providers. Connection-health logs do not store coordinates, addresses, search text, or provider query strings. Persistent address-search cache keys use a digest rather than storing the search text in Redis. Proxying removes unnecessary browser identity, but it cannot hide an exact address query or map area without breaking the requested feature.
 
+## Bundled demo data
+
+Administrators can create R1T, R1S, and R2S demo vehicles without Rivian credentials. Their rolling 14-day history is illustrative and read-only: it uses aggregate density measured from a human-reviewed development sample, generated sensor values, and deterministic routes between public landmarks around Washington, DC. It does not contain source VINs, account identifiers, payloads, addresses, timestamps, coordinates, or route geometry.
+
+Demo trips include stored route previews, reserved fixture addresses, and completed weather records. Viewing or refreshing a demo therefore does not call Rivian, Nominatim, or Open-Meteo. Refresh replaces only that demo vehicle's generated history, runtime status, and fixture artwork records; memberships, sharing, display names, preferences, and dashboard customizations remain intact.
+
 ## A practical reminder
 
 Self-hosting gives you control; it does not make network traffic disappear. Keep Riviamigo behind authenticated access, secure your host and backups, and avoid sharing screenshots or logs that contain account details, locations, tokens, or vehicle data.

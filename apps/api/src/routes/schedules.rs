@@ -51,6 +51,25 @@ fn http_client() -> Result<reqwest::Client, AppError> {
         .map_err(|error| AppError::Internal(error.into()))
 }
 
+async fn reject_demo_schedule_mutation(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
+    let key = sqlx::query_scalar::<_, String>(
+        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id=$1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if key.starts_with("demo-") {
+        return Err(AppError::Validation(
+            "demo vehicles are historical examples and cannot change Rivian schedules".into(),
+        ));
+    }
+    Ok(())
+}
+
 // ── GET /v1/vehicles/:id/charging-schedule ───────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -96,6 +115,7 @@ async fn put_charging_schedule(
     Json(body): Json<ChargingScheduleInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
+    reject_demo_schedule_mutation(&state.pool, vehicle_id).await?;
 
     let client = http_client()?;
 
@@ -162,6 +182,7 @@ async fn create_departure_schedule(
     Json(body): Json<CreateDepartureBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
+    reject_demo_schedule_mutation(&state.pool, vehicle_id).await?;
 
     let client = http_client()?;
 
@@ -194,6 +215,7 @@ async fn update_departure_schedule(
     Json(body): Json<CreateDepartureBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
+    reject_demo_schedule_mutation(&state.pool, vehicle_id).await?;
 
     // Resolve rivian_schedule_id from local id (schedule_id may be either).
     let rivian_sched_id: Option<String> = sqlx::query_scalar(
@@ -238,6 +260,7 @@ async fn delete_departure_schedule(
     Path((vehicle_id, schedule_id)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
+    reject_demo_schedule_mutation(&state.pool, vehicle_id).await?;
 
     let rivian_sched_id: Option<String> = sqlx::query_scalar(
         "SELECT rivian_schedule_id FROM riviamigo.departure_schedules

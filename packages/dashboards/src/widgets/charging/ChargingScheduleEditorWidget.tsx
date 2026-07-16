@@ -3,6 +3,7 @@ import { Calendar, Clock, Zap, Edit2, Save, X } from 'lucide-react';
 import {
   useChargingSchedule,
   useUpdateChargingSchedule,
+  useVehicles,
 } from '@riviamigo/hooks';
 import type { ChargingScheduleInput } from '@riviamigo/hooks';
 import { Button } from '@riviamigo/ui/primitives';
@@ -80,8 +81,10 @@ function ChargingScheduleEditorWidget({
   ctx: WidgetCtx;
 }) {
   const vehicleId = ctx.vehicleId ?? null;
+  const { data: vehicles } = useVehicles();
   const { data: schedule, isLoading } = useChargingSchedule(vehicleId);
   const update = useUpdateChargingSchedule(vehicleId);
+  const isDemo = vehicles?.find((vehicle) => vehicle.id === vehicleId)?.is_demo ?? false;
 
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState<FormState>({
@@ -115,6 +118,16 @@ function ChargingScheduleEditorWidget({
   function handleCancel() {
     if (schedule) setForm(scheduleToForm(schedule));
     setEditing(false);
+  }
+
+  if (isDemo) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <Calendar className="h-8 w-8 text-fg-tertiary" />
+        <p className="text-sm font-medium text-fg">Schedules are read-only for demos</p>
+        <p className="text-xs text-fg-tertiary">Demo vehicles include historical examples but do not simulate Rivian schedule changes.</p>
+      </div>
+    );
   }
 
   if (isLoading) {

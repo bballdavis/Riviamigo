@@ -4,14 +4,14 @@
 # the container has no host bind-mounts and the image is fully self-contained.
 #
 # Build args:
-#   NODE_VERSION   (default: 20-alpine)  — base for the build stage
+#   NODE_VERSION   (default: 22-alpine)  — base for the build stage
 #   NGINX_VERSION  (default: 1.27-alpine) — base for the final stage
 #
 # Usage (from repo root):
 #   docker build -f compose/nginx/Dockerfile -t riviamigo-web:latest .
 # ---------------------------------------------------------------------------
 
-ARG NODE_VERSION=20-alpine
+ARG NODE_VERSION=22-alpine
 ARG NGINX_VERSION=1.27-alpine
 
 # ── Stage 1: build ──────────────────────────────────────────────────────────

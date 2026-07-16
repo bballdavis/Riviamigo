@@ -7,8 +7,10 @@ use crate::errors::AppError;
 
 const FIXTURE_JSON: &str = include_str!("../../fixtures/demo/history-v1.json");
 const DEMO_OSM_ID_BASE: i64 = -9_100_000;
+const DEMO_ACTIVE_DAY_OFFSETS: [i64; 12] = [0, 1, 2, 4, 5, 6, 7, 8, 10, 11, 12, 13];
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DemoFixtureSpec {
     pub schema_version: u32,
     pub source_model: String,
@@ -22,6 +24,7 @@ pub struct DemoFixtureSpec {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DemoFixtureCoverage {
     pub location: f64,
     pub battery: f64,
@@ -154,10 +157,7 @@ pub fn validate_fixture(fixture: &DemoFixtureSpec) -> Result<(), AppError> {
         ("battery", fixture.coverage.battery),
         ("tires", fixture.coverage.tires),
         ("doors", fixture.coverage.doors),
-        (
-            "outside_temperature",
-            fixture.coverage.outside_temperature,
-        ),
+        ("outside_temperature", fixture.coverage.outside_temperature),
     ] {
         if !value.is_finite() || !(0.0..=1.0).contains(&value) {
             return Err(AppError::Validation(format!(
@@ -176,9 +176,7 @@ pub async fn seed_demo_vehicle(
 ) -> Result<DemoSeedSummary, AppError> {
     let fixture = load_fixture()?;
     let profile = model_profile(model)?;
-    let anchor = anchor
-        .with_nanosecond(0)
-        .unwrap_or(anchor);
+    let anchor = anchor.with_nanosecond(0).unwrap_or(anchor);
     let window_start = anchor - Duration::days(fixture.window_days);
 
     clear_seeded_history(tx, vehicle_id).await?;
@@ -192,14 +190,7 @@ pub async fn seed_demo_vehicle(
         &address_ids,
     )
     .await?;
-    seed_charges(
-        tx,
-        vehicle_id,
-        anchor,
-        fixture.charge_count,
-        &address_ids,
-    )
-    .await?;
+    seed_charges(tx, vehicle_id, anchor, fixture.charge_count, &address_ids).await?;
     seed_telemetry(tx, vehicle_id, anchor, &fixture, profile).await?;
     seed_state_periods(tx, vehicle_id).await?;
     seed_software_history(tx, vehicle_id, anchor).await?;
@@ -246,9 +237,7 @@ async fn clear_seeded_history(
     Ok(())
 }
 
-async fn ensure_demo_addresses(
-    tx: &mut Transaction<'_, Postgres>,
-) -> Result<Vec<Uuid>, AppError> {
+async fn ensure_demo_addresses(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Uuid>, AppError> {
     let mut ids = Vec::with_capacity(DEMO_ADDRESSES.len());
     for (index, address) in DEMO_ADDRESSES.iter().enumerate() {
         let osm_id = DEMO_OSM_ID_BASE - index as i64;
@@ -293,7 +282,11 @@ async fn seed_trips(
     for index in 0..trip_count {
         let route = index as usize % DEMO_ADDRESSES.len();
         let destination = (route + 1) % DEMO_ADDRESSES.len();
-        let started_at = anchor - Duration::days(13) + Duration::hours(i64::from(index) * 10);
+        let day_slot = index as usize % DEMO_ACTIVE_DAY_OFFSETS.len();
+        let occurrence = index as usize / DEMO_ACTIVE_DAY_OFFSETS.len();
+        let started_at = anchor - Duration::days(14)
+            + Duration::days(DEMO_ACTIVE_DAY_OFFSETS[day_slot])
+            + Duration::hours(8 + occurrence as i64 * 5);
         let duration_minutes = 18 + (index % 5) * 7;
         let ended_at = started_at + Duration::minutes(i64::from(duration_minutes));
         let start = DEMO_ADDRESSES[route];
@@ -305,8 +298,7 @@ async fn seed_trips(
         let soc_start = 82.0 - f64::from(index % 8) * 5.0;
         let soc_end = (soc_start - (distance_miles / 3.2)).max(18.0);
         let outside_temp = 8.0 + f64::from(index % 9) * 2.2;
-        let drive_mode = ["all_purpose", "conserve", "sport", "snow"]
-            [index as usize % 4];
+        let drive_mode = ["all_purpose", "conserve", "sport", "snow"][index as usize % 4];
         let route_preview = serde_json::json!([
             [start.longitude, start.latitude],
             [mid_lng, mid_lat],
@@ -369,8 +361,7 @@ async fn seed_trips(
             } else {
                 f64::from(sample_index) / f64::from(samples_for_trip - 1)
             };
-            let elapsed_seconds =
-                (f64::from(duration_minutes * 60) * fraction).round() as i32;
+            let elapsed_seconds = (f64::from(duration_minutes * 60) * fraction).round() as i32;
             let sampled_at = started_at + Duration::seconds(i64::from(elapsed_seconds));
             let latitude = start.latitude + (end.latitude - start.latitude) * fraction;
             let longitude = start.longitude + (end.longitude - start.longitude) * fraction;
@@ -425,7 +416,11 @@ async fn seed_charges(
             (soc_start + 24.0).min(90.0)
         };
         let kwh_added = 18.0 + f64::from(index) * 7.5;
-        let max_rate = if types[slot] == Some("dc") { 186.0 } else { 11.2 };
+        let max_rate = if types[slot] == Some("dc") {
+            186.0
+        } else {
+            11.2
+        };
         let charge_id = sqlx::query_scalar::<_, Uuid>(
             r#"INSERT INTO riviamigo.charge_sessions
                  (vehicle_id, started_at, ended_at, location_lat, location_lng, is_home,
@@ -503,11 +498,12 @@ async fn seed_telemetry(
     let tire_cutoff = (fixture.coverage.tires * 1_000.0).round() as i64;
     let door_cutoff = (fixture.coverage.doors * 1_000.0).round() as i64;
 
-    sqlx::query(
+    for (day_index, day_offset) in DEMO_ACTIVE_DAY_OFFSETS.iter().enumerate() {
+        let result = sqlx::query(
         r#"WITH active_days(day_offset) AS (
-               SELECT * FROM unnest(ARRAY[0,1,2,4,5,6,7,8,10,11,12,13]::int[])
+               SELECT $13::int
              ), samples AS (
-               SELECT row_number() OVER (ORDER BY d.day_offset, s.sample_no) - 1 AS sample_index,
+               SELECT row_number() OVER (ORDER BY s.sample_no) - 1 + ($14::bigint * $3::bigint) AS sample_index,
                       $2::timestamptz - interval '14 days'
                         + make_interval(days => d.day_offset)
                         + make_interval(secs => (s.sample_no * 86400.0 / $3::float8)) AS ts
@@ -669,8 +665,17 @@ async fn seed_telemetry(
     .bind(profile.max_range_mi)
     .bind(profile.has_liftgate)
     .bind(profile.has_truck_closures)
+    .bind(*day_offset as i32)
+    .bind(day_index as i64)
     .execute(&mut **tx)
     .await?;
+        if result.rows_affected() != samples_per_day as u64 {
+            return Err(AppError::Validation(format!(
+                "demo telemetry batch {day_index} inserted {} rows instead of {samples_per_day}",
+                result.rows_affected()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -691,7 +696,11 @@ async fn seed_state_periods(
            ), periods AS (
              SELECT state, started_at, ended_at FROM ordered
              UNION ALL
-             SELECT 'sleep', previous_end, started_at FROM ordered
+             SELECT 'sleep', previous_end, started_at - interval '45 minutes' FROM ordered
+             WHERE previous_end IS NOT NULL AND started_at > previous_end + interval '45 minutes'
+             UNION ALL
+             SELECT 'ready', GREATEST(previous_end, started_at - interval '45 minutes'), started_at
+             FROM ordered
              WHERE previous_end IS NOT NULL AND started_at > previous_end
            )
            INSERT INTO riviamigo.vehicle_state_periods (vehicle_id, state, started_at, ended_at)
@@ -759,9 +768,15 @@ async fn seed_latest_status(
               'all_purpose','park',18,0,22.1,21.0,118,15062,
               48.1,48.0,49.8,49.7,'normal','normal','normal','normal',
               TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,
-              TRUE,TRUE,$5,$5,$6,$6,'2026.18.0','idle','up_to_date','none','normal',
+              TRUE,TRUE,
+              CASE WHEN $5::bool THEN TRUE END, CASE WHEN $5::bool THEN TRUE END,
+              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
+              '2026.18.0','idle','up_to_date','none','normal',
               FALSE,FALSE,'off','none',FALSE,TRUE,FALSE,0,0,0,0,0,0,0,
-              $6,$6,$6,$6,$6,$6,TRUE,TRUE,TRUE,TRUE,TRUE,'idle',FALSE,FALSE,FALSE,FALSE,$2)
+              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
+              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
+              CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
+              TRUE,TRUE,TRUE,TRUE,TRUE,'idle',FALSE,FALSE,FALSE,FALSE,$2)
            ON CONFLICT (vehicle_id) DO UPDATE SET
              ts=EXCLUDED.ts, battery_level=EXCLUDED.battery_level,
              battery_capacity_wh=EXCLUDED.battery_capacity_wh,
@@ -854,12 +869,11 @@ async fn read_seed_counts(
     .bind(vehicle_id)
     .fetch_one(&mut **tx)
     .await?;
-    let trips = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM riviamigo.trips WHERE vehicle_id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let trips =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM riviamigo.trips WHERE vehicle_id=$1")
+            .bind(vehicle_id)
+            .fetch_one(&mut **tx)
+            .await?;
     let charges = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM riviamigo.charge_sessions WHERE vehicle_id=$1",
     )
@@ -936,13 +950,161 @@ mod tests {
             .await
             .unwrap();
 
-            let summary = seed_demo_vehicle(&mut tx, vehicle_id, model, Utc::now())
+            let first_anchor = Utc::now();
+            let summary = seed_demo_vehicle(&mut tx, vehicle_id, model, first_anchor)
                 .await
                 .unwrap();
             assert_eq!(summary.counts.telemetry, 5_664);
             assert_eq!(summary.counts.trips, 31);
             assert_eq!(summary.counts.charges, 4);
             assert_eq!(summary.counts.weather_samples, 80);
+
+            let unlinked_trips = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM riviamigo.trips trip
+                 WHERE trip.vehicle_id=$1 AND NOT EXISTS (
+                   SELECT 1 FROM timeseries.telemetry telemetry WHERE telemetry.trip_id=trip.id
+                 )",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(unlinked_trips, 0, "every demo trip needs detail samples");
+
+            let curve_points = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM riviamigo.rivian_charge_curve_points WHERE vehicle_id=$1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(curve_points, 25);
+
+            let pending_weather_jobs = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM riviamigo.weather_enrichment_jobs job
+                 JOIN riviamigo.trips trip ON trip.id=job.trip_id
+                 WHERE trip.vehicle_id=$1 AND job.status <> 'succeeded'",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(pending_weather_jobs, 0);
+
+            let out_of_bounds_locations = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM timeseries.telemetry
+                 WHERE vehicle_id=$1 AND latitude IS NOT NULL AND longitude IS NOT NULL
+                   AND NOT (latitude BETWEEN 38.70 AND 39.10 AND longitude BETWEEN -77.60 AND -76.80)",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(out_of_bounds_locations, 0);
+
+            let states = sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT state FROM riviamigo.vehicle_state_periods
+                 WHERE vehicle_id=$1 ORDER BY state",
+            )
+            .bind(vehicle_id)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+            for expected in ["charging", "drive", "ready", "sleep"] {
+                assert!(
+                    states.iter().any(|state| state == expected),
+                    "missing {expected} period"
+                );
+            }
+
+            let phantom_drain_periods = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM riviamigo.vehicle_state_periods period
+                 WHERE period.vehicle_id=$1 AND period.state='sleep'
+                   AND (SELECT count(*) FROM timeseries.telemetry telemetry
+                        WHERE telemetry.vehicle_id=period.vehicle_id
+                          AND telemetry.ts BETWEEN period.started_at AND period.ended_at
+                          AND telemetry.battery_level IS NOT NULL) >= 2
+                   AND (SELECT max(telemetry.battery_level)-min(telemetry.battery_level)
+                        FROM timeseries.telemetry telemetry
+                        WHERE telemetry.vehicle_id=period.vehicle_id
+                          AND telemetry.ts BETWEEN period.started_at AND period.ended_at) > 0",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            assert!(
+                phantom_drain_periods > 0,
+                "demo needs a measurable sleep drain example"
+            );
+
+            let closures = sqlx::query_as::<
+                _,
+                (
+                    Option<bool>,
+                    Option<bool>,
+                    Option<bool>,
+                    Option<bool>,
+                    Option<bool>,
+                    Option<bool>,
+                ),
+            >(
+                "SELECT closure_liftgate_closed, closure_tailgate_closed,
+                        tonneau_closed, side_bin_left_closed, side_bin_right_closed,
+                        closure_frunk_closed
+                 FROM riviamigo.vehicle_latest_status WHERE vehicle_id=$1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            match model {
+                "R1S" => {
+                    assert_eq!(closures.0, Some(true));
+                    assert_eq!(closures.1, None);
+                    assert_eq!(closures.2, None);
+                }
+                "R1T" => {
+                    assert_eq!(closures.0, None);
+                    assert_eq!(closures.1, Some(true));
+                    assert_eq!(closures.2, Some(true));
+                    assert_eq!(closures.3, Some(true));
+                    assert_eq!(closures.4, Some(true));
+                }
+                "R2S" => {
+                    assert_eq!(
+                        (closures.0, closures.1, closures.2, closures.3, closures.4),
+                        (None, None, None, None, None)
+                    );
+                    assert_eq!(closures.5, Some(true));
+                }
+                _ => unreachable!(),
+            }
+
+            sqlx::query("UPDATE riviamigo.vehicles SET name='Keep this demo name' WHERE id=$1")
+                .bind(vehicle_id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let refreshed = seed_demo_vehicle(
+                &mut tx,
+                vehicle_id,
+                model,
+                first_anchor + Duration::hours(1),
+            )
+            .await
+            .unwrap();
+            assert_eq!(refreshed.counts.telemetry, 5_664);
+            assert_eq!(refreshed.counts.trips, 31);
+            assert_eq!(refreshed.counts.charges, 4);
+            assert_eq!(refreshed.counts.weather_samples, 80);
+            let preserved_name =
+                sqlx::query_scalar::<_, String>("SELECT name FROM riviamigo.vehicles WHERE id=$1")
+                    .bind(vehicle_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .unwrap();
+            assert_eq!(preserved_name, "Keep this demo name");
             tx.rollback().await.unwrap();
         }
     }
