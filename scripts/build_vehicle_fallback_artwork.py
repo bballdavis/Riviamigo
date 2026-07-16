@@ -6,7 +6,7 @@ received. This script removes their flat white matte and composes three stable
 presentation canvases per model:
 
 * overview: portrait overhead artwork that matches the API rotation contract
-* charging: a front/charge-port crop composed for the charging connection chip
+* charging: a charge-port-end crop composed for the charging connection chip
 * health: a normalized three-quarter hero composition
 
 The output is deterministic and includes a machine-readable manifest plus an
@@ -27,7 +27,7 @@ from typing import Iterable, Literal
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-MODEL_NAMES = ("r1s", "r1t")
+MODEL_NAMES = ("r1s", "r1t", "r2s")
 Usage = Literal["overview", "charging", "health"]
 
 SOURCE_BY_USAGE: dict[Usage, str] = {
@@ -42,11 +42,14 @@ CANVAS_BY_USAGE: dict[Usage, tuple[int, int]] = {
     "health": (1600, 900),
 }
 
-# Keep enough of the front half to include the charge port, front wheel, and
-# leading door while deliberately discarding the full-vehicle side profile.
-CHARGING_FRONT_FRACTION: dict[str, float] = {
+# Each charge source keeps its charge-port end on the left side of the image.
+# For R1 vehicles that is the front quarter; for R2S it is the rear quarter.
+# Keep the port, cable, adjacent wheel, and one neighboring door while discarding
+# the rest of the full-vehicle side profile.
+CHARGING_PORT_FRACTION: dict[str, float] = {
     "r1s": 0.49,
     "r1t": 0.47,
+    "r2s": 0.50,
 }
 
 
@@ -276,7 +279,7 @@ def compose_charging(image: Image.Image, *, model: str) -> Image.Image:
     left, top, right, bottom = bbox
     visible_width = right - left
     visible_height = bottom - top
-    crop_right = min(image.width, math.ceil(left + visible_width * CHARGING_FRONT_FRACTION[model]))
+    crop_right = min(image.width, math.ceil(left + visible_width * CHARGING_PORT_FRACTION[model]))
     pad_x = max(8, round(visible_width * 0.012))
     pad_y = max(8, round(visible_height * 0.035))
     content = image.crop(
@@ -295,9 +298,9 @@ def compose_charging(image: Image.Image, *, model: str) -> Image.Image:
     resized = content.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
     canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
-    # Deliberately let the trailing door crop extend past the right edge. This
-    # pins the charge port/front wheel near the chip's visual focus while the
-    # cable recedes under the left-side information gradient.
+    # Let the vehicle body beyond the charge-port quarter extend past the right
+    # edge. This pins the port and adjacent wheel near the chip's visual focus
+    # while the cable recedes under the left-side information gradient.
     paste_x = round(canvas_width * 0.33)
     paste_y = round(canvas_height * 0.96) - target_height
     canvas.alpha_composite(resized, (paste_x, paste_y))
