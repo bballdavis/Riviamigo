@@ -104,11 +104,11 @@ Common usage:
 
 ### Vehicle artwork
 
-- Rivian API artwork remains the primary source. Local model artwork is the final fallback for missing image metadata, protected-image fetch failures, browser image errors, and demo/test vehicles.
+- Rivian API artwork remains the primary source. Local model artwork is the final fallback for missing image metadata, protected-image fetch failures, browser image errors, and demo/test vehicles. Packaged fallbacks currently support R1S, R1T, and R2S; unsupported models keep the neutral empty state.
 - Resolve local artwork through `getVehicleArtworkFallback(model, usage)` and render it through `AuthenticatedVehicleArtwork` using `fallbackSource`. Do not hard-code route-local asset paths.
 - Source renders under `assets/vehicles_generated` are not presentation assets. Regenerate the transparent, normalized files under `apps/web/public/vehicle-images/fallbacks` with `scripts/build_vehicle_fallback_artwork.py`.
-- The semantic canvases are stable contracts: `overview` is a 640×1440 portrait overhead image rotated by the shared overview frame; `charging` is a 1200×900 front/charge-port composition with no API crop transform; `health` is a 1600×900 three-quarter hero.
-- API and local charging artwork intentionally use different presentation rules. Put fallback-only class and style changes in `fallbackProps` instead of adding model-specific CSS guesses to route code.
+- The semantic canvases are stable contracts: `overview` is a 640×1440 portrait overhead image rotated by the shared overview frame; `charging` is a 1200×900 charge-port-end composition with no API crop transform; `health` is a 1600×900 three-quarter hero.
+- API and local charging artwork intentionally use different presentation rules. Put fallback-only class and style changes in `fallbackProps` instead of adding model-specific CSS guesses to route code. R1 source crops focus on the front charge port, while the R2S source crop focuses on its rear charge port.
 - Keep the transparent canvas and visible bounds consistent across models. Validate changes on both light and dark surfaces and run the artwork build in check mode before review.
 
 ### Empty, loading, and error states
