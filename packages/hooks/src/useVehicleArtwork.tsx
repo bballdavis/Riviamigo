@@ -20,6 +20,7 @@ type AuthenticatedVehicleArtworkProps = Omit<
   source: string | null | undefined;
   fallbackSource?: string | null | undefined;
   fallbackProps?: FallbackImageProps;
+  onFallbackChange?: (usingFallback: boolean) => void;
 };
 
 function isProtectedArtwork(source: string | null | undefined): source is string {
@@ -32,7 +33,10 @@ export function useVehicleArtwork(source: string | null | undefined) {
     queryKey: ['vehicle-artwork-asset', source],
     enabled: protectedArtwork,
     staleTime: Infinity,
-    retry: 1,
+    // A failed protected image should yield to packaged artwork immediately;
+    // retrying here only delays a usable fallback and the cache repair path
+    // already refreshes explicit 202 restoring responses.
+    retry: false,
     refetchInterval: (query) => (query.state.data?.restoring ? 3_000 : false),
     queryFn: async (): Promise<ArtworkAsset> => {
       const response = await api.authenticatedAsset(source!);
@@ -55,7 +59,10 @@ export function useVehicleArtwork(source: string | null | undefined) {
   }, [query.data?.blob]);
 
   return {
-    src: protectedArtwork ? objectUrl : source ?? null,
+    // A restoring cache endpoint deliberately returns a placeholder response.
+    // Do not treat that SVG as usable vehicle art: consumers with packaged
+    // artwork should show it while the protected cache repairs in the background.
+    src: protectedArtwork && query.data?.restoring ? null : protectedArtwork ? objectUrl : source ?? null,
     restoring: query.data?.restoring ?? false,
     isLoading: protectedArtwork && query.isLoading,
     isError: protectedArtwork && query.isError,
@@ -66,6 +73,7 @@ export function AuthenticatedVehicleArtwork({
   source,
   fallbackSource,
   fallbackProps,
+  onFallbackChange,
   alt,
   className,
   style,
@@ -83,8 +91,13 @@ export function AuthenticatedVehicleArtwork({
   const primaryUnavailable =
     primaryArtwork.isError || (!primaryArtwork.src && !primaryArtwork.isLoading);
   const usingFallback =
-    Boolean(fallbackArtwork.src) && (primaryFailed || primaryUnavailable);
+    Boolean(fallbackArtwork.src) &&
+    (primaryFailed || primaryArtwork.restoring || primaryUnavailable);
   const artwork = usingFallback ? fallbackArtwork : primaryArtwork;
+
+  React.useEffect(() => {
+    onFallbackChange?.(usingFallback);
+  }, [onFallbackChange, usingFallback]);
 
   if (!artwork.src) return null;
 
@@ -99,10 +112,11 @@ export function AuthenticatedVehicleArtwork({
   const handleError: React.ReactEventHandler<HTMLImageElement> = (event) => {
     if (!usingFallback && fallbackArtwork.src) {
       setPrimaryFailed(true);
+      onError?.(event);
       return;
     }
+    onError?.(event);
     if (usingFallback) fallbackOnError?.(event);
-    else onError?.(event);
   };
 
   return (
