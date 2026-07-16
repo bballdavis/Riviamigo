@@ -23,11 +23,15 @@ function renderArtwork(node: React.ReactNode) {
 describe('vehicle artwork fallback contract', () => {
   it('resolves supported model variants to semantic fallback canvases', () => {
     expect(normalizeVehicleArtworkModel('Gen 2 R1T Adventure')).toBe('r1t');
+    expect(normalizeVehicleArtworkModel('R2S Launch Edition')).toBe('r2s');
     expect(getVehicleArtworkFallback('R1S', 'overview')).toBe(
       '/vehicle-images/fallbacks/r1s/overview.webp',
     );
     expect(getVehicleArtworkFallback('R1T', 'charging')).toBe(
       '/vehicle-images/fallbacks/r1t/charging.webp',
+    );
+    expect(getVehicleArtworkFallback('Gen 1 R2-S', 'health')).toBe(
+      '/vehicle-images/fallbacks/r2s/health.webp',
     );
     expect(getVehicleArtworkFallback('R2', 'health')).toBeNull();
   });
@@ -36,13 +40,13 @@ describe('vehicle artwork fallback contract', () => {
     renderArtwork(
       <AuthenticatedVehicleArtwork
         source={null}
-        fallbackSource="/vehicle-images/fallbacks/r1s/health.webp"
+        fallbackSource="/vehicle-images/fallbacks/r2s/health.webp"
         alt="Fallback Rivian"
       />,
     );
 
     const image = screen.getByRole('img', { name: 'Fallback Rivian' });
-    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1s/health.webp');
+    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r2s/health.webp');
     expect(image.getAttribute('data-artwork-fallback')).toBe('true');
   });
 
@@ -50,7 +54,7 @@ describe('vehicle artwork fallback contract', () => {
     renderArtwork(
       <AuthenticatedVehicleArtwork
         source="/broken-api-artwork.webp"
-        fallbackSource="/vehicle-images/fallbacks/r1t/charging.webp"
+        fallbackSource="/vehicle-images/fallbacks/r2s/charging.webp"
         fallbackProps={{
           className: 'normalized-fallback',
           style: { transform: 'none' },
@@ -64,7 +68,7 @@ describe('vehicle artwork fallback contract', () => {
     fireEvent.error(screen.getByRole('img', { name: 'Charging Rivian' }));
 
     const image = screen.getByRole('img', { name: 'Charging Rivian' });
-    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1t/charging.webp');
+    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r2s/charging.webp');
     expect(image.className).toBe('normalized-fallback');
     expect(image.style.transform).toBe('none');
     expect(image.getAttribute('data-artwork-fallback')).toBe('true');
