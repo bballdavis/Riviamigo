@@ -596,13 +596,13 @@ function mileagePoints(data: Awaited<ReturnType<typeof useBatteryMileage>>['data
   }));
 }
 
-function BatteryMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
+function BatteryMileageSource({ definition, ctx, height, timeFilter, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
 }
 
-function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
+function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
@@ -1192,17 +1192,6 @@ function powerMethodLabel(points: CurvePoint[]) {
   if (methods.size === 1 && methods.has('recorded')) return 'Recorded kW';
   if (methods.size === 1) return 'SoC/time estimate';
   return 'Recorded and SoC/time estimates';
-}
-
-function percentile(values: number[], quantile: number) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const position = (sorted.length - 1) * quantile;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  if (lower === upper) return sorted[lower]!;
-  const ratio = position - lower;
-  return sorted[lower]! + (sorted[upper]! - sorted[lower]!) * ratio;
 }
 
 function normalizeChargeCurveType(chargerType: ChargeCurveAnalysisPoint['charger_type']) {

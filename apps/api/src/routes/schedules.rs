@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{require_vehicle_manager_access, require_vehicle_read_access},
     errors::AppError,
     ingestion::rivian_poll::{self, ChargingScheduleInput, DepartureScheduleInput},
-    middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    middleware::auth::{AppState, AuthUser},
 };
 
 pub fn router() -> Router<AppState> {
@@ -44,11 +44,11 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/:id/ota-details", get(get_ota_details))
 }
 
-fn http_client() -> reqwest::Client {
+fn http_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .unwrap_or_default()
+        .map_err(|error| AppError::Internal(error.into()))
 }
 
 // ── GET /v1/vehicles/:id/charging-schedule ───────────────────────────────────
@@ -72,8 +72,7 @@ async fn get_charging_schedule(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<Option<ChargingScheduleRow>>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let row = sqlx::query_as::<_, ChargingScheduleRow>(
         "SELECT id, enabled, start_time_minutes, duration_minutes, amperage,
@@ -96,10 +95,9 @@ async fn put_charging_schedule(
     Path(vehicle_id): Path<Uuid>,
     Json(body): Json<ChargingScheduleInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
 
-    let client = http_client();
+    let client = http_client()?;
 
     rivian_poll::mutate_charging_schedule_for_vehicle(
         vehicle_id,
@@ -132,8 +130,7 @@ async fn list_departure_schedules(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<Vec<DepartureScheduleRow>>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let rows = sqlx::query_as::<_, DepartureScheduleRow>(
         "SELECT id, rivian_schedule_id, name, enabled, occurrence, comfort_settings, updated_at
@@ -164,10 +161,9 @@ async fn create_departure_schedule(
     Path(vehicle_id): Path<Uuid>,
     Json(body): Json<CreateDepartureBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
 
-    let client = http_client();
+    let client = http_client()?;
 
     let input = DepartureScheduleInput {
         name: body.name,
@@ -197,8 +193,7 @@ async fn update_departure_schedule(
     Path((vehicle_id, schedule_id)): Path<(Uuid, String)>,
     Json(body): Json<CreateDepartureBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
 
     // Resolve rivian_schedule_id from local id (schedule_id may be either).
     let rivian_sched_id: Option<String> = sqlx::query_scalar(
@@ -212,7 +207,7 @@ async fn update_departure_schedule(
 
     let rivian_sched_id = rivian_sched_id.ok_or(AppError::NotFound)?;
 
-    let client = http_client();
+    let client = http_client()?;
 
     let input = DepartureScheduleInput {
         name: body.name,
@@ -242,8 +237,7 @@ async fn delete_departure_schedule(
     State(state): State<AppState>,
     Path((vehicle_id, schedule_id)): Path<(Uuid, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
 
     let rivian_sched_id: Option<String> = sqlx::query_scalar(
         "SELECT rivian_schedule_id FROM riviamigo.departure_schedules
@@ -256,7 +250,7 @@ async fn delete_departure_schedule(
 
     let rivian_sched_id = rivian_sched_id.ok_or(AppError::NotFound)?;
 
-    let client = http_client();
+    let client = http_client()?;
 
     rivian_poll::delete_departure_schedule_for_vehicle(
         vehicle_id,
@@ -293,8 +287,7 @@ async fn list_wallboxes(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<Vec<WallboxRow>>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let rows = sqlx::query_as::<_, WallboxRow>(
         "SELECT w.id, w.rivian_wallbox_id, w.name, w.latitude, w.longitude,
@@ -326,8 +319,7 @@ async fn get_ota_details(
     State(state): State<AppState>,
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<OtaDetailsRow>, AppError> {
-    require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     // Latest versions from telemetry + notes URL from vehicles table.
     let row = sqlx::query_as::<_, OtaDetailsRow>(

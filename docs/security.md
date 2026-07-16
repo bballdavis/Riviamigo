@@ -20,6 +20,9 @@ The current internal audit evidence and release requirements are tracked in
 - API keys are SHA256-hashed, read-only, and bound to exactly one vehicle; keys
   never authorize dashboard, account, administrative, or vehicle-setting writes
 - Argon2 password hashing
+- Vehicle membership roles are capability boundaries: `viewer` is telemetry and
+  history read-only, `manager` may run operational changes such as schedules
+  and backfills, and `owner` alone manages credentials and membership.
 - Protected-route bootstrap uses `POST /v1/auth/bootstrap`, which returns fresh tokens when a valid refresh cookie exists and `204 No Content` when no resumable session exists, so first-load logged-out state does not depend on a visible refresh 401.
 - The web app attempts one refresh on protected 401s, then emits a single auth-expired flow: toast, session clear, redirect to `/login`, and resume to the original in-app route after successful sign-in.
 
@@ -58,7 +61,10 @@ The current internal audit evidence and release requirements are tracked in
 - Weekly automated dependency audits via Dependabot
 - `cargo audit --deny warnings` in CI
 - `pnpm audit --prod --audit-level=high` in CI
-- Semgrep SAST on every PR (OWASP Top 10, Rust, TypeScript rules)
+- Semgrep SAST is blocking on trusted branches and same-repository pull
+  requests; fork pull requests use a separate secret-free blocking scan.
+- Critical and high Trivy findings are blocking after the API image builds.
+- Workflow actions are pinned to reviewed commit SHAs.
 
 ## Release Images
 - Standard Compose pulls public API and web images from GitHub Container Registry; source builds use the explicit build overlay only.
