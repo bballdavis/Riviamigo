@@ -1,0 +1,40 @@
+name: Vehicle artwork inventory
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - assets/**
+      - scripts/inventory_vehicle_artwork.py
+      - .github/workflows/vehicle-artwork-inventory.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install image tooling
+        run: python -m pip install --disable-pip-version-check Pillow==11.3.0
+
+      - name: Inspect source artwork
+        run: python scripts/inventory_vehicle_artwork.py --root assets --output-dir vehicle-artwork-inventory
+
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: vehicle-artwork-inventory
+          path: vehicle-artwork-inventory
+          if-no-files-found: error
+          retention-days: 3
