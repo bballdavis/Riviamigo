@@ -47,6 +47,38 @@ describe('resolved vehicle selection', () => {
     expect(result.current.effectiveVehicleId).toBeNull();
   });
 
+  it('preserves the active vehicle when a browser session resumes after refresh', async () => {
+    useAuth.setState({
+      accessToken: null,
+      isAuthenticated: false,
+      isBootstrapping: true,
+      userId: 'user-1',
+      defaultVehicleId: 'vehicle-1',
+      activeVehicleId: 'vehicle-2',
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        access_token: 'resumed-token',
+        expires_in: 900,
+        default_vehicle_id: 'vehicle-1',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response,
+    );
+
+    await expect(useAuth.getState().resumeSession()).resolves.toBe(true);
+
+    expect(useAuth.getState()).toMatchObject({
+      accessToken: 'resumed-token',
+      defaultVehicleId: 'vehicle-1',
+      activeVehicleId: 'vehicle-2',
+      isAuthenticated: true,
+      isBootstrapping: false,
+    });
+  });
+
   it('repairs stale persisted vehicle ids before shared live status can start', async () => {
     useAuth.setState({
       accessToken: 'token-123',
