@@ -55,6 +55,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import json
+          import shutil
           from PIL import Image, ImageDraw, ImageFont
 
           root = Path('assets/vehicles_generated')
@@ -82,6 +83,11 @@ jobs:
           (output / 'inventory.json').write_text(json.dumps(candidates, indent=2) + '\n')
           if not candidates:
               raise SystemExit('No R2S artwork candidates found')
+
+          source_output = output / 'source'
+          source_output.mkdir(parents=True, exist_ok=True)
+          for item in candidates:
+              shutil.copy2(item['path'], source_output / Path(item['path']).name)
 
           cell_w, cell_h = 560, 430
           cols = 2
