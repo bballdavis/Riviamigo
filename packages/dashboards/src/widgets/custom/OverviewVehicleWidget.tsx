@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
@@ -75,7 +75,9 @@ function CurrentVehicleStatePanel({
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
   const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
   const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
-  const baseOverheadFallback = baseOverheadLight ?? baseOverheadDark ?? findFirstOverheadImage(images?.all);
+  const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark ?? findFirstOverheadImage(images?.all);
+  const localOverheadFallback = getVehicleArtworkFallback(vehicleModel, 'overview');
+  const baseOverheadFallback = apiOverheadFallback ?? localOverheadFallback;
   const openDoorStates = getOpenDoorStates(status);
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
   const overlaysDark = getDoorOverlayUrls(images?.all, openDoorStates, 'dark');
@@ -166,9 +168,9 @@ function CurrentVehicleStatePanel({
           </div>
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {baseOverheadFallback ? (
-              <VehicleArtFrame source={baseOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
-                <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} />
-                <VehicleOverheadLayers base={baseOverheadDark ?? baseOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" />
+              <VehicleArtFrame source={baseOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
+                <VehicleOverheadLayers base={baseOverheadLight ?? baseOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} />
+                <VehicleOverheadLayers base={baseOverheadDark ?? baseOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.fl} value={tires.fl.value} tone={tires.fl.tone} targetTirePressurePsi={targetTirePressurePsi} />
                 <VehicleLabel className={anchors.tire.rr} value={tires.rr.value} tone={tires.rr.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -281,16 +283,20 @@ function LockLabel({ className, locked, title }: { className: string; locked: bo
 
 function VehicleArtFrame({
   source,
+  fallbackSource,
   heightPx,
   widthPx,
   children,
 }: {
   source: string;
+  fallbackSource?: string | null | undefined;
   heightPx: number;
   widthPx: number;
   children: React.ReactNode;
 }) {
   const artwork = useVehicleArtwork(source);
+  const fallbackArtwork = useVehicleArtwork(fallbackSource);
+  const frameArtworkSrc = artwork.src ?? (!artwork.isLoading ? fallbackArtwork.src : null);
   const [rotatedAspectRatio, setRotatedAspectRatio] = useState(2.25);
   useEffect(() => {
     const image = new Image();
@@ -299,8 +305,8 @@ function VehicleArtFrame({
         setRotatedAspectRatio(image.naturalHeight / image.naturalWidth);
       }
     };
-    if (artwork.src) image.src = artwork.src;
-  }, [artwork.src]);
+    if (frameArtworkSrc) image.src = frameArtworkSrc;
+  }, [frameArtworkSrc]);
   const maxHeight = heightPx > 0 ? Math.max(120, (heightPx - 34) / 1.12) : 216;
   const maxWidth = widthPx > 0 ? Math.max(260, (widthPx - 34) / 1.04) : 520;
   const frameHeight = Math.round(Math.min(maxHeight, maxWidth / rotatedAspectRatio));
@@ -318,12 +324,24 @@ function VehicleArtFrame({
         '--vehicle-frame-width': `${frameWidth}px`,
       } as React.CSSProperties}
     >
-      {artwork.src ? children : null}
+      {frameArtworkSrc ? children : null}
     </div>
   );
 }
 
-function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: { base: string; overlays: string[]; darkClassName: string; vehicleName?: string | undefined }) {
+function VehicleOverheadLayers({
+  base,
+  fallbackBase,
+  overlays,
+  darkClassName,
+  vehicleName,
+}: {
+  base: string;
+  fallbackBase?: string | null | undefined;
+  overlays: string[];
+  darkClassName: string;
+  vehicleName?: string | undefined;
+}) {
   const imageStyle = {
     height: 'var(--vehicle-frame-width)',
     width: 'var(--vehicle-frame-height)',
@@ -331,7 +349,13 @@ function VehicleOverheadLayers({ base, overlays, darkClassName, vehicleName }: {
   } as React.CSSProperties;
   return (
     <div className={`absolute inset-0 ${darkClassName}`}>
-      <AuthenticatedVehicleArtwork source={base} alt={vehicleName ?? 'Rivian vehicle'} className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />
+      <AuthenticatedVehicleArtwork
+        source={base}
+        fallbackSource={fallbackBase}
+        alt={vehicleName ?? 'Rivian vehicle'}
+        className="absolute left-1/2 top-1/2 max-w-none object-contain object-center"
+        style={imageStyle}
+      />
       {overlays.map((overlayUrl) => <AuthenticatedVehicleArtwork key={overlayUrl} source={overlayUrl} alt="" className="absolute left-1/2 top-1/2 max-w-none object-contain object-center" style={imageStyle} />)}
     </div>
   );

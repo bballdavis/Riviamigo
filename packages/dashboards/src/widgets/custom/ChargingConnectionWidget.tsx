@@ -1,6 +1,6 @@
 import React from 'react';
 import { Zap } from 'lucide-react';
-import { AuthenticatedVehicleArtwork, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
@@ -78,9 +78,10 @@ function ChargingConnectionWidget({
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
     chargingSideLight;
   const cropFamily = chargingCropFamily(activeVehicle?.model);
+  const fallbackChargingSource = getVehicleArtworkFallback(activeVehicle?.model, 'charging');
   const imageMode = 'side-charging';
-  const displaySideLight = chargingSideLight;
-  const displaySideDark = chargingSideDark;
+  const displaySideLight = chargingSideLight ?? fallbackChargingSource;
+  const displaySideDark = chargingSideDark ?? fallbackChargingSource;
   const rows = [
     {
       label: 'Status',
@@ -122,11 +123,12 @@ function ChargingConnectionWidget({
       data-image-mode={imageMode}
       data-image-light={displaySideLight}
       data-image-dark={displaySideDark}
+      data-fallback-image={fallbackChargingSource ?? undefined}
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        {displaySideLight ? <VehicleSideImage source={displaySideLight} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
-        {displaySideDark ? <VehicleSideImage source={displaySideDark} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
+        {displaySideLight ? <VehicleSideImage source={chargingSideLight} fallbackSource={fallbackChargingSource} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
+        {displaySideDark ? <VehicleSideImage source={chargingSideDark} fallbackSource={fallbackChargingSource} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/88 to-transparent" />
@@ -263,10 +265,12 @@ function ChargingBatteryLedBar({
 
 function VehicleSideImage({
   source,
+  fallbackSource,
   darkClassName,
   cropConfig,
 }: {
-  source: string;
+  source: string | null | undefined;
+  fallbackSource?: string | null | undefined;
   darkClassName: string;
   cropConfig: ChargingCropConfig;
 }) {
@@ -279,6 +283,15 @@ function VehicleSideImage({
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <AuthenticatedVehicleArtwork
         source={source}
+        fallbackSource={fallbackSource}
+        fallbackProps={{
+          className: 'h-full w-full max-w-none object-contain object-right',
+          style: {
+            objectPosition: 'right center',
+            transform: 'none',
+            transformOrigin: 'center',
+          },
+        }}
         alt="Vehicle side view showing charging port location"
         data-testid="charging-side-image"
         data-image-mode="charging"
