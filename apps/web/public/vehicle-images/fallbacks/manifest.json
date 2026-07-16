@@ -98,6 +98,54 @@
         844
       ],
       "sha256": "95274b8b57f1e70545e45be4c73e2469ff1a00b321f2abe218c04cab231d9e1e"
+    },
+    {
+      "model": "R2S",
+      "usage": "overview",
+      "source": "vehicles_generated/r2s/top.png",
+      "output": "r2s/overview.webp",
+      "width": 640,
+      "height": 1440,
+      "alpha_coverage": 0.621818,
+      "visible_bbox": [
+        60,
+        88,
+        580,
+        1352
+      ],
+      "sha256": "f0e5fd6561f0d1cfb0652cfefc51bd27334797289b5d140c342625b867037f13"
+    },
+    {
+      "model": "R2S",
+      "usage": "charging",
+      "source": "vehicles_generated/r2s/charge.png",
+      "output": "r2s/charging.webp",
+      "width": 1200,
+      "height": 900,
+      "alpha_coverage": 0.269479,
+      "visible_bbox": [
+        396,
+        67,
+        1200,
+        837
+      ],
+      "sha256": "25e01ab242057622aa63ba49caf4618b4b648fdff1467aeeaf119d009d588158"
+    },
+    {
+      "model": "R2S",
+      "usage": "health",
+      "source": "vehicles_generated/r2s/three_quarter.png",
+      "output": "r2s/health.webp",
+      "width": 1600,
+      "height": 900,
+      "alpha_coverage": 0.44257,
+      "visible_bbox": [
+        138,
+        202,
+        1526,
+        845
+      ],
+      "sha256": "e259ce655dc96994589e77d9e7bfc043d2467837444486469014322a191cfce3"
     }
   ]
 }
