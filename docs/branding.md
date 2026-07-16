@@ -102,6 +102,15 @@ Common usage:
 - On mobile, dashboard charts expose an on-theme expand control. The expanded viewer is an opaque, safe-area-aware fullscreen surface: its picker and close controls are anchored to opposite viewport edges so they do not consume chart height. They fade after the viewer first becomes available and return on a chart tap or Enter/Space, while the viewer uses a solid accent rotate prompt with large iconography before landscape exploration. The viewer must prevent page scroll, overscroll, and background interaction until it closes.
 - Time and numeric charts support horizontal range selection, touch-first pan and pinch exploration in the viewer, and a conditional top-right icon-only reset control that returns to the full range. Categorical charts keep full category/value detail and touch-safe selection rather than simulating a meaningless zoom level.
 
+### Vehicle artwork
+
+- Rivian API artwork remains the primary source. Local model artwork is the final fallback for missing image metadata, protected-image fetch failures, browser image errors, and demo/test vehicles.
+- Resolve local artwork through `getVehicleArtworkFallback(model, usage)` and render it through `AuthenticatedVehicleArtwork` using `fallbackSource`. Do not hard-code route-local asset paths.
+- Source renders under `assets/vehicles_generated` are not presentation assets. Regenerate the transparent, normalized files under `apps/web/public/vehicle-images/fallbacks` with `scripts/build_vehicle_fallback_artwork.py`.
+- The semantic canvases are stable contracts: `overview` is a 640×1440 portrait overhead image rotated by the shared overview frame; `charging` is a 1200×900 front/charge-port composition with no API crop transform; `health` is a 1600×900 three-quarter hero.
+- API and local charging artwork intentionally use different presentation rules. Put fallback-only class and style changes in `fallbackProps` instead of adding model-specific CSS guesses to route code.
+- Keep the transparent canvas and visible bounds consistent across models. Validate changes on both light and dark surfaces and run the artwork build in check mode before review.
+
 ### Empty, loading, and error states
 
 - Use `<EmptyState>` and `<Skeleton>` from shared primitives when they fit.
