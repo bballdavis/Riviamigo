@@ -17,7 +17,7 @@
         575,
         1353
       ],
-      "sha256": "7c8c814c36030c70bad97e7e5aa05643d90a40efc2e46b613d839b2e4c3d23e9"
+      "sha256": "902fed01b0d72f0d8644ab2ceda7916462da1fcabd5fd54ce521f0fa83e52454"
     },
     {
       "model": "R1S",
@@ -33,7 +33,7 @@
         1200,
         835
       ],
-      "sha256": "9563f8f9164cabb48a2ab9cf7f081571ce7bd8c65af03322a82398ec8ce17966"
+      "sha256": "b4b7b1e35ca08530fdaec979e3062dc89b561e368e04512ae7d6c94225d7ec23"
     },
     {
       "model": "R1S",
@@ -49,7 +49,7 @@
         1526,
         843
       ],
-      "sha256": "5576468a5035f17c5cde6c435327b427b65c2e838670ab648f22ef1d2dbea361"
+      "sha256": "02945694ff6be6f700db12fe69d19fc2eeee424a5e5350026a28902e2d88b6ab"
     },
     {
       "model": "R1T",
@@ -65,7 +65,7 @@
         543,
         1353
       ],
-      "sha256": "b5dcae8f6d4a2317c2705e8e4cd2ca1bebd17cc46b22e8051cb674cfb1366f6c"
+      "sha256": "4f0096090ada11068eae0da2d351a0a4d5bf2910c199a4db58206016d4ffe3fe"
     },
     {
       "model": "R1T",
@@ -81,7 +81,7 @@
         1200,
         837
       ],
-      "sha256": "1716425e2019d59c639952a4bdbb7c0f1dfa8df5e7c726f68bb7e57063382aee"
+      "sha256": "27091091f88ed089857bca137673308f660a2ae199a2aa1dca40992ca0a17534"
     },
     {
       "model": "R1T",
@@ -97,7 +97,7 @@
         1527,
         844
       ],
-      "sha256": "95274b8b57f1e70545e45be4c73e2469ff1a00b321f2abe218c04cab231d9e1e"
+      "sha256": "3f39ee86b60feb1020ae1bb564a97ba801655e14d6df10a466ea45dbd7533b84"
     },
     {
       "model": "R2S",
@@ -113,7 +113,7 @@
         580,
         1352
       ],
-      "sha256": "f0e5fd6561f0d1cfb0652cfefc51bd27334797289b5d140c342625b867037f13"
+      "sha256": "3ab1f01b79955cc087a1424e38395dc13a65793c5714249bff3633d7048796dd"
     },
     {
       "model": "R2S",
@@ -129,7 +129,7 @@
         1200,
         837
       ],
-      "sha256": "25e01ab242057622aa63ba49caf4618b4b648fdff1467aeeaf119d009d588158"
+      "sha256": "571d7a60d262f36f62f094aba987314e3664a9702774ed090aa4b4c450a6bd69"
     },
     {
       "model": "R2S",
@@ -145,7 +145,7 @@
         1526,
         845
       ],
-      "sha256": "e259ce655dc96994589e77d9e7bfc043d2467837444486469014322a191cfce3"
+      "sha256": "27ce59003f99c9156a13cd68e5330973e9cfb8e32c4d5ebffc2da20dd7803bce"
     }
   ]
 }

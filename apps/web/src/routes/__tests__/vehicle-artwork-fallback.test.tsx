@@ -1,7 +1,24 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../../../../packages/hooks/src/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../../packages/hooks/src/api')>();
+  return {
+    ...actual,
+    api: new Proxy(actual.api, {
+      get(target, property, receiver) {
+        if (property === 'authenticatedAsset') {
+          return () => Promise.reject(new Error('protected artwork unavailable'));
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    }),
+  };
+});
 
 import {
   AuthenticatedVehicleArtwork,
@@ -50,6 +67,22 @@ describe('vehicle artwork fallback contract', () => {
     expect(image.getAttribute('data-artwork-fallback')).toBe('true');
   });
 
+  it('uses the local asset when protected artwork cannot be fetched', async () => {
+    renderArtwork(
+      <AuthenticatedVehicleArtwork
+        source="/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/health.webp"
+        fallbackSource="/vehicle-images/fallbacks/r1s/health.webp"
+        alt="Protected fallback Rivian"
+      />,
+    );
+
+    await waitFor(() => {
+      const image = screen.getByRole('img', { name: 'Protected fallback Rivian' });
+      expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1s/health.webp');
+      expect(image.getAttribute('data-artwork-fallback')).toBe('true');
+    });
+  });
+
   it('switches presentation rules when an API image fails in the browser', () => {
     renderArtwork(
       <AuthenticatedVehicleArtwork
@@ -72,5 +105,18 @@ describe('vehicle artwork fallback contract', () => {
     expect(image.className).toBe('normalized-fallback');
     expect(image.style.transform).toBe('none');
     expect(image.getAttribute('data-artwork-fallback')).toBe('true');
+  });
+
+  it('keeps every manifest fallback in the web public directory', () => {
+    const publicDirectory = resolve(process.cwd(), 'public');
+    const manifest = JSON.parse(
+      readFileSync(resolve(publicDirectory, 'vehicle-images/fallbacks/manifest.json'), 'utf8'),
+    ) as { assets: Array<{ output: string }> };
+
+    for (const asset of manifest.assets) {
+      expect(() =>
+        readFileSync(resolve(publicDirectory, 'vehicle-images/fallbacks', asset.output)),
+      ).not.toThrow();
+    }
   });
 });

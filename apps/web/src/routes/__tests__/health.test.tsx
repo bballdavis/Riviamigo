@@ -370,8 +370,8 @@ const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => healthPageMocks.auth,
-  AuthenticatedVehicleArtwork: ({ source, alt, className }: { source: string; alt: string; className?: string }) => (
-    <img src={source} alt={alt} className={className} />
+  AuthenticatedVehicleArtwork: ({ source, fallbackSource, alt, className }: { source: string | null; fallbackSource?: string | null; alt: string; className?: string }) => (
+    <img src={source ?? fallbackSource} alt={alt} className={className} />
   ),
   useResolvedVehicleSelection: () => ({
     authReady: true,
@@ -385,6 +385,12 @@ vi.mock('@riviamigo/hooks', () => ({
   }),
   useVehicleHealth: (vehicleId?: string | null) => mockUseVehicleHealth(vehicleId),
   useCurrentVehicleStatus: (vehicleId?: string | null) => mockUseCurrentVehicleStatus(vehicleId),
+  getVehicleArtworkFallback: (model: string | null | undefined, usage: string) => {
+    const normalized = (model ?? '').toLowerCase();
+    if (!normalized.includes('r1s') && !normalized.includes('r1t')) return null;
+    const vehicleModel = normalized.includes('r1s') ? 'r1s' : 'r1t';
+    return `/vehicle-images/fallbacks/${vehicleModel}/${usage}.webp`;
+  },
   api: { vehicleImages: vi.fn() },
 }));
 
@@ -492,6 +498,17 @@ describe('/health page cleanup', () => {
     render(<HealthContent />);
     const image = screen.getByAltText('Vehicle three-quarter view');
     expect(image).toHaveAttribute('src', 'https://example.com/side.png');
+  });
+
+  it('uses packaged health artwork when the image query returns no usable image', () => {
+    healthPageMocks.imagesByVehicleId['veh-1'] = null;
+
+    render(<HealthContent />);
+
+    expect(screen.getByAltText('Vehicle three-quarter view')).toHaveAttribute(
+      'src',
+      '/vehicle-images/fallbacks/r1t/health.webp',
+    );
   });
 
   it('shows update banner when a real update version exists', () => {
