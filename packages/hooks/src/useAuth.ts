@@ -114,7 +114,11 @@ export const useAuth = create<AuthState>()(
           set({
             accessToken: tokens.access_token,
             defaultVehicleId: tokens.default_vehicle_id ?? null,
-            activeVehicleId: null,
+            // Bootstrap resumes the existing browser session. Keep the user's
+            // active session vehicle choice across a page refresh; the resolved
+            // selection hook still validates it against the vehicles returned
+            // for the authenticated user.
+            activeVehicleId: get().activeVehicleId,
             isAuthenticated: true,
             isBootstrapping: false,
           });
@@ -156,7 +160,9 @@ api.onAuthChange((tokens) => {
     useAuth.setState({
       accessToken: tokens.access_token,
       defaultVehicleId: tokens.default_vehicle_id ?? null,
-      activeVehicleId: null,
+      // Token refresh is still the same authenticated session, so do not
+      // replace the user's current vehicle with the account default.
+      activeVehicleId: useAuth.getState().activeVehicleId,
       isAuthenticated: true,
       isBootstrapping: false,
     });

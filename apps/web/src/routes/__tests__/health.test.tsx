@@ -371,7 +371,7 @@ const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => healthPageMocks.auth,
   AuthenticatedVehicleArtwork: ({ source, fallbackSource, alt, className }: { source: string | null; fallbackSource?: string | null; alt: string; className?: string }) => (
-    <img src={source ?? fallbackSource} alt={alt} className={className} />
+    <img src={source ?? fallbackSource ?? undefined} alt={alt} className={className} />
   ),
   useResolvedVehicleSelection: () => ({
     authReady: true,

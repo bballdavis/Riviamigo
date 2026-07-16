@@ -8,6 +8,7 @@ describe('api.vehicleStatus', () => {
       accessToken: null,
       userId: null,
       defaultVehicleId: null,
+      activeVehicleId: null,
       isAuthenticated: false,
     });
     vi.restoreAllMocks();
@@ -47,6 +48,7 @@ describe('api.vehicleStatus', () => {
       accessToken: 'expired-token',
       userId: null,
       defaultVehicleId: 'old-vehicle',
+      activeVehicleId: 'selected-vehicle',
       isAuthenticated: true,
     });
 
@@ -86,6 +88,7 @@ describe('api.vehicleStatus', () => {
     expect(useAuth.getState()).toMatchObject({
       accessToken: 'fresh-token',
       defaultVehicleId: 'new-vehicle',
+      activeVehicleId: 'selected-vehicle',
       isAuthenticated: true,
     });
   });
