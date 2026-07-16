@@ -53,7 +53,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Test fallback contract
-        run: pnpm --filter @riviamigo/web test -- src/routes/__tests__/vehicle-artwork-fallback.test.tsx
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm --filter @riviamigo/web exec vitest run \
+            src/routes/__tests__/vehicle-artwork-fallback.test.tsx \
+            --reporter=verbose 2>&1 | tee vehicle-artwork-build/test.log
 
       - name: Typecheck shared artwork seams
         run: |
@@ -84,7 +89,8 @@ jobs:
           git commit -m "feat: wire normalized fallback vehicle artwork"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
 
-      - name: Upload normalized artwork preview
+      - name: Upload normalized artwork preview and validation log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: normalized-vehicle-artwork
