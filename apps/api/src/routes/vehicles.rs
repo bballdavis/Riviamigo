@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     path::{Path as StdPath, PathBuf},
     time::Duration,
 };
@@ -143,278 +143,27 @@ struct CreateDemoVehicleBody {
     model: String,
 }
 
-fn demo_vehicle_latest_status_upsert_sql() -> &'static str {
-    "INSERT INTO riviamigo.vehicle_latest_status
-      (vehicle_id, ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-       power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
-       drive_mode, gear_status, altitude_m, speed_mph, cabin_temp_c, driver_temp_c, outside_temp_c,
-       heading_deg, odometer_miles,
-       tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-       tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
-       tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
-       door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
-       door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
-       closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
-       closure_tailgate_locked, closure_tailgate_closed,
-       ota_current_version, ota_available_version, ota_status, ota_current_status,
-       hv_thermal_event, twelve_volt_health,
-       charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
-       pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
-       seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
-       tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
-       side_bin_left_closed, side_bin_right_closed,
-       window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
-       gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
-       alarm_active, service_mode, updated_at)
-     VALUES
-      ($1, now(), 78, $2, $3, 85,
-       'charging', 'Charging', now(), 'chrgr_sts_connected_charging', 95,
-       'all_purpose', 'park', -8.2, 0, 22.8, 21.7, 18.9,
-       132, 15018,
-       48, 48, 50, 50,
-       'normal', 'normal', 'normal', 'normal',
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE,
-       '2026.18.0', NULL, 'idle', 'up_to_date',
-       'none', 'normal',
-       TRUE, FALSE, 'off', 'none',
-       FALSE, TRUE, FALSE, 0,
-       0, 0, 0, 0, 0, 0,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, 'idle', FALSE, FALSE,
-       FALSE, FALSE, now())
-     ON CONFLICT (vehicle_id) DO UPDATE
-     SET (ts, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-          power_state, charger_state, charger_state_ts, charger_status, time_to_end_of_charge_min,
-          drive_mode, gear_status, altitude_m, speed_mph, cabin_temp_c, driver_temp_c, outside_temp_c,
-          heading_deg, odometer_miles,
-          tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-          tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
-          tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
-          door_front_left_locked, door_front_right_locked, door_rear_left_locked, door_rear_right_locked,
-          door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
-          closure_frunk_locked, closure_frunk_closed, closure_liftgate_locked, closure_liftgate_closed,
-          closure_tailgate_locked, closure_tailgate_closed,
-          ota_current_version, ota_available_version, ota_status, ota_current_status,
-          hv_thermal_event, twelve_volt_health,
-          charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
-          pet_mode_active, pet_mode_temp_ok, defrost_active, steering_wheel_heat,
-          seat_fl_heat, seat_fr_heat, seat_rl_heat, seat_rr_heat, seat_fl_vent, seat_fr_vent,
-          tonneau_locked, tonneau_closed, side_bin_left_locked, side_bin_right_locked,
-          side_bin_left_closed, side_bin_right_closed,
-          window_fl_closed, window_fr_closed, window_rl_closed, window_rr_closed,
-          gear_guard_locked, gear_guard_video_status, wiper_fluid_low, brake_fluid_low,
-          alarm_active, service_mode, updated_at) =
-         (EXCLUDED.ts, EXCLUDED.battery_level, EXCLUDED.battery_capacity_wh, EXCLUDED.distance_to_empty_mi, EXCLUDED.battery_limit,
-          EXCLUDED.power_state, EXCLUDED.charger_state, EXCLUDED.charger_state_ts, EXCLUDED.charger_status, EXCLUDED.time_to_end_of_charge_min,
-          EXCLUDED.drive_mode, EXCLUDED.gear_status, EXCLUDED.altitude_m, EXCLUDED.speed_mph, EXCLUDED.cabin_temp_c, EXCLUDED.driver_temp_c, EXCLUDED.outside_temp_c,
-          EXCLUDED.heading_deg, EXCLUDED.odometer_miles,
-          EXCLUDED.tire_fl_psi, EXCLUDED.tire_fr_psi, EXCLUDED.tire_rl_psi, EXCLUDED.tire_rr_psi,
-          EXCLUDED.tire_fl_status, EXCLUDED.tire_fr_status, EXCLUDED.tire_rl_status, EXCLUDED.tire_rr_status,
-          EXCLUDED.tire_fl_valid, EXCLUDED.tire_fr_valid, EXCLUDED.tire_rl_valid, EXCLUDED.tire_rr_valid,
-          EXCLUDED.door_front_left_locked, EXCLUDED.door_front_right_locked, EXCLUDED.door_rear_left_locked, EXCLUDED.door_rear_right_locked,
-          EXCLUDED.door_front_left_closed, EXCLUDED.door_front_right_closed, EXCLUDED.door_rear_left_closed, EXCLUDED.door_rear_right_closed,
-          EXCLUDED.closure_frunk_locked, EXCLUDED.closure_frunk_closed, EXCLUDED.closure_liftgate_locked, EXCLUDED.closure_liftgate_closed,
-          EXCLUDED.closure_tailgate_locked, EXCLUDED.closure_tailgate_closed,
-          EXCLUDED.ota_current_version, EXCLUDED.ota_available_version, EXCLUDED.ota_status, EXCLUDED.ota_current_status,
-          EXCLUDED.hv_thermal_event, EXCLUDED.twelve_volt_health,
-          EXCLUDED.charge_port_open, EXCLUDED.charger_derate_active, EXCLUDED.cabin_precon_status, EXCLUDED.cabin_precon_type,
-          EXCLUDED.pet_mode_active, EXCLUDED.pet_mode_temp_ok, EXCLUDED.defrost_active, EXCLUDED.steering_wheel_heat,
-          EXCLUDED.seat_fl_heat, EXCLUDED.seat_fr_heat, EXCLUDED.seat_rl_heat, EXCLUDED.seat_rr_heat, EXCLUDED.seat_fl_vent, EXCLUDED.seat_fr_vent,
-          EXCLUDED.tonneau_locked, EXCLUDED.tonneau_closed, EXCLUDED.side_bin_left_locked, EXCLUDED.side_bin_right_locked,
-          EXCLUDED.side_bin_left_closed, EXCLUDED.side_bin_right_closed,
-          EXCLUDED.window_fl_closed, EXCLUDED.window_fr_closed, EXCLUDED.window_rl_closed, EXCLUDED.window_rr_closed,
-          EXCLUDED.gear_guard_locked, EXCLUDED.gear_guard_video_status, EXCLUDED.wiper_fluid_low, EXCLUDED.brake_fluid_low,
-          EXCLUDED.alarm_active, EXCLUDED.service_mode, now())"
-}
-
-fn demo_vehicle_software_history_seed_sql() -> &'static str {
-    "DELETE FROM riviamigo.software_versions WHERE vehicle_id = $1;
-     INSERT INTO riviamigo.software_versions (vehicle_id, version, installed_at, observed_until)
-     VALUES
-      ($1, '2026.14.0', now() - interval '45 days', now() - interval '14 days'),
-      ($1, '2026.18.0', now() - interval '14 days', NULL)"
-}
-
-fn demo_vehicle_telemetry_seed_insert_sql() -> &'static str {
-    "INSERT INTO timeseries.telemetry
-      (ts, vehicle_id, battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
-       speed_mph, altitude_m, power_state, charger_state, charger_status, time_to_end_of_charge_min,
-       drive_mode, gear_status, cabin_temp_c, driver_temp_c, outside_temp_c, odometer_miles,
-       tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi,
-       tire_fl_status, tire_fr_status, tire_rl_status, tire_rr_status,
-       tire_fl_valid, tire_fr_valid, tire_rl_valid, tire_rr_valid,
-       door_front_left_closed, door_front_right_closed, door_rear_left_closed, door_rear_right_closed,
-       closure_frunk_closed, closure_liftgate_closed, closure_tailgate_closed,
-       ota_current_version, ota_available_version, ota_status, ota_current_status,
-       hv_thermal_event, twelve_volt_health,
-       charge_port_open, charger_derate_active, cabin_precon_status, cabin_precon_type,
-       pet_mode_active, pet_mode_temp_ok, defrost_active,
-       tonneau_locked, tonneau_closed, side_bin_left_closed, side_bin_right_closed, is_online)
-     VALUES
-      (now() - interval '90 minutes', $1, 74, $2, $3 - 12, 85,
-       0, -8.7, 'charging', 'Connected', 'chrgr_sts_connected_no_chrg', 110,
-       'all_purpose', 'park', 22.1, 21.2, 18.1, 15018,
-       47.8, 47.9, 49.7, 49.8,
-       'normal', 'normal', 'normal', 'normal',
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE,
-       '2026.18.0', NULL, 'idle', 'up_to_date',
-       'none', 'normal',
-       TRUE, FALSE, 'off', 'none',
-       FALSE, TRUE, FALSE,
-       TRUE, TRUE, TRUE, TRUE, TRUE),
-      (now() - interval '60 minutes', $1, 76, $2, $3 - 9, 85,
-       0, -8.5, 'charging', 'Charging', 'chrgr_sts_connected_charging', 102,
-       'all_purpose', 'park', 22.4, 21.4, 18.5, 15018,
-       47.9, 48.0, 49.9, 50.0,
-       'normal', 'normal', 'normal', 'normal',
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE,
-       '2026.18.0', NULL, 'idle', 'up_to_date',
-       'none', 'normal',
-       TRUE, FALSE, 'off', 'none',
-       FALSE, TRUE, FALSE,
-       TRUE, TRUE, TRUE, TRUE, TRUE),
-      (now() - interval '30 minutes', $1, 78, $2, $3 - 6, 85,
-       0, -8.2, 'charging', 'Charging', 'chrgr_sts_connected_charging', 95,
-       'all_purpose', 'park', 22.8, 21.7, 18.9, 15018,
-       48.0, 48.0, 50.0, 50.0,
-       'normal', 'normal', 'normal', 'normal',
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE, TRUE,
-       TRUE, TRUE, TRUE,
-       '2026.18.0', NULL, 'idle', 'up_to_date',
-       'none', 'normal',
-       TRUE, FALSE, 'off', 'none',
-       FALSE, TRUE, FALSE,
-       TRUE, TRUE, TRUE, TRUE, TRUE)
-     ON CONFLICT DO NOTHING"
-}
-
 fn is_demo_vehicle_key(value: &str) -> bool {
     value.starts_with("demo-")
 }
 
-#[derive(Debug, Clone)]
-struct DemoVehicleImageSeed {
-    placement: String,
-    design: Option<String>,
-    size: Option<String>,
-    resolution: Option<String>,
-    url: String,
-    overlays: serde_json::Value,
-    metadata: serde_json::Value,
-}
-
-fn demo_vehicle_image_seeds(model: &str) -> Result<Vec<DemoVehicleImageSeed>, AppError> {
-    let manifest = load_demo_fixture_manifest(model)?;
-    validate_demo_fixture_manifest(model, &manifest)?;
-
-    Ok(manifest
-        .images
-        .into_iter()
-        .map(|image| DemoVehicleImageSeed {
-            placement: image.placement,
-            design: image.design,
-            size: image.size,
-            resolution: image.resolution,
-            url: image.url,
-            overlays: serde_json::to_value(image.overlays)
-                .unwrap_or_else(|_| serde_json::json!([])),
-            metadata: image.metadata,
-        })
-        .collect())
-}
-
-fn demo_fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web/public/vehicle-images/fixtures")
-}
-
-fn fixture_public_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../web/public")
-}
-
-fn load_demo_fixture_manifest(model: &str) -> Result<DemoFixtureManifest, AppError> {
-    let manifest_path = demo_fixture_root()
-        .join(model.to_lowercase())
-        .join("manifest.json");
-    if !manifest_path.exists() {
-        return Err(AppError::Validation(format!(
-            "Demo fixture pack for {model} is missing. Run the fixture export script or add {}/manifest.json.",
-            manifest_path
-                .strip_prefix(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."))
-                .unwrap_or(&manifest_path)
-                .display()
-        )));
+async fn require_remote_backed_vehicle(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+) -> Result<String, AppError> {
+    let key = sqlx::query_scalar::<_, String>(
+        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id=$1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if is_demo_vehicle_key(&key) {
+        return Err(AppError::Validation(
+            "demo vehicles do not use Rivian credentials or remote artwork".into(),
+        ));
     }
-
-    let contents = std::fs::read_to_string(&manifest_path)?;
-    serde_json::from_str::<DemoFixtureManifest>(&contents).map_err(|error| {
-        AppError::Validation(format!(
-            "Demo fixture manifest for {model} is invalid: {error}"
-        ))
-    })
-}
-
-fn validate_demo_fixture_manifest(
-    model: &str,
-    manifest: &DemoFixtureManifest,
-) -> Result<(), AppError> {
-    if !manifest.model.eq_ignore_ascii_case(model) {
-        return Err(AppError::Validation(format!(
-            "Demo fixture manifest model mismatch: expected {model}, found {}.",
-            manifest.model
-        )));
-    }
-
-    let mut placements = HashSet::new();
-    for image in &manifest.images {
-        placements.insert(normalize_image_placement(&image.placement));
-        ensure_fixture_public_file_exists(&image.url)?;
-    }
-
-    for required in ["overhead", "side", "front", "rear"] {
-        if !placements.contains(required) {
-            return Err(AppError::Validation(format!(
-                "Demo fixture manifest for {model} is incomplete. Missing required placement '{required}'."
-            )));
-        }
-    }
-
-    if !manifest.images.iter().any(|image| {
-        is_charging_side_value(&image.placement) || image.url.contains("side-charging")
-    }) {
-        return Err(AppError::Validation(format!(
-            "Demo fixture manifest for {model} is incomplete. Missing required 'side-charging' image."
-        )));
-    }
-
-    Ok(())
-}
-
-fn ensure_fixture_public_file_exists(public_url: &str) -> Result<(), AppError> {
-    if !public_url.starts_with("/vehicle-images/fixtures/") {
-        return Err(AppError::Validation(format!(
-            "Demo fixture URL must live under /vehicle-images/fixtures, got '{public_url}'."
-        )));
-    }
-    let relative = public_url.trim_start_matches('/');
-    let path = fixture_public_root().join(relative);
-    if !path.exists() {
-        return Err(AppError::Validation(format!(
-            "Demo fixture asset is missing from disk: {}",
-            path.display()
-        )));
-    }
-    Ok(())
+    Ok(key)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -961,25 +710,6 @@ struct MirroredOverlayAsset {
     overlay: Option<String>,
     #[serde(rename = "zIndex")]
     z_index: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct DemoFixtureManifest {
-    model: String,
-    images: Vec<DemoFixtureImageEntry>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct DemoFixtureImageEntry {
-    placement: String,
-    design: Option<String>,
-    size: Option<String>,
-    resolution: Option<String>,
-    url: String,
-    #[serde(default)]
-    overlays: Vec<VehicleImageOverlay>,
-    #[serde(default)]
-    metadata: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -1624,11 +1354,7 @@ async fn refresh_vehicle_credentials(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_role(&state.pool, auth.user_id, vid, &["owner", "manager"]).await?;
 
-    let rivian_vehicle_id: String =
-        sqlx::query_scalar("SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id = $1")
-            .bind(vid)
-            .fetch_one(&state.pool)
-            .await?;
+    let rivian_vehicle_id = require_remote_backed_vehicle(&state.pool, vid).await?;
 
     if let Some(requested) = body.rivian_vehicle_id.as_deref() {
         if requested != rivian_vehicle_id {
@@ -2365,7 +2091,6 @@ async fn create_demo_vehicle(
     }
     let demo_key = format!("demo-{}-local", model.to_lowercase());
     let display_name = format!("Demo {model}");
-    let vin = format!("DEMO-{model}-LOCAL-0001");
     let (trim, battery_config, battery_capacity_wh, _range_mi) = match model.as_str() {
         "R1S" => ("Adventure", "r1_large_g1", 135_000.0_f64, 260.0_f64),
         "R2S" => ("Adventure", "r2s", 82_000.0_f64, 300.0_f64),
@@ -2384,29 +2109,38 @@ async fn create_demo_vehicle(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let (vehicle_id, created) = if let Some(Some(vehicle_id)) = existing_vehicle_id {
-        (vehicle_id, false)
-    } else {
-        let vehicle_id = sqlx::query_scalar::<_, Uuid>(
+    if let Some(Some(vehicle_id)) = existing_vehicle_id {
+        tx.commit().await?;
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "vehicle_id": vehicle_id,
+            "created": false,
+            "seeded": false,
+            "refreshed": false,
+            "seeded_at": null,
+            "window_start": null,
+            "window_end": null,
+            "counts": null
+        })));
+    }
+
+    let vehicle_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO riviamigo.vehicles
-              (user_id, rivian_vehicle_id, model, trim, vin, color, battery_config, battery_capacity_wh, name)
+              (user_id, rivian_vehicle_id, model, trim, color, battery_config, battery_capacity_wh, name)
              VALUES
-              ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING id",
         )
         .bind(auth.user_id)
         .bind(&demo_key)
         .bind(&model)
         .bind(trim)
-        .bind(&vin)
         .bind("Limestone")
         .bind(battery_config)
         .bind(battery_capacity_wh)
         .bind(&display_name)
         .fetch_one(&mut *tx)
         .await?;
-        (vehicle_id, true)
-    };
 
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
@@ -2431,23 +2165,19 @@ async fn create_demo_vehicle(
     .execute(&mut *tx)
     .await?;
 
-    let summary = if created {
-        Some(seed_demo_vehicle(&mut tx, vehicle_id, &model, Utc::now()).await?)
-    } else {
-        None
-    };
+    let summary = seed_demo_vehicle(&mut tx, vehicle_id, &model, Utc::now()).await?;
 
     tx.commit().await?;
     Ok(Json(serde_json::json!({
         "ok": true,
         "vehicle_id": vehicle_id,
-        "created": created,
-        "seeded": summary.is_some(),
+        "created": true,
+        "seeded": true,
         "refreshed": false,
-        "seeded_at": summary.as_ref().map(|value| value.seeded_at),
-        "window_start": summary.as_ref().map(|value| value.window_start),
-        "window_end": summary.as_ref().map(|value| value.window_end),
-        "counts": summary.as_ref().map(|value| &value.counts)
+        "seeded_at": summary.seeded_at,
+        "window_start": summary.window_start,
+        "window_end": summary.window_end,
+        "counts": summary.counts
     })))
 }
 
@@ -4311,6 +4041,7 @@ async fn admin_remirror_vehicle_images(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
     queue_vehicle_artwork_repair_with_mode(&state, vehicle_id, true).await;
     Ok(Json(
         serde_json::json!({ "ok": true, "queued": true, "vehicle_id": vehicle_id }),
@@ -4323,6 +4054,7 @@ async fn admin_purge_vehicle_artwork_cache(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    require_remote_backed_vehicle(&state.pool, vehicle_id).await?;
     let _ = tokio::fs::remove_dir_all(image_cache_root(&state.config).join(vehicle_id.to_string()))
         .await;
     sqlx::query(
@@ -4384,6 +4116,18 @@ async fn queue_vehicle_artwork_repair_with_mode(
     vehicle_id: Uuid,
     force_manifest_refresh: bool,
 ) {
+    let is_demo = sqlx::query_scalar::<_, String>(
+        "SELECT rivian_vehicle_id FROM riviamigo.vehicles WHERE id=$1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some_and(|key| is_demo_vehicle_key(&key));
+    if is_demo {
+        return;
+    }
     if !force_manifest_refresh
         && vehicle_artwork_cache_complete(&state.pool, &state.config, vehicle_id).await
     {
@@ -5337,60 +5081,17 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
-    #[test]
-    fn demo_vehicle_latest_status_seed_query_does_not_reference_is_online() {
-        let sql = super::demo_vehicle_latest_status_upsert_sql();
-        assert!(!sql.contains("is_online"));
-    }
-
-    #[test]
-    fn demo_vehicle_latest_status_seed_query_marks_the_demo_as_actively_charging() {
-        let sql = super::demo_vehicle_latest_status_upsert_sql();
-        assert!(sql.contains("'charging'"));
-        assert!(sql.contains("'Charging'"));
-        assert!(sql.contains("'chrgr_sts_connected_charging'"));
-        assert!(sql.contains("time_to_end_of_charge_min"));
-        assert!(sql.contains("charge_port_open"));
-        assert!(sql.contains("door_front_left_locked"));
-        assert!(sql.contains("tire_fl_psi"));
-        assert!(sql.contains("ota_current_version"));
-        assert!(sql.contains("twelve_volt_health"));
-    }
-
-    #[test]
-    fn demo_vehicle_image_seeds_use_packaged_app_assets() {
-        let r1t = super::demo_vehicle_image_seeds("R1T").expect("R1T fixture manifest should load");
-        assert!(!r1t.is_empty());
-        assert!(r1t
-            .iter()
-            .all(|seed| seed.url.starts_with("/vehicle-images/fixtures/")));
-        assert!(r1t
-            .iter()
-            .all(|seed| !seed.url.contains("media.rivian.com")));
-        assert!(r1t.iter().any(|seed| seed.url.contains("/r1t/")));
-        assert!(r1t.iter().any(|seed| seed.placement == "front"));
-        assert!(r1t.iter().any(|seed| seed.placement == "overhead"));
-        assert!(r1t.iter().any(|seed| seed.placement == "rear"));
-        assert!(r1t.iter().any(|seed| seed.placement == "side"));
-        assert!(r1t.iter().any(|seed| seed.placement == "side-charging"));
-    }
-
-    #[test]
-    fn demo_vehicle_telemetry_seed_query_covers_health_inputs() {
-        let sql = super::demo_vehicle_telemetry_seed_insert_sql();
-        assert!(sql.contains("chrgr_sts_connected_charging"));
-        assert!(sql.contains("tire_fl_psi"));
-        assert!(sql.contains("closure_frunk_closed"));
-        assert!(sql.contains("ota_current_version"));
-        assert!(sql.contains("twelve_volt_health"));
-        assert!(sql.contains("is_online"));
-    }
-
-    #[test]
-    fn missing_demo_fixture_manifest_returns_validation_error() {
-        let error = super::demo_vehicle_image_seeds("R2S")
-            .expect_err("R2S fixture should be absent until exported");
-        assert!(matches!(error, crate::errors::AppError::Validation(_)));
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn refresh_demo_vehicle_requires_auth() {
+        let app = make_app().await;
+        let status = post_status(
+            app,
+            &format!("/v1/vehicles/{}/demo/refresh", Uuid::new_v4()),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[test]

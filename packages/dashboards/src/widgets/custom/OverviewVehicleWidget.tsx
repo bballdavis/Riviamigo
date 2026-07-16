@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, Lock, MapPin, Package, PackageOpen, Thermometer, TriangleAlert, Unlock } from 'lucide-react';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
-import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useCurrentVehicleStatus, useVehicles, useVehicleArtwork } from '@riviamigo/hooks';
 import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
@@ -9,7 +9,7 @@ import { Tooltip } from '@riviamigo/ui/primitives';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
-import { findFirstOverheadImage, getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
+import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 
 type AnchorSet = {
   tire: { rl: string; fl: string; rr: string; fr: string };
@@ -75,10 +75,11 @@ function CurrentVehicleStatePanel({
 }) {
   const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
   const batteryLevel = clamp(status?.battery_level ?? 0, 0, 100);
-  const baseOverheadLight = images?.overhead?.light ?? findFirstOverheadImage(images?.all, 'light');
-  const baseOverheadDark = images?.overhead?.dark ?? findFirstOverheadImage(images?.all, 'dark');
-  const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark ?? findFirstOverheadImage(images?.all);
-  const localOverheadFallback = getVehicleArtworkFallback(vehicleModel, 'overview');
+  const resolvedOverhead = resolveVehicleArtwork(images, vehicleModel, 'overview');
+  const baseOverheadLight = resolvedOverhead.light;
+  const baseOverheadDark = resolvedOverhead.dark;
+  const apiOverheadFallback = baseOverheadLight ?? baseOverheadDark;
+  const localOverheadFallback = resolvedOverhead.fallback;
   const overheadArtworkAvailable = Boolean(apiOverheadFallback ?? localOverheadFallback);
   const openDoorStates = getOpenDoorStates(status);
   const overlaysLight = getDoorOverlayUrls(images?.all, openDoorStates, 'light');
