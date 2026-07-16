@@ -11,8 +11,9 @@ import {
   DASHBOARD_VISIBILITY_CONDITIONS,
   dashboardVisibilityStateFromStatus,
   getDashboardVisibilityRuleTypes,
+  getDashboardVisibilityOptionLabel,
   hasDashboardVisibilityRules,
-  type DashboardVisibilityState,
+  type DashboardPreviewState,
 } from './dashboardVisibility';
 
 const GridEditor = lazy(() => import('./GridEditor'));
@@ -36,8 +37,8 @@ export function DashboardRenderer({
   const {
     liveWidgets,
     previewWidgets,
-    previewState,
-    setPreviewValue,
+    previewScenario,
+    setPreviewScenarioValue,
     visibilityTypes,
   } = useDashboardViewWidgets(config.id, widgets, ctx, mode);
   const dataWidgets = mode === 'edit' ? previewWidgets : liveWidgets;
@@ -52,17 +53,17 @@ export function DashboardRenderer({
       <Suspense fallback={<div className="text-xs text-fg-tertiary p-4">Loading editor...</div>}>
         <GridEditor
           config={{ ...config, widgets }}
-          ctx={{ ...ctx, visibilityState: previewState }}
+          ctx={{ ...ctx, visibilityState: previewScenario }}
           onConfigChange={onConfigChange}
           editActions={editActions}
           visibleWidgetIds={previewWidgets.map((widget) => widget.id)}
-          visibilityState={previewState}
-          onVisibilityStateChange={setPreviewValue}
+          visibilityState={previewScenario}
+          onVisibilityStateChange={setPreviewScenarioValue}
           previewControls={visibilityTypes.length > 0 ? (
             <DashboardVisibilityPreview
               types={visibilityTypes}
-              state={previewState}
-              onChange={setPreviewValue}
+              state={previewScenario}
+              onChange={setPreviewScenarioValue}
             />
           ) : undefined}
         />
@@ -90,7 +91,7 @@ function useDashboardViewWidgets(
     () => dashboardVisibilityStateFromStatus(status),
     [status],
   );
-  const [previewState, setPreviewState] = React.useState<DashboardVisibilityState>(liveState);
+  const [previewScenario, setPreviewScenario] = React.useState<DashboardPreviewState>(liveState);
   const previewTouchedRef = React.useRef(false);
   const previewKey = `${dashboardId}:${mode}`;
   const previousPreviewKeyRef = React.useRef(previewKey);
@@ -99,34 +100,34 @@ function useDashboardViewWidgets(
     if (previousPreviewKeyRef.current !== previewKey) {
       previousPreviewKeyRef.current = previewKey;
       previewTouchedRef.current = false;
-      setPreviewState(liveState);
+      setPreviewScenario(liveState);
     }
   }, [liveState, previewKey]);
 
   React.useEffect(() => {
-    if (!previewTouchedRef.current) setPreviewState(liveState);
+    if (!previewTouchedRef.current) setPreviewScenario(liveState);
   }, [liveState]);
 
-  const setPreviewValue = React.useCallback((
+  const setPreviewScenarioValue = React.useCallback((
     type: 'vehicle-connection',
-    value: DashboardVisibilityState['vehicle-connection'],
+    value: DashboardPreviewState['vehicle-connection'],
   ) => {
     previewTouchedRef.current = true;
-    setPreviewState((current) => ({ ...current, [type]: value }));
+    setPreviewScenario((current) => ({ ...current, [type]: value }));
   }, []);
 
   const liveWidgets = hasVisibilityRules
     ? resolveDashboardViewWidgets(widgets, liveState)
     : widgets;
   const previewWidgets = hasVisibilityRules
-    ? resolveDashboardViewWidgets(widgets, previewState)
+    ? resolveDashboardViewWidgets(widgets, previewScenario)
     : widgets;
 
   return {
     liveWidgets,
     previewWidgets,
-    previewState,
-    setPreviewValue,
+    previewScenario,
+    setPreviewScenarioValue,
     visibilityTypes,
   };
 }
@@ -137,19 +138,31 @@ function DashboardVisibilityPreview({
   onChange,
 }: {
   types: Array<'vehicle-connection'>;
-  state: DashboardVisibilityState;
+  state: DashboardPreviewState;
   onChange: (
     type: 'vehicle-connection',
-    value: DashboardVisibilityState['vehicle-connection'],
+    value: DashboardPreviewState['vehicle-connection'],
   ) => void;
 }) {
+  const activeScenario = types
+    .map((type) => getDashboardVisibilityOptionLabel(type, state[type]))
+    .join(' · ');
+
   return (
-    <div className="grid gap-2" aria-label="Conditional dashboard preview">
+    <div className="grid gap-2" aria-label="Dashboard scenario preview" data-dashboard-preview-state={activeScenario}>
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-tertiary">
+          Scenario preview
+        </span>
+        <span className="truncate text-xs font-medium text-fg" data-dashboard-preview-label>
+          Previewing: {activeScenario}
+        </span>
+      </div>
       {types.map((type) => {
         const definition = DASHBOARD_VISIBILITY_CONDITIONS[type];
         return (
           <div key={type} className="flex items-center justify-between gap-3">
-            <span className="text-[11px] font-medium text-fg-tertiary">Preview</span>
+            <span className="text-[11px] font-medium text-fg-tertiary">{definition.label}</span>
             <div className="inline-flex rounded-lg border border-border bg-bg p-0.5">
               {definition.values.map((option) => (
                 <button

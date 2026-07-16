@@ -294,6 +294,11 @@ describe('charging connection custom widget', () => {
     );
 
     expect(await screen.findByRole('button', { name: 'Unplugged' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
+    expect(screen.getByRole('complementary').querySelector('[data-dashboard-preview-state]')).toHaveAttribute(
+      'data-dashboard-preview-state',
+      'Unplugged',
+    );
     expect(screen.getByTestId('sensor-chip')).toBeInTheDocument();
     expect(screen.queryByTestId('charging-connection-chip')).toBeNull();
 
@@ -301,10 +306,40 @@ describe('charging connection custom widget', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Plugged in' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('Previewing: Plugged in')).toBeInTheDocument();
       expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
       expect(screen.queryByTestId('sensor-chip')).toBeNull();
+      expect(screen.getByTestId('charging-connection-chip').closest('[data-fixed-size="true"]')).not.toBeNull();
     });
   }, 15_000);
+
+  it('resets the transient scenario to live state when edit mode is reopened', async () => {
+    const firstRender = render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Plugged in' }));
+    expect(screen.getByText('Previewing: Plugged in')).toBeInTheDocument();
+    firstRender.unmount();
+
+    render(
+      <DashboardRenderer
+        config={swappedConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+        mode="edit"
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Unplugged' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
+  });
+
 
   it('requests data only for widgets visible in the selected preview', async () => {
     render(

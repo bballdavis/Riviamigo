@@ -189,7 +189,7 @@ Every widget can opt into shared conditional visibility:
 }
 ```
 
-Multiple rules use AND semantics. An absent or empty rule list means Always. The shared widget editor exposes Always, Vehicle plugged in, and Vehicle unplugged. When a visibility edit would hide the selected widget, the editor switches its temporary preview to keep that widget selected. A manual preview change that hides it closes the form.
+Multiple rules use AND semantics. An absent or empty rule list means Always. The shared widget editor exposes Always, Vehicle plugged in, and Vehicle unplugged. In dashboard edit mode, the editor drawer provides a prominent scenario preview switch and labels the active state, such as `Previewing: Vehicle plugged in`. This is transient editor state and is never saved or exported. When a visibility edit would hide the selected widget, the editor switches its temporary preview to keep that widget selected. A manual preview change that hides it closes the form.
 
 Condition definitions, labels, values, live-state resolvers, and legacy normalization live in `packages/dashboards/src/dashboardVisibility.ts`. Add future condition types there and extend the schema; do not branch on dashboard slug. The editor canvas and data manifest use only preview-visible widgets, but mutations always apply to the full draft so overlapping state-specific layouts cannot erase one another.
 
