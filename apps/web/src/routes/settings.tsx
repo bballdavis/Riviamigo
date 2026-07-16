@@ -960,11 +960,14 @@ export function SettingsContent() {
                       const membershipRole = v.membership_role ?? 'viewer';
                       const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
                       const canManageMembers = membershipRole === 'owner';
+                      const isDemo = v.is_demo ?? v.rivian_vehicle_id.startsWith('demo-');
 
-                      const needsReauth = v.auth_state === 'needs_reauth';
+                      const needsReauth = !isDemo && v.auth_state === 'needs_reauth';
                       const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
                       const collectorPassive = v.worker_health === 'passive';
-                      const healthColor = needsReauth
+                      const healthColor = isDemo
+                        ? 'var(--rm-status-info)'
+                        : needsReauth
                         ? 'var(--rm-status-warning)'
                         : collectorHealthy
                           ? 'var(--rm-status-positive)'
@@ -973,7 +976,9 @@ export function SettingsContent() {
                           : v.worker_health != null
                             ? 'var(--rm-status-danger)'
                             : 'var(--rm-border-default)';
-                      const healthText = needsReauth
+                      const healthText = isDemo
+                        ? 'Demo data'
+                        : needsReauth
                         ? 'Login required'
                         : collectorHealthy
                           ? (isActive ? 'Active' : 'Connected')
@@ -982,7 +987,7 @@ export function SettingsContent() {
                           : v.worker_health != null
                             ? 'Error'
                             : (isActive ? 'Active' : 'Offline');
-                      const hasGlow = needsReauth || v.worker_health != null;
+                      const hasGlow = isDemo || needsReauth || v.worker_health != null;
 
                       const modelLine = [v.model, v.year, v.trim].filter(Boolean).join(' · ') || 'Vehicle details pending';
                       const batteryLabel = v.battery_capacity_kwh != null ? ` · ${v.battery_capacity_kwh} kWh` : '';
@@ -990,10 +995,10 @@ export function SettingsContent() {
                       return (
                       <div key={v.id} className="py-2">
                         <div className="rounded-lg border border-border bg-bg-elevated/35 p-3">
-                          <div className="flex gap-3">
+                          <div className="flex flex-col gap-3 sm:flex-row">
                             {/* Status chip */}
                             <div
-                              className="flex w-40 shrink-0 flex-col items-center gap-1 rounded-xl border bg-bg-elevated/70 px-1.5 py-2 transition-shadow"
+                              className="flex w-full shrink-0 flex-col items-center gap-1 rounded-xl border bg-bg-elevated/70 px-1.5 py-2 transition-shadow sm:w-40"
                               style={{
                                 borderColor: healthColor,
                                 boxShadow: hasGlow
@@ -1020,13 +1025,16 @@ export function SettingsContent() {
                                 <Badge variant={membershipBadgeVariant(membershipRole)} size="sm">
                                   {formatMembershipRole(membershipRole)}
                                 </Badge>
+                                {isDemo && (
+                                  <Badge variant="info" size="sm" dot>Demo data</Badge>
+                                )}
                                 {isActive && (
                                   <Badge variant="success" size="sm" dot>Default vehicle</Badge>
                                 )}
                                 {needsReauth && (
                                   <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
                                 )}
-                                {isAdmin && v.images?.cache && (
+                                {isAdmin && !isDemo && v.images?.cache && (
                                   <Badge
                                     variant={v.images.cache.status === 'ready' ? 'success' : v.images.cache.status === 'failed' ? 'warning' : 'default'}
                                     size="sm"
@@ -1047,7 +1055,7 @@ export function SettingsContent() {
                             </div>
 
                             {/* Action buttons */}
-                            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 self-center">
+                            <div className="flex shrink-0 flex-wrap items-center justify-start gap-1.5 self-center sm:justify-end">
                               {!isActive && (
                                 <Button
                                   variant="secondary"
@@ -1075,7 +1083,7 @@ export function SettingsContent() {
                                   {isSharingExpanded ? 'Hide Sharing' : 'Manage Sharing'}
                                 </Button>
                               )}
-                              {canManageVehicle && (
+                              {canManageVehicle && !isDemo && (
                                 <Tooltip content="Refresh Rivian login">
                                   <Button
                                     aria-label={`Refresh Rivian login for ${v.display_name}`}
@@ -1093,7 +1101,7 @@ export function SettingsContent() {
                                   </Button>
                                 </Tooltip>
                               )}
-                              {isAdmin && (
+                              {isAdmin && !isDemo && (
                                 <Tooltip content="Clear local artwork cache; the next artwork view restores it">
                                   <Button
                                     aria-label={`Clear local artwork cache for ${v.display_name}`}
@@ -1107,7 +1115,7 @@ export function SettingsContent() {
                                   </Button>
                                 </Tooltip>
                               )}
-                              {isAdmin && (
+                              {isAdmin && !isDemo && (
                                 <Tooltip content="Refresh vehicle artwork from Rivian">
                                   <Button
                                     aria-label={`Refresh vehicle artwork for ${v.display_name}`}
@@ -1118,6 +1126,21 @@ export function SettingsContent() {
                                     onClick={() => refreshVehicleArtwork.mutate(v.id)}
                                   >
                                     <RefreshCw className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
+                              )}
+                              {isAdmin && isDemo && (
+                                <Tooltip content="Replace this vehicle's illustrative 14-day history">
+                                  <Button
+                                    aria-label={`Refresh demo data for ${v.display_name}`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="h-8 px-2.5"
+                                    loading={refreshDemoVehicle.isPending && refreshDemoVehicle.variables === v.id}
+                                    onClick={() => setDemoRefreshConfirmId(v.id)}
+                                  >
+                                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                                    Refresh Demo Data
                                   </Button>
                                 </Tooltip>
                               )}

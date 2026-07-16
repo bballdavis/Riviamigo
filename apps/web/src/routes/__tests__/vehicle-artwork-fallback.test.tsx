@@ -24,6 +24,7 @@ import {
   AuthenticatedVehicleArtwork,
   getVehicleArtworkFallback,
   normalizeVehicleArtworkModel,
+  resolveVehicleArtwork,
 } from '@riviamigo/hooks';
 
 afterEach(cleanup);
@@ -50,7 +51,30 @@ describe('vehicle artwork fallback contract', () => {
     expect(getVehicleArtworkFallback('Gen 1 R2-S', 'health')).toBe(
       '/vehicle-images/fallbacks/r2s/health.webp',
     );
+    expect(getVehicleArtworkFallback('R1T', 'vehicle-card')).toBe(
+      '/vehicle-images/fallbacks/r1t/side.webp',
+    );
     expect(getVehicleArtworkFallback('R2', 'health')).toBeNull();
+  });
+
+  it('resolves API artwork by surface priority before model fallbacks', () => {
+    const images = {
+      all: [
+        { placement: 'front', design: 'light', size: null, resolution: null, url: '/front.webp' },
+        { placement: 'three-quarter', design: 'light', size: null, resolution: null, url: '/hero.webp' },
+        { placement: 'side-charging', design: 'light', size: null, resolution: null, url: '/charging.webp' },
+      ],
+      side: { light: '/side.webp', dark: '/side-dark.webp' },
+      overhead: { light: '/overhead.webp', dark: '/overhead-dark.webp' },
+    };
+
+    expect(resolveVehicleArtwork(images, 'R1S', 'overview')).toMatchObject({ light: '/overhead.webp' });
+    expect(resolveVehicleArtwork(images, 'R1S', 'charging')).toMatchObject({ light: '/charging.webp' });
+    expect(resolveVehicleArtwork(images, 'R1S', 'health')).toMatchObject({ light: '/hero.webp' });
+    expect(resolveVehicleArtwork(images, 'R1S', 'vehicle-card')).toMatchObject({
+      light: '/side.webp',
+      fallback: '/vehicle-images/fallbacks/r1s/side.webp',
+    });
   });
 
   it('uses the local asset immediately when no API artwork exists', () => {
