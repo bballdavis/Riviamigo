@@ -32,8 +32,6 @@ const dashboardMocks = vi.hoisted(() => ({
   deleteMutate: vi.fn(),
   lockMutate: vi.fn(),
   restoreMutate: vi.fn(),
-  updateMutateAsync: vi.fn(),
-  updateAdminMutateAsync: vi.fn(),
 }));
 
 const mockNavigate = vi.fn();
@@ -245,8 +243,6 @@ vi.mock('@riviamigo/dashboards', () => ({
   useDeleteDashboard: () => ({ mutate: dashboardMocks.deleteMutate, isPending: false, variables: undefined }),
   useSetAdminDashboardLock: () => ({ mutate: dashboardMocks.lockMutate, isPending: false, variables: undefined }),
   useRestoreAdminDashboardDefault: () => ({ mutate: dashboardMocks.restoreMutate, isPending: false, variables: undefined }),
-  useUpdateDashboard: () => ({ mutateAsync: dashboardMocks.updateMutateAsync, isPending: false, variables: undefined }),
-  useUpdateAdminDashboard: () => ({ mutateAsync: dashboardMocks.updateAdminMutateAsync, isPending: false, variables: undefined }),
 }));
 
 vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
@@ -329,8 +325,7 @@ describe('Settings page', () => {
     dashboardMocks.deleteMutate.mockReset();
     dashboardMocks.lockMutate.mockReset();
     dashboardMocks.restoreMutate.mockReset();
-    dashboardMocks.updateMutateAsync.mockReset();
-    dashboardMocks.updateAdminMutateAsync.mockReset();
+    localStorage.clear();
     settingsMocks.me = {
       user_id: 'u1',
       email: 'user@example.com',
@@ -462,13 +457,11 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('user-charging');
 
-    const showEditButton = screen.getByRole('switch', { name: 'Show edit button on Overview' });
+    const showEditButton = screen.getByRole('switch', { name: 'Show edit button on dashboard pages' });
     expect(showEditButton).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(showEditButton);
-    expect(dashboardMocks.updateAdminMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'default-overview',
-      showEditButton: true,
-    }));
+    expect(showEditButton).toHaveAttribute('aria-checked', 'true');
+    expect(localStorage.getItem('rm-show-dashboard-edit-button:u1')).toBe('true');
     confirmSpy.mockRestore();
   });
 
