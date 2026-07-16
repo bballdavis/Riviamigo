@@ -49,6 +49,68 @@ jobs:
       - name: Install image tooling
         run: python -m pip install --disable-pip-version-check Pillow==11.3.0
 
+      - name: Inspect R2S source artwork
+        run: |
+          mkdir -p vehicle-artwork-build/r2s-inventory
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          from PIL import Image, ImageDraw, ImageFont
+
+          root = Path('assets/vehicles_generated')
+          output = Path('vehicle-artwork-build/r2s-inventory')
+          candidates = []
+          for path in sorted(root.rglob('*')):
+              if not path.is_file():
+                  continue
+              normalized = str(path.relative_to(root)).lower().replace('-', '').replace('_', '').replace(' ', '')
+              if 'r2s' not in normalized:
+                  continue
+              try:
+                  with Image.open(path) as image:
+                      candidates.append({
+                          'path': str(path),
+                          'width': image.width,
+                          'height': image.height,
+                          'mode': image.mode,
+                          'format': image.format,
+                      })
+              except Exception:
+                  continue
+
+          print(json.dumps(candidates, indent=2))
+          (output / 'inventory.json').write_text(json.dumps(candidates, indent=2) + '\n')
+          if not candidates:
+              raise SystemExit('No R2S artwork candidates found')
+
+          cell_w, cell_h = 560, 430
+          cols = 2
+          rows = (len(candidates) + cols - 1) // cols
+          sheet = Image.new('RGB', (cols * cell_w, rows * cell_h), '#d7d7d7')
+          draw = ImageDraw.Draw(sheet)
+          font = ImageFont.load_default()
+          for index, item in enumerate(candidates):
+              x = (index % cols) * cell_w
+              y = (index // cols) * cell_h
+              with Image.open(item['path']).convert('RGBA') as image:
+                  thumb = image.copy()
+                  thumb.thumbnail((cell_w - 30, cell_h - 80), Image.Resampling.LANCZOS)
+                  checker = Image.new('RGB', thumb.size, 'white')
+                  checker_draw = ImageDraw.Draw(checker)
+                  tile = 20
+                  for cy in range(0, thumb.height, tile):
+                      for cx in range(0, thumb.width, tile):
+                          if (cx // tile + cy // tile) % 2:
+                              checker_draw.rectangle((cx, cy, cx + tile - 1, cy + tile - 1), fill='#b8b8b8')
+                  checker.paste(thumb, (0, 0), thumb)
+                  px = x + (cell_w - thumb.width) // 2
+                  py = y + 42 + (cell_h - 80 - thumb.height) // 2
+                  sheet.paste(checker, (px, py))
+              label = f"{item['path']}  {item['width']}x{item['height']} {item['mode']}"
+              draw.text((x + 10, y + 12), label, fill='black', font=font)
+          sheet.save(output / 'contact-sheet.png')
+          PY
+
       - name: Verify checked-in fallback artwork
         run: python scripts/build_vehicle_fallback_artwork.py --check
 
