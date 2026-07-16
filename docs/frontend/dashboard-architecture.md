@@ -88,7 +88,7 @@ This package should stay framework-focused. It should not accumulate page-specif
 
 Conditional widgets use `WidgetInstance.visibility`. Rules are evaluated with AND semantics, and widgets without rules are always visible. The first registered condition is `vehicle-connection`, with `plugged` and `unplugged` values. Connected standby counts as plugged. Add future condition families to `dashboardVisibility.ts`; do not add slug, route, or widget-definition branches to the renderer.
 
-In view mode, `DashboardRenderer` resolves visibility from live status. In edit mode it owns temporary preview state, filters both the canvas and dashboard-wide data requirements to preview-visible widgets, and keeps the complete draft in `GridEditor`. Preview state never persists. Legacy `options.chargingConnectionVisibility` values are normalized to typed rules at API/import boundaries and are written in the typed form on the next save.
+In view mode, `DashboardRenderer` resolves visibility from live status. In edit mode it owns a temporary, named scenario preview state, filters both the canvas and dashboard-wide data requirements to preview-visible widgets, and keeps the complete draft in `GridEditor`. The editor drawer presents the active scenario prominently, for example `Previewing: Vehicle plugged in`, and lets the user switch between registered condition values. Preview state never persists or enters the dashboard schema. Legacy `options.chargingConnectionVisibility` values are normalized to typed rules at API/import boundaries and are written in the typed form on the next save.
 
 ### 5. Widget Layer
 

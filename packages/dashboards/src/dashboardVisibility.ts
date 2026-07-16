@@ -10,6 +10,13 @@ export interface DashboardVisibilityState {
   'vehicle-connection': VehicleConnectionVisibilityValue;
 }
 
+/**
+ * The transient scenario selected by the dashboard editor. This is deliberately
+ * kept separate from DashboardConfig so previewing a condition can never be
+ * persisted with a dashboard draft.
+ */
+export type DashboardPreviewState = DashboardVisibilityState;
+
 interface VisibilityValueDefinition<T extends string> {
   value: T;
   label: string;
@@ -44,6 +51,16 @@ export function dashboardVisibilityStateFromStatus(
   return {
     'vehicle-connection': DASHBOARD_VISIBILITY_CONDITIONS['vehicle-connection'].resolve(status),
   };
+}
+
+export function getDashboardVisibilityOptionLabel(
+  type: DashboardVisibilityRuleType,
+  value: DashboardVisibilityState[DashboardVisibilityRuleType],
+) {
+  const option = DASHBOARD_VISIBILITY_CONDITIONS[type].values.find(
+    (candidate) => candidate.value === value,
+  );
+  return option?.label ?? String(value);
 }
 
 export function isVehiclePluggedIn(status: VehicleStatus | null | undefined) {

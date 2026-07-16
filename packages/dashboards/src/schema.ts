@@ -39,6 +39,8 @@ export const DashboardConfigSchema = z.object({
   isDefault: z.boolean(),
   isLocked: z.boolean(),
   ownerId: z.string().uuid().nullable(),
+  /** Whether the dashboard title exposes the page-level edit button. */
+  showEditButton: z.boolean().optional(),
   controls: DashboardControlsSchema,
   widgets: z.array(WidgetInstanceSchema),
 });

@@ -396,7 +396,7 @@ function DashboardPageShellContent({
     })(shellState)
     : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
-  const defaultTitleAction = !currentEditMode && canEditDashboard ? (
+  const defaultTitleAction = !currentEditMode && canEditDashboard && activeConfig?.showEditButton === true ? (
     <button
       type="button"
       onClick={enterEdit}
