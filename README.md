@@ -10,9 +10,11 @@
   A private, self-hosted home for your vehicle's battery, charging, trips, and efficiency data.
 </p>
 
-I built Riviamigo because I wanted a better way to understand the data my Rivian already produces without handing that history to another hosted service. It connects to your Rivian account, collects the telemetry available to you, and turns it into dashboards that are useful at a glance and still detailed when you want to dig deeper.
+I built Riviamigo because I've loved running a self-hosted analytics/data retention like Teslamate for my Tesla for years now, and I wanted somethign similar for Rivian (with maybe a bit more directness than the grafana piece of Teslamate). It connects to your Rivian account, collects the telemetry available to you, and turns it into dashboards that are useful at a glance and still detailed when you want to dig deeper.
 
 Riviamigo runs on hardware you control. There is no Riviamigo-hosted account, subscription, or product analytics service in the middle. Your vehicle history lives in your own database, your backups go where you choose, and you decide who can access the installation.
+
+With all that said, but shoutout to the guys over at Teslamate, I definitely used some of those dashboards as inspiration.  Also, the [Unofficial Rivian API](https://rivian-api.kaedenb.org/) folks and the [HASS Rivian Integration](https://github.com/bretterer/home-assistant-rivian) team for the hard work they've done poking around the Rivian ws graph.
 
 ## What Riviamigo does
 
@@ -32,7 +34,7 @@ The exact data available depends on what Rivian reports, and that can change ove
 
 ## A quick look
 
-These are live, redacted views of Riviamigo at desktop and iPhone 17 Pro Max-style mobile sizes.
+These are live, redacted views of Riviamigo at desktop and mobile sizes.
 
 ### Desktop
 
