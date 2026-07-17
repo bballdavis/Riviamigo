@@ -17,7 +17,7 @@
         575,
         1353
       ],
-      "sha256": "902fed01b0d72f0d8644ab2ceda7916462da1fcabd5fd54ce521f0fa83e52454"
+      "sha256": "7c8c814c36030c70bad97e7e5aa05643d90a40efc2e46b613d839b2e4c3d23e9"
     },
     {
       "model": "R1S",
@@ -26,14 +26,14 @@
       "output": "r1s/charging.webp",
       "width": 1200,
       "height": 900,
-      "alpha_coverage": 0.261996,
+      "alpha_coverage": 0.277673,
       "visible_bbox": [
-        396,
-        240,
-        1200,
-        835
+        48,
+        459,
+        1186,
+        851
       ],
-      "sha256": "b4b7b1e35ca08530fdaec979e3062dc89b561e368e04512ae7d6c94225d7ec23"
+      "sha256": "0c81f6e59472f6c2c0b61729ef44cb68902af9c37a77011347287806cbc9b1cc"
     },
     {
       "model": "R1S",
@@ -49,7 +49,7 @@
         1526,
         843
       ],
-      "sha256": "02945694ff6be6f700db12fe69d19fc2eeee424a5e5350026a28902e2d88b6ab"
+      "sha256": "5576468a5035f17c5cde6c435327b427b65c2e838670ab648f22ef1d2dbea361"
     },
     {
       "model": "R1S",
@@ -65,7 +65,7 @@
         1151,
         505
       ],
-      "sha256": "66f9cece3342536d646ef5eb72bbd37e733b39cf64c1ffb225ea94443618bb1f"
+      "sha256": "e2f5efd5688fd4d1be2888ed9eb86e037c5cdc385c70219e621dce0fdb63502a"
     },
     {
       "model": "R1T",
@@ -81,7 +81,7 @@
         543,
         1353
       ],
-      "sha256": "4f0096090ada11068eae0da2d351a0a4d5bf2910c199a4db58206016d4ffe3fe"
+      "sha256": "b5dcae8f6d4a2317c2705e8e4cd2ca1bebd17cc46b22e8051cb674cfb1366f6c"
     },
     {
       "model": "R1T",
@@ -97,7 +97,7 @@
         1186,
         852
       ],
-      "sha256": "35c76adc984a099292bbfa7f544ea33d9e0d47817f6e80f099e40c8504c9b55b"
+      "sha256": "2b19451b79d137410297f5475162b38b59cc71f6ecddfbe5f25f0528cdef74d2"
     },
     {
       "model": "R1T",
@@ -113,7 +113,7 @@
         1527,
         844
       ],
-      "sha256": "3f39ee86b60feb1020ae1bb564a97ba801655e14d6df10a466ea45dbd7533b84"
+      "sha256": "95274b8b57f1e70545e45be4c73e2469ff1a00b321f2abe218c04cab231d9e1e"
     },
     {
       "model": "R1T",
@@ -129,7 +129,7 @@
         1151,
         506
       ],
-      "sha256": "b2052562fe8511a2104932be28ec479863e405e25cb1a9ba31e8b194750bdfcb"
+      "sha256": "d6cf207382b853e4aca427b80ac6079a4df905e6fd14129ec72a5d76df5ee501"
     },
     {
       "model": "R2S",
@@ -145,7 +145,7 @@
         580,
         1352
       ],
-      "sha256": "3ab1f01b79955cc087a1424e38395dc13a65793c5714249bff3633d7048796dd"
+      "sha256": "f0e5fd6561f0d1cfb0652cfefc51bd27334797289b5d140c342625b867037f13"
     },
     {
       "model": "R2S",
@@ -161,7 +161,7 @@
         1186,
         850
       ],
-      "sha256": "feda8a9bc2c1b5f5c56a59fd81382d8f223143ab18f629b94b44935f26622e20"
+      "sha256": "7eee1246747278a5cc199c967b4b30093683ce34ceb1034834a6b382387a16cb"
     },
     {
       "model": "R2S",
@@ -177,7 +177,7 @@
         1526,
         845
       ],
-      "sha256": "27ce59003f99c9156a13cd68e5330973e9cfb8e32c4d5ebffc2da20dd7803bce"
+      "sha256": "e259ce655dc96994589e77d9e7bfc043d2467837444486469014322a191cfce3"
     },
     {
       "model": "R2S",
@@ -193,7 +193,7 @@
         1146,
         504
       ],
-      "sha256": "9a4ab158cfa9544df499e63847d603213e66b4a452573a7fcd3c4f61cedfa053"
+      "sha256": "978e3e8b77cefd6d46e54b60318b6a1f5325510a896b61c3dd024c0ee8041c4e"
     }
   ]
 }

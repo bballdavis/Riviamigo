@@ -59,23 +59,26 @@ The API embeds the reviewed profile and owns all demo generation. Do not add par
 CI is organized into independently visible workflows so contributors can rerun
 the evidence closest to their change:
 
-The full validation suite runs on pull requests targeting `dev` or `main`, not
+The fast validation gate runs on pull requests targeting `dev` or `main`, not
 on every push to either protected branch. Container images are published only
 by intentional release workflows: stable images from a validated `main` tag
 and pre-release images from an approved `dev` candidate.
 
-The normal PR gate is six checks: frontend validation, browser E2E, backend,
-runtime/deployment, quality, and security. Fresh-install acceptance remains
-available through manual workflow dispatch for release or installation changes;
-vehicle-artwork validation remains path-filtered.
+PRs run deterministic quality, typecheck, unit-test, build, SQLx, and security
+checks. Browser E2E, live runtime/container validation, and fresh-install
+acceptance are intentionally outside the PR gate: E2E and runtime checks run
+weekly or by manual dispatch, while fresh-install and vehicle-artwork
+validation remain manual-only. Full coverage runs are kept out of the PR
+gate because they duplicate the unit-test pass; use the documented coverage
+commands when a coverage report is needed.
 
-| Area | Current checks |
-| --- | --- |
-| Quality | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift |
-| Frontend | Typecheck, unit tests with coverage, Storybook build, and Playwright browser tests |
-| Backend | `cargo fmt --check`, SQLx offline metadata, Clippy with warnings denied, all non-ignored Rust tests and isolated integration suites, and coverage |
-| Runtime/deployment | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build |
-| Security | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy |
+| Area               | Current checks                                                                                                                               |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quality            | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
+| Frontend           | Typecheck, two-worker unit tests, and Storybook build on PRs; Playwright browser tests weekly or manually                                    |
+| Backend            | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
+| Runtime/deployment | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build weekly or manually |
+| Security           | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
 
 Dependency and secret failures are release blockers. High-risk Semgrep
 findings and critical/high Trivy findings are also blocking. Any reviewed

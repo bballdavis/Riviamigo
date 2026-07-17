@@ -3,6 +3,9 @@ name: Frontend
 on:
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -27,15 +30,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm turbo typecheck
-      - name: Run frontend coverage
-        run: pnpm --filter @riviamigo/web test:coverage
-      - name: Upload frontend coverage
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: frontend-coverage
-          path: apps/web/coverage
-          if-no-files-found: warn
+      - name: Run frontend unit tests
+        run: pnpm --filter @riviamigo/web exec vitest run --maxWorkers=2
       - name: Build Storybook
         run: pnpm turbo build-storybook
       - name: Upload Storybook build
@@ -48,6 +44,7 @@ jobs:
 
   e2e:
     name: Browser E2E
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

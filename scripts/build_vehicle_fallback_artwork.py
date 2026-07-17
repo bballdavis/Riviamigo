@@ -6,7 +6,7 @@ received. This script removes their flat white matte and composes four stable
 presentation canvases per model:
 
 * overview: portrait overhead artwork that matches the API rotation contract
-* charging: a charge-port-end crop composed for the charging connection chip
+* charging: a full side profile composed for the charging connection chip
 * health: a normalized three-quarter hero composition
 * vehicle-card: a compact full side profile for vehicle lists and pickers
 
@@ -45,16 +45,15 @@ CANVAS_BY_USAGE: dict[Usage, tuple[int, int]] = {
     "vehicle-card": (1200, 560),
 }
 
-# R1S retains the original charge-port close-up. Demo R1T/R2S charging cards
-# use a fuller side profile so the fallback does not cut the vehicle at the
-# canvas edge.
+# Charging fallbacks use the full side profile so the vehicle is not cut at the
+# canvas edge. The live API artwork keeps its own charge-port crop behavior.
 CHARGING_PORT_FRACTION: dict[str, float] = {
-    "r1s": 0.49,
+    "r1s": 1.00,
     "r1t": 1.00,
     "r2s": 1.00,
 }
 
-FULL_PROFILE_CHARGING_MODELS = frozenset({"r1t", "r2s"})
+FULL_PROFILE_CHARGING_MODELS = frozenset({"r1s", "r1t", "r2s"})
 
 
 @dataclass(frozen=True)
