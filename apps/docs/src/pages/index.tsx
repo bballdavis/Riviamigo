@@ -12,26 +12,26 @@ const entryPoints = [
     to: '/docs/getting-started/',
   },
   {
-    eyebrow: 'Contributors',
-    title: 'Understand the system',
-    description: 'Review architecture, implementation references, runbooks, and release expectations.',
-    to: '/docs/development/',
+    eyebrow: 'Owners and operators',
+    title: 'Use and operate Riviamigo',
+    description: 'Customize the product, manage integrations, update safely, and stay recoverable.',
+    to: '/docs/using-riviamigo/',
   },
   {
-    eyebrow: 'Operators',
-    title: 'Deploy securely',
-    description: 'Keep the application private, recoverable, and safely reachable away from home.',
-    to: '/docs/getting-started/secure-deployment/',
+    eyebrow: 'Contributors',
+    title: 'Understand the system',
+    description: 'Review architecture, implementation guidance, governance, and exact references.',
+    to: '/docs/development/',
   },
 ];
 
 const quickLinks = [
-  ['Features', '/docs/getting-started/features/'],
-  ['Dashboard customization', '/docs/getting-started/dashboard-customization/'],
-  ['Backup and restore', '/docs/getting-started/backup-and-restore/'],
+  ['Features', '/docs/overview/features/'],
+  ['Dashboard customization', '/docs/using-riviamigo/dashboard-customization/'],
+  ['Operations', '/docs/operations/'],
+  ['Backup and restore', '/docs/operations/backup-and-restore/'],
   ['Privacy', '/docs/privacy/'],
-  ['API access', '/docs/api-access/'],
-  ['Runbooks', '/docs/runbooks/'],
+  ['Reference', '/docs/reference/'],
 ];
 
 export default function Home(): ReactElement {

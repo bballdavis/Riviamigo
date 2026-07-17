@@ -20,7 +20,7 @@ This document is canonical for documentation upkeep and publishing.
 ## Update procedure
 
 1. Update the owning Markdown file in `docs/` with the behavior or structural change.
-2. Keep each document in exactly one logical sidebar path: Welcome, Getting Started, or Development.
+2. Keep each document in exactly one logical sidebar path: Overview, Getting Started, Using Riviamigo, Operations, Development, or Reference.
 3. Add frontmatter only when a stable route, title, description, or navigation label is needed.
 4. Run:
 

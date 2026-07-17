@@ -1,7 +1,7 @@
 ---
 title: External connections
 description: Configure weather, geocoding, basemap, proxy, privacy, and self-hosted providers.
-slug: /getting-started/external-connections/
+slug: /using-riviamigo/external-connections/
 ---
 
 # External connections

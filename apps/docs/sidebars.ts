@@ -1,7 +1,7 @@
 import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
-  welcomeSidebar: ['index', 'guides/features', 'privacy', 'security', 'roadmap'],
+  overviewSidebar: ['index', 'guides/features', 'privacy', 'security', 'roadmap'],
   gettingStartedSidebar: [
     'guides/README',
     'guides/prerequisites',
@@ -9,11 +9,34 @@ const sidebars: SidebarsConfig = {
     'guides/configuration',
     'guides/rivian-account',
     'guides/verify-installation',
-    'guides/deployment',
-    'guides/secure-deployment',
-    'guides/external-connections',
+  ],
+  usingRiviamigoSidebar: [
+    'using-riviamigo',
     'guides/dashboard-customization',
-    'guides/backup-and-restore',
+    'guides/external-connections',
+  ],
+  operationsSidebar: [
+    'operations',
+    {
+      type: 'category',
+      label: 'Deployment and recovery',
+      collapsed: false,
+      items: ['guides/deployment', 'guides/secure-deployment', 'guides/backup-and-restore'],
+    },
+    {
+      type: 'category',
+      label: 'Maintainer runbooks',
+      collapsed: false,
+      items: [
+        'runbooks/README',
+        'runbooks/secure-deployment',
+        'runbooks/backup-restore',
+        'runbooks/release-images',
+        'runbooks/release-database-cutover',
+        'runbooks/vehicle-history-rebuild',
+        'runbooks/parallax-capture',
+      ],
+    },
   ],
   developmentSidebar: [
     'development',
@@ -27,46 +50,26 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Architecture',
       collapsed: false,
-      items: [
-        'architecture/backend-data-flow',
-        'frontend/dashboard-architecture',
-        'rivian-auth',
-      ],
+      items: ['architecture/backend-data-flow', 'frontend/dashboard-architecture', 'rivian-auth'],
     },
     {
       type: 'category',
-      label: 'Implementation references',
+      label: 'Implementation guidance',
       collapsed: false,
       items: [
         'frontend/dashboard-authoring',
-        'dashboard-data-map',
-        'metrics-reference',
-        'api-access',
         'branding',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Operations and runbooks',
-      collapsed: false,
-      items: [
-        'runbooks/README',
-        'runbooks/documentation-maintenance',
-        'runbooks/backup-restore',
-        'runbooks/secure-deployment',
-        'runbooks/release-images',
-        'runbooks/release-database-cutover',
-        'runbooks/vehicle-history-rebuild',
-        'runbooks/parallax-capture',
+        {type: 'link', label: 'Security implementation', href: '/Riviamigo/docs/security/'},
       ],
     },
     {
       type: 'category',
       label: 'Governance and review',
       collapsed: false,
-      items: ['security-audit', 'decision-log'],
+      items: ['runbooks/documentation-maintenance', 'security-audit', 'decision-log'],
     },
   ],
+  referenceSidebar: ['reference', 'api-access', 'metrics-reference', 'dashboard-data-map'],
 };
 
 export default sidebars;

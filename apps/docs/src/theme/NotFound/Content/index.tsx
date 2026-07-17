@@ -14,9 +14,10 @@ export default function NotFoundContent(): ReactElement {
           The documentation may have moved. Use site search or choose one of the primary documentation paths.
         </p>
         <div className="rm-not-found__actions">
+          <Link className="button button--secondary" to="/">Welcome</Link>
           <Link className="button button--primary" to="/docs/getting-started/">Getting Started</Link>
           <Link className="button button--secondary" to="/docs/development/">Development</Link>
-          <Link className="button button--secondary" to="/docs/">Documentation Overview</Link>
+          <Link className="button button--secondary" href="https://github.com/bballdavis/Riviamigo">GitHub</Link>
         </div>
       </div>
     </main>

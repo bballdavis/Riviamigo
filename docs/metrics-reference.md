@@ -1,3 +1,10 @@
+---
+title: Riviamigo Metrics Reference
+description: Review metric definitions, units, sources, availability, and parity goals.
+slug: /reference/metrics/
+sidebar_label: Metrics
+---
+
 # Riviamigo Metrics Reference
 
 Compiled from Teslamate (open-source, most comprehensive), Tessie, and Rivian Roamer.

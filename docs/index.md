@@ -1,9 +1,10 @@
 ---
 title: Documentation overview
-description: Choose the Riviamigo documentation path for installing, operating, or developing the project.
+description: Choose the Riviamigo documentation path for installing, using, operating, or developing the project.
 slug: /
 sidebar_label: Overview
-pagination_next: guides/README
+pagination_prev: null
+pagination_next: guides/features
 ---
 
 # Riviamigo documentation
@@ -12,41 +13,27 @@ Riviamigo's repository documentation is the source of truth for the application,
 
 ## Choose your path
 
-### Install and operate Riviamigo
+| If you want to... | Start here |
+|---|---|
+| Understand the project, privacy model, security posture, or roadmap | **Overview** — continue through this section |
+| Prepare, install, connect, and verify a new installation | [Getting Started](./guides/README.md) |
+| Customize dashboards or control optional external services | [Using Riviamigo](./using-riviamigo.md) |
+| Update, secure, back up, recover, or troubleshoot an installation | [Operations](./operations.md) |
+| Understand architecture or contribute code and documentation | [Development](./development.md) |
+| Look up APIs, metrics, or dashboard data contracts | [Reference](./reference.md) |
 
-Follow [Getting Started](./guides/README.md) for a sequential path from host prerequisites to a verified, secure, and recoverable installation.
-
-The path covers:
-
-1. Preparing a host with Docker Compose and persistent storage.
-2. Configuring secrets and the production environment.
-3. Starting Riviamigo and connecting a Rivian account.
-4. Verifying health, securing access, and learning normal operations.
-5. Customizing dashboards and protecting the installation with backups.
-
-### Understand or contribute to Riviamigo
-
-Open the [Development documentation](./development.md) for contributor orientation, system architecture, implementation references, operational runbooks, and review expectations.
-
-Start there when you need to answer questions such as:
-
-- Which package or shared seam owns a behavior?
-- How do telemetry, authentication, storage, and dashboards fit together?
-- How should a widget, API integration, or reusable UI pattern be implemented?
-- Which runbook governs releases, database changes, backups, or repairs?
-- What evidence is expected before a change is merged or released?
-
-## Popular references
+## Common tasks
 
 | Need | Start here |
 |---|---|
 | See what Riviamigo currently supports | [Features](./guides/features.md) |
 | Understand privacy and external requests | [Privacy](./privacy.md) |
 | Review deployment security | [Security](./security.md) |
+| Customize an installed dashboard | [Using Riviamigo](./using-riviamigo.md) |
+| Update or recover an installation | [Operations](./operations.md) |
 | Understand the repository structure | [Architecture overview](./architecture/overview.md) |
 | Build or change dashboards | [Dashboard architecture](./frontend/dashboard-architecture.md) |
-| Find a recurring maintenance procedure | [Runbooks](./runbooks/README.md) |
-| Review project direction | [Roadmap](./roadmap.md) |
+| Look up APIs, metrics, or dashboard data | [Reference](./reference.md) |
 
 ## Canonical entry points
 
