@@ -1,0 +1,227 @@
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  align-items: center;
+  gap: 3rem;
+  min-height: calc(100vh - var(--ifm-navbar-height));
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 5rem 3rem;
+  overflow: hidden;
+}
+
+.heroGlow {
+  position: absolute;
+  inset: 15% auto auto 5%;
+  width: 28rem;
+  height: 28rem;
+  border-radius: 999px;
+  background: var(--rm-accent-muted);
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+.heroCopy,
+.heroVisual {
+  position: relative;
+  z-index: 1;
+}
+
+.logo {
+  width: min(23rem, 75vw);
+  height: auto;
+  margin-bottom: 1.75rem;
+}
+
+.hero h1,
+.sectionHeading h2,
+.quickSection h2 {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+.hero h1 {
+  max-width: 12ch;
+  margin: 0;
+  font-size: clamp(2.75rem, 6vw, 5.5rem);
+  line-height: 0.96;
+  letter-spacing: -0.055em;
+}
+
+.eyebrow,
+.cardEyebrow {
+  margin: 0 0 0.75rem;
+  color: var(--rm-accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.lede {
+  max-width: 38rem;
+  margin: 1.5rem 0 0;
+  color: var(--rm-text-secondary);
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  line-height: 1.65;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.heroVisual {
+  padding: 1rem;
+  border: 1px solid var(--rm-border-default);
+  border-radius: 1.5rem;
+  background: var(--rm-bg-glass);
+  box-shadow: var(--rm-shadow-xl), var(--rm-glow-md);
+  transform: perspective(1400px) rotateY(-4deg) rotateX(2deg);
+}
+
+.heroVisual img {
+  display: block;
+  width: 100%;
+  border-radius: 1rem;
+}
+
+.pathSection,
+.quickSection {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 5rem 2rem;
+}
+
+.sectionHeading {
+  max-width: 48rem;
+  margin-bottom: 2rem;
+}
+
+.sectionHeading h2,
+.quickSection h2 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  letter-spacing: -0.035em;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.pathCard {
+  display: flex;
+  min-height: 18rem;
+  flex-direction: column;
+  padding: 1.5rem;
+  border: 1px solid var(--rm-border-default);
+  border-radius: 1rem;
+  color: var(--rm-text-primary);
+  background: var(--rm-bg-surface);
+  box-shadow: var(--rm-shadow-sm);
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.pathCard:hover,
+.pathCard:focus-visible {
+  border-color: var(--rm-border-accent);
+  color: var(--rm-text-primary);
+  box-shadow: var(--rm-shadow-lg), var(--rm-glow-sm);
+  text-decoration: none;
+  transform: translateY(-2px);
+}
+
+.pathCard h3 {
+  margin: 0;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 1.5rem;
+}
+
+.pathCard p {
+  color: var(--rm-text-secondary);
+  line-height: 1.65;
+}
+
+.cardLink {
+  display: flex;
+  justify-content: space-between;
+  margin-top: auto;
+  color: var(--rm-accent);
+  font-weight: 700;
+}
+
+.quickSection {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.8fr);
+  gap: 3rem;
+  align-items: start;
+  margin-bottom: 4rem;
+  border: 1px solid var(--rm-border-default);
+  border-radius: 1.5rem;
+  background: var(--rm-bg-elevated);
+}
+
+.quickSection p:not(.eyebrow) {
+  max-width: 44rem;
+  color: var(--rm-text-secondary);
+  line-height: 1.7;
+}
+
+.quickLinks {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.quickLinks a {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.6rem;
+  color: var(--rm-text-primary);
+  font-weight: 600;
+}
+
+.quickLinks a:hover,
+.quickLinks a:focus-visible {
+  color: var(--rm-accent);
+  background: var(--rm-accent-muted);
+  text-decoration: none;
+}
+
+@media screen and (max-width: 996px) {
+  .hero {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    padding: 4rem 1.25rem 3rem;
+  }
+
+  .heroVisual {
+    transform: none;
+  }
+
+  .cardGrid,
+  .quickSection {
+    grid-template-columns: 1fr;
+  }
+
+  .pathSection,
+  .quickSection {
+    padding: 3.5rem 1.25rem;
+  }
+}
+
+@media screen and (max-width: 560px) {
+  .actions a {
+    width: 100%;
+  }
+
+  .pathCard {
+    min-height: 15rem;
+  }
+}

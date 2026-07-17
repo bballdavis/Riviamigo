@@ -1,4 +1,10 @@
-# Secure Deployment
+---
+title: Secure deployment
+description: Keep Riviamigo behind an authenticated HTTPS gateway and off the public origin port.
+slug: /getting-started/secure-deployment/
+---
+
+# Secure deployment
 
 ## Required boundary
 

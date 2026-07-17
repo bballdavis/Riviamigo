@@ -1,3 +1,9 @@
+---
+title: Backup and restore
+description: Create, verify, download, and restore complete Riviamigo recovery packages.
+slug: /getting-started/backup-and-restore/
+---
+
 # Backup and restore
 
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.

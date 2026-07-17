@@ -1,63 +1,59 @@
-# Riviamigo Docs Index
+---
+title: Documentation overview
+description: Choose the Riviamigo documentation path for installing, operating, or developing the project.
+slug: /
+sidebar_label: Overview
+pagination_next: guides/README
+---
 
-This is the routing hub for repo documentation. Repo docs are canonical; the GitHub Wiki is a published mirror for selected user-facing pages sourced from `docs/guides/`.
+# Riviamigo documentation
 
-## Canonical Entry Points
+Riviamigo's repository documentation is the source of truth for the application, its operation, and its implementation. This site is built directly from `docs/` whenever a relevant change reaches `main`.
 
-| Document | Audience | Source of truth | Update when | Scope |
-|---|---|---|---|---|
-| `README.md` | New contributors, evaluators, self-hosters | Repo root | onboarding, quick-start, top-level architecture changes | concise overview and links out |
-| `AGENTS.md` | Codex and repo-aware agents | Repo root | workflow, documentation policy, shared engineering expectations change | agent bootstrap |
-| `CLAUDE.md` | Claude and human contributors | Repo root | command workflows or companion guidance change | execution-focused companion |
-| `docs/branding.md` | Frontend contributors and reviewers | `docs/branding.md` | shared visual patterns, tokens, icon rules, spacing, copy patterns change | canonical visual system |
+## Choose your path
 
-## Engineering Internals
+### Install and operate Riviamigo
 
-| Document | Audience | Update when | Adjacent docs |
-|---|---|---|---|
-| [`docs/architecture/overview.md`](./architecture/overview.md) | contributors changing repo structure | package boundaries, ownership, or architectural seams shift | frontend architecture, backend data flow |
-| [`docs/architecture/backend-data-flow.md`](./architecture/backend-data-flow.md) | backend contributors | ingestion, auth, storage, or API flow changes | API access, Rivian auth, security |
-| [`docs/frontend/dashboard-architecture.md`](./frontend/dashboard-architecture.md) | frontend/dashboard contributors | dashboard shell, renderer, registry, widget seam changes | dashboard authoring, branding |
-| [`docs/frontend/dashboard-authoring.md`](./frontend/dashboard-authoring.md) | widget/dashboard authors | widget authoring flow changes | dashboard architecture, branding |
-| [`docs/rivian-auth.md`](./rivian-auth.md) | auth/connection contributors | Rivian auth flow or upstream drift changes local behavior | API access, backend data flow |
-| [`docs/api-access.md`](./api-access.md) | API consumers and maintainers | auth headers, API-key flow, or local testing access changes | security, README |
-| [`docs/security.md`](./security.md) | maintainers | auth, headers, secrets, or operational security expectations change | backend data flow, runbooks |
-| [`docs/security-audit.md`](./security-audit.md) | maintainers and release reviewers | audit scope, findings, or release evidence changes | security, secure-deployment runbook |
-| [`docs/dashboard-data-map.md`](./dashboard-data-map.md) | telemetry and dashboard contributors | field mapping, parity targets, or dashboard contract changes | metrics reference |
-| [`docs/metrics-reference.md`](./metrics-reference.md) | backend and dashboard contributors | metrics catalog or meaning changes | dashboard data map |
-| [`docs/roadmap.md`](./roadmap.md) | contributors and users | feature priorities or parity targets change | dashboard data map, contributing |
+Follow [Getting Started](./guides/README.md) for a sequential path from host prerequisites to a verified, secure, and recoverable installation.
 
-## Visual System
+The path covers:
 
-| Document | Audience | Update when | Adjacent docs |
-|---|---|---|---|
-| [`docs/branding.md`](./branding.md) | designers, frontend contributors, reviewers | shared visual language or reusable patterns change | dashboard architecture, contributing |
+1. Preparing a host with Docker Compose and persistent storage.
+2. Configuring secrets and the production environment.
+3. Starting Riviamigo and connecting a Rivian account.
+4. Verifying health, securing access, and learning normal operations.
+5. Customizing dashboards and protecting the installation with backups.
 
-## Operations and Maintenance
+### Understand or contribute to Riviamigo
 
-| Document | Audience | Update when | Adjacent docs |
-|---|---|---|---|
-| [`docs/contributing.md`](./contributing.md) | contributors and reviewers | workflow, review rules, testing expectations, or doc policy changes | AGENTS, CLAUDE |
-| [`docs/runbooks/README.md`](./runbooks/README.md) | maintainers | runbook taxonomy or recurring maintenance surface changes | documentation maintenance |
-| [`docs/runbooks/documentation-maintenance.md`](./runbooks/documentation-maintenance.md) | maintainers and agents | doc publishing or drift-prevention workflow changes | user guides, contributing |
-| [`docs/runbooks/vehicle-history-rebuild.md`](./runbooks/vehicle-history-rebuild.md) | maintainers and agents | rebuild steps, trip enrichment behavior, or post-replay verification changes | backend data flow, metrics reference |
-| [`docs/runbooks/secure-deployment.md`](./runbooks/secure-deployment.md) | self-hosters and maintainers | public exposure boundary, gateway requirements, or production secret behavior changes | security, deployment guide |
-| [`docs/runbooks/release-images.md`](./runbooks/release-images.md) | maintainers | release, GHCR image, provenance, or retention behavior changes | deployment guide, security audit |
-| [`docs/runbooks/release-database-cutover.md`](./runbooks/release-database-cutover.md) | maintainers | initial-release baseline or database adoption changes | deployment guide, backup and restore |
-| [`docs/decision-log.md`](./decision-log.md) | maintainers and future contributors | durable repo/process decisions are made | contributing, architecture |
+Open the [Development documentation](./development.md) for contributor orientation, system architecture, implementation references, operational runbooks, and review expectations.
 
-## User-Facing Documentation
+Start there when you need to answer questions such as:
 
-| Document | Audience | Source of truth | Update when | Scope |
-|---|---|---|---|---|
-| [`docs/guides/README.md`](./guides/README.md) | self-hosters and end users | repo, mirrored to GitHub Wiki | user-visible setup, operations, or product behavior changes | curated user-facing subset |
-| [`docs/guides/dashboard-customization.md`](./guides/dashboard-customization.md) | dashboard users and administrators | repo, mirrored to GitHub Wiki | dashboard ownership, precedence, or editing behavior changes | customization and recovery |
-| [`docs/guides/external-connections.md`](./guides/external-connections.md) | self-hosters, users, and administrators | repo, mirrored to GitHub Wiki | external provider, proxy, privacy, or weather-enrichment behavior changes | connection controls and disclosures |
-| [`docs/privacy.md`](./privacy.md) | self-hosters and users | repo | data-flow or third-party request behavior changes | user guides, security |
+- Which package or shared seam owns a behavior?
+- How do telemetry, authentication, storage, and dashboards fit together?
+- How should a widget, API integration, or reusable UI pattern be implemented?
+- Which runbook governs releases, database changes, backups, or repairs?
+- What evidence is expected before a change is merged or released?
 
-## Documentation Rules
+## Popular references
 
-- Repo docs are canonical.
-- The Wiki is a mirror, not an authoring surface.
-- If a change affects shared behavior, update the relevant doc in the same PR or leave explicit tracked doc debt.
-- Run `pnpm docs:check` before merging documentation-heavy changes.
+| Need | Start here |
+|---|---|
+| See what Riviamigo currently supports | [Features](./guides/features.md) |
+| Understand privacy and external requests | [Privacy](./privacy.md) |
+| Review deployment security | [Security](./security.md) |
+| Understand the repository structure | [Architecture overview](./architecture/overview.md) |
+| Build or change dashboards | [Dashboard architecture](./frontend/dashboard-architecture.md) |
+| Find a recurring maintenance procedure | [Runbooks](./runbooks/README.md) |
+| Review project direction | [Roadmap](./roadmap.md) |
+
+## Canonical entry points
+
+- `README.md` introduces the project and provides the shortest installation summary.
+- `AGENTS.md` defines repository policy for Codex and other repo-aware agents.
+- `CLAUDE.md` provides companion command and execution guidance.
+- `docs/branding.md` defines the shared visual system.
+- This documentation site renders the complete `docs/` tree for easy navigation and review.
+
+If behavior, structure, operations, or shared visual language changes, update its canonical document in the same pull request or create explicit tracked documentation debt.
