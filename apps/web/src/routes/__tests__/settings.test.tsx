@@ -394,6 +394,43 @@ describe('Settings page', () => {
     expect(screen.getByText('Vehicle')).toBeInTheDocument();
   });
 
+  it('uses compact accessible icon actions on vehicle cards', () => {
+    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    settingsMocks.vehicles = [
+      {
+        id: 'v1', display_name: 'Adventure Truck', model: 'R1T', year: null, trim: null, vin: null,
+        rivian_vehicle_id: 'rivian-1', battery_capacity_kwh: 135, target_tire_pressure_psi: 48,
+        membership_role: 'owner', is_demo: false,
+      },
+      {
+        id: 'v2', display_name: 'Second Vehicle', model: 'R1S', year: null, trim: null, vin: null,
+        rivian_vehicle_id: 'rivian-2', battery_capacity_kwh: 135, target_tire_pressure_psi: 48,
+        membership_role: 'owner', is_demo: false,
+      },
+      {
+        id: 'demo-v1', display_name: 'Demo R2S', model: 'R2S', year: null, trim: null, vin: null,
+        rivian_vehicle_id: 'demo-r2s-local', battery_capacity_kwh: 82, target_tire_pressure_psi: 48,
+        membership_role: 'owner', is_demo: true,
+      },
+    ];
+
+    renderSettings();
+
+    const setDefault = screen.getByRole('button', { name: 'Set Second Vehicle as default vehicle' });
+    const manageSharing = screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' });
+    const refreshDemo = screen.getByRole('button', { name: 'Refresh demo data for Demo R2S' });
+    for (const button of [setDefault, manageSharing, refreshDemo]) {
+      expect(button).toHaveClass('h-8', 'w-8', 'px-0');
+    }
+    expect(screen.queryByText('Set Default')).not.toBeInTheDocument();
+    expect(screen.queryByText('Manage Sharing')).not.toBeInTheDocument();
+    expect(screen.queryByText('Refresh Demo Data')).not.toBeInTheDocument();
+
+    fireEvent.click(manageSharing);
+    expect(screen.getByText('Vehicle Access')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hide sharing for Adventure Truck' })).toBeInTheDocument();
+  });
+
   it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
     settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
     dashboardMocks.dashboards = [

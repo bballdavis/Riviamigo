@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a user, maintainer, or self-hosting improvement.
+title: "feature: "
+labels:
+  - enhancement
+  - triage
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Who is affected, and what workflow or decision is currently difficult?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you would like to see.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Frontend or dashboard
+        - Backend or API
+        - Authentication or authorization
+        - Ingestion or vehicle connection
+        - Database, backup, or restore
+        - Deployment or containers
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain other approaches or current workarounds.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the observable conditions that would make this complete.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy and safety review
+      options:
+        - label: This request does not require sharing secrets, credentials, production data, live telemetry, or precise vehicle locations.
+          required: true
