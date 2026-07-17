@@ -29,19 +29,19 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/vehicles/:id/charging-schedule",
+            "/vehicles/{id}/charging-schedule",
             get(get_charging_schedule).put(put_charging_schedule),
         )
         .route(
-            "/vehicles/:id/departure-schedules",
+            "/vehicles/{id}/departure-schedules",
             get(list_departure_schedules).post(create_departure_schedule),
         )
         .route(
-            "/vehicles/:id/departure-schedules/:schedule_id",
+            "/vehicles/{id}/departure-schedules/{schedule_id}",
             patch(update_departure_schedule).delete(delete_departure_schedule),
         )
-        .route("/vehicles/:id/wallboxes", get(list_wallboxes))
-        .route("/vehicles/:id/ota-details", get(get_ota_details))
+        .route("/vehicles/{id}/wallboxes", get(list_wallboxes))
+        .route("/vehicles/{id}/ota-details", get(get_ota_details))
 }
 
 fn http_client() -> Result<reqwest::Client, AppError> {

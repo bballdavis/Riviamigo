@@ -26,7 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/backups/settings", put(update_backup_settings))
         .route("/admin/backups/run", post(run_backup_now))
         .route(
-            "/admin/backups/artifacts/:artifact_id/download",
+            "/admin/backups/artifacts/{artifact_id}/download",
             get(download_backup_artifact),
         )
         .route(

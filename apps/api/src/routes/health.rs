@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/:vehicle_id/health", get(health))
+    Router::new().route("/vehicles/{vehicle_id}/health", get(health))
 }
 
 #[derive(Serialize)]
