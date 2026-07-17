@@ -18,6 +18,12 @@ Use this file for command references, architecture reminders, and Claude-oriente
 pnpm run dev:stack
 ```
 
+Before it allocates ports, `dev:stack` clears only stale host processes that
+belong to this checkout: the local `riviamigo-api` binary and Vite processes
+launched from `apps/web`. It does not terminate unrelated applications that
+happen to use the usual development ports; those still trigger fallback-port
+allocation.
+
 ### Workspace
 
 ```bash

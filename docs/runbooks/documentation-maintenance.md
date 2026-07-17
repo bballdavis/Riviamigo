@@ -12,7 +12,7 @@ This document is canonical for the documentation upkeep workflow.
 
 - Repo docs are canonical.
 - `docs/guides/` is the source for user-facing wiki pages.
-- The GitHub Wiki is a publish target only.
+- The GitHub Wiki is a generated publish target only. The publisher maps `docs/guides/README.md` to `Home.md`, generates `_Sidebar.md`, rewrites links for the Wiki, and removes stale generated pages.
 
 ## Update Procedure
 
@@ -40,4 +40,6 @@ This document is canonical for the documentation upkeep workflow.
 - `pnpm docs:check` fails on route or API contracts
   Update the contract in `scripts/check-docs.mjs` or bring docs/code back into alignment.
 - `scripts/publish-wiki.sh --validate-only` fails
-  Resolve filename collisions or missing wiki draft files before publishing.
+  Resolve invalid or colliding guide filenames before publishing.
+- Wiki pages show links back to local paths
+  Publish with `scripts/publish-wiki.sh`; it renders Wiki links from the canonical repo pages instead of copying raw repo-relative links.

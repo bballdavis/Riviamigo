@@ -16,6 +16,12 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect to the database")?;
 
+    let checksum = Sha384::digest(BASELINE.as_bytes()).to_vec();
+    if is_adopted(&pool, &checksum).await? {
+        println!("Database is already adopted by the release baseline; no rebaseline is needed.");
+        return Ok(());
+    }
+
     verify_pre_release_schema(&pool).await?;
 
     if !confirm {
@@ -30,7 +36,6 @@ async fn main() -> anyhow::Result<()> {
         bail!("backup file does not exist: {backup_path}");
     }
 
-    let checksum = Sha384::digest(BASELINE.as_bytes()).to_vec();
     let mut transaction = pool.begin().await?;
 
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('riviamigo-schema-rebaseline'))")
@@ -98,6 +103,38 @@ async fn main() -> anyhow::Result<()> {
         "Database adopted by the release baseline. Run pnpm db:migrate or start the API normally to verify."
     );
     Ok(())
+}
+
+async fn is_adopted(pool: &sqlx::PgPool, expected_checksum: &[u8]) -> anyhow::Result<bool> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+    if !exists {
+        return Ok(false);
+    }
+
+    let row = sqlx::query("SELECT version, checksum FROM public._sqlx_migrations")
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public._sqlx_migrations")
+        .fetch_one(pool)
+        .await?;
+    if count != 1 {
+        bail!("public._sqlx_migrations contains unexpected migration records");
+    }
+
+    let version: i64 = row.get("version");
+    let checksum: Vec<u8> = row.get("checksum");
+    if version != 1 || checksum != expected_checksum {
+        bail!("public._sqlx_migrations does not match the release baseline");
+    }
+
+    Ok(true)
 }
 
 fn parse_args() -> anyhow::Result<(bool, Option<String>)> {
