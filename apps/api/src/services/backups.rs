@@ -869,7 +869,7 @@ fn sha256_file(path: &Path) -> Result<String, anyhow::Error> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 async fn current_database_name(pool: &PgPool) -> Result<String, AppError> {
@@ -901,7 +901,7 @@ async fn compute_sha256(path: &Path) -> Result<String, AppError> {
             hasher.update(&buffer[..read]);
         }
 
-        Ok::<String, anyhow::Error>(format!("{:x}", hasher.finalize()))
+        Ok::<String, anyhow::Error>(hex::encode(hasher.finalize()))
     })
     .await
     .map_err(|error| AppError::Internal(anyhow::anyhow!("checksum task failed: {error}")))?

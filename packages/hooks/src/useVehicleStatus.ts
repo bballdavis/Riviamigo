@@ -95,7 +95,7 @@ function stripNullsFromPatch(
 
 export function useVehicleStatus(vehicleId: string | null, accessToken: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const backoffRef = useRef(1000);
   const reconnectAttemptsRef = useRef(0);
   const connectionKeyRef = useRef<string | null>(null);

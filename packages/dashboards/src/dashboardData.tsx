@@ -115,7 +115,7 @@ export function DashboardDataProvider({
   requirements: DashboardDataRequirements;
   children: React.ReactNode;
 }) {
-  const storeRef = React.useRef<DashboardDataStore>();
+  const storeRef = React.useRef<DashboardDataStore | undefined>(undefined);
   if (!storeRef.current) storeRef.current = new DashboardDataStore();
   const store = storeRef.current;
   const metrics = requirements.metrics ?? [];
