@@ -1,7 +1,7 @@
 ---
 title: Deployment and updates
 description: Deploy, update, inspect, stop, and recover the standard Riviamigo stack.
-slug: /getting-started/deployment/
+slug: /operations/deployment-and-updates/
 sidebar_label: Deployment and updates
 ---
 

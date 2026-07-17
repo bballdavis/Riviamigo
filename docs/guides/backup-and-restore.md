@@ -1,7 +1,7 @@
 ---
 title: Backup and restore
 description: Create, verify, download, and restore complete Riviamigo recovery packages.
-slug: /getting-started/backup-and-restore/
+slug: /operations/backup-and-restore/
 ---
 
 # Backup and restore

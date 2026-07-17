@@ -1,7 +1,7 @@
 ---
 title: Dashboard customization
 description: Understand system defaults, personal dashboards, editing, previews, and recovery.
-slug: /getting-started/dashboard-customization/
+slug: /using-riviamigo/dashboard-customization/
 ---
 
 # Dashboard customization

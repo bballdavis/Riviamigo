@@ -5,7 +5,7 @@ import {remarkRepositoryLinks, rewriteRepositoryLink} from './lib/repository-lin
 const config: Config = {
   title: 'Riviamigo',
   tagline: "Your Rivian's data companion.",
-  favicon: 'logo-lockup-light.png',
+  favicon: 'favicon.svg',
   url: 'https://bballdavis.github.io',
   baseUrl: '/Riviamigo/',
   organizationName: 'bballdavis',
@@ -25,7 +25,7 @@ const config: Config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
-  staticDirectories: ['static', '../../docs/assets/readme'],
+  staticDirectories: ['static', '../../docs/assets/readme', '../../apps/web/public'],
   presets: [
     [
       'classic',
@@ -84,14 +84,15 @@ const config: Config = {
       title: 'Riviamigo',
       logo: {
         alt: 'Riviamigo',
-        src: 'logo-lockup-light.png',
-        srcDark: 'logo-lockup-dark.png',
+        src: 'logo_color_lighter.svg',
       },
       items: [
-        {to: '/', label: 'Welcome', position: 'left', activeBaseRegex: '^/$'},
         {to: '/docs/', label: 'Overview', position: 'left'},
         {to: '/docs/getting-started/', label: 'Getting Started', position: 'left'},
+        {to: '/docs/using-riviamigo/', label: 'User Guide', position: 'left'},
+        {to: '/docs/operations/', label: 'Operations', position: 'left'},
         {to: '/docs/development/', label: 'Development', position: 'left'},
+        {to: '/docs/reference/', label: 'Reference', position: 'left'},
         {
           href: 'https://github.com/bballdavis/Riviamigo',
           label: 'GitHub',
@@ -107,7 +108,15 @@ const config: Config = {
           items: [
             {label: 'Prerequisites', to: '/docs/getting-started/prerequisites/'},
             {label: 'Install Riviamigo', to: '/docs/getting-started/install/'},
-            {label: 'Secure deployment', to: '/docs/getting-started/secure-deployment/'},
+            {label: 'Verify installation', to: '/docs/getting-started/verify-installation/'},
+          ],
+        },
+        {
+          title: 'Use and Operate',
+          items: [
+            {label: 'User guide', to: '/docs/using-riviamigo/'},
+            {label: 'Deployment and updates', to: '/docs/operations/deployment-and-updates/'},
+            {label: 'Backup and restore', to: '/docs/operations/backup-and-restore/'},
           ],
         },
         {
@@ -115,7 +124,7 @@ const config: Config = {
           items: [
             {label: 'Architecture', to: '/docs/architecture/overview/'},
             {label: 'Dashboard authoring', to: '/docs/frontend/dashboard-authoring/'},
-            {label: 'Runbooks', to: '/docs/runbooks/'},
+            {label: 'Reference', to: '/docs/reference/'},
           ],
         },
         {

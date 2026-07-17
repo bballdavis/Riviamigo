@@ -1,7 +1,7 @@
 ---
 title: Features
 description: Review the dashboards, vehicles, telemetry, and workflows Riviamigo currently supports.
-slug: /getting-started/features/
+slug: /overview/features/
 ---
 
 # Features

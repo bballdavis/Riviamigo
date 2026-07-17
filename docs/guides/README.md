@@ -1,15 +1,15 @@
 ---
 title: Getting Started
-description: Install, verify, secure, operate, and protect a Riviamigo installation.
+description: Prepare, install, configure, connect, and verify a Riviamigo installation.
 slug: /getting-started/
 sidebar_label: Getting Started
-pagination_prev: index
+pagination_prev: null
 pagination_next: guides/prerequisites
 ---
 
 # Getting Started
 
-This path takes a new self-hoster from an empty host to a verified, private, and recoverable Riviamigo installation. Work through it in order for a first installation; return directly to individual pages for later maintenance.
+This path takes a new self-hoster from an empty host to a verified, private Riviamigo installation. Work through it in order for a first installation. Ongoing ownership moves to the Using Riviamigo and Operations sections.
 
 ## Before you begin
 
@@ -17,7 +17,7 @@ Plan for three phases:
 
 1. **Prepare:** confirm the host, Docker, persistent storage, network boundary, and required secrets.
 2. **Install:** configure the Compose environment, start the stack, create the first owner, and connect Rivian.
-3. **Operate:** verify the runtime, secure access, configure optional providers, customize dashboards, and create a recovery package.
+3. **Verify:** confirm runtime health, application access, ownership, and telemetry.
 
 Riviamigo is designed to stay private. Its standard Compose origin listens on the host loopback interface. Use an authenticated HTTPS gateway for remote access; never forward the application port directly to the public internet.
 
@@ -28,18 +28,15 @@ Riviamigo is designed to stay private. Its standard Compose origin listens on th
 3. [Configuration](./configuration.md) — understand required secrets and optional production settings.
 4. [Rivian account setup](./rivian-account.md) — connect the vehicle account and handle MFA or login repair.
 5. [Verify the installation](./verify-installation.md) — check container health, application access, ownership, and telemetry.
-6. [Deployment and updates](./deployment.md) — operate, update, inspect, stop, and recover the stack.
-7. [Secure deployment](./secure-deployment.md) — maintain the required authenticated access boundary.
-8. [External connections](./external-connections.md) — choose weather, geocoding, basemap, and custom-provider policies.
-9. [Dashboard customization](./dashboard-customization.md) — understand defaults, personal copies, editing, and recovery.
-10. [Backup and restore](./backup-and-restore.md) — create and test complete recovery packages.
+
+After verification, continue to [Using Riviamigo](../using-riviamigo.md) for dashboards and external services or [Operations](../operations.md) for deployment, security, updates, and recovery.
 
 ## When something fails
 
-- A container will not become healthy: start with [Verify the installation](./verify-installation.md) and [Deployment and updates](./deployment.md).
+- A container will not become healthy: start with [Verify the installation](./verify-installation.md) and the [Operations](../operations.md) troubleshooting path.
 - Rivian login or MFA fails: use [Rivian account setup](./rivian-account.md).
-- The public address cannot connect or WebSockets fail: review [Secure deployment](./secure-deployment.md).
-- A provider cannot connect: use [External connections](./external-connections.md).
-- Recovery or backup validation fails: use [Backup and restore](./backup-and-restore.md) and the linked maintainer runbook.
+- The public address cannot connect or WebSockets fail: review [Operations](../operations.md).
+- A provider cannot connect: use [Using Riviamigo](../using-riviamigo.md).
+- Recovery or backup validation fails: use [Operations](../operations.md) and the linked maintainer runbook.
 
-For implementation details or maintainer procedures, continue to the [Development documentation](../development.md).
+For implementation details, continue to [Development](../development.md). For exact data contracts, use [Reference](../reference.md).

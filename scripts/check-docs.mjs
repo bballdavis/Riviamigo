@@ -18,6 +18,9 @@ const requiredFiles = [
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
   "docs/development.md",
+  "docs/using-riviamigo.md",
+  "docs/operations.md",
+  "docs/reference.md",
   "docs/runbooks/README.md",
   "docs/runbooks/documentation-maintenance.md",
   "docs/guides/README.md",
@@ -195,9 +198,25 @@ function checkDocusaurusContracts() {
     "onBrokenLinks: 'throw'",
     "onBrokenAnchors: 'throw'",
     "@cmfcmf/docusaurus-search-local",
+    "label: 'User Guide'",
+    "label: 'Operations'",
+    "label: 'Reference'",
   ]) {
     if (!config.includes(requiredSnippet)) {
       fail(`Docusaurus config is missing required publishing contract: ${requiredSnippet}`);
+    }
+  }
+
+  for (const sidebarName of [
+    "overviewSidebar",
+    "gettingStartedSidebar",
+    "usingRiviamigoSidebar",
+    "operationsSidebar",
+    "developmentSidebar",
+    "referenceSidebar",
+  ]) {
+    if (!sidebars.includes(sidebarName)) {
+      fail(`Docusaurus sidebars are missing required functional section: ${sidebarName}`);
     }
   }
 

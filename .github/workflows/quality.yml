@@ -68,7 +68,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if git diff --quiet "$BASE_SHA" HEAD -- \
-            docs apps/docs packages/ui/src/tokens README.md AGENTS.md CLAUDE.md \
+            docs apps/docs apps/web/public/favicon.svg apps/web/public/logo_color_lighter.svg \
+            packages/ui/src/tokens README.md AGENTS.md CLAUDE.md \
             package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json \
             scripts/check-docs.mjs .github/workflows/publish-docs.yml .github/workflows/quality.yml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
