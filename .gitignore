@@ -48,6 +48,9 @@ compose/resolv.conf
 # Vite
 apps/web/.vite/
 apps/web/vite.config.js
+apps/docs/build/
+apps/docs/.docusaurus/
+.pnpm-store/
 
 # pnpm
 pnpm-debug.log*

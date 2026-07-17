@@ -1,4 +1,11 @@
-# Getting started
+---
+title: Install Riviamigo
+description: Bring up the standard private Riviamigo Compose stack and create the first owner.
+slug: /getting-started/install/
+sidebar_label: Install Riviamigo
+---
+
+# Install Riviamigo
 
 This is the quick, self-hosted path—not the developer environment. It pulls published images through the standard Compose stack in [`compose/`](../../compose/).
 

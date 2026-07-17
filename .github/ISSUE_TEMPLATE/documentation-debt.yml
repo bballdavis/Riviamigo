@@ -9,7 +9,7 @@ body:
     id: missing-docs
     attributes:
       label: Missing documentation
-      description: State exactly which canonical docs or wiki drafts still need to be updated.
+      description: State exactly which canonical docs or published documentation sections still need to be updated.
       placeholder: docs/branding.md, docs/guides/getting-started.md
     validations:
       required: true

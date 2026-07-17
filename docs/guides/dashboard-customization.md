@@ -1,3 +1,9 @@
+---
+title: Dashboard customization
+description: Understand system defaults, personal dashboards, editing, previews, and recovery.
+slug: /getting-started/dashboard-customization/
+---
+
 # Dashboard customization
 
 Riviamigo keeps an installation-wide system version of each built-in dashboard and can also keep personal dashboards for each user. Open **Settings > Dashboards** to see which version you are managing.

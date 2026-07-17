@@ -1,3 +1,9 @@
+---
+title: Prerequisites
+description: Confirm the host, Docker, storage, browser, and network requirements for Riviamigo.
+slug: /getting-started/prerequisites/
+---
+
 # Prerequisites
 
 Riviamigo runs as a small Docker Compose stack. A home server, NAS that supports Docker Compose, or always-on Linux machine is a good fit.
