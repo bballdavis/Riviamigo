@@ -17,29 +17,38 @@ const requiredFiles = [
   "docs/privacy.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
+  "docs/development.md",
+  "docs/using-riviamigo.md",
+  "docs/operations.md",
+  "docs/reference.md",
   "docs/runbooks/README.md",
   "docs/runbooks/documentation-maintenance.md",
   "docs/guides/README.md",
-  "scripts/publish-wiki.sh",
+  "docs/guides/verify-installation.md",
+  "apps/docs/docusaurus.config.ts",
+  "apps/docs/sidebars.ts",
+  "apps/docs/src/pages/index.tsx",
 ];
+
+function collectMarkdownFiles(relativeDir) {
+  const absoluteDir = path.join(repoRoot, relativeDir);
+  const found = [];
+  for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+    const relativePath = path.join(relativeDir, entry.name).replaceAll(path.sep, "/");
+    if (entry.isDirectory()) {
+      found.push(...collectMarkdownFiles(relativePath));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      found.push(relativePath);
+    }
+  }
+  return found;
+}
 
 const docsFilesToCheck = [
   "README.md",
   "AGENTS.md",
   "CLAUDE.md",
-  "docs/index.md",
-  "docs/branding.md",
-  "docs/contributing.md",
-  "docs/decision-log.md",
-  "docs/security.md",
-  "docs/security-audit.md",
-  "docs/roadmap.md",
-  "docs/privacy.md",
-  "docs/architecture/overview.md",
-  "docs/architecture/backend-data-flow.md",
-  "docs/runbooks/README.md",
-  "docs/runbooks/documentation-maintenance.md",
-  "docs/guides/README.md",
+  ...collectMarkdownFiles("docs"),
 ];
 
 const routeSlugs = [
@@ -80,6 +89,9 @@ const requiredGuides = [
   "rivian-account.md",
   "backup-and-restore.md",
   "secure-deployment.md",
+  "verify-installation.md",
+  "dashboard-customization.md",
+  "external-connections.md",
 ];
 
 function fail(message) {
@@ -171,6 +183,76 @@ function checkGuides() {
       fail(`guide publish collision: ${prior} and ${fileName} both map to ${publishedName}`);
     }
     publishedNames.set(publishedName, fileName);
+  }
+}
+
+function checkDocusaurusContracts() {
+  const config = readFile("apps/docs/docusaurus.config.ts");
+  const sidebars = readFile("apps/docs/sidebars.ts");
+
+  for (const requiredSnippet of [
+    "url: 'https://bballdavis.github.io'",
+    "baseUrl: '/Riviamigo/'",
+    "path: '../../docs'",
+    "routeBasePath: 'docs'",
+    "onBrokenLinks: 'throw'",
+    "onBrokenAnchors: 'throw'",
+    "@cmfcmf/docusaurus-search-local",
+    "label: 'User Guide'",
+    "label: 'Operations'",
+    "label: 'Reference'",
+  ]) {
+    if (!config.includes(requiredSnippet)) {
+      fail(`Docusaurus config is missing required publishing contract: ${requiredSnippet}`);
+    }
+  }
+
+  for (const sidebarName of [
+    "overviewSidebar",
+    "gettingStartedSidebar",
+    "usingRiviamigoSidebar",
+    "operationsSidebar",
+    "developmentSidebar",
+    "referenceSidebar",
+  ]) {
+    if (!sidebars.includes(sidebarName)) {
+      fail(`Docusaurus sidebars are missing required functional section: ${sidebarName}`);
+    }
+  }
+
+  for (const relativePath of collectMarkdownFiles("docs")) {
+    const docId = relativePath.replace(/^docs\//, "").replace(/\.md$/, "");
+    const quotedId = new RegExp(`[\"']${docId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\"']`, "g");
+    const occurrences = [...sidebars.matchAll(quotedId)].length;
+    if (occurrences !== 1) {
+      fail(`expected ${docId} to appear in exactly one Docusaurus sidebar; found ${occurrences}`);
+    }
+  }
+}
+
+function checkLegacyWikiReferences() {
+  const files = [
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    ...collectMarkdownFiles("docs"),
+  ];
+  const forbidden = [
+    "github.com/bballdavis/Riviamigo/wiki",
+    "scripts/publish-wiki.sh",
+    ".github/workflows/publish-wiki.yml",
+    "Wiki publishing",
+    "publish to the Wiki",
+    "publish through the Wiki",
+  ];
+
+  for (const relativePath of files) {
+    const content = readFile(relativePath);
+    for (const snippet of forbidden) {
+      if (content.includes(snippet)) {
+        fail(`legacy Wiki publishing reference in ${relativePath}: ${snippet}`);
+      }
+    }
   }
 }
 
@@ -277,6 +359,8 @@ function checkProductionDeploymentContract() {
 checkRequiredFiles();
 checkMarkdownLinks();
 checkGuides();
+checkDocusaurusContracts();
+checkLegacyWikiReferences();
 checkRouteContracts();
 checkApiContracts();
 checkEnvVarReferences();

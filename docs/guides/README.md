@@ -1,17 +1,42 @@
-# Riviamigo user guides
+---
+title: Getting Started
+description: Prepare, install, configure, connect, and verify a Riviamigo installation.
+slug: /getting-started/
+sidebar_label: Getting Started
+pagination_prev: null
+pagination_next: guides/prerequisites
+---
 
-These are the in-repository source pages for self-hosters. The GitHub Wiki mirrors them after review; please edit these files rather than the Wiki directly. The publisher renders this file as the Wiki `Home.md` page and generates the Wiki sidebar.
+# Getting Started
 
-- [Getting started](./getting-started.md) — the shortest path to a private Compose installation.
-- [Prerequisites](./prerequisites.md) — host, Docker, and network expectations.
-- [Deployment](./deployment.md) — configuration, gateways, updates, logs, and recovery.
-- [Configuration](./configuration.md) — environment variables and production secrets.
-- [Rivian account setup](./rivian-account.md) — connecting your vehicle and handling Rivian MFA.
-- [Backup and restore](./backup-and-restore.md) — protecting and recovering your data.
-- [Secure deployment](./secure-deployment.md) — keeping a remote installation behind authentication.
-- [Features](./features.md) — what the dashboard currently covers.
+This path takes a new self-hoster from an empty host to a verified, private Riviamigo installation. Work through it in order for a first installation. Ongoing ownership moves to the Using Riviamigo and Operations sections.
 
-- [Dashboard customization](./dashboard-customization.md) — system defaults, personal copies, reset/restore behavior, and conditional previews.
-- [External connections](./external-connections.md) — weather, geocoding, basemap, proxy, privacy, and self-hosted provider controls.
+## Before you begin
 
-For privacy and third-party requests, read [the privacy details](../privacy.md). For contributing and local development, start at the [docs hub](../index.md).
+Plan for three phases:
+
+1. **Prepare:** confirm the host, Docker, persistent storage, network boundary, and required secrets.
+2. **Install:** configure the Compose environment, start the stack, create the first owner, and connect Rivian.
+3. **Verify:** confirm runtime health, application access, ownership, and telemetry.
+
+Riviamigo is designed to stay private. Its standard Compose origin listens on the host loopback interface. Use an authenticated HTTPS gateway for remote access; never forward the application port directly to the public internet.
+
+## Installation path
+
+1. [Prerequisites](./prerequisites.md) — confirm host, Docker, storage, browser, and network expectations.
+2. [Install Riviamigo](./getting-started.md) — clone the repository, prepare the environment, and start the production stack.
+3. [Configuration](./configuration.md) — understand required secrets and optional production settings.
+4. [Rivian account setup](./rivian-account.md) — connect the vehicle account and handle MFA or login repair.
+5. [Verify the installation](./verify-installation.md) — check container health, application access, ownership, and telemetry.
+
+After verification, continue to [Using Riviamigo](../using-riviamigo.md) for dashboards and external services or [Operations](../operations.md) for deployment, security, updates, and recovery.
+
+## When something fails
+
+- A container will not become healthy: start with [Verify the installation](./verify-installation.md) and the [Operations](../operations.md) troubleshooting path.
+- Rivian login or MFA fails: use [Rivian account setup](./rivian-account.md).
+- The public address cannot connect or WebSockets fail: review [Operations](../operations.md).
+- A provider cannot connect: use [Using Riviamigo](../using-riviamigo.md).
+- Recovery or backup validation fails: use [Operations](../operations.md) and the linked maintainer runbook.
+
+For implementation details, continue to [Development](../development.md). For exact data contracts, use [Reference](../reference.md).

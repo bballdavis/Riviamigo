@@ -60,7 +60,7 @@ Use these entrypoints in this order:
 
 ## Documentation System
 
-Repo docs are canonical. The GitHub Wiki is a published mirror for selected user-facing pages only.
+Repo docs are canonical. The Docusaurus site is built directly from `docs/` and published to GitHub Pages after relevant changes reach `main`.
 
 ### Doc ownership
 
@@ -79,7 +79,7 @@ Repo docs are canonical. The GitHub Wiki is a published mirror for selected user
 - `docs/runbooks/*`
   Audience: maintainers troubleshooting or updating operations/process.
 - `docs/guides/*`
-  Audience: self-hosters and end users. These drafts are authored in-repo and mirrored to the Wiki.
+  Audience: self-hosters and end users. These pages are authored in-repo and published directly through Docusaurus.
 
 ### When docs must be updated
 
@@ -110,7 +110,7 @@ Every non-trivial change should classify itself as one of:
 
 - `No doc impact`
 - `Internal doc update required`
-- `User-facing doc/wiki update required`
+- `Documentation site update required`
 - `Both internal and user-facing docs required`
 
 This classification belongs in the PR template and should be reflected in the changed files.
@@ -125,10 +125,10 @@ If implementation must land before final docs:
 
 ### Publishing model
 
-- Author user-facing pages in `docs/guides/`
-- Validate draft publishability with `scripts/publish-wiki.sh --validate-only`
-- Publish to the GitHub Wiki with `scripts/publish-wiki.sh` after review
-- Do not edit the GitHub Wiki directly
+- Author all documentation in `docs/`; keep user installation and operation pages in `docs/guides/`.
+- Run `pnpm docs:check` and `pnpm docs:build` before merging documentation-site changes.
+- Relevant commits to `main` are built and published automatically to GitHub Pages.
+- Do not maintain a separate hosted or generated documentation copy.
 
 ## Useful Commands
 
@@ -138,6 +138,7 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm docs:check
+pnpm docs:build
 pnpm -C apps/web exec vitest run src/test/<file>.test.tsx
 ```
 

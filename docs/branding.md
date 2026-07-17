@@ -126,6 +126,15 @@ Common usage:
 - Use ambient decoration sparingly and keep it `aria-hidden`.
 - Accent color is for interaction, emphasis, and active state, not decorative noise.
 
+### Documentation site
+
+- `apps/docs` consumes `@riviamigo/ui/tokens/globals.css` directly and maps Docusaurus/Infima variables to the shared semantic tokens. Do not create a documentation-only color palette.
+- Keep Space Grotesk headings, Inter body copy, JetBrains Mono code, the orange accent, shared surfaces, borders, radii, shadows, and focus rings aligned with the application.
+- Documentation must support light, dark, and system modes through the same token values used by the app. Theme-specific selectors must include Docusaurus's `data-theme` attributes.
+- Section landing cards clarify audience and reading order without becoming a separate marketing system. Technical pages remain direct, readable, and content-first.
+- Desktop navigation and the mobile drawer expose the same Overview, Getting Started, User Guide, Operations, Development, and Reference structure. At approximately 390px, controls remain touch-safe, search remains reachable, and content never relies on horizontal scrolling.
+- The documentation site contains no analytics, tracking pixels, cookies, or hosted search service. Production search is generated locally with the static site.
+
 ## Copy Tone
 
 - Precise, not marketing-heavy.

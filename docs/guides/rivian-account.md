@@ -1,3 +1,9 @@
+---
+title: Rivian account setup
+description: Connect a Rivian account and handle MFA or authentication repair.
+slug: /getting-started/rivian-account/
+---
+
 # Rivian account setup
 
 After you create your Riviamigo owner account, open **Settings → Vehicles** and choose **Add Vehicle**.

@@ -1,3 +1,9 @@
+---
+title: Features
+description: Review the dashboards, vehicles, telemetry, and workflows Riviamigo currently supports.
+slug: /overview/features/
+---
+
 # Features
 
 Riviamigo is a private dashboard for the Rivian data you already have access to. It focuses on making that data useful on your own hardware.
