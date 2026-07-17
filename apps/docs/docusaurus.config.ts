@@ -81,18 +81,71 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Riviamigo',
       logo: {
         alt: 'Riviamigo',
-        src: 'logo_color_lighter.svg',
+        src: 'text_black.svg',
+        srcDark: 'text_white.svg',
       },
       items: [
         {to: '/docs/', label: 'Overview', position: 'left'},
-        {to: '/docs/getting-started/', label: 'Getting Started', position: 'left'},
-        {to: '/docs/using-riviamigo/', label: 'User Guide', position: 'left'},
-        {to: '/docs/operations/', label: 'Operations', position: 'left'},
-        {to: '/docs/development/', label: 'Development', position: 'left'},
-        {to: '/docs/reference/', label: 'Reference', position: 'left'},
+        {
+          type: 'dropdown',
+          label: 'Getting Started',
+          to: '/docs/getting-started/',
+          position: 'left',
+          items: [
+            {label: 'Prerequisites', to: '/docs/getting-started/prerequisites/'},
+            {label: 'Install Riviamigo', to: '/docs/getting-started/install/'},
+            {label: 'Configure the environment', to: '/docs/getting-started/configuration/'},
+            {label: 'Connect a Rivian account', to: '/docs/getting-started/rivian-account/'},
+            {label: 'Verify the installation', to: '/docs/getting-started/verify-installation/'},
+          ],
+        },
+        {
+          type: 'dropdown',
+          label: 'User Guide',
+          to: '/docs/using-riviamigo/',
+          position: 'left',
+          items: [
+            {label: 'Dashboard customization', to: '/docs/using-riviamigo/dashboard-customization/'},
+            {label: 'External connections', to: '/docs/using-riviamigo/external-connections/'},
+          ],
+        },
+        {
+          type: 'dropdown',
+          label: 'Operations',
+          to: '/docs/operations/',
+          position: 'left',
+          items: [
+            {label: 'Deployment and updates', to: '/docs/operations/deployment-and-updates/'},
+            {label: 'Secure remote access', to: '/docs/operations/secure-remote-access/'},
+            {label: 'Backup and restore', to: '/docs/operations/backup-and-restore/'},
+            {label: 'Maintainer runbooks', to: '/docs/runbooks/'},
+          ],
+        },
+        {
+          type: 'dropdown',
+          label: 'Development',
+          to: '/docs/development/',
+          position: 'left',
+          items: [
+            {label: 'Contributor orientation', to: '/docs/contributing/'},
+            {label: 'Architecture', to: '/docs/architecture/overview/'},
+            {label: 'Implementation guidance', to: '/docs/frontend/dashboard-authoring/'},
+            {label: 'Governance and review', to: '/docs/runbooks/documentation-maintenance/'},
+          ],
+        },
+        {
+          type: 'dropdown',
+          label: 'Reference',
+          to: '/docs/reference/',
+          position: 'left',
+          items: [
+            {label: 'Integration API', to: '/docs/reference/api-access/'},
+            {label: 'Metrics', to: '/docs/reference/metrics/'},
+            {label: 'Dashboard data map', to: '/docs/reference/dashboard-data-map/'},
+          ],
+        },
         {
           href: 'https://github.com/bballdavis/Riviamigo',
           label: 'GitHub',

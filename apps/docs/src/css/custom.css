@@ -57,12 +57,13 @@ input:focus-visible,
 }
 
 .navbar__logo {
-  width: 2rem;
+  width: auto;
   height: 2rem;
 }
 
 .navbar__logo img {
-  width: 100%;
+  width: auto;
+  height: 100%;
   object-fit: contain;
 }
 
