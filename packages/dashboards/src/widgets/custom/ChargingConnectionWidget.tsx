@@ -76,7 +76,7 @@ function ChargingConnectionWidget({
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
-  const isDemoVehicle = activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id.startsWith('demo-') ?? false;
+  const isDemoVehicle = activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false;
   const rivianChargingSideLight =
     findSideChargingImage(activeVehicle?.images?.all, 'light') ??
     findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');

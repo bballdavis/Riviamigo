@@ -74,7 +74,7 @@ precise vehicle locations in public issues.
 ## Release Images
 - Standard Compose pulls public API and web images from GitHub Container Registry; source builds use the explicit build overlay only.
 - Stable images use immutable Calendar Version tags and provenance attestations; `latest` is a moving convenience tag, not a reproducible deployment identifier.
-- Development images use `edge` plus immutable SHA tags. Cleanup may delete only expired SHA-only versions and never stable, current-edge, or untagged multi-architecture manifests.
+- Container images are published only by intentional release workflows from validated `main` tags or the current `dev` pre-release candidate. Stable and pre-release image tags and digests must be treated as release artifacts.
 - See the [release images runbook](./runbooks/release-images.md) for package visibility, tag protection, and recovery requirements.
 
 ## Production Checklist

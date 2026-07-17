@@ -549,9 +549,11 @@ pub async fn run_ws_loop(
             &tokens,
             &tx,
             &mut shutdown,
-            &subscription_query,
-            subscription_health.disabled_count(),
-            parallax_tx.as_ref(),
+            WsSubscription {
+                query: &subscription_query,
+                disabled_field_count: subscription_health.disabled_count(),
+                parallax_tx: parallax_tx.as_ref(),
+            },
         )
         .await
         {
@@ -613,15 +615,19 @@ pub async fn run_ws_loop(
     }
 }
 
+struct WsSubscription<'a> {
+    query: &'a str,
+    disabled_field_count: usize,
+    parallax_tx: Option<&'a mpsc::Sender<parallax::ParallaxEvent>>,
+}
+
 async fn connect_and_subscribe(
     vehicle_id: &Uuid,
     rivian_veh_id: &str,
     tokens: &RivianTokenBundle,
     tx: &mpsc::Sender<WsInboundEvent>,
     shutdown: &mut tokio::sync::broadcast::Receiver<()>,
-    subscription_query: &str,
-    disabled_field_count: usize,
-    parallax_tx: Option<&mpsc::Sender<parallax::ParallaxEvent>>,
+    subscription: WsSubscription<'_>,
 ) -> anyhow::Result<WsLoopEnd> {
     let request = build_rivian_ws_request()?;
 
@@ -724,7 +730,7 @@ async fn connect_and_subscribe(
         "type": "subscribe",
         "payload": {
             "operationName": "vehicleState",
-            "query": subscription_query,
+            "query": subscription.query,
             "variables": { "vehicleID": rivian_veh_id }
         }
     });
@@ -734,14 +740,14 @@ async fn connect_and_subscribe(
             kind: WsInboundKind::Control,
             received_at: Utc::now(),
             raw:
-                json!({"type": "subscribe", "disabled_vehicle_state_fields": disabled_field_count})
+                json!({"type": "subscribe", "disabled_vehicle_state_fields": subscription.disabled_field_count})
                     .to_string(),
             message_type: Some("subscribe".into()),
             telemetry: None,
         })
         .await;
 
-    if parallax_tx.is_some() {
+    if subscription.parallax_tx.is_some() {
         ws.send(Message::Text(parallax::subscription_message(rivian_veh_id)))
             .await?;
         tracing::info!(
@@ -779,7 +785,7 @@ async fn connect_and_subscribe(
                                     let received_at = Utc::now();
                                     let event = parallax::parse_next_message(&value, received_at)?;
                                     if let Some(event) = event {
-                                        if let Some(parallax_tx) = parallax_tx {
+                                        if let Some(parallax_tx) = subscription.parallax_tx {
                                             parallax_tx.send(event).await.map_err(|_| {
                                                 anyhow::anyhow!("Parallax capture channel closed")
                                             })?;

@@ -59,11 +59,21 @@ The API embeds the reviewed profile and owns all demo generation. Do not add par
 CI is organized into independently visible workflows so contributors can rerun
 the evidence closest to their change:
 
+The full validation suite runs on pull requests targeting `dev` or `main`, not
+on every push to either protected branch. Container images are published only
+by intentional release workflows: stable images from a validated `main` tag
+and pre-release images from an approved `dev` candidate.
+
+The normal PR gate is six checks: frontend validation, browser E2E, backend,
+runtime/deployment, quality, and security. Fresh-install acceptance remains
+available through manual workflow dispatch for release or installation changes;
+vehicle-artwork validation remains path-filtered.
+
 | Area | Current checks |
 | --- | --- |
 | Quality | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift |
 | Frontend | Typecheck, unit tests with coverage, Storybook build, and Playwright browser tests |
-| Backend | `cargo fmt --check`, SQLx offline metadata, Clippy with warnings denied, all Rust tests including ignored tests, and coverage |
+| Backend | `cargo fmt --check`, SQLx offline metadata, Clippy with warnings denied, all non-ignored Rust tests and isolated integration suites, and coverage |
 | Runtime/deployment | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build |
 | Security | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy |
 

@@ -19,7 +19,7 @@ This directory is canonical for operational and process runbooks. Update it when
 - [`secure-deployment.md`](./secure-deployment.md)
   Required authenticated-gateway posture, production secret requirements, and verification steps for shared instances.
 - [`release-images.md`](./release-images.md)
-  Calendar Version releases, public GHCR images, development-image retention, and recovery steps.
+  Calendar Version releases, public GHCR images, pre-release images from `dev`, and recovery steps.
 - [`backup-restore.md`](./backup-restore.md)
   Recovery-package validation, clean-install restore, and incident recovery steps.
 - [`parallax-capture.md`](./parallax-capture.md)
