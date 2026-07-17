@@ -60,7 +60,7 @@ Use these entrypoints in this order:
 
 ## Documentation System
 
-Repo docs are canonical. The [Riviamigo documentation site](https://bballdavis.github.io/Riviamigo/) is built directly from `docs/` and published to GitHub Pages after relevant changes reach `main`.
+Repo docs are canonical. The [Riviamigo documentation site](https://riviamigo.com/) is built directly from `docs/` and published to GitHub Pages after relevant changes reach `main`.
 
 ### Doc ownership
 

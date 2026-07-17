@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://bballdavis.github.io/Riviamigo/sitemap.xml
+Sitemap: https://riviamigo.com/sitemap.xml

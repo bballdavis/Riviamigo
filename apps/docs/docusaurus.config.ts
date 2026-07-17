@@ -1,13 +1,14 @@
 import type {Config} from '@docusaurus/types';
 import type {Options as ClassicPresetOptions, ThemeConfig} from '@docusaurus/preset-classic';
 import {remarkRepositoryLinks, rewriteRepositoryLink} from './lib/repository-links.mjs';
+import {remarkComposeInclude} from './lib/remark-compose-include.mjs';
 
 const config: Config = {
   title: 'Riviamigo',
   tagline: "Your Rivian's data companion.",
   favicon: 'favicon.svg',
-  url: 'https://bballdavis.github.io',
-  baseUrl: '/Riviamigo/',
+  url: 'https://riviamigo.com',
+  baseUrl: '/',
   organizationName: 'bballdavis',
   projectName: 'Riviamigo',
   trailingSlash: true,
@@ -36,7 +37,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           sidebarCollapsible: true,
           sidebarCollapsed: false,
-          remarkPlugins: [remarkRepositoryLinks],
+          remarkPlugins: [remarkRepositoryLinks, remarkComposeInclude],
           editUrl: ({docPath}) =>
             `https://github.com/bballdavis/Riviamigo/edit/main/docs/${docPath}`,
         },

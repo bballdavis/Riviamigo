@@ -191,8 +191,8 @@ function checkDocusaurusContracts() {
   const sidebars = readFile("apps/docs/sidebars.ts");
 
   for (const requiredSnippet of [
-    "url: 'https://bballdavis.github.io'",
-    "baseUrl: '/Riviamigo/'",
+    "url: 'https://riviamigo.com'",
+    "baseUrl: '/'",
     "path: '../../docs'",
     "routeBasePath: 'docs'",
     "onBrokenLinks: 'throw'",

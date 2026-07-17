@@ -38,6 +38,19 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
 
 The standard stack defaults to production mode and intentionally listens only on `127.0.0.1:8080`. That is a feature: follow [secure deployment](./secure-deployment.md) before making it available outside your local network.
 
+## Copy the standard Compose file
+
+This is the exact production Compose file from the repository, included at build time so the documentation stays synchronized with the installation source. Copy it into `compose/docker-compose.yml` if you are working from a downloaded documentation bundle, or use the linked source file directly: [`compose/docker-compose.yml`](../../compose/docker-compose.yml).
+
+```compose-include
+compose/docker-compose.yml
+```
+
+Other Compose variants are available when you need them:
+
+- [`docker-compose.build.yml`](../../compose/docker-compose.build.yml) — build the API and web images from the local checkout.
+- [`docker-compose.dev.yml`](../../compose/docker-compose.dev.yml) — start development infrastructure for `pnpm dev:stack`.
+
 ## Next steps
 
 - [Connect your Rivian account](./rivian-account.md).
