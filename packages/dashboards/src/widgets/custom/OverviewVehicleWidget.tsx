@@ -9,6 +9,7 @@ import { Tooltip } from '@riviamigo/ui/primitives';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
+import { isVehiclePluggedIn } from '../../dashboardVisibility';
 import { getDoorOverlayUrls, getOpenDoorStates } from './imageUtils';
 
 type AnchorSet = {
@@ -55,6 +56,7 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       images={activeVehicle?.images}
       vehicleName={activeVehicle?.display_name}
       vehicleModel={activeVehicle?.model}
+      isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id.startsWith('demo-') ?? false}
       targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
     />
   );
@@ -65,12 +67,14 @@ function CurrentVehicleStatePanel({
   images,
   vehicleName,
   vehicleModel,
+  isDemoVehicle,
   targetTirePressurePsi,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
   vehicleName?: string | undefined;
   vehicleModel?: string | undefined;
+  isDemoVehicle: boolean;
   targetTirePressurePsi?: number | null | undefined;
 }) {
   const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;
@@ -115,6 +119,7 @@ function CurrentVehicleStatePanel({
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
   const rearGateLockTitle = vehicleModel === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
+  const demoCenteredOverviewFrame = isDemoVehicle && (vehicleModel === 'R1T' || vehicleModel === 'R2S');
 
   useEffect(() => {
     const element = imageStageRef.current;
@@ -161,7 +166,7 @@ function CurrentVehicleStatePanel({
             <div className="grid gap-2 text-sm">
               <SocDatum label="Range" value={formatMiles(status?.range_miles)} />
               <SocDatum label="Limit" value={formatPercent(status?.battery_limit)} />
-              <SocDatum label="Charging" value={<ChargingGlyph chargerState={status?.charger_state} chargerStatus={status?.charger_status} />} />
+              <SocDatum label="Charging" value={<ChargingGlyph status={status} />} />
               {isCharging(status) ? (
                 <SocDatum label="To Limit" value={formatTimeToFull(status?.time_to_end_of_charge_min)} />
               ) : null}
@@ -175,7 +180,7 @@ function CurrentVehicleStatePanel({
           </div>
           <div className="absolute inset-1 z-10 flex items-center justify-center">
             {overheadArtworkAvailable ? (
-              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth}>
+              <VehicleArtFrame source={apiOverheadFallback} fallbackSource={localOverheadFallback} heightPx={imageStageHeight} widthPx={imageStageWidth} translateXPercent={demoCenteredOverviewFrame ? 0 : -5}>
                 <VehicleOverheadLayers base={baseOverheadLight ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysLight} darkClassName="dark:hidden" vehicleName={vehicleName} isR1tFallback={vehicleModel === 'R1T'} />
                 <VehicleOverheadLayers base={baseOverheadDark ?? apiOverheadFallback} fallbackBase={localOverheadFallback} overlays={overlaysDark} darkClassName="hidden dark:block" isR1tFallback={vehicleModel === 'R1T'} />
                 <VehicleLabel className={anchors.tire.rl} value={tires.rl.value} tone={tires.rl.tone} targetTirePressurePsi={targetTirePressurePsi} />
@@ -227,15 +232,20 @@ function SocDatum({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function ChargingGlyph({ chargerState, chargerStatus }: { chargerState: string | null | undefined; chargerStatus: string | null | undefined }) {
-  const charging = chargerState && !['unknown', 'disconnected'].includes(chargerState.toLowerCase()) && chargerStatus !== 'chrgr_sts_not_connected';
+function ChargingGlyph({ status }: { status: VehicleStatus | null | undefined }) {
+  const charging = isCharging(status);
+  const pluggedIn = isVehiclePluggedIn(status);
+  const state = charging ? 'charging' : pluggedIn ? 'connected' : 'disconnected';
+  const label = charging ? 'Charging' : pluggedIn ? 'Connected, not charging' : 'Not connected';
   return (
     <span
-      aria-label={charging ? 'Charging' : 'Not charging'}
-      title={charging ? 'Charging' : 'Not charging'}
+      data-testid="overview-charging-glyph"
+      data-charging-state={state}
+      aria-label={label}
+      title={label}
       className={`inline-flex items-center justify-center ${charging ? 'text-accent' : 'text-fg-tertiary'}`}
     >
-      {charging ? <PiPlugsConnectedFill className="h-4 w-4" /> : <PiPlugsFill className="h-4 w-4" />}
+      {pluggedIn ? <PiPlugsConnectedFill className="h-4 w-4" /> : <PiPlugsFill className="h-4 w-4" />}
     </span>
   );
 }
@@ -305,12 +315,14 @@ function VehicleArtFrame({
   fallbackSource,
   heightPx,
   widthPx,
+  translateXPercent,
   children,
 }: {
   source: string | null | undefined;
   fallbackSource?: string | null | undefined;
   heightPx: number;
   widthPx: number;
+  translateXPercent: number;
   children: React.ReactNode;
 }) {
   const artwork = useVehicleArtwork(source);
@@ -338,7 +350,7 @@ function VehicleArtFrame({
         containerType: 'inline-size',
         height: frameHeight,
         width: frameWidth,
-        transform: 'translateX(-5%)',
+        transform: `translateX(${translateXPercent}%)`,
         '--vehicle-frame-height': `${frameHeight}px`,
         '--vehicle-frame-width': `${frameWidth}px`,
       } as React.CSSProperties}

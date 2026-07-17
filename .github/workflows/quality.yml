@@ -1,0 +1,85 @@
+name: Quality
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: '11.5.1'
+  NODE_VERSION: '20'
+
+jobs:
+  repo-hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Reject generated state and duplicate lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden=$(git ls-files | grep -E '(^|/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(/|$)|(^|/)package-lock\.json$|(^|/)[^/]+\.tmp$' || true)
+          if [[ -n "$forbidden" ]]; then
+            echo "Generated or local-only files are tracked:"
+            echo "$forbidden"
+            exit 1
+          fi
+          echo "Repository hygiene check passed"
+
+  linting:
+    name: Linting and design-token guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm turbo lint
+      - name: Color-token guard
+        run: |
+          set +e
+          VIOLATIONS=$(grep -rn \
+            --include="*.tsx" --include="*.ts" --include="*.css" \
+            -E '#[0-9a-fA-F]{3,8}|rgb\(|rgba\(|text-(blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-[0-9]+|bg-(blue|indigo|sky|green|red|orange|yellow|slate|zinc|stone)-[0-9]+' \
+            apps/web/src packages/ui/src packages/dashboards/src packages/hooks/src \
+            --exclude-dir=node_modules \
+            | grep -v 'tokens/colors\.ts\|globals\.css\|\.test\.\|\.spec\.\|//.*#' \
+            | grep -v 'getPropertyValue\|CHART_COLORS\|rm-map-route' \
+          )
+          if [ -n "$VIOLATIONS" ]; then
+            echo "Color-token violations found — use design tokens instead of raw colors:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "No color-token violations"
+
+  docs-and-drift:
+    name: Documentation and dashboard drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Docs check
+        run: pnpm docs:check
+      - name: Dashboard default drift check
+        run: pnpm dashboards:sync-defaults --check

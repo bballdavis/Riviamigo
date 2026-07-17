@@ -56,16 +56,24 @@ The API embeds the reviewed profile and owns all demo generation. Do not add par
 
 ## CI Coverage
 
-The main CI workflow is organized around these evidence groups:
+CI is organized into independently visible workflows so contributors can rerun
+the evidence closest to their change:
 
 | Area | Current checks |
 | --- | --- |
-| Frontend | Typecheck, lint, docs check, dashboard-default drift, design-token guard, unit tests with coverage, Storybook build, and Playwright browser tests |
+| Quality | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift |
+| Frontend | Typecheck, unit tests with coverage, Storybook build, and Playwright browser tests |
 | Backend | `cargo fmt --check`, SQLx offline metadata, Clippy with warnings denied, all Rust tests including ignored tests, and coverage |
 | Runtime/deployment | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build |
 | Security | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy |
 
-Dependency and secret failures are release blockers. Semgrep and Trivy are currently advisory in CI while the repository establishes a clean baseline; findings still require review and should not be waived silently. CI provides repeatable evidence, not a security certification or a replacement for human review. Release and exposure decisions should also consult [`security.md`](./security.md) and [`security-audit.md`](./security-audit.md).
+Dependency and secret failures are release blockers. High-risk Semgrep
+findings and critical/high Trivy findings are also blocking. Any reviewed
+exception must be time-bounded, recorded in the PR, and linked to remediation;
+it must not be silently waived. CI provides repeatable evidence, not a security
+certification or a replacement for human review. Release and exposure decisions
+should also consult [`SECURITY.md`](../SECURITY.md), [`security.md`](./security.md),
+and [`security-audit.md`](./security-audit.md).
 
 ## Review Expectations
 

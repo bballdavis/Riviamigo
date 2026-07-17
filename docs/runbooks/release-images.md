@@ -21,7 +21,12 @@ If image publication or manifest verification fails, no GitHub release is create
 
 ## Development images and cleanup
 
-After a successful CI run on `dev`, **Publish development images** updates the `edge` tag and creates an immutable `sha-<commit>` tag for each image. These are development artifacts, not GitHub prereleases and not a stable deployment channel.
+After successful `Quality`, `Frontend`, `Backend`, `Security`, and `Runtime`
+workflow runs for the same commit on `dev`, **Publish development images**
+updates the `edge` tag and creates an immutable `sha-<commit>` tag for each
+image. The publisher verifies those exact-commit conclusions before it can
+publish. These are development artifacts, not GitHub prereleases and not a
+stable deployment channel.
 
 **Clean expired development images** runs weekly. Run it manually with `dry_run=true` first when investigating retention. It retains every Calendar Version, `latest`, the current `edge` image, and its SHA tag. It deletes only SHA-only versions older than 30 days and deliberately ignores untagged manifests so a multi-architecture image cannot lose a platform child.
 

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a sensitive security vulnerability privately
+    url: https://github.com/bballdavis/Riviamigo/security/advisories/new
+    about: Do not disclose credentials, exploit details, live telemetry, or precise vehicle locations in a public issue.

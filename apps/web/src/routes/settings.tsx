@@ -1057,31 +1057,35 @@ export function SettingsContent() {
                             {/* Action buttons */}
                             <div className="flex shrink-0 flex-wrap items-center justify-start gap-1.5 self-center sm:justify-end">
                               {!isActive && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  className="h-8 px-2.5"
-                                  loading={setDefaultVehicle.isPending && setDefaultVehicle.variables === v.id}
-                                  onClick={() => setDefaultVehicle.mutate(v.id)}
-                                >
-                                  <Star className="mr-1.5 h-3.5 w-3.5" />
-                                  Set Default
-                                </Button>
+                                <Tooltip content="Set as default vehicle">
+                                  <Button
+                                    aria-label={`Set ${v.display_name} as default vehicle`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="h-8 w-8 px-0"
+                                    loading={setDefaultVehicle.isPending && setDefaultVehicle.variables === v.id}
+                                    onClick={() => setDefaultVehicle.mutate(v.id)}
+                                  >
+                                    <Star className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
                               )}
                               {canManageMembers && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  className="h-8 px-2.5"
-                                  onClick={() => {
-                                    setSharingVehicleId((current) => current === v.id ? null : v.id);
-                                    setShareEmail('');
-                                    setShareRole('viewer');
-                                  }}
-                                >
-                                  <Users className="mr-1.5 h-3.5 w-3.5" />
-                                  {isSharingExpanded ? 'Hide Sharing' : 'Manage Sharing'}
-                                </Button>
+                                <Tooltip content={isSharingExpanded ? 'Hide sharing' : 'Manage sharing'}>
+                                  <Button
+                                    aria-label={`${isSharingExpanded ? 'Hide sharing for' : 'Manage sharing for'} ${v.display_name}`}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="h-8 w-8 px-0"
+                                    onClick={() => {
+                                      setSharingVehicleId((current) => current === v.id ? null : v.id);
+                                      setShareEmail('');
+                                      setShareRole('viewer');
+                                    }}
+                                  >
+                                    <Users className="h-3.5 w-3.5" />
+                                  </Button>
+                                </Tooltip>
                               )}
                               {canManageVehicle && !isDemo && (
                                 <Tooltip content="Refresh Rivian login">
@@ -1130,17 +1134,16 @@ export function SettingsContent() {
                                 </Tooltip>
                               )}
                               {isAdmin && isDemo && (
-                                <Tooltip content="Replace this vehicle's illustrative 14-day history">
+                                <Tooltip content="Refresh demo data">
                                   <Button
                                     aria-label={`Refresh demo data for ${v.display_name}`}
                                     variant="secondary"
                                     size="sm"
-                                    className="h-8 px-2.5"
+                                    className="h-8 w-8 px-0"
                                     loading={refreshDemoVehicle.isPending && refreshDemoVehicle.variables === v.id}
                                     onClick={() => setDemoRefreshConfirmId(v.id)}
                                   >
-                                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-                                    Refresh Demo Data
+                                    <RotateCcw className="h-3.5 w-3.5" />
                                   </Button>
                                 </Tooltip>
                               )}
