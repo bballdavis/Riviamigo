@@ -45,15 +45,16 @@ CANVAS_BY_USAGE: dict[Usage, tuple[int, int]] = {
     "vehicle-card": (1200, 560),
 }
 
-# Each charge source keeps its charge-port end on the left side of the image.
-# For R1 vehicles that is the front quarter; for R2S it is the rear quarter.
-# Keep the port, cable, adjacent wheel, and one neighboring door while discarding
-# the rest of the full-vehicle side profile.
+# R1S retains the original charge-port close-up. Demo R1T/R2S charging cards
+# use a fuller side profile so the fallback does not cut the vehicle at the
+# canvas edge.
 CHARGING_PORT_FRACTION: dict[str, float] = {
     "r1s": 0.49,
-    "r1t": 0.47,
-    "r2s": 0.50,
+    "r1t": 1.00,
+    "r2s": 1.00,
 }
+
+FULL_PROFILE_CHARGING_MODELS = frozenset({"r1t", "r2s"})
 
 
 @dataclass(frozen=True)
@@ -311,16 +312,24 @@ def compose_charging(image: Image.Image, *, model: str) -> Image.Image:
     )
 
     canvas_width, canvas_height = CANVAS_BY_USAGE["charging"]
-    target_height = round(canvas_height * 0.92)
-    scale = target_height / content.height
+    if model in FULL_PROFILE_CHARGING_MODELS:
+        # Keep the full side profile visible, with the vehicle body ending at
+        # the card edge and the cable naturally receding below the information
+        # gradient on the left.
+        max_width = round(canvas_width * 0.96)
+        max_height = round(canvas_height * 0.78)
+        scale = min(max_width / content.width, max_height / content.height)
+    else:
+        target_height = round(canvas_height * 0.92)
+        scale = target_height / content.height
     target_width = round(content.width * scale)
+    target_height = round(content.height * scale)
     resized = content.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
     canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
-    # Let the vehicle body beyond the charge-port quarter extend past the right
-    # edge. This pins the port and adjacent wheel near the chip's visual focus
-    # while the cable recedes under the left-side information gradient.
-    paste_x = round(canvas_width * 0.33)
+    # The close-up composition keeps the port-side quarter near the visual
+    # focus. Full-profile demo artwork instead ends at the canvas edge.
+    paste_x = canvas_width - target_width if model in FULL_PROFILE_CHARGING_MODELS else round(canvas_width * 0.33)
     paste_y = round(canvas_height * 0.96) - target_height
     canvas.alpha_composite(resized, (paste_x, paste_y))
     return canvas
