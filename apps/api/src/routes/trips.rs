@@ -19,16 +19,16 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/trips", get(list_trips))
-        .route("/trips/:id", get(get_trip))
-        .route("/trips/:id/detail", get(get_trip_detail))
-        .route("/trips/:id/track", get(get_track))
-        .route("/trips/:id/speed", get(get_speed_profile))
-        .route("/trips/:id/elevation", get(get_elevation_profile))
-        .route("/trips/:id/power", get(get_power_profile))
-        .route("/trips/:id/series", get(get_trip_series))
+        .route("/trips/{id}", get(get_trip))
+        .route("/trips/{id}/detail", get(get_trip_detail))
+        .route("/trips/{id}/track", get(get_track))
+        .route("/trips/{id}/speed", get(get_speed_profile))
+        .route("/trips/{id}/elevation", get(get_elevation_profile))
+        .route("/trips/{id}/power", get(get_power_profile))
+        .route("/trips/{id}/series", get(get_trip_series))
         .route("/trips/map", get(get_trip_map))
         .route(
-            "/vehicles/:vehicle_id/drives/:id/power",
+            "/vehicles/{vehicle_id}/drives/{id}/power",
             get(get_power_profile_path),
         )
 }

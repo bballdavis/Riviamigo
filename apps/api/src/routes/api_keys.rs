@@ -20,7 +20,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api-keys", get(list_api_keys).post(create_api_key))
-        .route("/api-keys/:id", delete(revoke_api_key))
+        .route("/api-keys/{id}", delete(revoke_api_key))
         .route("/api/catalog", get(api_catalog))
         .route("/admin/api/catalog", get(admin_api_catalog))
 }

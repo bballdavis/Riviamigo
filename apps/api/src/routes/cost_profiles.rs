@@ -18,7 +18,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/cost-profiles", get(list_profiles).post(create_profile))
         .route(
-            "/cost-profiles/:id",
+            "/cost-profiles/{id}",
             get(get_profile).put(update_profile).delete(delete_profile),
         )
 }

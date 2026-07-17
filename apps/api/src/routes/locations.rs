@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/:vehicle_id/locations", get(locations))
+    Router::new().route("/vehicles/{vehicle_id}/locations", get(locations))
 }
 #[derive(Deserialize)]
 struct LocationParams {

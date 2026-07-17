@@ -20,9 +20,9 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/vehicles/:id/backfill-status", get(get_backfill_status))
-        .route("/vehicles/:id/backfill", post(trigger_backfill))
-        .route("/vehicles/:id/charging-backfill", post(trigger_backfill))
+        .route("/vehicles/{id}/backfill-status", get(get_backfill_status))
+        .route("/vehicles/{id}/backfill", post(trigger_backfill))
+        .route("/vehicles/{id}/charging-backfill", post(trigger_backfill))
 }
 
 async fn get_backfill_status(

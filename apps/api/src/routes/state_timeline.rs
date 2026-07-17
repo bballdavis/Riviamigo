@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/:vehicle_id/state-timeline", get(state_timeline))
+    Router::new().route("/vehicles/{vehicle_id}/state-timeline", get(state_timeline))
 }
 #[derive(Deserialize)]
 struct TimelineParams {

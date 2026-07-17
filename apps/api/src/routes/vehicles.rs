@@ -34,53 +34,53 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/connect", post(connect))
         .route("/vehicles/connect/otp", post(connect_otp))
         .route("/vehicles/demo", post(create_demo_vehicle))
-        .route("/vehicles/:id/demo/refresh", post(refresh_demo_vehicle))
+        .route("/vehicles/{id}/demo/refresh", post(refresh_demo_vehicle))
         .route(
-            "/vehicle-image-cache/:id/:image_key",
+            "/vehicle-image-cache/{id}/{image_key}",
             get(vehicle_image_cache_asset),
         )
         .route(
-            "/admin/vehicles/:id/images/remirror",
+            "/admin/vehicles/{id}/images/remirror",
             post(admin_remirror_vehicle_images),
         )
         .route(
-            "/admin/vehicles/:id/images/cache/purge",
+            "/admin/vehicles/{id}/images/cache/purge",
             post(admin_purge_vehicle_artwork_cache),
         )
         .route("/vehicles", post(add_vehicle).get(list_vehicles))
-        .route("/vehicles/:id", delete(delete_vehicle))
-        .route("/vehicles/:id/default", post(set_default_vehicle))
+        .route("/vehicles/{id}", delete(delete_vehicle))
+        .route("/vehicles/{id}/default", post(set_default_vehicle))
         .route(
-            "/vehicles/:id/members",
+            "/vehicles/{id}/members",
             get(list_vehicle_members).post(add_vehicle_member),
         )
         .route(
-            "/vehicles/:id/members/:user_id",
+            "/vehicles/{id}/members/{user_id}",
             put(update_vehicle_member).delete(remove_vehicle_member),
         )
         .route(
-            "/vehicles/:id/invites",
+            "/vehicles/{id}/invites",
             get(list_vehicle_invites).post(create_vehicle_invite),
         )
         .route(
-            "/vehicles/:id/invites/:invite_id",
+            "/vehicles/{id}/invites/{invite_id}",
             delete(revoke_vehicle_invite),
         )
-        .route("/invites/:token", get(preview_invite))
-        .route("/invites/:token/accept", post(accept_invite))
+        .route("/invites/{token}", get(preview_invite))
+        .route("/invites/{token}/accept", post(accept_invite))
         .route(
-            "/vehicles/:id/credentials",
+            "/vehicles/{id}/credentials",
             put(refresh_vehicle_credentials),
         )
-        .route("/vehicles/:id/status", get(vehicle_status))
-        .route("/vehicles/:id/images", get(vehicle_images))
-        .route("/vehicles/:id/raw-data", get(raw_vehicle_data))
-        .route("/vehicles/:id/telemetry/lanes", get(telemetry_lanes))
-        .route("/vehicles/:id/raw-events", get(raw_vehicle_events))
-        .route("/vehicles/:id/raw-events/:event_id", get(raw_vehicle_event))
-        .route("/vehicles/:id/settings", put(update_vehicle_settings))
-        .route("/vehicles/:id/battery-config", put(update_battery_config))
-        .route("/vehicles/:id/name", put(update_vehicle_name))
+        .route("/vehicles/{id}/status", get(vehicle_status))
+        .route("/vehicles/{id}/images", get(vehicle_images))
+        .route("/vehicles/{id}/raw-data", get(raw_vehicle_data))
+        .route("/vehicles/{id}/telemetry/lanes", get(telemetry_lanes))
+        .route("/vehicles/{id}/raw-events", get(raw_vehicle_events))
+        .route("/vehicles/{id}/raw-events/{event_id}", get(raw_vehicle_event))
+        .route("/vehicles/{id}/settings", put(update_vehicle_settings))
+        .route("/vehicles/{id}/battery-config", put(update_battery_config))
+        .route("/vehicles/{id}/name", put(update_vehicle_name))
 }
 
 #[derive(Deserialize)]

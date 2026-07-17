@@ -21,29 +21,29 @@ pub fn router() -> Router<AppState> {
         .route("/charging/chart-series", get(get_chart_series))
         .route("/charging/summary", get(get_summary))
         .route("/charging/sessions", get(list_sessions))
-        .route("/charging/sessions/:id/curve", get(get_session_curve))
-        .route("/charging/sessions/:id", get(get_session))
-        .route("/charging/:id/curve", get(get_session_curve))
-        .route("/charging/:id", get(get_session))
-        .route("/charging/:id", patch(update_session_location))
+        .route("/charging/sessions/{id}/curve", get(get_session_curve))
+        .route("/charging/sessions/{id}", get(get_session))
+        .route("/charging/{id}/curve", get(get_session_curve))
+        .route("/charging/{id}", get(get_session))
+        .route("/charging/{id}", patch(update_session_location))
         .route("/charging/curve-analysis", get(get_curve_analysis))
         .route(
-            "/vehicles/:vehicle_id/charging-sessions",
+            "/vehicles/{vehicle_id}/charging-sessions",
             get(list_sessions_path),
         )
         .route(
-            "/vehicles/:vehicle_id/charging-sessions/:id/curve",
+            "/vehicles/{vehicle_id}/charging-sessions/{id}/curve",
             get(get_session_curve_path),
         )
         .route(
-            "/vehicles/:vehicle_id/charging-sessions/:id",
+            "/vehicles/{vehicle_id}/charging-sessions/{id}",
             get(get_session_path),
         )
         .route(
-            "/vehicles/:vehicle_id/charging-sessions/:id",
+            "/vehicles/{vehicle_id}/charging-sessions/{id}",
             patch(update_session_location_path),
         )
-        .route("/vehicles/:vehicle_id/costs", get(get_summary_path))
+        .route("/vehicles/{vehicle_id}/costs", get(get_summary_path))
 }
 
 #[derive(Deserialize)]

@@ -23,7 +23,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vehicles/live", get(live_handler))
-        .route("/vehicles/:id/live-session", get(live_session_handler))
+        .route("/vehicles/{id}/live-session", get(live_session_handler))
 }
 
 #[derive(Deserialize)]
