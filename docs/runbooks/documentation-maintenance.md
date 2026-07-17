@@ -80,7 +80,7 @@ Do not:
 - Search is empty under `pnpm docs:dev`
   This is expected. Build and serve the production site to test the static index.
 - The live site loads without CSS or images
-  Confirm `baseUrl` remains `/Riviamigo/` and that assets use Docusaurus-aware URLs.
+  Confirm the production `url` is `https://riviamigo.com`, `baseUrl` is `/`, and assets use Docusaurus-aware URLs.
 - The Pages deployment does not run
   Confirm the commit reached `main`, changed a configured path, and that repository Pages source is set to **GitHub Actions**.
 
