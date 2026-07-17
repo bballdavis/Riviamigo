@@ -12,7 +12,7 @@
   "dependencies": {
     "@riviamigo/types": "workspace:*",
     "@tanstack/react-query": "^5.51.0",
-    "date-fns": "^3.6.0",
+    "date-fns": "^4.4.0",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
