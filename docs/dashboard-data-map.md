@@ -1,3 +1,9 @@
+---
+title: Dashboard data map
+description: Trace dashboard needs through telemetry, storage, API, and presentation ownership.
+slug: /reference/dashboard-data-map/
+---
+
 # Dashboard data map
 
 This document tracks what the dashboards need, what TeslaMate-style EV logging commonly shows, what Rivian appears to expose, and what Riviamigo currently stores.

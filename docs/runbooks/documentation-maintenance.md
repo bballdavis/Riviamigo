@@ -1,48 +1,89 @@
-# Documentation Maintenance Runbook
+# Documentation maintenance
 
 ## Audience
 
-Maintainers and agents updating canonical docs or publishing wiki content.
+Maintainers and agents updating canonical documentation or the published documentation site.
 
-## Source Of Truth
+## Source of truth
 
-This document is canonical for the documentation upkeep workflow.
+This document is canonical for documentation upkeep and publishing.
 
-## Canonical Model
+## Canonical model
 
-- Repo docs are canonical.
-- `docs/guides/` is the source for user-facing wiki pages.
-- The GitHub Wiki is a generated publish target only. The publisher maps `docs/guides/README.md` to `Home.md`, generates `_Sidebar.md`, rewrites links for the Wiki, and removes stale generated pages.
+- The repository `docs/` tree is canonical.
+- `docs/guides/` owns the sequential installation and operation path for self-hosters.
+- `docs/development.md` and the development sidebar route contributors into architecture, implementation references, runbooks, and governance.
+- `apps/docs` contains the Docusaurus presentation, navigation, search, and GitHub Pages configuration. It does not duplicate documentation content.
+- Relevant commits to `main` are the only public deployment trigger.
+- Pull requests validate the production site but never publish it.
 
-## Update Procedure
+## Update procedure
 
-1. Update the relevant canonical docs in the repo.
-2. If the change is user-facing, update the corresponding page in `docs/guides/`.
-3. Run `pnpm docs:check`.
-4. If publishability is the only thing you need to verify, run:
-   `scripts/publish-wiki.sh --validate-only`
-5. After review and merge to `main`, the `Publish Wiki` workflow publishes the
-   guides automatically when `docs/guides/` changes. You can also publish
-   locally with:
-   `scripts/publish-wiki.sh`
-   The workflow can be rerun manually from GitHub Actions when needed.
+1. Update the owning Markdown file in `docs/` with the behavior or structural change.
+2. Keep each document in exactly one logical sidebar path: Overview, Getting Started, Using Riviamigo, Operations, Development, or Reference.
+3. Add frontmatter only when a stable route, title, description, or navigation label is needed.
+4. Run:
 
-## When Docs Must Change
+   ```bash
+   pnpm docs:check
+   pnpm docs:build
+   ```
 
-- visual pattern changes: update `docs/branding.md`
-- repo structure or seam changes: update `docs/index.md` and relevant architecture docs
-- env vars, routes, or operational behavior: update relevant canonical docs and wiki drafts if user-visible
-- publishing workflow changes: update this runbook and `docs/guides/README.md`
+5. For visual or navigation changes, serve the production output:
 
-## Failure Modes
+   ```bash
+   pnpm docs:serve
+   ```
 
-- `pnpm docs:check` fails on a missing file link
-  Fix the link or restore the referenced file.
-- `pnpm docs:check` fails on env vars
-  Add the missing env var to `compose/.env.full.example` (and the short template when needed) or remove the stale doc reference.
-- `pnpm docs:check` fails on route or API contracts
-  Update the contract in `scripts/check-docs.mjs` or bring docs/code back into alignment.
-- `scripts/publish-wiki.sh --validate-only` fails
-  Resolve invalid or colliding guide filenames before publishing.
-- Wiki pages show links back to local paths
-  Publish with `scripts/publish-wiki.sh`; it renders Wiki links from the canonical repo pages instead of copying raw repo-relative links.
+6. Verify desktop and small-screen navigation, light and dark themes, representative deep links, and local search.
+7. Merge through the normal review flow. When the relevant commit reaches `main`, the Pages workflow publishes `apps/docs/build`.
+
+## Local authoring
+
+Use the development server while writing content or styling:
+
+```bash
+pnpm docs:dev
+```
+
+The local search index is generated only by the production build. Use `pnpm docs:build` followed by `pnpm docs:serve` to test search.
+
+## When docs must change
+
+- Visual pattern or token changes: update `docs/branding.md` and verify the Docusaurus theme adapter.
+- Repository structure or ownership changes: update `docs/index.md`, `docs/development.md`, and the relevant architecture document.
+- Environment variables, routes, auth, backups, or operational behavior: update the applicable guide and maintainer reference.
+- Publishing, navigation, or search changes: update this runbook and the Docusaurus application.
+
+## Publishing contract
+
+The Pages workflow runs only for a push to `main` that changes a documentation-site input. It installs the frozen pnpm graph, runs the documentation checks, builds Docusaurus, uploads `apps/docs/build`, and deploys through the `github-pages` environment.
+
+Do not:
+
+- publish from `dev`, feature branches, pull requests, schedules, or manual dispatch
+- commit `apps/docs/build` or `.docusaurus`
+- maintain a second hosted documentation copy outside `docs/`
+- create a parallel generated-documents branch
+- add deployment PATs or long-lived Pages secrets
+
+## Failure modes
+
+- `pnpm docs:check` reports a missing canonical file or obsolete publishing language
+  Restore the required file or update the obsolete documentation contract.
+- `pnpm docs:check` reports a broken local link
+  Correct the canonical Markdown target; do not suppress the check.
+- `pnpm docs:build` reports a broken internal route
+  Correct the document path, slug, sidebar ID, or anchor.
+- `pnpm docs:build` reports a broken repository link
+  Restore or correct the referenced file. Links outside `docs/` are converted to GitHub source URLs only when the target exists.
+- Search is empty under `pnpm docs:dev`
+  This is expected. Build and serve the production site to test the static index.
+- The live site loads without CSS or images
+  Confirm `baseUrl` remains `/Riviamigo/` and that assets use Docusaurus-aware URLs.
+- The Pages deployment does not run
+  Confirm the commit reached `main`, changed a configured path, and that repository Pages source is set to **GitHub Actions**.
+
+## Go-live settings
+
+Repository administrators must set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. After a successful live deployment and link audit, disable the repository's legacy knowledge-base feature under **Settings → Features**.

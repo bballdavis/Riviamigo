@@ -75,7 +75,7 @@ If AI assistance was used, briefly describe its scope and the human verification
 
 - [ ] No doc impact
 - [ ] Internal doc update required
-- [ ] User-facing doc/wiki update required
+- [ ] Documentation site update required
 - [ ] Both internal and user-facing docs required
 
 Docs touched:

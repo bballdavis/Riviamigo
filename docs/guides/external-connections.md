@@ -1,3 +1,9 @@
+---
+title: External connections
+description: Configure weather, geocoding, basemap, proxy, privacy, and self-hosted providers.
+slug: /using-riviamigo/external-connections/
+---
+
 # External connections
 
 Open **Settings > External Connections** to see every service Riviamigo may contact. All signed-in users can read the inventory and its data disclosures. Administrators and super users control the installation-wide policy.

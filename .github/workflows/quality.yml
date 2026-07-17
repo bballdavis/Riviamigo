@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - name: Reject generated state and duplicate lockfiles
         shell: bash
         run: |
@@ -59,5 +61,23 @@ jobs:
           echo "No color-token violations"
       - name: Docs check
         run: pnpm docs:check
+      - name: Detect documentation-site changes
+        id: docs-changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" HEAD -- \
+            docs apps/docs apps/web/public/favicon.svg apps/web/public/logo_color_lighter.svg \
+            packages/ui/src/tokens README.md AGENTS.md CLAUDE.md \
+            package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json \
+            scripts/check-docs.mjs .github/workflows/publish-docs.yml .github/workflows/quality.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build documentation site
+        if: steps.docs-changes.outputs.changed == 'true'
+        run: pnpm docs:build
       - name: Dashboard default drift check
         run: pnpm dashboards:sync-defaults --check

@@ -1,3 +1,10 @@
+---
+title: Riviamigo integration API
+description: Create and use read-only, vehicle-scoped Riviamigo integration keys.
+slug: /reference/api-access/
+sidebar_label: Integration API
+---
+
 # Riviamigo integration API
 
 Riviamigo integration keys are read-only, bearer tokens scoped to one vehicle.
