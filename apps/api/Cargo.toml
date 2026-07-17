@@ -14,12 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 # Web framework
-axum            = { version = "0.7", features = ["macros", "ws"] }
-axum-extra      = { version = "0.9", features = ["typed-header"] }
-tower           = { version = "0.4", features = ["full"] }
-tower-http      = { version = "0.5", features = ["cors", "compression-gzip", "request-id", "trace", "limit", "set-header"] }
-tower_governor  = "0.4"
-governor        = "0.6.3"
+axum            = { version = "0.8", features = ["macros", "ws"] }
+axum-extra      = { version = "0.12", features = ["typed-header"] }
+tower           = { version = "0.5", features = ["full"] }
+tower-http      = { version = "0.7", features = ["cors", "compression-gzip", "request-id", "trace", "limit", "set-header"] }
+tower_governor  = "0.8"
+governor        = "0.10.4"
 
 # Async runtime
 tokio           = { version = "1", features = ["full"] }
@@ -32,7 +32,7 @@ sqlx            = { version = "0.7", features = ["postgres", "runtime-tokio-nati
 redis           = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
 
 # HTTP client
-reqwest         = { version = "0.12", features = ["json", "native-tls"] }
+reqwest         = { version = "0.13", features = ["json", "native-tls", "query"] }
 
 # Serialization
 serde           = { version = "1", features = ["derive"] }
@@ -69,7 +69,7 @@ async-trait     = "0.1"
 base64          = "0.22"
 hex             = "0.4"
 rand            = "0.8"
-sha2            = "0.10"
+sha2            = "0.11"
 tar             = "0.4"
 flate2          = "1"
 walkdir         = "2"

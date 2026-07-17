@@ -67,7 +67,6 @@ pub struct AppState {
     pub supervisor: SupervisorHandle,
 }
 
-#[async_trait::async_trait]
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
 

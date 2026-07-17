@@ -139,13 +139,13 @@ async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client
                             Ok(p) => p,
                             Err(_) => continue,
                         };
-                        if sink.send(Message::Text(payload)).await.is_err() { break; }
+                        if sink.send(Message::Text(payload.into())).await.is_err() { break; }
                     }
                     None => break,
                 }
             }
             _ = ping_interval.tick() => {
-                if sink.send(Message::Ping(vec![])).await.is_err() { break; }
+                if sink.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
             }
             msg = stream.next() => {
                 match msg {

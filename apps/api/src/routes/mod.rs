@@ -267,9 +267,7 @@ pub fn build_router(state: AppState) -> Router {
     let protected_metadata = Router::new()
         .merge(auth::metadata_router())
         .merge(dashboards::metadata_router())
-        .layer(GovernorLayer {
-            config: auth_metadata_identity_config,
-        });
+        .layer(GovernorLayer::new(auth_metadata_identity_config));
 
     let protected_heavy = Router::new().merge(live::router());
 
@@ -277,16 +275,10 @@ pub fn build_router(state: AppState) -> Router {
         .merge(protected_metadata)
         .merge(
             protected_common
-                .layer(GovernorLayer {
-                    config: auth_read_identity_config,
-                })
-                .layer(GovernorLayer {
-                    config: auth_write_identity_config,
-                }),
+                .layer(GovernorLayer::new(auth_read_identity_config))
+                .layer(GovernorLayer::new(auth_write_identity_config)),
         )
-        .merge(protected_heavy.layer(GovernorLayer {
-            config: heavy_read_identity_config,
-        }))
+        .merge(protected_heavy.layer(GovernorLayer::new(heavy_read_identity_config)))
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = decoding_key.clone();
@@ -299,9 +291,7 @@ pub fn build_router(state: AppState) -> Router {
         .layer(RequestBodyLimitLayer::new(64 * 1024));
 
     // Public auth routes with strict rate limiting
-    let auth_public = auth::router().layer(GovernorLayer {
-        config: auth_ip_config,
-    });
+    let auth_public = auth::router().layer(GovernorLayer::new(auth_ip_config));
 
     Router::new()
         .route("/health", get(health))
