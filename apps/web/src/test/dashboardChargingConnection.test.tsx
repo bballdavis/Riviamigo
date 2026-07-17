@@ -219,7 +219,7 @@ const metricPreviewConfig: DashboardConfig = {
   ],
 };
 
-const packagedDemoR1TChargingFixtures = {
+const demoR1TArtworkFixtures = {
   all: [
     { placement: 'side', design: 'light', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_light.webp' },
     { placement: 'side', design: 'dark', size: 'large', resolution: 'hdpi', url: '/vehicle-images/fixtures/r1t/r1t_side_dark.webp' },
@@ -510,11 +510,11 @@ describe('charging connection custom widget', () => {
     });
   });
 
-  it('uses full-side packaged demo R1T art when the seeded truck is plugged in', () => {
+  it('uses the dedicated charging fallback for a demo R1T even when side artwork is available', () => {
     chargingMocks.forcePluggedState = 'Charging';
     chargingMocks.model = 'R1T';
     chargingMocks.isDemo = true;
-    chargingMocks.images = packagedDemoR1TChargingFixtures;
+    chargingMocks.images = demoR1TArtworkFixtures;
 
     render(
       <DashboardRenderer
@@ -524,21 +524,51 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-artwork-variant', 'demo-full-side');
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-artwork-variant', 'demo-charging-fallback');
     expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
-      '/vehicle-images/fixtures/r1t/r1t_side_light.webp',
-      '/vehicle-images/fixtures/r1t/r1t_side_dark.webp',
+      '/vehicle-images/fallbacks/r1t/charging.webp',
+      '/vehicle-images/fallbacks/r1t/charging.webp',
     ]);
     for (const image of screen.getAllByTestId('charging-side-image')) {
-      expect(image).toHaveClass('absolute', 'inset-y-0', 'right-0', 'my-auto', 'w-[58%]', 'max-h-[82%]');
-      expect(image.style.transform).toBe('none');
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image).toHaveClass('h-full', 'w-full', 'max-w-none', 'object-contain', 'object-right');
+      expect(image.style.transform).toBe('translate(20px, 5px) scale(2.25)');
+      expect(image.style.transformOrigin).toBe('33% 95%');
+      expect(image).not.toHaveClass('w-[58%]', 'max-h-[82%]');
+    }
+  });
+
+  it('does not let demo-provided Rivian artwork replace the dedicated fallback', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.model = 'R1T';
+    chargingMocks.isDemo = true;
+    chargingMocks.images = {
+      all: [
+        { placement: 'side-charging', design: 'light', size: 'large', resolution: '@3x', url: '/rivian/demo-side-charging-light.webp' },
+        { placement: 'side-charging', design: 'dark', size: 'large', resolution: '@3x', url: '/rivian/demo-side-charging-dark.webp' },
+      ],
+    };
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-artwork-variant', 'demo-charging-fallback');
+    for (const image of screen.getAllByTestId('charging-side-image')) {
+      expect(image).toHaveAttribute('data-image-mode', 'charging');
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image).toHaveAttribute('src', '/vehicle-images/fallbacks/r1t/charging.webp');
+      expect(image).toHaveStyle({ transform: 'translate(20px, 5px) scale(2.25)' });
     }
   });
 
   it.each([
-    ['R1T', '/vehicle-images/fallbacks/r1t/side.webp'],
-    ['R2S', '/vehicle-images/fallbacks/r2s/side.webp'],
-  ] as const)('uses the balanced full-side demo fallback for %s', (model, fallback) => {
+    ['R1T', '/vehicle-images/fallbacks/r1t/charging.webp'],
+    ['R2S', '/vehicle-images/fallbacks/r2s/charging.webp'],
+  ] as const)('anchors the enlarged dedicated charging fallback for demo %s', (model, fallback) => {
     chargingMocks.forcePluggedState = 'Connected';
     chargingMocks.model = model;
     chargingMocks.isDemo = true;
@@ -551,14 +581,16 @@ describe('charging connection custom widget', () => {
     );
 
     const chip = screen.getByTestId('charging-connection-chip');
-    expect(chip).toHaveAttribute('data-artwork-variant', 'demo-full-side');
+    expect(chip).toHaveAttribute('data-artwork-variant', 'demo-charging-fallback');
     expect(chip).toHaveAttribute('data-fallback-image', fallback);
     const images = screen.getAllByTestId('charging-side-image');
     expect(images).toHaveLength(2);
     for (const image of images) {
       expect(image).toHaveAttribute('data-artwork-fallback');
-      expect(image).toHaveClass('absolute', 'inset-y-0', 'right-0', 'my-auto', 'w-[58%]', 'max-h-[82%]');
-      expect(image.style.transform).toBe('none');
+      expect(image).toHaveClass('h-full', 'w-full', 'max-w-none', 'object-contain', 'object-right');
+      expect(image.style.transform).toBe('translate(20px, 5px) scale(2.25)');
+      expect(image.style.transformOrigin).toBe('33% 95%');
+      expect(image).not.toHaveClass('w-[58%]', 'max-h-[82%]');
     }
   });
 

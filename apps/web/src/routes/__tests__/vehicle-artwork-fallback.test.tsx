@@ -135,12 +135,27 @@ describe('vehicle artwork fallback contract', () => {
     const publicDirectory = resolve(process.cwd(), 'public');
     const manifest = JSON.parse(
       readFileSync(resolve(publicDirectory, 'vehicle-images/fallbacks/manifest.json'), 'utf8'),
-    ) as { assets: Array<{ output: string }> };
+    ) as {
+      assets: Array<{
+        model: string;
+        usage: string;
+        output: string;
+        width: number;
+        visible_bbox: [number, number, number, number] | null;
+      }>;
+    };
 
     for (const asset of manifest.assets) {
       expect(() =>
         readFileSync(resolve(publicDirectory, 'vehicle-images/fallbacks', asset.output)),
       ).not.toThrow();
+    }
+
+    for (const model of ['R1T', 'R2S']) {
+      const chargingAsset = manifest.assets.find((asset) => asset.model === model && asset.usage === 'charging');
+      expect(chargingAsset?.visible_bbox).not.toBeNull();
+      expect(chargingAsset?.visible_bbox?.[0]).toBeLessThanOrEqual(chargingAsset!.width * 0.05);
+      expect(chargingAsset?.visible_bbox?.[2]).toBeGreaterThanOrEqual(chargingAsset!.width * 0.98);
     }
   });
 });
