@@ -6,7 +6,7 @@ This runbook owns Riviamigo's public container-image release process. It applies
 
 Before the first release, configure both generated GHCR packages as public and confirm anonymous `docker pull` works. The publishing workflows add the OCI source label that links each package to this repository; keep inherited repository permissions enabled and grant this repository Actions admin access to each package.
 
-Enable immutable releases in repository settings. Add a tag ruleset for `YYYY.MM.PATCH` tags that prevents deletion and force-moves, while allowing the release workflow to create tags. Protect `main` and `dev`: the privileged development publisher accepts only successful CI runs from this repository's `dev` branch. The release workflow requires repository Actions permission to write contents, packages, attestations, and OIDC tokens; do not replace its `GITHUB_TOKEN` with a long-lived personal token.
+Enable immutable releases in repository settings. Add a tag ruleset for `YYYY.MM.PATCH` tags that prevents deletion and force-moves, while allowing the release workflow to create tags. Protect `main` and `dev` and require the pull-request validation checks before merging. The release workflow requires repository Actions permission to write contents, packages, attestations, and OIDC tokens; do not replace its `GITHUB_TOKEN` with a long-lived personal token.
 
 ## Stable releases
 
@@ -19,18 +19,19 @@ Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release i
 
 If image publication or manifest verification fails, no GitHub release is created. Correct the failure before creating another release tag; immutable releases intentionally make published release tags non-reusable.
 
-## Development images and cleanup
+## Pre-release images from dev
 
-After successful `Quality`, `Frontend`, `Backend`, `Security`, and `Runtime`
-workflow runs for the same commit on `dev`, **Publish development images**
-updates the `edge` tag and creates an immutable `sha-<commit>` tag for each
-image. The publisher verifies those exact-commit conclusions before it can
-publish. These are development artifacts, not GitHub prereleases and not a
-stable deployment channel.
+Pre-release publishing is manual and does not run for ordinary commits or
+merges into `dev`. After the candidate has passed its pull-request checks,
+run **Publish pre-release images** from Actions and provide a version such as
+`2026.07.0-rc.1`, `2026.07.0-beta.1`, or `2026.07.0-alpha.1`.
 
-**Clean expired development images** runs weekly. Run it manually with `dry_run=true` first when investigating retention. It retains every Calendar Version, `latest`, the current `edge` image, and its SHA tag. It deletes only SHA-only versions older than 30 days and deliberately ignores untagged manifests so a multi-architecture image cannot lose a platform child.
-
-GitHub can restore a deleted package version for only 30 days. Stable images are therefore protected by exact tags and by never being cleanup candidates; package deletion remains an administrator action that must be avoided.
+The workflow builds the current `dev` commit for `linux/amd64` and
+`linux/arm64`, pushes only the exact pre-release image tags, records
+provenance attestations, runs the published-image smoke test, and creates a
+GitHub pre-release. It never updates `latest`.
+The GitHub pre-release tag is created at the exact `dev` commit used for the
+build.
 
 ## Source and image verification
 

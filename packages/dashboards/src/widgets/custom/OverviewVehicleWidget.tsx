@@ -56,7 +56,7 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
       images={activeVehicle?.images}
       vehicleName={activeVehicle?.display_name}
       vehicleModel={activeVehicle?.model}
-      isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id.startsWith('demo-') ?? false}
+      isDemoVehicle={activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id?.startsWith('demo-') ?? false}
       targetTirePressurePsi={activeVehicle?.target_tire_pressure_psi}
     />
   );

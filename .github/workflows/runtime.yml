@@ -1,17 +1,15 @@
 name: Runtime
 
 on:
-  push:
-    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read
 
 jobs:
-  db-smoke:
-    name: Fresh DB migration and health smoke test
+  runtime:
+    name: Backend runtime, migrations, and containers
     runs-on: ubuntu-latest
     services:
       timescaledb:
@@ -39,9 +37,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
       REDIS_URL: redis://localhost:6379
-    defaults:
-      run:
-        working-directory: apps/api
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -49,12 +44,16 @@ jobs:
         with:
           workspaces: apps/api
       - name: Install sqlx-cli
+        working-directory: apps/api
         run: cargo install sqlx-cli --no-default-features --features postgres --locked
       - name: Run migrations on fresh DB
+        working-directory: apps/api
         run: cargo sqlx migrate run
       - name: Verify migration idempotency
+        working-directory: apps/api
         run: cargo sqlx migrate run
       - name: Start API and probe health
+        working-directory: apps/api
         run: |
           REDIS_URL=redis://localhost:6379 cargo run &
           API_PID=$!
@@ -69,12 +68,6 @@ jobs:
           echo "Health check timed out"
           kill $API_PID
           exit 1
-
-  container-build:
-    name: Compose validation and container build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate Compose and build deployable images
         env:
           DATABASE_URL: postgresql://riviamigo:ci-password@timescaledb:5432/riviamigo
