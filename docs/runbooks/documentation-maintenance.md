@@ -21,8 +21,11 @@ This document is canonical for the documentation upkeep workflow.
 3. Run `pnpm docs:check`.
 4. If publishability is the only thing you need to verify, run:
    `scripts/publish-wiki.sh --validate-only`
-5. After review and merge, publish with:
+5. After review and merge to `main`, the `Publish Wiki` workflow publishes the
+   guides automatically when `docs/guides/` changes. You can also publish
+   locally with:
    `scripts/publish-wiki.sh`
+   The workflow can be rerun manually from GitHub Actions when needed.
 
 ## When Docs Must Change
 
