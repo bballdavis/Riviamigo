@@ -26,22 +26,22 @@ pub fn router() -> Router<AppState> {
             get(list_account_invitations).post(create_account_invitation),
         )
         .route(
-            "/admin/account-invitations/:id",
+            "/admin/account-invitations/{id}",
             axum::routing::delete(revoke_account_invitation),
         )
-        .route("/admin/users/:id", patch(update_user).delete(delete_user))
-        .route("/admin/users/:id/detail", get(get_user_detail))
+        .route("/admin/users/{id}", patch(update_user).delete(delete_user))
+        .route("/admin/users/{id}/detail", get(get_user_detail))
         .route(
-            "/admin/users/:id/vehicles",
+            "/admin/users/{id}/vehicles",
             get(list_user_vehicle_memberships),
         )
-        .route("/admin/users/:id/invites", get(list_user_invites))
+        .route("/admin/users/{id}/invites", get(list_user_invites))
         .route(
-            "/admin/users/:id/invites/:invite_id/revoke",
+            "/admin/users/{id}/invites/{invite_id}/revoke",
             post(revoke_user_invite),
         )
         .route(
-            "/admin/users/:id/vehicles/:vehicle_id",
+            "/admin/users/{id}/vehicles/{vehicle_id}",
             post(grant_user_vehicle_membership)
                 .patch(update_user_vehicle_membership)
                 .delete(remove_user_vehicle_membership),

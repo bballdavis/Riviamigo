@@ -23,7 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/places", get(list_places).post(create_place))
         .route("/places/search", get(search_places))
         .route(
-            "/places/:id",
+            "/places/{id}",
             get(get_place).put(update_place).delete(delete_place),
         )
 }

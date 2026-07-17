@@ -30,19 +30,19 @@ pub fn router() -> Router<AppState> {
             "/settings/external-connections/disable-optional",
             post(disable_optional),
         )
-        .route("/settings/external-connections/:id", put(update_connection))
+        .route("/settings/external-connections/{id}", put(update_connection))
         .route(
-            "/settings/external-connections/:id/test",
+            "/settings/external-connections/{id}/test",
             post(test_connection),
         )
         .route(
-            "/settings/external-connections/:id/cache/purge",
+            "/settings/external-connections/{id}/cache/purge",
             post(purge_connection_cache),
         )
-        .route("/external/basemap/:style/:z/:x/:y", get(proxy_basemap_tile))
+        .route("/external/basemap/{style}/{z}/{x}/{y}", get(proxy_basemap_tile))
         .route("/external/basemap/config", get(basemap_config))
         .route("/external/iconify/search", get(proxy_iconify_search))
-        .route("/external/iconify/:resource", get(proxy_iconify_resource))
+        .route("/external/iconify/{resource}", get(proxy_iconify_resource))
 }
 
 #[derive(Debug, Serialize)]

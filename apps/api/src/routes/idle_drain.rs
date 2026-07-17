@@ -40,7 +40,7 @@ const SOC_WINDOW_MISMATCH_TOLERANCE_PCT: f64 = 3.0;
 const RANGE_EFFICIENCY_DRIFT_TOLERANCE: f64 = 0.35;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/:vehicle_id/idle-drain", get(idle_drain))
+    Router::new().route("/vehicles/{vehicle_id}/idle-drain", get(idle_drain))
 }
 
 #[derive(Deserialize)]
