@@ -242,10 +242,26 @@ describe('overview vehicle anchors', () => {
     );
   });
 
-  it.each(['R1T', 'R2S'] as const)('nudges the %s demo overview frame right without affecting real vehicles', (model) => {
+  it.each(['R1T', 'R2S'] as const)('keeps Rivian-provided %s demo artwork on its original coordinates', (model) => {
     overviewMocks.isDemo = true;
     renderOverviewForModel(model);
-    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ transform: 'translateX(0%)' });
+    const anchors = expectedAnchors[model];
+    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ transform: 'translateX(-5%)' });
+    for (const image of Array.from(document.querySelectorAll('img[src^="/rivian/overhead"]'))) {
+      expect(image).toHaveStyle({ left: '50%' });
+    }
+    expect(screen.getByText('31 psi').parentElement?.parentElement).toHaveClass(anchors.tires.rl);
+    expect(screen.getByTitle('Rear left door lock')).toHaveClass(anchors.locks.rl);
+  });
+
+  it.each(['R1T', 'R2S'] as const)('centers only the packaged %s demo fallback between the lock anchors', (model) => {
+    overviewMocks.isDemo = true;
+    overviewMocks.hasApiArtwork = false;
+    renderOverviewForModel(model);
+
+    for (const image of Array.from(document.querySelectorAll('img[data-artwork-fallback]'))) {
+      expect(image).toHaveStyle({ left: '53%' });
+    }
   });
 
   it('keeps the real-vehicle overview frame offset unchanged', () => {

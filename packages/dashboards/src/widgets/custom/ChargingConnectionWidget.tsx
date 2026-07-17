@@ -1,11 +1,12 @@
 import React from 'react';
 import { Zap } from 'lucide-react';
-import { AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
+import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { isVehiclePluggedIn } from '../../dashboardVisibility';
+import { findBestChargingSideOverlay, findSideChargingImage } from './imageUtils';
 
 type ChargingCropFamily = 'R1T' | 'R1S' | 'default';
 
@@ -16,6 +17,12 @@ interface ChargingCropConfig {
   objectPosition?: string;
 }
 
+// The image element spans the whole card, while object-contain places the
+// artwork on its right. Anchor at the visible vehicle's lower-left position in
+// that full element so the scale cannot turn the 20px nudge into a large shift.
+const DEMO_CHARGING_FALLBACK_TRANSFORM = 'translate(20px, 5px) scale(2.25)';
+const DEMO_CHARGING_FALLBACK_ORIGIN = '33% 95%';
+
 const CHARGING_CROP_CONFIG: Record<ChargingCropFamily, ChargingCropConfig> = {
   R1T: {
     translateX: -34,
@@ -24,7 +31,7 @@ const CHARGING_CROP_CONFIG: Record<ChargingCropFamily, ChargingCropConfig> = {
     objectPosition: 'left center',
   },
   R1S: {
-    // Keep the stock crop for R1S; only the demo truck needs the tighter framing.
+    // Preserve the original Rivian-provided charging-art composition.
     translateX: -12,
     scale: 1.12,
     objectPosition: 'left center',
@@ -69,22 +76,21 @@ function ChargingConnectionWidget({
   const charging = isActivelyCharging(status);
   const timeToFull = status?.time_to_end_of_charge_min;
   const snapshot = summary as ChargingSummarySnapshot | undefined;
-  const resolvedChargingArtwork = resolveVehicleArtwork(activeVehicle?.images, activeVehicle?.model, 'charging');
-  const resolvedVehicleCardArtwork = resolveVehicleArtwork(activeVehicle?.images, activeVehicle?.model, 'vehicle-card');
   const isDemoVehicle = activeVehicle?.is_demo ?? activeVehicle?.rivian_vehicle_id.startsWith('demo-') ?? false;
-  const chargingSideLight = resolvedChargingArtwork.light;
-  const chargingSideDark = resolvedChargingArtwork.dark ?? chargingSideLight;
-  const demoSideLight = resolvedVehicleCardArtwork.light;
-  const demoSideDark = resolvedVehicleCardArtwork.dark ?? demoSideLight;
-  const sideLight = isDemoVehicle ? demoSideLight : chargingSideLight;
-  const sideDark = isDemoVehicle ? demoSideDark : chargingSideDark;
+  const rivianChargingSideLight =
+    findSideChargingImage(activeVehicle?.images?.all, 'light') ??
+    findBestChargingSideOverlay(activeVehicle?.images?.all, 'light');
+  const rivianChargingSideDark =
+    findSideChargingImage(activeVehicle?.images?.all, 'dark') ??
+    findBestChargingSideOverlay(activeVehicle?.images?.all, 'dark') ??
+    rivianChargingSideLight;
   const cropFamily = chargingCropFamily(activeVehicle?.model);
-  const fallbackChargingSource = isDemoVehicle
-    ? resolvedVehicleCardArtwork.fallback ?? resolvedChargingArtwork.fallback
-    : resolvedChargingArtwork.fallback;
+  const fallbackChargingSource = getVehicleArtworkFallback(activeVehicle?.model, 'charging');
+  const chargingSideLight = isDemoVehicle ? null : rivianChargingSideLight;
+  const chargingSideDark = isDemoVehicle ? null : rivianChargingSideDark;
   const imageMode = 'side-charging';
-  const displaySideLight = sideLight ?? fallbackChargingSource;
-  const displaySideDark = sideDark ?? fallbackChargingSource;
+  const displaySideLight = chargingSideLight ?? fallbackChargingSource;
+  const displaySideDark = chargingSideDark ?? fallbackChargingSource;
   const rows = [
     {
       label: 'Status',
@@ -127,12 +133,12 @@ function ChargingConnectionWidget({
       data-image-light={displaySideLight}
       data-image-dark={displaySideDark}
       data-fallback-image={fallbackChargingSource ?? undefined}
-      data-artwork-variant={isDemoVehicle ? 'demo-full-side' : 'charging-side'}
+      data-artwork-variant={isDemoVehicle ? 'demo-charging-fallback' : 'rivian-charging'}
       className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-[linear-gradient(135deg,var(--rm-bg-surface),var(--rm-bg-elevated))] shadow-lg shadow-black/10"
     >
       <div className="absolute inset-0 flex items-stretch justify-end">
-        {displaySideLight ? <VehicleSideImage source={sideLight} fallbackSource={fallbackChargingSource} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} useBalancedDemoArtwork={isDemoVehicle} /> : null}
-        {displaySideDark ? <VehicleSideImage source={sideDark} fallbackSource={fallbackChargingSource} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} useBalancedDemoArtwork={isDemoVehicle} /> : null}
+        {displaySideLight ? <VehicleSideImage source={chargingSideLight} fallbackSource={fallbackChargingSource} darkClassName="dark:hidden" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
+        {displaySideDark ? <VehicleSideImage source={chargingSideDark} fallbackSource={fallbackChargingSource} darkClassName="hidden dark:block" cropConfig={CHARGING_CROP_CONFIG[cropFamily]} /> : null}
       </div>
 
       <div className="pointer-events-none absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-bg via-bg/88 to-transparent" />
@@ -272,50 +278,39 @@ function VehicleSideImage({
   fallbackSource,
   darkClassName,
   cropConfig,
-  useBalancedDemoArtwork,
 }: {
   source: string | null | undefined;
   fallbackSource?: string | null | undefined;
   darkClassName: string;
   cropConfig: ChargingCropConfig;
-  useBalancedDemoArtwork: boolean;
 }) {
   const translateY = cropConfig.translateY ?? 0;
   const transform =
     translateY === 0
       ? `translateX(${cropConfig.translateX}%) scale(${cropConfig.scale})`
       : `translate(${cropConfig.translateX}%, ${translateY}%) scale(${cropConfig.scale})`;
-  const balancedArtworkProps = {
-    className: 'absolute inset-y-0 right-0 my-auto h-auto w-[58%] max-h-[82%] object-contain object-right',
-    style: {
-      objectPosition: 'right center',
-      transform: 'none',
-      transformOrigin: 'center',
-    },
-  };
-  const fallbackProps = useBalancedDemoArtwork
-    ? balancedArtworkProps
-    : {
-        className: 'h-full w-full max-w-none object-contain object-right',
-        style: balancedArtworkProps.style,
-      };
   return (
     <div className={`absolute inset-y-0 right-0 flex h-full w-full items-center justify-end ${darkClassName}`}>
       <AuthenticatedVehicleArtwork
         source={source}
         fallbackSource={fallbackSource}
-        fallbackProps={fallbackProps}
+        fallbackProps={{
+          className: 'h-full w-full max-w-none object-contain object-right',
+          style: {
+            objectPosition: 'right center',
+            transform: DEMO_CHARGING_FALLBACK_TRANSFORM,
+            transformOrigin: DEMO_CHARGING_FALLBACK_ORIGIN,
+          },
+        }}
         alt="Vehicle side view showing charging port location"
         data-testid="charging-side-image"
         data-image-mode="charging"
-        className={useBalancedDemoArtwork ? balancedArtworkProps.className : 'h-full w-auto max-w-none object-contain'}
-        style={useBalancedDemoArtwork
-          ? balancedArtworkProps.style
-          : {
-              objectPosition: cropConfig.objectPosition ?? 'left center',
-              transform,
-              transformOrigin: 'left top',
-            }}
+        className="h-full w-auto max-w-none object-contain"
+        style={{
+          objectPosition: cropConfig.objectPosition ?? 'left center',
+          transform,
+          transformOrigin: 'left top',
+        }}
       />
     </div>
   );
