@@ -960,7 +960,7 @@ export function SettingsContent() {
                       const membershipRole = v.membership_role ?? 'viewer';
                       const canManageVehicle = membershipRole === 'owner' || membershipRole === 'manager';
                       const canManageMembers = membershipRole === 'owner';
-                      const isDemo = v.is_demo ?? v.rivian_vehicle_id.startsWith('demo-');
+                      const isDemo = v.is_demo ?? v.rivian_vehicle_id?.startsWith('demo-') ?? false;
 
                       const needsReauth = !isDemo && v.auth_state === 'needs_reauth';
                       const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';

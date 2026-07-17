@@ -54,75 +54,6 @@ fn ratio(numerator: i64, denominator: i64) -> f64 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn serialized_fixture_is_strictly_aggregate_and_allowlisted() {
-        let export = FixtureExport {
-            schema_version: 1,
-            source_model: "R1S",
-            window_days: 14,
-            telemetry_rows: 5_664,
-            active_days: 12,
-            trip_count: 31,
-            charge_count: 4,
-            weather_sample_count: 80,
-            coverage: FixtureCoverage {
-                location: 0.558,
-                battery: 0.517,
-                tires: 0.065,
-                doors: 0.085,
-                outside_temperature: 0.0,
-            },
-        };
-        let value = serde_json::to_value(export).expect("aggregate fixture serializes");
-        let object = value.as_object().expect("fixture object");
-        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            [
-                "active_days",
-                "charge_count",
-                "coverage",
-                "schema_version",
-                "source_model",
-                "telemetry_rows",
-                "trip_count",
-                "weather_sample_count",
-                "window_days",
-            ]
-        );
-
-        let json = serde_json::to_string(&value).unwrap().to_lowercase();
-        for forbidden in [
-            "vehicle_id",
-            "vin",
-            "account",
-            "address",
-            "latitude",
-            "longitude",
-            "coordinate",
-            "raw_payload",
-            "started_at",
-            "2026-",
-        ] {
-            assert!(
-                !json.contains(forbidden),
-                "fixture leaked forbidden field {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn coverage_ratio_is_bounded_and_rounded() {
-        assert_eq!(ratio(1, 3), 0.333);
-        assert_eq!(ratio(2, 0), 0.0);
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = env::args().skip(1);
@@ -208,4 +139,73 @@ async fn main() -> Result<()> {
         export.telemetry_rows, export.trip_count, export.charge_count, export.weather_sample_count
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialized_fixture_is_strictly_aggregate_and_allowlisted() {
+        let export = FixtureExport {
+            schema_version: 1,
+            source_model: "R1S",
+            window_days: 14,
+            telemetry_rows: 5_664,
+            active_days: 12,
+            trip_count: 31,
+            charge_count: 4,
+            weather_sample_count: 80,
+            coverage: FixtureCoverage {
+                location: 0.558,
+                battery: 0.517,
+                tires: 0.065,
+                doors: 0.085,
+                outside_temperature: 0.0,
+            },
+        };
+        let value = serde_json::to_value(export).expect("aggregate fixture serializes");
+        let object = value.as_object().expect("fixture object");
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "active_days",
+                "charge_count",
+                "coverage",
+                "schema_version",
+                "source_model",
+                "telemetry_rows",
+                "trip_count",
+                "weather_sample_count",
+                "window_days",
+            ]
+        );
+
+        let json = serde_json::to_string(&value).unwrap().to_lowercase();
+        for forbidden in [
+            "vehicle_id",
+            "vin",
+            "account",
+            "address",
+            "latitude",
+            "longitude",
+            "coordinate",
+            "raw_payload",
+            "started_at",
+            "2026-",
+        ] {
+            assert!(
+                !json.contains(forbidden),
+                "fixture leaked forbidden field {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn coverage_ratio_is_bounded_and_rounded() {
+        assert_eq!(ratio(1, 3), 0.333);
+        assert_eq!(ratio(2, 0), 0.0);
+    }
 }

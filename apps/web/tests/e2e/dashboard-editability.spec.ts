@@ -1,6 +1,10 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import type { DashboardConfig } from '@riviamigo/dashboards';
+import {
+  DEFAULT_DASHBOARD_VISIBILITY_STATE,
+  isWidgetVisible,
+  type DashboardConfig,
+} from '@riviamigo/dashboards';
 
 const dashboard = loadDashboard('dashboard');
 const battery = loadDashboard('battery');
@@ -119,11 +123,12 @@ test.describe('dashboard editability in a browser', () => {
       await expect(page.locator('.rgl-editor')).toBeVisible();
 
       const config = dashboards.get(routeCase.slug)!;
-      await expect(page.locator('[data-widget-frame="edit"]')).toHaveCount(config.widgets.length);
+      const visibleWidgets = config.widgets.filter((widget) => isWidgetVisible(widget, DEFAULT_DASHBOARD_VISIBILITY_STATE));
+      await expect(page.locator('[data-widget-frame="edit"]')).toHaveCount(visibleWidgets.length);
       const editControls = page.locator('[data-widget-edit-control="true"]');
-      await expect(editControls).toHaveCount(config.widgets.length);
+      await expect(editControls).toHaveCount(visibleWidgets.length);
 
-      for (let index = 0; index < config.widgets.length; index += 1) {
+      for (let index = 0; index < visibleWidgets.length; index += 1) {
         const button = editControls.nth(index).getByRole('button', { name: 'Edit widget settings' });
         await button.scrollIntoViewIfNeeded();
         await expectEditControl(button);
@@ -151,6 +156,7 @@ test.describe('dashboard editability in a browser', () => {
     await installApiMocks(page);
     await page.goto('/charging');
     await page.getByRole('button', { name: 'Edit dashboard' }).click();
+    await page.getByRole('button', { name: 'Plugged in' }).click();
 
     const frame = page.locator('[data-widget-id="d4000004-0000-0000-0000-000000000013"]');
     await expect(frame).toHaveAttribute('data-fixed-size', 'true');
@@ -362,6 +368,9 @@ function loadDashboard(slug: string): DashboardConfig {
 async function installApiMocks(page: Page, options: { vehicleStatus?: Record<string, unknown> } = {}) {
   const createdDashboards: Array<{ config: DashboardConfig }> = [];
 
+  await page.addInitScript(() => {
+    window.localStorage.setItem('rm-show-dashboard-edit-button:e2e-user', 'true');
+  });
   await page.routeWebSocket('**/v1/vehicles/live**', (socket) => socket.close());
   await page.route('**/v1/**', async (route) => {
     const request = route.request();

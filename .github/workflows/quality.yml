@@ -1,10 +1,8 @@
 name: Quality
 
 on:
-  push:
-    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read
@@ -14,8 +12,8 @@ env:
   NODE_VERSION: '20'
 
 jobs:
-  repo-hygiene:
-    name: Repository hygiene
+  quality:
+    name: Lint, hygiene, docs, and drift
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -30,12 +28,6 @@ jobs:
             exit 1
           fi
           echo "Repository hygiene check passed"
-
-  linting:
-    name: Linting and design-token guard
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -48,6 +40,7 @@ jobs:
       - name: Lint
         run: pnpm turbo lint
       - name: Color-token guard
+        shell: bash
         run: |
           set +e
           VIOLATIONS=$(grep -rn \
@@ -64,21 +57,6 @@ jobs:
             exit 1
           fi
           echo "No color-token violations"
-
-  docs-and-drift:
-    name: Documentation and dashboard drift
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
       - name: Docs check
         run: pnpm docs:check
       - name: Dashboard default drift check
