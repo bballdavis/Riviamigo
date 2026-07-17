@@ -1,6 +1,6 @@
 # Riviamigo user guides
 
-These are the in-repository source pages for self-hosters. The GitHub Wiki mirrors them after review; please edit these files rather than the Wiki directly.
+These are the in-repository source pages for self-hosters. The GitHub Wiki mirrors them after review; please edit these files rather than the Wiki directly. The publisher renders this file as the Wiki `Home.md` page and generates the Wiki sidebar.
 
 - [Getting started](./getting-started.md) — the shortest path to a private Compose installation.
 - [Prerequisites](./prerequisites.md) — host, Docker, and network expectations.

@@ -60,6 +60,7 @@ Common usage:
 - Use the full battery glyph for the shared Battery main-navigation destination; reserve level-specific battery glyphs for live status indicators.
 - Prefer icon-plus-label patterns already established by shared primitives instead of inventing one-off controls.
 - Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
+- Text inputs and textareas use the active theme surface for normal, focused, selected, and browser-autofilled values. The caret and selection use the accent token; browser-default autofill colors are not part of the product palette.
 - Dashboard toolbar controls use the elevated surface consistently across vehicle selection, efficiency toggles, and date-range triggers.
 - Dashboard management rows use matching secondary icon-plus-label buttons for Open, Edit, and Export. Action groups wrap on small screens without shrinking below touch-safe targets; destructive Reset, Delete, and Restore actions remain visually distinct.
 - User-facing choice menus use the shared `SelectPicker` surface with a checkmarked selected state, keyboard navigation, and in-app dismissal; native browser select menus are not part of the product UI.

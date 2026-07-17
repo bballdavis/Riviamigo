@@ -137,6 +137,98 @@ async function installDependencies() {
   }
 }
 
+function parseProcessList(output) {
+  const trimmed = output.trim();
+  if (!trimmed) return [];
+
+  const parsed = JSON.parse(trimmed);
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter((process) =>
+    Number.isInteger(process.ProcessId) && process.ProcessId > 0,
+  );
+}
+
+function powerShellLiteral(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+async function listRepoOwnedProcesses() {
+  const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
+
+  if (isWindows) {
+    const command = [
+      `$apiBin = ${powerShellLiteral(apiBin)}`,
+      `$webDir = ${powerShellLiteral(webDir)}`,
+      'Get-CimInstance Win32_Process -ErrorAction Stop |',
+      'Where-Object {',
+      "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
+      "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
+      '  $isApi -or $isVite',
+      '} |',
+      'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
+      'ConvertTo-Json -Compress',
+    ].join('\n');
+    const { code, stdout, stderr } = await capture('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      command,
+    ]);
+    if (code !== 0) {
+      log(`[dev] Could not inspect existing Windows processes; leaving occupied ports alone. ${stripAnsi(stderr).trim()}`);
+      return [];
+    }
+
+    try {
+      return parseProcessList(stdout).map((process) => ({
+        pid: process.ProcessId,
+        name: process.Name,
+        kind: String(process.ExecutablePath ?? '').toLowerCase() === apiBin.toLowerCase() ? 'api' : 'vite',
+      }));
+    } catch (error) {
+      log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
+      return [];
+    }
+  }
+
+  const { code, stdout, stderr } = await capture('ps', ['-axo', 'pid=,command=']);
+  if (code !== 0) {
+    log(`[dev] Could not inspect existing processes; leaving occupied ports alone. ${stripAnsi(stderr).trim()}`);
+    return [];
+  }
+
+  return stdout.split(/\r?\n/).flatMap((line) => {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match) return [];
+    const [, rawPid, command] = match;
+    if (command.includes(apiBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-api', kind: 'api' }];
+    if (command.includes(webDir) && /\bvite(?:\.js)?\b/i.test(command)) {
+      return [{ pid: Number.parseInt(rawPid, 10), name: 'vite', kind: 'vite' }];
+    }
+    return [];
+  });
+}
+
+async function clearRepoOwnedDevProcesses() {
+  const processes = await listRepoOwnedProcesses();
+  if (processes.length === 0) return;
+
+  // Stop Vite before the API: a dev-stack launcher exits when its web child
+  // exits, preventing it from restarting the API while cleanup is in flight.
+  processes.sort((left, right) => (left.kind === 'vite' ? -1 : 1) - (right.kind === 'vite' ? -1 : 1));
+  log(`[dev] Clearing ${processes.length} stale Riviamigo dev process(es): ${processes.map((process) => `${process.name} (${process.pid})`).join(', ')}`);
+
+  for (const process of processes) {
+    const result = isWindows
+      ? await capture('taskkill', ['/PID', String(process.pid), '/T', '/F'])
+      : await capture('kill', ['-TERM', String(process.pid)]);
+    if (result.code !== 0) {
+      log(`[dev] Could not stop stale ${process.name} (${process.pid}): ${stripAnsi(result.stderr).trim()}`);
+    }
+  }
+
+  await sleep(500);
+}
+
 async function findAvailablePort(start, label, maxTries = 50) {
   for (let attempt = 0; attempt < maxTries; attempt += 1) {
     const candidate = start + attempt;
@@ -438,6 +530,7 @@ async function main() {
   log('');
 
   await requireTools();
+  await clearRepoOwnedDevProcesses();
   await installDependencies();
   await allocateRuntimePorts();
   await startInfrastructure();

@@ -131,6 +131,37 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/*
+ * Browser password managers otherwise apply their own yellow/green autofill
+ * background. Keep typed, selected, and saved values on the active theme's
+ * input surface instead of letting browser chrome break the product palette.
+ */
+input,
+textarea {
+  caret-color: var(--rm-accent);
+}
+
+input::selection,
+textarea::selection {
+  color: var(--rm-text-primary);
+  background-color: var(--rm-accent-muted);
+}
+
+input:autofill,
+textarea:autofill,
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus {
+  color: var(--rm-text-primary);
+  -webkit-text-fill-color: var(--rm-text-primary);
+  caret-color: var(--rm-accent);
+  box-shadow: 0 0 0 1000px var(--rm-bg-elevated) inset;
+  -webkit-box-shadow: 0 0 0 1000px var(--rm-bg-elevated) inset;
+}
+
 .rm-accent-range {
   width: 100%;
   height: 0.375rem;

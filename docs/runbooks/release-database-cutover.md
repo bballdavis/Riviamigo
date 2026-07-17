@@ -37,7 +37,9 @@ The command relocates the SQLx bookkeeping table from the historical
 riviamigo schema to public, then replaces its entries with the baseline
 checksum. It does not execute schema SQL, alter application tables, or delete
 application data. It refuses databases that do not have the expected
-pre-release ledger and final release-schema markers.
+pre-release ledger and final release-schema markers. If the database is already
+adopted, it exits with a no-op message and does not require another backup or
+cutover.
 
 ## Baseline maintenance
 
