@@ -21,7 +21,7 @@ for (const term of ['installation', 'backup', 'dashboard', 'architecture', 'api'
 }
 
 const pageIndex = JSON.parse(fs.readFileSync(pageIndexPath, 'utf8'));
-if (!pageIndex.documents?.some((document) => document.sectionRoute === '/Riviamigo/')) {
+if (!pageIndex.documents?.some((document) => document.sectionRoute === '/')) {
   throw new Error('Production search index does not include the branded homepage');
 }
 

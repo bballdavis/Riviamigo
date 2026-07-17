@@ -90,7 +90,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'frontend/dashboard-authoring',
         'branding',
-        {type: 'link', label: 'Security implementation', href: '/Riviamigo/docs/security/'},
+        {type: 'link', label: 'Security implementation', href: '/docs/security/'},
       ],
     },
     {

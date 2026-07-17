@@ -60,7 +60,7 @@ These are live, redacted views of Riviamigo at desktop and mobile sizes.
 
 Riviamigo runs as a Docker Compose stack. You will need Git, Docker Engine with Docker Compose v2, a trusted host with persistent storage, and a safe way to reach the app.
 
-> **Keep it private:** Riviamigo is meant to run on a trusted home network. The standard stack listens only on the host's loopback interface. If you want remote access, put it behind an authenticated HTTPS tunnel or identity-aware reverse proxy. Do not forward a public port directly to Riviamigo. Read the [secure remote access guide](https://bballdavis.github.io/Riviamigo/docs/operations/secure-remote-access/) before making the app available outside your local network.
+> **Keep it private:** Riviamigo is meant to run on a trusted home network. The standard stack listens only on the host's loopback interface. If you want remote access, put it behind an authenticated HTTPS tunnel or identity-aware reverse proxy. Do not forward a public port directly to Riviamigo. Read the [secure remote access guide](https://riviamigo.com/docs/operations/secure-remote-access/) before making the app available outside your local network.
 
 1. Clone the repository and enter it:
 
@@ -69,7 +69,7 @@ Riviamigo runs as a Docker Compose stack. You will need Git, Docker Engine with 
    cd Riviamigo
    ```
 
-2. Create your `.env` file, then replace every placeholder using the [configuration guide](https://bballdavis.github.io/Riviamigo/docs/getting-started/configuration/). Do not commit this file.
+2. Create your `.env` file, then replace every placeholder using the [configuration guide](https://riviamigo.com/docs/getting-started/configuration/). Do not commit this file.
 
    ```bash
    cp compose/.env.example .env
@@ -83,21 +83,21 @@ Riviamigo runs as a Docker Compose stack. You will need Git, Docker Engine with 
 
 4. Put your authenticated HTTPS gateway in front of the loopback-only origin, open that address, create the first owner account, and connect your Rivian.
 
-That is the short version. The [Getting Started path](https://bballdavis.github.io/Riviamigo/docs/getting-started/) walks through installation and verification, while [Operations](https://bballdavis.github.io/Riviamigo/docs/operations/) covers updates, logs, security, backups, and recovery.
+That is the short version. The [Getting Started path](https://riviamigo.com/docs/getting-started/) walks through installation and verification, while [Operations](https://riviamigo.com/docs/operations/) covers updates, logs, security, backups, and recovery.
 
 ## Documentation
 
-The [Riviamigo documentation site](https://bballdavis.github.io/Riviamigo/) publishes the complete canonical `docs/` tree through six functional sections: Overview, Getting Started, User Guide, Operations, Development, and Reference.
+The [Riviamigo documentation site](https://riviamigo.com/) publishes the complete canonical `docs/` tree through six functional sections: Overview, Getting Started, User Guide, Operations, Development, and Reference.
 
-- [Getting Started](https://bballdavis.github.io/Riviamigo/docs/getting-started/): install, verify, secure, and protect Riviamigo.
-- [Prerequisites](https://bballdavis.github.io/Riviamigo/docs/getting-started/prerequisites/): check the host, Docker, storage, browser, and network requirements.
-- [Deployment and updates](https://bballdavis.github.io/Riviamigo/docs/operations/deployment-and-updates/): configure gateways, update the stack, inspect logs, and recover an installation.
-- [Configuration](https://bballdavis.github.io/Riviamigo/docs/getting-started/configuration/): prepare production environment variables and secrets.
-- [Rivian account setup](https://bballdavis.github.io/Riviamigo/docs/getting-started/rivian-account/): connect an account and work through Rivian MFA or login repair.
-- [Backup and restore](https://bballdavis.github.io/Riviamigo/docs/operations/backup-and-restore/): create, download, verify, and restore complete recovery packages.
-- [Development](https://bballdavis.github.io/Riviamigo/docs/development/): review architecture, implementation references, runbooks, and governance.
+- [Getting Started](https://riviamigo.com/docs/getting-started/): install, verify, secure, and protect Riviamigo.
+- [Prerequisites](https://riviamigo.com/docs/getting-started/prerequisites/): check the host, Docker, storage, browser, and network requirements.
+- [Deployment and updates](https://riviamigo.com/docs/operations/deployment-and-updates/): configure gateways, update the stack, inspect logs, and recover an installation.
+- [Configuration](https://riviamigo.com/docs/getting-started/configuration/): prepare production environment variables and secrets.
+- [Rivian account setup](https://riviamigo.com/docs/getting-started/rivian-account/): connect an account and work through Rivian MFA or login repair.
+- [Backup and restore](https://riviamigo.com/docs/operations/backup-and-restore/): create, download, verify, and restore complete recovery packages.
+- [Development](https://riviamigo.com/docs/development/): review architecture, implementation references, runbooks, and governance.
 
-For the complete architecture, API, security, dashboard authoring, maintenance, and contributor material, use the [Development documentation](https://bballdavis.github.io/Riviamigo/docs/development/).
+For the complete architecture, API, security, dashboard authoring, maintenance, and contributor material, use the [Development documentation](https://riviamigo.com/docs/development/).
 
 ## Privacy
 

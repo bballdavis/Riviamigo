@@ -109,7 +109,7 @@ packages/
 ## References
 
 - Primary agent guide: [`AGENTS.md`](./AGENTS.md)
-- Published documentation site: [bballdavis.github.io/Riviamigo](https://bballdavis.github.io/Riviamigo/)
+- Published documentation site: [riviamigo.com](https://riviamigo.com/)
 - Docs hub: [`docs/index.md`](./docs/index.md)
 - Visual system: [`docs/branding.md`](./docs/branding.md)
 - Architecture: [`docs/architecture/overview.md`](./docs/architecture/overview.md)
