@@ -66,7 +66,7 @@ function buildRoutes(count: number): TripMapRoute[] {
 describe('TripMapChart', () => {
   it('syncs the latest routes when the map load event fires after routes changed', async () => {
     const mockMap = new MockMap();
-    const mapLoader = vi.fn(async () => ({ Map: vi.fn(() => mockMap) }));
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
 
     const { rerender } = render(
       <TripMapChart routes={buildRoutes(1)} track={[]} height={320} mapLoader={mapLoader as never} />,
@@ -100,7 +100,7 @@ describe('TripMapChart', () => {
 
   it('shows only selected routes and refits to their bounds when selection changes', async () => {
     const mockMap = new MockMap();
-    const mapLoader = vi.fn(async () => ({ Map: vi.fn(() => mockMap) }));
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
     const routes = buildRoutes(2);
 
     const { rerender } = render(
@@ -139,7 +139,7 @@ describe('TripMapChart', () => {
 
   it('authenticates only Riviamigo basemap proxy requests', async () => {
     const mockMap = new MockMap();
-    const mapConstructor = vi.fn((_options: unknown) => mockMap);
+    const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
     const mapLoader = vi.fn(async () => ({ Map: mapConstructor }));
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       enabled: true,
