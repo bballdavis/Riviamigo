@@ -1,19 +1,50 @@
 import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
-  overviewSidebar: ['index', 'guides/features', 'privacy', 'security', 'roadmap'],
+  overviewSidebar: [
+    'index',
+    {
+      type: 'category',
+      label: 'Product overview',
+      collapsed: false,
+      items: ['guides/features', 'roadmap'],
+    },
+    {
+      type: 'category',
+      label: 'Trust and privacy',
+      collapsed: false,
+      items: ['privacy', 'security'],
+    },
+  ],
   gettingStartedSidebar: [
     'guides/README',
-    'guides/prerequisites',
-    'guides/getting-started',
-    'guides/configuration',
-    'guides/rivian-account',
-    'guides/verify-installation',
+    {
+      type: 'category',
+      label: 'Prepare and install',
+      collapsed: false,
+      items: ['guides/prerequisites', 'guides/getting-started', 'guides/configuration'],
+    },
+    {
+      type: 'category',
+      label: 'Connect and verify',
+      collapsed: false,
+      items: ['guides/rivian-account', 'guides/verify-installation'],
+    },
   ],
   usingRiviamigoSidebar: [
     'using-riviamigo',
-    'guides/dashboard-customization',
-    'guides/external-connections',
+    {
+      type: 'category',
+      label: 'Personalize your dashboard',
+      collapsed: false,
+      items: ['guides/dashboard-customization'],
+    },
+    {
+      type: 'category',
+      label: 'Integrations',
+      collapsed: false,
+      items: ['guides/external-connections'],
+    },
   ],
   operationsSidebar: [
     'operations',
@@ -69,7 +100,21 @@ const sidebars: SidebarsConfig = {
       items: ['runbooks/documentation-maintenance', 'security-audit', 'decision-log'],
     },
   ],
-  referenceSidebar: ['reference', 'api-access', 'metrics-reference', 'dashboard-data-map'],
+  referenceSidebar: [
+    'reference',
+    {
+      type: 'category',
+      label: 'API and integrations',
+      collapsed: false,
+      items: ['api-access'],
+    },
+    {
+      type: 'category',
+      label: 'Data and dashboards',
+      collapsed: false,
+      items: ['metrics-reference', 'dashboard-data-map'],
+    },
+  ],
 };
 
 export default sidebars;
