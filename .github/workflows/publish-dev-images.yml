@@ -2,7 +2,7 @@ name: Publish development images
 
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [Quality, Frontend, Backend, Security, Runtime]
     branches: [dev]
     types: [completed]
 
@@ -11,7 +11,7 @@ env:
   OWNER: bballdavis
 
 concurrency:
-  group: publish-dev-images
+  group: publish-dev-images-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 jobs:
@@ -21,6 +21,7 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       packages: write
       attestations: write
@@ -29,6 +30,30 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Verify every release check for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUIRED_WORKFLOWS: Quality,Frontend,Backend,Security,Runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs?branch=dev&head_sha=${HEAD_SHA}&per_page=100")
+
+          IFS=',' read -ra workflows <<< "$REQUIRED_WORKFLOWS"
+          for workflow in "${workflows[@]}"; do
+            conclusion=$(jq -r \
+              --arg name "$workflow" \
+              --arg sha "$HEAD_SHA" \
+              '[.workflow_runs[] | select(.name == $name and .head_sha == $sha)] | sort_by(.run_number) | last | .conclusion // empty' \
+              <<< "$runs")
+            if [[ "$conclusion" != "success" ]]; then
+              echo "${workflow} has not completed successfully for ${HEAD_SHA} (conclusion: ${conclusion:-pending})"
+              exit 1
+            fi
+            echo "${workflow}: success"
+          done
       - id: revision
         shell: bash
         run: echo "short_sha=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"

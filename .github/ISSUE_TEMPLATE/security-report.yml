@@ -1,0 +1,49 @@
+name: Security report
+description: Report a non-sensitive security hardening, dependency, or CI concern.
+title: "security: "
+labels:
+  - security
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, tokens, exploit details, production data, live telemetry, or precise vehicle locations here. Use [GitHub Security Advisories](https://github.com/bballdavis/Riviamigo/security/advisories/new) for a confidential vulnerability report.
+  - type: dropdown
+    id: category
+    attributes:
+      label: Security concern category
+      options:
+        - Dependency or supply-chain concern
+        - CI or workflow hardening
+        - Documentation or deployment hardening
+        - Non-sensitive vulnerability disclosure
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the concern at a level safe for a public issue.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential impact
+      description: Explain the affected boundary without publishing exploit instructions or sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: remediation
+    attributes:
+      label: Suggested remediation
+      description: Include a safe mitigation or verification idea if known.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Public-report safety confirmation
+      options:
+        - label: I confirm this report contains no secrets, credentials, exploit details, production data, live telemetry, or precise vehicle locations.
+          required: true

@@ -7,6 +7,7 @@ const overviewMocks = vi.hoisted(() => ({
   chargerState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
   batteryLevel: 64,
   hasApiArtwork: true,
+  isDemo: false,
 }));
 
 const overheadImageFixtures = {
@@ -69,7 +70,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         side_bin_right_closed: false,
       },
     }),
-    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: overviewMocks.model, images: overviewMocks.hasApiArtwork ? overheadImageFixtures : undefined, target_tire_pressure_psi: 48 }] }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: overviewMocks.model, images: overviewMocks.hasApiArtwork ? overheadImageFixtures : undefined, is_demo: overviewMocks.isDemo, target_tire_pressure_psi: 48 }] }),
   };
 });
 
@@ -159,6 +160,7 @@ describe('overview vehicle anchors', () => {
     overviewMocks.chargerState = 'Disconnected';
     overviewMocks.batteryLevel = 64;
     overviewMocks.hasApiArtwork = true;
+    overviewMocks.isDemo = false;
   });
 
   it.each([
@@ -218,11 +220,37 @@ describe('overview vehicle anchors', () => {
     expect(screen.getByText('1h 35m')).toBeInTheDocument();
   });
 
+  it.each([
+    ['Disconnected', 'disconnected', 'Not connected', 'text-fg-tertiary'],
+    ['Connected', 'connected', 'Connected, not charging', 'text-fg-tertiary'],
+    ['Charging', 'charging', 'Charging', 'text-accent'],
+  ] as const)('renders the %s plug state distinctly', (chargerState, expectedState, label, toneClass) => {
+    overviewMocks.chargerState = chargerState;
+
+    renderOverviewForModel('R1T');
+
+    const glyph = screen.getByTestId('overview-charging-glyph');
+    expect(glyph).toHaveAttribute('data-charging-state', expectedState);
+    expect(glyph).toHaveAccessibleName(label);
+    expect(glyph).toHaveClass(toneClass);
+  });
+
   it('renders seeded overhead demo art for the overview stage', () => {
     renderOverviewForModel('R1T');
     expect(screen.getAllByRole('img').map((image) => image.getAttribute('src'))).toEqual(
       expect.arrayContaining(['/rivian/overhead-light.webp', '/rivian/overhead-dark.webp']),
     );
+  });
+
+  it.each(['R1T', 'R2S'] as const)('nudges the %s demo overview frame right without affecting real vehicles', (model) => {
+    overviewMocks.isDemo = true;
+    renderOverviewForModel(model);
+    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ transform: 'translateX(0%)' });
+  });
+
+  it('keeps the real-vehicle overview frame offset unchanged', () => {
+    renderOverviewForModel('R1T');
+    expect(screen.getByTestId('overview-vehicle-art-frame')).toHaveStyle({ transform: 'translateX(-5%)' });
   });
 
   it('scales only the packaged R1T overview fallback across its short axis', () => {

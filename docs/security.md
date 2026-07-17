@@ -14,6 +14,11 @@ required gateway contract and verification steps.
 The current internal audit evidence and release requirements are tracked in
 [`docs/security-audit.md`](./security-audit.md).
 
+Sensitive vulnerability reports must use the repository's [private GitHub
+Security Advisory flow](https://github.com/bballdavis/Riviamigo/security/advisories/new).
+Do not publish credentials, exploit details, production data, live telemetry, or
+precise vehicle locations in public issues.
+
 ## Authentication
 - JWT (RS256) with 15-minute access tokens
 - 30-day HttpOnly refresh tokens, rotated on use

@@ -1,0 +1,90 @@
+name: Runtime
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  db-smoke:
+    name: Fresh DB migration and health smoke test
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.26.3-pg16
+        env:
+          POSTGRES_DB: riviamigo_smoke
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U riviamigo -d riviamigo_smoke"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
+      REDIS_URL: redis://localhost:6379
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: apps/api
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+      - name: Run migrations on fresh DB
+        run: cargo sqlx migrate run
+      - name: Verify migration idempotency
+        run: cargo sqlx migrate run
+      - name: Start API and probe health
+        run: |
+          REDIS_URL=redis://localhost:6379 cargo run &
+          API_PID=$!
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3001/health; then
+              echo "Health check passed"
+              kill $API_PID
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check timed out"
+          kill $API_PID
+          exit 1
+
+  container-build:
+    name: Compose validation and container build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate Compose and build deployable images
+        env:
+          DATABASE_URL: postgresql://riviamigo:ci-password@timescaledb:5432/riviamigo
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: ci-password
+          REDIS_PASSWORD: ci-redis-password
+          JWT_SECRET: ci-private-key
+          JWT_PUBLIC_KEY: ci-public-key
+          AGE_ENCRYPTION_KEY: AGE-SECRET-KEY-1CI
+          ALLOWED_ORIGINS: https://ci.example.test
+        run: |
+          docker compose -f compose/docker-compose.yml -f compose/docker-compose.build.yml config --quiet
+          docker compose -f compose/docker-compose.yml -f compose/docker-compose.build.yml build

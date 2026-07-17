@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const chargingMocks = vi.hoisted(() => ({
   forcePluggedState: 'Disconnected' as 'Disconnected' | 'Connected' | 'Charging',
-  model: 'R1S' as 'R1S' | 'R1T' | 'unknown',
+  model: 'R1S' as 'R1S' | 'R1T' | 'R2S' | 'unknown',
+  isDemo: false,
   images: null as null | {
     all: Array<{
       placement: string;
@@ -28,7 +29,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
       authReady: true,
       effectiveVehicleId: 'vehicle-1',
       vehicleSelectionReady: true,
-      vehicles: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images }],
+      vehicles: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images, is_demo: chargingMocks.isDemo }],
     }),
     useCurrentVehicleStatus: () => ({
       data: {
@@ -52,7 +53,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         last_updated: '2026-05-12T12:00:00Z',
       },
     }),
-    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images }] }),
+    useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images, is_demo: chargingMocks.isDemo }] }),
     useMetricCatalog: () => ({ data: [] }),
     useMetricBatch: (_vehicleId: string, metrics: Array<{ metric: string }>) => {
       chargingMocks.metricRequests.push(metrics);
@@ -240,6 +241,7 @@ describe('charging connection custom widget', () => {
   beforeEach(() => {
     chargingMocks.forcePluggedState = 'Disconnected';
     chargingMocks.model = 'R1S';
+    chargingMocks.isDemo = false;
     chargingMocks.images = null;
     chargingMocks.metricRequests = [];
   });
@@ -508,9 +510,10 @@ describe('charging connection custom widget', () => {
     });
   });
 
-  it('renders packaged demo R1T charging art when the seeded truck is plugged in', () => {
+  it('uses full-side packaged demo R1T art when the seeded truck is plugged in', () => {
     chargingMocks.forcePluggedState = 'Charging';
     chargingMocks.model = 'R1T';
+    chargingMocks.isDemo = true;
     chargingMocks.images = packagedDemoR1TChargingFixtures;
 
     render(
@@ -521,11 +524,42 @@ describe('charging connection custom widget', () => {
     );
 
     expect(screen.getByTestId('charging-connection-chip')).toBeInTheDocument();
-    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-image-mode', 'side-charging');
+    expect(screen.getByTestId('charging-connection-chip')).toHaveAttribute('data-artwork-variant', 'demo-full-side');
     expect(screen.getAllByTestId('charging-side-image').map((image) => image.getAttribute('src'))).toEqual([
-      '/vehicle-images/fixtures/r1t/r1t_side-charging_light.webp',
-      '/vehicle-images/fixtures/r1t/r1t_side-charging_dark.webp',
+      '/vehicle-images/fixtures/r1t/r1t_side_light.webp',
+      '/vehicle-images/fixtures/r1t/r1t_side_dark.webp',
     ]);
+    for (const image of screen.getAllByTestId('charging-side-image')) {
+      expect(image).toHaveClass('absolute', 'inset-y-0', 'right-0', 'my-auto', 'w-[58%]', 'max-h-[82%]');
+      expect(image.style.transform).toBe('none');
+    }
+  });
+
+  it.each([
+    ['R1T', '/vehicle-images/fallbacks/r1t/side.webp'],
+    ['R2S', '/vehicle-images/fallbacks/r2s/side.webp'],
+  ] as const)('uses the balanced full-side demo fallback for %s', (model, fallback) => {
+    chargingMocks.forcePluggedState = 'Connected';
+    chargingMocks.model = model;
+    chargingMocks.isDemo = true;
+
+    render(
+      <DashboardRenderer
+        config={baseConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    const chip = screen.getByTestId('charging-connection-chip');
+    expect(chip).toHaveAttribute('data-artwork-variant', 'demo-full-side');
+    expect(chip).toHaveAttribute('data-fallback-image', fallback);
+    const images = screen.getAllByTestId('charging-side-image');
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      expect(image).toHaveAttribute('data-artwork-fallback');
+      expect(image).toHaveClass('absolute', 'inset-y-0', 'right-0', 'my-auto', 'w-[58%]', 'max-h-[82%]');
+      expect(image.style.transform).toBe('none');
+    }
   });
 
   it('does not expose a force-show switch in the custom widget editor', () => {
