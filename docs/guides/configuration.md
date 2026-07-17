@@ -1,3 +1,9 @@
+---
+title: Configuration
+description: Configure required production secrets and optional Riviamigo settings.
+slug: /getting-started/configuration/
+---
+
 # Configuration
 
 The standard Compose file reads its values from `.env` or your deployment environment. Keep real values out of Git and use a secret manager where your host supports one.

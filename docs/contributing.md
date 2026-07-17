@@ -22,7 +22,7 @@ Every non-trivial PR should declare one of:
 
 - `No doc impact`
 - `Internal doc update required`
-- `User-facing doc/wiki update required`
+- `Documentation site update required`
 - `Both internal and user-facing docs required`
 
 If the classification is not `No doc impact`, the PR should either include the docs change or explicitly track doc debt.
@@ -98,8 +98,9 @@ and [`security-audit.md`](./security-audit.md).
 ## Required Checks
 
 - Run `pnpm docs:check` when docs, env vars, routes, or publishing workflow changes.
+- Run `pnpm docs:build` when published navigation, links, rendering, search, or branding changes.
 - Run the focused tests closest to the changed seam.
-- Keep user-facing docs in `docs/guides/`; do not author in the GitHub Wiki UI.
+- Keep user-facing installation and operation docs in `docs/guides/`; do not maintain a separate hosted or generated documentation copy.
 
 ## Doc Debt
 

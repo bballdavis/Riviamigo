@@ -8,7 +8,7 @@ Use this file for short, durable process and documentation decisions that should
 
 - `AGENTS.md` is the primary Codex/bootstrap document for Riviamigo.
 - `CLAUDE.md` remains first-class, but acts as a companion guide rather than a competing source of truth.
-- Repo docs are canonical; the GitHub Wiki is a published mirror for selected user-facing pages from `docs/guides/`.
+- Repo docs are canonical; the Docusaurus site renders the complete `docs/` tree and publishes relevant `main` commits to GitHub Pages.
 
 ### Documentation governance
 
@@ -18,4 +18,5 @@ Use this file for short, durable process and documentation decisions that should
 
 ### Drift prevention
 
-- `pnpm docs:check` is the lightweight repo check for canonical file presence, markdown-link validity, env-var coverage, route/API contract checks, and wiki-draft publishability.
+- `pnpm docs:check` is the lightweight repo check for canonical file presence, markdown-link validity, env-var coverage, route/API contracts, and documentation-site policy.
+- `pnpm docs:build` validates production Docusaurus routes, navigation, assets, and local search before publication.

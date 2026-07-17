@@ -1,4 +1,11 @@
-# Deployment
+---
+title: Deployment and updates
+description: Deploy, update, inspect, stop, and recover the standard Riviamigo stack.
+slug: /getting-started/deployment/
+sidebar_label: Deployment and updates
+---
+
+# Deployment and updates
 
 This is the standard, self-hosted image deployment stack. For the shortest setup path, see [getting started](./getting-started.md).
 

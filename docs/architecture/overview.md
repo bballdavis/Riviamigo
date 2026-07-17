@@ -14,6 +14,7 @@ This document is canonical for the repo-level architecture map. Update it when o
 apps/
   api/          Rust API, ingestion, auth, database access, operational routes
   web/          React SPA, routes, layout, page composition
+  docs/         Docusaurus site built directly from the canonical docs tree
 packages/
   dashboards/   dashboard schema, defaults, renderer, widget registry
   hooks/        API client, auth store, React Query hooks
@@ -21,7 +22,7 @@ packages/
   ui/           design system primitives, charts, tables, tokens
   config/       shared TS, ESLint, Tailwind config
 compose/        compose, nginx, postgres, object-storage runtime files
-docs/           canonical documentation and wiki source drafts
+docs/           canonical documentation published through Docusaurus
 scripts/        dev/build/docs utilities
 ```
 

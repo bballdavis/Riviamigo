@@ -1,3 +1,9 @@
+---
+title: Runbooks
+description: Repeatable Riviamigo maintenance, publishing, recovery, release, and repair procedures.
+slug: /runbooks/
+---
+
 # Runbooks
 
 - [Release database cutover](./release-database-cutover.md)
@@ -13,7 +19,7 @@ This directory is canonical for operational and process runbooks. Update it when
 ## Current Runbooks
 
 - [`documentation-maintenance.md`](./documentation-maintenance.md)
-  How to keep repo docs and wiki drafts live, validate them, and publish safely.
+  How to keep canonical docs structured, validate the Docusaurus site, and publish safely.
 - [`vehicle-history-rebuild.md`](./vehicle-history-rebuild.md)
   How the one-off vehicle history rebuild works, what it replays, and how post-replay trip enrichment is restored.
 - [`secure-deployment.md`](./secure-deployment.md)
