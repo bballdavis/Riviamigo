@@ -1,22 +1,7 @@
 name: Vehicle artwork build
 
 on:
-  pull_request:
-    branches:
-      - dev
-    paths:
-      - assets/vehicles_generated/**
-      - apps/web/public/vehicle-images/fallbacks/**
-      - apps/web/src/routes/health.tsx
-      - apps/web/src/routes/__tests__/vehicle-artwork-fallback.test.tsx
-      - packages/hooks/src/index.ts
-      - packages/hooks/src/useVehicleArtwork.tsx
-      - packages/hooks/src/vehicleArtworkFallback.ts
-      - packages/dashboards/src/widgets/custom/OverviewVehicleWidget.tsx
-      - packages/dashboards/src/widgets/custom/ChargingConnectionWidget.tsx
-      - scripts/build_vehicle_fallback_artwork.py
-      - docs/branding.md
-      - .github/workflows/vehicle-artwork-build.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
