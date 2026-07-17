@@ -764,7 +764,7 @@ async fn seed_latest_status(
               window_rr_closed, gear_guard_locked, gear_guard_video_status,
               wiper_fluid_low, brake_fluid_low, alarm_active, service_mode, updated_at)
            VALUES
-             ($1,$2,68,$3,$4,85,'ready','Disconnected',$2,'chrgr_sts_not_connected',NULL,
+             ($1,$2,68,$3,$4,85,'ready','Connected',$2,'chrgr_sts_connected_no_chrg',NULL,
               'all_purpose','park',18,0,22.1,21.0,118,15062,
               48.1,48.0,49.8,49.7,'normal','normal','normal','normal',
               TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,TRUE,
@@ -772,7 +772,7 @@ async fn seed_latest_status(
               CASE WHEN $5::bool THEN TRUE END, CASE WHEN $5::bool THEN TRUE END,
               CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
               '2026.18.0','idle','up_to_date','none','normal',
-              FALSE,FALSE,'off','none',FALSE,TRUE,FALSE,0,0,0,0,0,0,0,
+              TRUE,FALSE,'off','none',FALSE,TRUE,FALSE,0,0,0,0,0,0,0,
               CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
               CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
               CASE WHEN $6::bool THEN TRUE END, CASE WHEN $6::bool THEN TRUE END,
@@ -1080,6 +1080,22 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
+
+            let connection = sqlx::query_as::<
+                _,
+                (Option<String>, Option<String>, Option<i32>, Option<bool>),
+            >(
+                "SELECT charger_state, charger_status, time_to_end_of_charge_min, charge_port_open
+                 FROM riviamigo.vehicle_latest_status WHERE vehicle_id=$1",
+            )
+            .bind(vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(connection.0.as_deref(), Some("Connected"));
+            assert_eq!(connection.1.as_deref(), Some("chrgr_sts_connected_no_chrg"));
+            assert_eq!(connection.2, None);
+            assert_eq!(connection.3, Some(true));
 
             sqlx::query("UPDATE riviamigo.vehicles SET name='Keep this demo name' WHERE id=$1")
                 .bind(vehicle_id)
