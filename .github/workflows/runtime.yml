@@ -1,8 +1,9 @@
 name: Runtime
 
 on:
-  pull_request:
-    branches: [main, dev]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * 1'
 
 permissions:
   contents: read

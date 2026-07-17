@@ -119,7 +119,8 @@ function CurrentVehicleStatePanel({
     ? status?.closure_tailgate_locked
     : status?.closure_liftgate_locked ?? status?.closure_tailgate_locked;
   const rearGateLockTitle = vehicleModel === 'R1T' ? 'Tailgate lock' : 'Rear gate lock';
-  const demoArtworkNudgeRight = isDemoVehicle && (vehicleModel === 'R1T' || vehicleModel === 'R2S');
+  const demoArtworkNudgeRight = isDemoVehicle
+    && (vehicleModel === 'R1S' || vehicleModel === 'R1T' || vehicleModel === 'R2S');
 
   useEffect(() => {
     const element = imageStageRef.current;
