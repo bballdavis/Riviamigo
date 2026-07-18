@@ -17,6 +17,12 @@ Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release i
 3. **Publish release image** builds the unified image for `linux/amd64` and `linux/arm64`, pushes the exact version plus `latest`, records its provenance attestation, verifies the manifest, and creates the GitHub release with `images.lock`.
 4. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require repeatability should pin `IMAGE_TAG` to the exact Calendar Version.
 
+Before pushing a release tag, run `pnpm verify:release-image -- --no-cache`. It
+builds the same `linux/amd64,linux/arm64` image locally without pushing it and
+fails after 45 minutes instead of leaving a release check running indefinitely.
+The workflow uses native-platform Rust cross-compilation for ARM64 and a shared
+Actions cache; a clean build should complete well within that limit.
+
 If image publication or manifest verification fails, no GitHub release is created. Correct the failure before creating another release tag; immutable releases intentionally make published release tags non-reusable.
 
 ## Pre-release images from dev

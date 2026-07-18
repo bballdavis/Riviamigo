@@ -8,6 +8,10 @@ node_modules
 **/node_modules
 target
 **/target
+target-*
+**/target-*
+\.pnpm-store
+**/\.pnpm-store
 dist
 **/dist
 coverage
