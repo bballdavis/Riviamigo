@@ -1,20 +1,59 @@
 # syntax=docker/dockerfile:1
 
-FROM rust:1.88-slim AS api-builder
+FROM --platform=$BUILDPLATFORM rust:1.88-slim AS api-builder
+ARG TARGETARCH
 WORKDIR /build/apps/api
 ENV SQLX_OFFLINE=true
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        dpkg --add-architecture arm64; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev libssl-dev:arm64 \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
+        rustup target add aarch64-unknown-linux-gnu; \
+    else \
+        apt-get update; \
+        apt-get install -y --no-install-recommends pkg-config libssl-dev; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
 COPY apps/api/Cargo.toml apps/api/Cargo.lock ./
 RUN mkdir src && printf 'fn main() {}\n' > src/main.rs \
     && printf 'pub fn __riviamigo_dummy() {}\n' > src/lib.rs \
-    && cargo build --release \
+    && target_flag='' \
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+            CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+            AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+            PKG_CONFIG_ALLOW_CROSS=1 \
+            PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+            OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
+            OPENSSL_INCLUDE_DIR=/usr/include; \
+        target_flag='--target aarch64-unknown-linux-gnu'; \
+    fi \
+    && cargo build --release $target_flag \
     && rm -rf src
 COPY apps/api/ ./
 RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql \
-    && cargo build --release
+    && target_flag='' \
+    && binary_path=target/release/riviamigo-api \
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+            CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+            AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+            PKG_CONFIG_ALLOW_CROSS=1 \
+            PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+            OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
+            OPENSSL_INCLUDE_DIR=/usr/include; \
+        target_flag='--target aarch64-unknown-linux-gnu'; \
+        binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-api; \
+    fi \
+    && cargo build --release $target_flag \
+    && cp "$binary_path" /build/apps/api/riviamigo-api
 
-FROM node:22-alpine AS web-builder
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
 RUN corepack enable
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -39,7 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd -r -u 1001 -g 1001 riviamigo
 
 WORKDIR /app
-COPY --from=api-builder /build/apps/api/target/release/riviamigo-api ./riviamigo-api
+COPY --from=api-builder /build/apps/api/riviamigo-api ./riviamigo-api
 COPY --from=api-builder /build/apps/api/migrations ./migrations
 COPY --from=web-builder /build/apps/web/dist ./dist
 COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf

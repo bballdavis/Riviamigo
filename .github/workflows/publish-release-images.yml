@@ -34,6 +34,7 @@ jobs:
   image:
     needs: validate-tag
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -60,6 +61,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:${{ needs.validate-tag.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:latest
+          cache-from: type=gha,scope=riviamigo-container-image
+          cache-to: type=gha,mode=max,scope=riviamigo-container-image
           labels: |
             org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
             org.opencontainers.image.revision=${{ github.sha }}
