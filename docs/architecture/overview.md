@@ -21,7 +21,7 @@ packages/
   types/        shared TypeScript contracts
   ui/           design system primitives, charts, tables, tokens
   config/       shared TS, ESLint, Tailwind config
-compose/        compose, nginx, postgres, object-storage runtime files
+compose/        production image, Compose topology, nginx, and development infrastructure
 docs/           canonical documentation published through Docusaurus
 scripts/        dev/build/docs utilities
 ```
@@ -34,6 +34,7 @@ scripts/        dev/build/docs utilities
 - `packages/dashboards` owns dashboard rendering and widget registration, not route-level page concerns.
 - `packages/ui` owns shared visual primitives and tokens.
 - `apps/web` owns route composition, page-specific UX, and integration of shared packages.
+- `compose/Dockerfile` owns the unified production image containing the API, built SPA, nginx, and backup tools; development remains split through `compose/docker-compose.dev.yml`.
 
 ## Change Triggers
 

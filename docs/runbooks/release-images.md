@@ -1,6 +1,6 @@
 # Release Images
 
-This runbook owns Riviamigo's public container-image release process. It applies to the two images published to GitHub Container Registry (GHCR): `ghcr.io/bballdavis/riviamigo-api` and `ghcr.io/bballdavis/riviamigo-web`.
+This runbook owns Riviamigo's public container-image release process. The API, web application, nginx configuration, and backup tooling ship together as `ghcr.io/bballdavis/riviamigo`.
 
 ## One-time GitHub setup
 
@@ -14,7 +14,7 @@ Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release i
 
 1. Ensure `main` is the intended, validated release commit.
 2. Run **Prepare calendar release** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
-3. **Publish release images** builds API and web images for `linux/amd64` and `linux/arm64`, pushes the exact version plus `latest`, records provenance attestations, verifies both published manifests, and creates the GitHub release with `images.lock`.
+3. **Publish release image** builds the unified image for `linux/amd64` and `linux/arm64`, pushes the exact version plus `latest`, records its provenance attestation, verifies the manifest, and creates the GitHub release with `images.lock`.
 4. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require repeatability should pin `IMAGE_TAG` to the exact Calendar Version.
 
 If image publication or manifest verification fails, no GitHub release is created. Correct the failure before creating another release tag; immutable releases intentionally make published release tags non-reusable.
@@ -37,4 +37,4 @@ build.
 
 - Normal self-hosted deployments use `compose/docker-compose.yml` and pull published images.
 - Source candidates use the `compose/docker-compose.build.yml` overlay. Fresh-install acceptance passes `--source-build` so it tests the candidate rather than an older published image.
-- A published release must be checked by pulling its exact Calendar Version and verifying the two image digests in the GitHub release asset before announcing it.
+- A published release must be checked by pulling its exact Calendar Version and verifying the image digest in the GitHub release asset before announcing it.

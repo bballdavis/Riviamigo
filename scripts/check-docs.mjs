@@ -15,6 +15,7 @@ const requiredFiles = [
   "docs/security-audit.md",
   "docs/roadmap.md",
   "docs/privacy.md",
+  "docs/environment-variables.md",
   "docs/architecture/overview.md",
   "docs/architecture/backend-data-flow.md",
   "docs/development.md",
@@ -294,6 +295,7 @@ function checkEnvVarReferences() {
     "docs/contributing.md",
     "docs/runbooks/documentation-maintenance.md",
     "docs/guides/configuration.md",
+    "docs/environment-variables.md",
   ];
 
   for (const relativePath of docFiles) {
@@ -314,6 +316,48 @@ function checkEnvVarReferences() {
   }
 }
 
+function checkEnvironmentReferenceCoverage() {
+  const fullTemplate = readFile("compose/.env.full.example");
+  const reference = readFile("docs/environment-variables.md");
+  const supported = new Set(
+    [...fullTemplate.matchAll(/^#?\s*([A-Z][A-Z0-9_]+)=/gm)].map((match) => match[1]),
+  );
+
+  for (const name of supported) {
+    if (!reference.includes(`\`${name}\``)) {
+      fail(`environment reference is missing supported variable: ${name}`);
+    }
+  }
+
+  const configContent = readFile("apps/api/src/config.rs");
+  const configBlock = configContent.slice(
+    configContent.indexOf("pub struct Config"),
+    configContent.indexOf("pub struct RateLimitConfig"),
+  );
+  const runtimeFields = [...configBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => match[1].toUpperCase())
+    .filter((name) => name !== "RATE_LIMIT");
+  const rateBlock = configContent.slice(
+    configContent.indexOf("pub struct RateLimitConfig"),
+    configContent.indexOf("fn default_port"),
+  );
+  const rateFields = [...rateBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => `RATE_LIMIT_${match[1].toUpperCase()}`);
+  const directRuntimeVars = ["RIVIAN_GRAPHQL_GATEWAY_URL", "RUST_LOG"];
+  for (const name of [...runtimeFields, ...rateFields, ...directRuntimeVars]) {
+    if (!supported.has(name)) {
+      fail(`compose/.env.full.example is missing runtime variable: ${name}`);
+    }
+  }
+
+  const productionCompose = readFile("compose/docker-compose.yml");
+  for (const match of productionCompose.matchAll(/\$\{([A-Z][A-Z0-9_]+)/g)) {
+    if (!supported.has(match[1])) {
+      fail(`compose/.env.full.example is missing production Compose variable: ${match[1]}`);
+    }
+  }
+}
+
 function checkProductionDeploymentContract() {
   const productionCompose = readFile("compose/docker-compose.yml");
   const buildCompose = readFile("compose/docker-compose.build.yml");
@@ -321,11 +365,11 @@ function checkProductionDeploymentContract() {
 
   for (const requiredSnippet of [
     '"127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
-    "JWT_SECRET: ${JWT_SECRET}",
-    "JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}",
-    "AGE_ENCRYPTION_KEY: ${AGE_ENCRYPTION_KEY}",
-    "RIVIAMIGO_ENV: ${RIVIAMIGO_ENV:-production}",
-    "ghcr.io/bballdavis}/riviamigo-api:${IMAGE_TAG:-latest}",
+    "RIVIAMIGO_ENV: production",
+    "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
+    "../data/db:/db",
+    "../data/backups:/backups",
+    "../data/cache:/cache",
     "redis:",
   ]) {
     if (!productionCompose.includes(requiredSnippet)) {
@@ -333,13 +377,13 @@ function checkProductionDeploymentContract() {
     }
   }
 
-  for (const forbiddenSnippet of ['"80:80"', '"443:443"', "COOKIE_INSECURE:"]) {
+  for (const forbiddenSnippet of ['"80:80"', '"443:443"', "COOKIE_INSECURE:", "  nginx:"]) {
     if (productionCompose.includes(forbiddenSnippet)) {
       fail(`production compose must not include direct-public deployment setting: ${forbiddenSnippet}`);
     }
   }
 
-  for (const requiredSnippet of ["context: ../apps/api", "dockerfile: compose/nginx/Dockerfile"]) {
+  for (const requiredSnippet of ["context: ..", "dockerfile: compose/Dockerfile"]) {
     if (!buildCompose.includes(requiredSnippet)) {
       fail(`build overlay is missing required source-build contract: ${requiredSnippet}`);
     }
@@ -349,7 +393,7 @@ function checkProductionDeploymentContract() {
     fail("standard Compose must pull published images instead of defining build contexts");
   }
 
-  for (const requiredSnippet of ["resolver 127.0.0.11", "http://api:3001", "listen 8080;"]) {
+  for (const requiredSnippet of ["http://127.0.0.1:3001", "listen 8080;"]) {
     if (!nginxConfig.includes(requiredSnippet)) {
       fail(`nginx must use the internal secure-deployment topology: ${requiredSnippet}`);
     }
@@ -364,6 +408,7 @@ checkLegacyWikiReferences();
 checkRouteContracts();
 checkApiContracts();
 checkEnvVarReferences();
+checkEnvironmentReferenceCoverage();
 checkProductionDeploymentContract();
 
 if (process.exitCode) {

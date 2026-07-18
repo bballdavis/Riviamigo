@@ -1,4 +1,4 @@
-name: Publish release images
+name: Publish release image
 
 on:
   push:
@@ -28,52 +28,10 @@ jobs:
             exit 1
           fi
           git fetch origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "Stable release tags must point to a commit on main" >&2
-            exit 1
-          fi
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  api:
-    needs: validate-tag
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      attestations: write
-      id-token: write
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: ./apps/api
-          file: ./apps/api/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-api:${{ needs.validate-tag.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-api:latest
-          labels: |
-            org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.validate-tag.outputs.version }}
-      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-api
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-
-  web:
+  image:
     needs: validate-tag
     runs-on: ubuntu-latest
     permissions:
@@ -96,72 +54,57 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: ./compose/nginx/Dockerfile
+          file: ./compose/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-web:${{ needs.validate-tag.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-web:latest
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:${{ needs.validate-tag.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:latest
           labels: |
             org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.validate-tag.outputs.version }}
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-web
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
   release-smoke:
-    needs: [validate-tag, api, web]
+    needs: [validate-tag, image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - name: Authenticate the release smoke test to GHCR
+      - name: Authenticate release smoke test to GHCR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - name: Create an ephemeral production environment
-        env:
-          JWT_SECRET: ${{ secrets.FRESH_INSTALL_JWT_SECRET }}
-          JWT_PUBLIC_KEY: ${{ secrets.FRESH_INSTALL_JWT_PUBLIC_KEY }}
-          AGE_ENCRYPTION_KEY: ${{ secrets.FRESH_INSTALL_AGE_ENCRYPTION_KEY }}
-        shell: bash
+      - name: Create ephemeral production environment
         run: |
-          set -euo pipefail
           cp compose/.env.example release-smoke.env
-          sed -i 's|DATABASE_URL=.*|DATABASE_URL=postgresql://riviamigo:release-smoke-password@timescaledb:5432/riviamigo|' release-smoke.env
           sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=release-smoke-password|' release-smoke.env
           sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=release-smoke-redis-password|' release-smoke.env
           sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://release-smoke.example.test|' release-smoke.env
-          printf '\nJWT_SECRET=%s\nJWT_PUBLIC_KEY=%s\nAGE_ENCRYPTION_KEY=%s\n' "$JWT_SECRET" "$JWT_PUBLIC_KEY" "$AGE_ENCRYPTION_KEY" >> release-smoke.env
-      - name: Exercise the published image-only stack
+      - name: Exercise published image-only stack
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PWD/release-smoke.env" --image-tag "${{ needs.validate-tag.outputs.version }}"
 
   create-release:
-    needs: [validate-tag, api, web, release-smoke]
+    needs: [validate-tag, image, release-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Verify published multi-architecture images
-        run: |
-          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-api@${{ needs.api.outputs.digest }}"
-          docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo-web@${{ needs.web.outputs.digest }}"
+      - name: Verify published multi-architecture image
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.image.outputs.digest }}"
       - name: Create digest lock and GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.validate-tag.outputs.version }}
-          API_DIGEST: ${{ needs.api.outputs.digest }}
-          WEB_DIGEST: ${{ needs.web.outputs.digest }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
         shell: bash
         run: |
-          set -euo pipefail
-          cat > images.lock <<EOF
-          ghcr.io/bballdavis/riviamigo-api@${API_DIGEST}
-          ghcr.io/bballdavis/riviamigo-web@${WEB_DIGEST}
-          EOF
+          echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
           gh release create "$VERSION" images.lock#images.lock --title "$VERSION" --generate-notes

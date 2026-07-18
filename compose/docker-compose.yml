@@ -1,88 +1,67 @@
 services:
-  api:
-    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo-api:${IMAGE_TAG:-latest}
+  app:
+    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    env_file:
+      - ${RIVIAMIGO_ENV_FILE:-../.env}
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
-      AGE_ENCRYPTION_KEY: ${AGE_ENCRYPTION_KEY}
-      S3_ENDPOINT: ${S3_ENDPOINT:-}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      RIVIAMIGO_ENV: production
+      PORT: 3001
       RUST_LOG: ${RUST_LOG:-info}
-      BACKUP_DRIVER: ${BACKUP_DRIVER:-pg_dump}
-      BACKUP_ARTIFACT_DIR: ${BACKUP_ARTIFACT_DIR:-/backups}
-      BACKUP_POLL_INTERVAL_SECONDS: ${BACKUP_POLL_INTERVAL_SECONDS:-60}
-      # Managed persistent storage for Rivian artwork mirrors. The API root is
-      # read-only, so this must never be under /tmp.
-      VEHICLE_IMAGE_CACHE_DIR: /data/vehicle-image-cache
-      RIVIAN_WS_RECONNECT_INITIAL_SECONDS: ${RIVIAN_WS_RECONNECT_INITIAL_SECONDS:-10}
-      RIVIAN_WS_RECONNECT_MAX_SECONDS: ${RIVIAN_WS_RECONNECT_MAX_SECONDS:-900}
-      RIVIAN_RAW_EVENT_RETENTION_DAYS: ${RIVIAN_RAW_EVENT_RETENTION_DAYS:-7}
-      RIVIAN_PERSIST_RAW_EVENTS: ${RIVIAN_PERSIST_RAW_EVENTS:-true}
-      RIVIAN_PARALLAX_CAPTURE_ENABLED: ${RIVIAN_PARALLAX_CAPTURE_ENABLED:-true}
-      RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY: ${RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY:-true}
-      RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE: ${RATE_LIMIT_AUTH_PUBLIC_PER_MINUTE:-30}
-      RATE_LIMIT_AUTH_PUBLIC_BURST: ${RATE_LIMIT_AUTH_PUBLIC_BURST:-10}
-      RATE_LIMIT_AUTH_METADATA_PER_MINUTE: ${RATE_LIMIT_AUTH_METADATA_PER_MINUTE:-1200}
-      RATE_LIMIT_AUTH_METADATA_BURST: ${RATE_LIMIT_AUTH_METADATA_BURST:-120}
-      RATE_LIMIT_AUTH_READ_PER_MINUTE: ${RATE_LIMIT_AUTH_READ_PER_MINUTE:-900}
-      RATE_LIMIT_AUTH_READ_BURST: ${RATE_LIMIT_AUTH_READ_BURST:-180}
-      RATE_LIMIT_AUTH_WRITE_PER_MINUTE: ${RATE_LIMIT_AUTH_WRITE_PER_MINUTE:-240}
-      RATE_LIMIT_AUTH_WRITE_BURST: ${RATE_LIMIT_AUTH_WRITE_BURST:-60}
-      RATE_LIMIT_HEAVY_READ_PER_MINUTE: ${RATE_LIMIT_HEAVY_READ_PER_MINUTE:-300}
-      RATE_LIMIT_HEAVY_READ_BURST: ${RATE_LIMIT_HEAVY_READ_BURST:-90}
-      RIVIAMIGO_ENV: ${RIVIAMIGO_ENV:-production}
+      VEHICLE_IMAGE_CACHE_DIR: ${VEHICLE_IMAGE_CACHE_DIR:-/cache/riviamigo/vehicle-images}
     depends_on:
       timescaledb:
         condition: service_healthy
       redis:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
     networks:
       - internal
       - proxy
-    expose:
-      - "3001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
+      - /var/run
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
     volumes:
-      - vehicle_image_cache:/data/vehicle-image-cache
-      - backup_artifacts:/backups
+      - ../data/backups:/backups
+      - ../data/cache:/cache
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 512M
+          cpus: '1.5'
+          memory: 640M
         reservations:
-          memory: 128M
+          memory: 160M
 
   timescaledb:
     image: timescale/timescaledb:2.26.3-pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: riviamigo
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-riviamigo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATA: /db
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ../data/db:/db
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d riviamigo"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-riviamigo} -d riviamigo"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -97,11 +76,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
-    volumes:
-      - redisdata:/data
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "--appendonly", "yes"]
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - ../data/redis:/data
     networks:
       - internal
     healthcheck:
@@ -120,38 +99,6 @@ services:
           memory: 256M
         reservations:
           memory: 64M
-
-  nginx:
-    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo-web:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
-    networks:
-      - internal
-      - proxy
-    depends_on:
-      - api
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/run
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 128M
-        reservations:
-          memory: 32M
-
-volumes:
-  pgdata:
-  redisdata:
-  vehicle_image_cache:
-  backup_artifacts:
 
 networks:
   internal:

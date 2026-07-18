@@ -48,7 +48,7 @@ compose/docker-compose.yml
 
 Other Compose variants are available when you need them:
 
-- [`docker-compose.build.yml`](../../compose/docker-compose.build.yml) — build the API and web images from the local checkout.
+- [`docker-compose.build.yml`](../../compose/docker-compose.build.yml) — build the unified production image from the local checkout.
 - [`docker-compose.dev.yml`](../../compose/docker-compose.dev.yml) — start development infrastructure for `pnpm dev:stack`.
 
 ## Next steps

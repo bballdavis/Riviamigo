@@ -7,79 +7,77 @@ sidebar_label: Deployment and updates
 
 # Deployment and updates
 
-This is the standard, self-hosted image deployment stack. For the shortest setup path, see [getting started](./getting-started.md).
-
-The stack in [`compose/docker-compose.yml`](../../compose/docker-compose.yml) pulls published Riviamigo images and runs:
-
-- TimescaleDB for application and telemetry data.
-- Redis for session and token-lock state.
-- The Riviamigo API on Docker's internal network.
-- Nginx for the web app and API origin, bound to `127.0.0.1:8080` by default.
+The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is bound to the host, at `127.0.0.1:8080` by default.
 
 The loopback binding is intentional. Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of it; never publish the API, database, Redis, or origin port directly.
 
 ## Initial deployment
 
-1. Copy `compose/.env.example` to `.env`, then prepare it using [configuration](./configuration.md). In particular, use `timescaledb` (not `localhost`) in `DATABASE_URL`, set separate strong database and Redis passwords, provide the signing and age encryption keys, and set `ALLOWED_ORIGINS` to your exact public HTTPS address. Standard Compose defaults to production mode.
-
+1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords plus your exact public HTTPS `ALLOWED_ORIGINS` value. Internal service URLs and persistent application keys are generated automatically.
 2. Start the stack:
 
    ```bash
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
-3. Check that services are healthy:
+3. Verify it:
 
    ```bash
    docker compose --env-file .env -f compose/docker-compose.yml ps
    curl http://127.0.0.1:8080/health
    ```
 
-4. Configure an authenticated gateway that forwards to `127.0.0.1:8080` and supports WebSockets. The [secure deployment guide](./secure-deployment.md) has the required access boundary.
+4. Configure an authenticated gateway that forwards to `127.0.0.1:8080` and supports WebSockets.
+5. Open the HTTPS address and create the first owner account.
 
-5. Open the authenticated HTTPS address. The first account is the `super_user`; afterward, that owner can create activation links for invited users and optionally assign viewer access to a vehicle during the invitation flow.
+## Persistent files
+
+The standard stack keeps operator-visible files under `./data`:
+
+| Host directory | Container path | Contents |
+|---|---|---|
+| `data/db` | `/db` | PostgreSQL data |
+| `data/redis` | `/data` | Redis append-only state |
+| `data/backups` | `/backups` | Downloadable recovery packages |
+| `data/cache` | `/cache` | Application cache files, including vehicle artwork |
+
+Do not delete `data` during updates. Copy recovery packages off-host for disaster recovery.
 
 ## Logs and updates
 
 ```bash
-# Follow every service
 docker compose --env-file .env -f compose/docker-compose.yml logs -f
-
-# Follow the API only
-docker compose --env-file .env -f compose/docker-compose.yml logs -f api
-
-# Pull a new image tag and recreate the stack
+docker compose --env-file .env -f compose/docker-compose.yml logs -f app
 docker compose --env-file .env -f compose/docker-compose.yml pull
 docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```
 
-The API applies its database migrations on startup. The first public release
-uses one initial schema baseline; later releases add normal forward-only
-migrations. Back up before a significant update and review the release notes
-for breaking changes. Maintainers adopting the pre-release development database
-must follow the [release database cutover](../runbooks/release-database-cutover.md)
-before running the release build.
-
-To pin a deployment, set `IMAGE_TAG` in `.env` to an exact Calendar Version such as `2026.07.0`, then run the same pull and up commands. `latest` remains the default and tracks the newest stable release.
+The app applies database migrations on startup. Pin `IMAGE_TAG` to an exact Calendar Version for repeatable deployments.
 
 ## Build from source
-
-Contributors and CI can build the same standard topology from the checked-out source without changing the image deployment file:
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-compose.build.yml up -d --build
 ```
 
-Local development uses `pnpm dev:stack` and `compose/docker-compose.dev.yml` instead; it is not the supported self-hosted deployment path.
+Local development continues to use `pnpm dev:stack` and `compose/docker-compose.dev.yml`; production image consolidation does not change that workflow.
+
+## Upgrade from the former named volumes
+
+Before the first start with the host-visible layout, stop the old stack and create a current recovery package. Then migrate the old volumes:
+
+```bash
+docker compose --env-file .env -f compose/docker-compose.yml down
+node scripts/migrate-production-storage.mjs --project riviamigo
+docker compose --env-file .env -f compose/docker-compose.yml up -d
+```
+
+The migration refuses running source volumes and non-empty destinations, verifies copied file counts, and retains the old volumes for rollback. Pass the prior Compose project name through `--project` if it was not `riviamigo`.
 
 ## Stopping and recovery
 
 ```bash
-# Stop containers but retain your data volumes
 docker compose --env-file .env -f compose/docker-compose.yml down
-
-# Destructive: remove containers and all stored data
-docker compose --env-file .env -f compose/docker-compose.yml down -v --remove-orphans
 ```
 
-For a database dump, restore process, and backup considerations, see [backup and restore](./backup-and-restore.md).
+`down` retains `./data`. Removing the containers does not remove bind-mounted application data. See [backup and restore](./backup-and-restore.md) before replacing or deleting the data directory.
