@@ -18,6 +18,15 @@ This document is canonical for the high-level backend flow. Update it when the A
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
 7. Completed trips enqueue an idempotent weather-enrichment job. The worker samples the exact route at endpoints and 15-minute intervals, derives rounded provider cells, batches Open-Meteo requests, stores `trip_weather_samples`, and updates the time-weighted `trips.outside_temp_c` summary used by trip and efficiency APIs.
 
+Telemetry is written to the `timeseries.telemetry` hypertable. The
+`telemetry_1min` continuous aggregate incrementally materializes the prior
+seven days once an hour, ending five minutes before the present. It remains a
+real-time aggregate, so queries include the unmaterialized recent tail from
+the hypertable. This keeps active dashboards and charge curves current without
+running a refresh every five minutes. Do not stretch this policy to 12 hours or
+daily: doing so makes dashboard reads carry an increasingly large raw-data
+tail. `odometer_daily` has a separate hourly, materialized-only policy.
+
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
 The API can also run an experimental, read-only Parallax capture alongside the

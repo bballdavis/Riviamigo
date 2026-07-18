@@ -14,6 +14,11 @@ function parsePort(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback;
 }
 
+function parseSeconds(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 60 ? parsed : fallback;
+}
+
 const requestedPorts = {
   api: parsePort(process.env.DEV_API_PORT, 3001),
   web: parsePort(process.env.DEV_WEB_PORT, 5173),
@@ -25,6 +30,7 @@ const requestedPorts = {
 
 let ports = { ...requestedPorts };
 const composeProjectName = process.env.DEV_COMPOSE_PROJECT_NAME || process.env.COMPOSE_PROJECT_NAME || 'riviamigo';
+const databaseReadyTimeoutMs = parseSeconds(process.env.DEV_DATABASE_READY_TIMEOUT_SECONDS, 600) * 1000;
 
 const urls = {
   get apiHealth() {
@@ -301,7 +307,8 @@ async function startInfrastructure() {
   log(`Starting infrastructure (TimescaleDB, Redis, Garage) for ${composeProjectName}...`);
   await run('docker', ['compose', '-f', composeFile, 'up', '-d', 'timescaledb', 'redis', 'garage']);
 
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + databaseReadyTimeoutMs;
+  let nextProgressLog = Date.now() + 15000;
   let dbReady = false;
   while (Date.now() < deadline) {
     const { code } = await capture('docker', [
@@ -311,11 +318,16 @@ async function startInfrastructure() {
       dbReady = true;
       break;
     }
+    if (Date.now() >= nextProgressLog) {
+      const remainingSeconds = Math.ceil((deadline - Date.now()) / 1000);
+      log(`TimescaleDB is still recovering or starting; waiting up to ${remainingSeconds}s more...`);
+      nextProgressLog += 15000;
+    }
     await sleep(1000);
   }
 
   if (!dbReady) {
-    throw new Error('Timed out waiting for TimescaleDB to accept connections.');
+    throw new Error(`Timed out waiting for TimescaleDB to accept connections after ${databaseReadyTimeoutMs / 1000}s. Inspect docker compose logs timescaledb for recovery errors.`);
   }
 
   log('');

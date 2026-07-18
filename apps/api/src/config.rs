@@ -86,6 +86,7 @@ fn default_backup_driver() -> String {
 fn default_vehicle_image_cache_dir() -> String {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
         .or_else(|| {
             std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
@@ -93,7 +94,8 @@ fn default_vehicle_image_cache_dir() -> String {
         .unwrap_or_else(std::env::temp_dir);
 
     base.join("riviamigo")
-        .join("vehicle-image-cache")
+        .join("cache")
+        .join("vehicle-images")
         .to_string_lossy()
         .into_owned()
 }
@@ -167,6 +169,7 @@ fn default_heavy_read_burst() -> u32 {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
+        populate_compose_connection_urls()?;
         let config =
             envy::from_env::<Config>().map_err(|e| anyhow::anyhow!("Config error: {e}"))?;
         config.validate()?;
@@ -179,24 +182,26 @@ impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
         let is_production = self.is_production();
 
+        let supplied_key_count = [
+            self.jwt_secret.as_deref(),
+            self.jwt_public_key.as_deref(),
+            self.age_encryption_key.as_deref(),
+        ]
+        .into_iter()
+        .filter(|value| value.is_some_and(|value| !value.trim().is_empty()))
+        .count();
+        if supplied_key_count != 0 && supplied_key_count != 3 {
+            anyhow::bail!(
+                "JWT_SECRET, JWT_PUBLIC_KEY, and AGE_ENCRYPTION_KEY must be supplied together or all omitted so Riviamigo can persist generated keys"
+            );
+        }
+
         if is_production {
             if self.cookie_insecure.is_some() {
                 anyhow::bail!(
                     "COOKIE_INSECURE must not be set when RIVIAMIGO_ENV=production. \
                      Remove it from your environment before starting the API."
                 );
-            }
-
-            for (name, value) in [
-                ("JWT_SECRET", self.jwt_secret.as_deref()),
-                ("JWT_PUBLIC_KEY", self.jwt_public_key.as_deref()),
-                ("AGE_ENCRYPTION_KEY", self.age_encryption_key.as_deref()),
-            ] {
-                if value.map_or(true, |value| value.trim().is_empty()) {
-                    anyhow::bail!(
-                        "{name} must be supplied by the deployment secret manager when RIVIAMIGO_ENV=production; database-generated key fallback is development-only"
-                    );
-                }
             }
 
             if self.allowed_origins.is_empty() {
@@ -226,11 +231,23 @@ impl Config {
             let database_url = url::Url::parse(&self.database_url)
                 .map_err(|error| anyhow::anyhow!("DATABASE_URL is invalid: {error}"))?;
             let password = database_url.password().unwrap_or_default();
-            if password.is_empty() || matches!(password, "devpassword" | "CHANGE_ME" | "change_me")
+            if password.is_empty()
+                || matches!(password, "devpassword" | "CHANGE_ME" | "change_me")
+                || password.starts_with("CHANGE_ME")
             {
                 anyhow::bail!(
                     "DATABASE_URL must contain a non-default database password in production"
                 );
+            }
+
+            let redis_url = url::Url::parse(&self.redis_url)
+                .map_err(|error| anyhow::anyhow!("REDIS_URL is invalid: {error}"))?;
+            let redis_password = redis_url.password().unwrap_or_default();
+            if redis_password.is_empty()
+                || matches!(redis_password, "devpassword" | "CHANGE_ME" | "change_me")
+                || redis_password.starts_with("CHANGE_ME")
+            {
+                anyhow::bail!("REDIS_URL must contain a non-default Redis password in production");
             }
         }
 
@@ -244,6 +261,31 @@ impl Config {
             .as_deref()
             .is_some_and(|environment| environment.eq_ignore_ascii_case("production"))
     }
+}
+
+fn populate_compose_connection_urls() -> anyhow::Result<()> {
+    if std::env::var_os("DATABASE_URL").is_none() {
+        let password = std::env::var("POSTGRES_PASSWORD")
+            .map_err(|_| anyhow::anyhow!("DATABASE_URL or POSTGRES_PASSWORD is required"))?;
+        let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "riviamigo".into());
+        let mut url = url::Url::parse("postgresql://timescaledb:5432/riviamigo")?;
+        url.set_username(&user)
+            .map_err(|_| anyhow::anyhow!("POSTGRES_USER cannot be encoded in DATABASE_URL"))?;
+        url.set_password(Some(&password))
+            .map_err(|_| anyhow::anyhow!("POSTGRES_PASSWORD cannot be encoded in DATABASE_URL"))?;
+        std::env::set_var("DATABASE_URL", url.as_str());
+    }
+
+    if std::env::var_os("REDIS_URL").is_none() {
+        let password = std::env::var("REDIS_PASSWORD")
+            .map_err(|_| anyhow::anyhow!("REDIS_URL or REDIS_PASSWORD is required"))?;
+        let mut url = url::Url::parse("redis://redis:6379")?;
+        url.set_password(Some(&password))
+            .map_err(|_| anyhow::anyhow!("REDIS_PASSWORD cannot be encoded in REDIS_URL"))?;
+        std::env::set_var("REDIS_URL", url.as_str());
+    }
+
+    Ok(())
 }
 
 impl Default for RateLimitConfig {
@@ -311,7 +353,7 @@ mod tests {
         Config {
             database_url: "postgresql://riviamigo:strong-password@timescaledb:5432/riviamigo"
                 .into(),
-            redis_url: "redis://redis:6379".into(),
+            redis_url: "redis://:strong-redis-password@redis:6379".into(),
             jwt_secret: Some("private".into()),
             jwt_public_key: Some("public".into()),
             age_encryption_key: Some("age-key".into()),
@@ -337,7 +379,18 @@ mod tests {
     }
 
     #[test]
-    fn production_requires_externally_managed_keys() {
+    fn production_allows_database_bootstrapped_keys() {
+        let mut config = production_config();
+        config.jwt_secret = None;
+        config.jwt_public_key = None;
+        config.age_encryption_key = None;
+        config
+            .validate()
+            .expect("production keys may bootstrap into the database");
+    }
+
+    #[test]
+    fn key_overrides_must_be_complete() {
         let mut config = production_config();
         config.age_encryption_key = None;
 
@@ -345,7 +398,7 @@ mod tests {
             .validate()
             .unwrap_err()
             .to_string()
-            .contains("AGE_ENCRYPTION_KEY"));
+            .contains("must be supplied together"));
     }
 
     #[test]

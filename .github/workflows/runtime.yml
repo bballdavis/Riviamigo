@@ -71,14 +71,10 @@ jobs:
           exit 1
       - name: Validate Compose and build deployable images
         env:
-          DATABASE_URL: postgresql://riviamigo:ci-password@timescaledb:5432/riviamigo
-          POSTGRES_USER: riviamigo
           POSTGRES_PASSWORD: ci-password
           REDIS_PASSWORD: ci-redis-password
-          JWT_SECRET: ci-private-key
-          JWT_PUBLIC_KEY: ci-public-key
-          AGE_ENCRYPTION_KEY: AGE-SECRET-KEY-1CI
           ALLOWED_ORIGINS: https://ci.example.test
+          RIVIAMIGO_ENV_FILE: ../compose/.env.example
         run: |
           docker compose -f compose/docker-compose.yml -f compose/docker-compose.build.yml config --quiet
           docker compose -f compose/docker-compose.yml -f compose/docker-compose.build.yml build

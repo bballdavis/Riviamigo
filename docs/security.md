@@ -56,7 +56,7 @@ precise vehicle locations in public issues.
 ## Secret Storage
 - Durable Rivian credential bundles are encrypted before storage in `riviamigo.vehicle_credentials`
 - Short-lived connect / OTP staging data should stay encrypted at rest in Redis and Redis should remain internal-only
-- Production requires externally supplied `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and `JWT_PUBLIC_KEY`; database-generated fallback keys are development-only
+- Production generates `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and `JWT_PUBLIC_KEY` on first start and persists them in PostgreSQL; externally managed overrides must supply all three together
 
 ## Audit Logging
 - Security events (login success/failure, key operations) logged to `riviamigo.security_events`
@@ -68,11 +68,11 @@ precise vehicle locations in public issues.
 - `pnpm audit --prod --audit-level=high` in CI
 - Semgrep SAST is blocking on trusted branches and same-repository pull
   requests; fork pull requests use a separate secret-free blocking scan.
-- Critical and high Trivy findings are blocking after the API image builds.
+- Critical and high Trivy findings are blocking after the unified production image builds.
 - Workflow actions are pinned to reviewed commit SHAs.
 
 ## Release Images
-- Standard Compose pulls public API and web images from GitHub Container Registry; source builds use the explicit build overlay only.
+- Standard Compose pulls one public unified image from GitHub Container Registry; source builds use the explicit build overlay only.
 - Stable images use immutable Calendar Version tags and provenance attestations; `latest` is a moving convenience tag, not a reproducible deployment identifier.
 - Container images are published only by intentional release workflows from validated `main` tags or the current `dev` pre-release candidate. Stable and pre-release image tags and digests must be treated as release artifacts.
 - See the [release images runbook](./runbooks/release-images.md) for package visibility, tag protection, and recovery requirements.
@@ -81,7 +81,7 @@ precise vehicle locations in public issues.
 - [ ] `COOKIE_INSECURE` is NOT set
 - [ ] `POSTGRES_PASSWORD` changed from default
 - [ ] `REDIS_PASSWORD` is strong and Redis is not host-published
-- [ ] `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and `JWT_PUBLIC_KEY` are supplied from deployment secrets or a secret manager
+- [ ] Generated application keys are protected by database backups, or all three explicit key overrides are stored safely
 - [ ] `ALLOWED_ORIGINS` set to exact frontend domain(s)
 - [ ] An authenticated tunnel or identity-aware reverse proxy terminates public HTTPS
 - [ ] Riviamigo listens only on `127.0.0.1:8080` or an equivalent private Docker network

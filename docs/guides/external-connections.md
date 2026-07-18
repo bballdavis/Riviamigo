@@ -45,7 +45,7 @@ The selected connection shows its entry count and storage use. Administrators ca
 
 - **Iconify:** catalog searches and runtime icon files use the Riviamigo proxy. Disabling it preserves bundled icons and existing supported selections.
 - **S3-compatible backups:** status is shown here, while endpoint and credential controls remain in **Settings > Backups**.
-- **Rivian account:** vehicle connectivity and artwork remain managed from **Settings > Vehicles**. Rivian-provided artwork is fetched with the same encrypted account session used for telemetry, stored on Riviamigo's persistent API data volume, and served only from first-party cache URLs. A failed or missing cache file shows the local placeholder and is repaired in the background; it never causes the browser to request a Rivian image URL. Administrators can use **Refresh vehicle artwork** from the vehicle card to fetch a new manifest and invalidate immutable image URLs.
+- **Rivian account:** vehicle connectivity and artwork remain managed from **Settings > Vehicles**. Rivian-provided artwork is fetched with the same encrypted account session used for telemetry, stored under the persistent application cache directory, and served only from first-party cache URLs. A failed or missing cache file shows the local placeholder and is repaired in the background; it never causes the browser to request a Rivian image URL. Administrators can use **Refresh vehicle artwork** from the vehicle card to fetch a new manifest and invalidate immutable image URLs.
 
 ## Custom endpoint safety
 

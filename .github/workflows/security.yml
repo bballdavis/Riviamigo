@@ -62,12 +62,12 @@ jobs:
             p/react
             p/owasp-top-ten
             config/security/semgrep-rules.yml
-      - name: Build API image
-        run: docker build -t riviamigo-api:${{ github.sha }} ./apps/api
+      - name: Build production image
+        run: docker build -f compose/Dockerfile -t riviamigo:${{ github.sha }} .
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
         with:
-          image-ref: riviamigo-api:${{ github.sha }}
+          image-ref: riviamigo:${{ github.sha }}
           format: table
           severity: CRITICAL,HIGH
           exit-code: '1'

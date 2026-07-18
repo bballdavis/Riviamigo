@@ -12,7 +12,7 @@ Redis live snapshots, browser storage, refresh sessions, Rivian/provider credent
 
 ## Create and download a recovery package
 
-Open **Settings > Backups** and choose **Run now**. A successful run creates a file ending in `.rma.tar.gz`. Download that file and store it outside the host running Riviamigo. The local artifact volume is useful for operational retention, but it is not an off-host disaster-recovery copy until you download or copy it elsewhere.
+Open **Settings > Backups** and choose **Run now**. A successful run creates a file ending in `.rma.tar.gz`. Download that file and store it outside the host running Riviamigo. The local `./data/backups` directory is useful for operational retention, but it is not an off-host disaster-recovery copy until you download or copy it elsewhere.
 
 Every package contains:
 
@@ -38,8 +38,8 @@ For a source checkout, add `--source-build`. The command:
 1. Validates the archive, manifest, checksums, and archive paths.
 2. Starts only PostgreSQL and refuses a database that already contains users.
 3. Restores the database before starting the API, allowing the new release to apply pending migrations.
-4. Restores the vehicle artwork cache volume.
-5. Starts the API and web services and verifies health plus the restored setup state.
+4. Restores the vehicle artwork cache directory.
+5. Starts the unified app service and verifies health plus the restored setup state.
 
 Use `--force` only when intentionally replacing the target installation:
 
@@ -54,7 +54,7 @@ The restore command does not restore Rivian credentials or live sessions. After 
 
 ## Persistent artifact storage
 
-Production Compose mounts `/backups` as a dedicated backup-artifact volume and uses it for `BACKUP_ARTIFACT_DIR`. Keep this volume separate from the PostgreSQL and artwork volumes. For disaster recovery, copy downloaded packages to a different host or storage system.
+Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for `BACKUP_ARTIFACT_DIR`. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. For disaster recovery, copy downloaded packages to a different host or storage system.
 
 ## Compatibility and verification
 

@@ -104,6 +104,12 @@ const sidebars: SidebarsConfig = {
     'reference',
     {
       type: 'category',
+      label: 'Configuration',
+      collapsed: false,
+      items: ['environment-variables'],
+    },
+    {
+      type: 'category',
       label: 'API and integrations',
       collapsed: false,
       items: ['api-access'],
