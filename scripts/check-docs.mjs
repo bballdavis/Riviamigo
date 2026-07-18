@@ -364,12 +364,11 @@ function checkProductionDeploymentContract() {
   const nginxConfig = readFile("compose/nginx/nginx.conf");
 
   for (const requiredSnippet of [
-    '"127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
-    "RIVIAMIGO_ENV: production",
+    '"${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
     "../data/db:/db",
     "../data/backups:/backups",
-    "../data/cache:/cache",
+    "../data/cache:/data/cache",
     "redis:",
   ]) {
     if (!productionCompose.includes(requiredSnippet)) {

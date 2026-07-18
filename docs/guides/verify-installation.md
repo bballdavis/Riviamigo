@@ -27,7 +27,7 @@ For one service, append its Compose service name to the logs command.
 
 ## Check the private origin
 
-Open `http://127.0.0.1:8080` from the host or through a trusted local connection. The login or first-owner setup screen should load without exposing port 8080 publicly.
+Open `http://localhost:8080` from the host. The login or first-owner setup screen should load; use a host firewall and authenticated gateway before exposing it remotely.
 
 If the page does not load:
 
@@ -61,7 +61,7 @@ After local verification, configure the authenticated HTTPS gateway described in
 - Authentication is required before Riviamigo is reachable.
 - Normal API requests succeed after sign-in.
 - Live vehicle updates do not show WebSocket connection failures.
-- The loopback origin is still not directly reachable from the public network.
+- Host firewall rules and the authenticated gateway protect port 8080 from direct public access.
 
 ## Establish a recovery baseline
 

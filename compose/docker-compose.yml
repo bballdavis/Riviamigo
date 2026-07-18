@@ -4,18 +4,13 @@ services:
     restart: unless-stopped
     env_file:
       - ${RIVIAMIGO_ENV_FILE:-../.env}
-    environment:
-      RIVIAMIGO_ENV: production
-      PORT: 3001
-      RUST_LOG: ${RUST_LOG:-info}
-      VEHICLE_IMAGE_CACHE_DIR: ${VEHICLE_IMAGE_CACHE_DIR:-/cache/riviamigo/vehicle-images}
     depends_on:
       timescaledb:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
+      - "${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
     networks:
       - internal
       - proxy
@@ -25,21 +20,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/run
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-    security_opt:
-      - no-new-privileges:true
     volumes:
       - ../data/backups:/backups
-      - ../data/cache:/cache
+      - ../data/cache:/data/cache
     deploy:
       resources:
         limits:
@@ -88,10 +71,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     deploy:
       resources:
         limits:

@@ -18,7 +18,11 @@ async fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "riviamigo_api=debug,tower_http=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer().json())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(std::io::stdout),
+        )
         .init();
 
     let config = Config::from_env()?;

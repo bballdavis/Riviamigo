@@ -384,6 +384,7 @@ function apiEnv() {
     // refresh cookies must not be marked Secure or browser reload will drop
     // session continuity and trigger repeated 401/WS reconnect churn.
     COOKIE_INSECURE: '1',
+    RIVIAMIGO_ENV: 'development',
   };
 }
 
