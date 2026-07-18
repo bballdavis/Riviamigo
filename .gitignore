@@ -17,7 +17,6 @@ target/
 **/target-tests/
 **/target-tests-regression/
 **/target-codex-*/
-apps/api/Cargo.lock
 # apps/api/.sqlx/ — intentionally tracked; required for SQLX_OFFLINE=true builds
 *.lock.tmp
 /tmp
