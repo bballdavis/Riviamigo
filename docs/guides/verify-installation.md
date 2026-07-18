@@ -17,7 +17,7 @@ From the repository root, inspect the production stack:
 docker compose --env-file .env -f compose/docker-compose.yml ps
 ```
 
-The API, database, Redis, web, and backup services should be running, and services with health checks should become healthy. If a service is restarting or unhealthy, inspect its recent logs before changing configuration:
+The unified app, database, and Redis services should be running, and services with health checks should become healthy. If a service is restarting or unhealthy, inspect its recent logs before changing configuration:
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml logs --tail=200

@@ -100,6 +100,7 @@ async function verifyProduction() {
   const environment = {
     ...process.env,
     RIVIAMIGO_ORIGIN_PORT: port,
+    RIVIAMIGO_ENV_FILE: resolve(productionEnv),
     ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
   };
   productionEnvironment = environment;

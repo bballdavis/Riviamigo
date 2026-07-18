@@ -36,13 +36,14 @@ const sourceBuild = args.includes('--source-build');
 
 if (!existsSync(packagePath)) throw new Error(`Recovery package does not exist: ${packagePath}`);
 if (!existsSync(envFile)) throw new Error(`Compose env file does not exist: ${envFile}`);
+const composeEnvironment = { ...process.env, RIVIAMIGO_ENV_FILE: envFile };
 
 function run(command, commandArgs, options = {}) {
-  return execFileSync(command, commandArgs, { cwd: root, stdio: 'inherit', ...options });
+  return execFileSync(command, commandArgs, { cwd: root, stdio: 'inherit', env: composeEnvironment, ...options });
 }
 
 function capture(command, commandArgs, options = {}) {
-  return execFileSync(command, commandArgs, { cwd: root, encoding: 'utf8', ...options }).trim();
+  return execFileSync(command, commandArgs, { cwd: root, encoding: 'utf8', env: composeEnvironment, ...options }).trim();
 }
 
 async function waitForDatabase(postgresUser) {
@@ -52,7 +53,7 @@ async function waitForDatabase(postgresUser) {
     'pg_isready', '-U', postgresUser, '-d', 'riviamigo',
   ];
   while (Date.now() < deadline) {
-    const result = spawnSync('docker', args, { cwd: root, stdio: 'ignore' });
+    const result = spawnSync('docker', args, { cwd: root, stdio: 'ignore', env: composeEnvironment });
     if (result.status === 0) return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
   }
@@ -207,7 +208,7 @@ function restoreArtwork(staging) {
   run('docker', [
     ...composeArgs(), 'run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
     '-v', `${cachePath}:/restore-cache:ro`, 'api', '-c',
-    'mkdir -p /data/vehicle-image-cache && rm -rf /data/vehicle-image-cache/* && cp -a /restore-cache/. /data/vehicle-image-cache/',
+    'mkdir -p /cache/riviamigo/vehicle-images && rm -rf /cache/riviamigo/vehicle-images/* && cp -a /restore-cache/. /cache/riviamigo/vehicle-images/',
   ]);
 }
 
@@ -231,7 +232,7 @@ try {
   const manifest = verifyManifest(staging);
   const postgresUser = readEnvValue('POSTGRES_USER') ?? 'riviamigo';
 
-  run('docker', [...composeArgs(), 'stop', 'api', 'nginx']);
+  run('docker', [...composeArgs(), 'stop', 'app']);
   run('docker', [...composeArgs(), 'up', '-d', 'timescaledb']);
   await waitForDatabase(postgresUser);
   ensureDatabaseState(postgresUser);
@@ -239,7 +240,7 @@ try {
   restoreDatabase(postgresUser, join(staging, 'database.dump'));
   restoreBackupSettings(postgresUser, staging);
   restoreArtwork(staging);
-  run('docker', [...composeArgs(), 'up', ...(sourceBuild ? ['--build'] : []), '-d', 'api', 'nginx']);
+  run('docker', [...composeArgs(), 'up', ...(sourceBuild ? ['--build'] : []), '-d', 'app']);
 
   const port = readEnvValue('RIVIAMIGO_ORIGIN_PORT') ?? '8080';
   await waitForHealth(`http://localhost:${port}/health`);

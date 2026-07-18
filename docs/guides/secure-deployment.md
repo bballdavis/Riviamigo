@@ -23,9 +23,9 @@ applies after the gateway.
 
 - The standard Compose stack defaults to `RIVIAMIGO_ENV=production`; do not override it for a shared deployment.
 - Set `ALLOWED_ORIGINS` to the exact public HTTPS URL.
-- Supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` through a
-  secret manager or protected deployment environment. Production startup fails
-  if any are absent.
+- Let Riviamigo generate and persist its application keys in PostgreSQL, or
+  supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` together
+  through a secret manager. Partial overrides are rejected.
 - Use strong `POSTGRES_PASSWORD` and `REDIS_PASSWORD` values.
 - Leave `COOKIE_INSECURE` unset.
 
