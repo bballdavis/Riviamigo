@@ -21,4 +21,4 @@ Riviamigo runs as a small Docker Compose stack. A home server, NAS that supports
 - A hostname for the authenticated gateway.
 - A UPS for a home server or NAS.
 
-The database and Redis remain inside the Compose network. The web origin binds to the host loopback interface by default, so gateway configuration is part of a remote installation rather than an optional afterthought.
+The database and Redis remain inside the Compose network. The web origin publishes port 8080 by default, so host firewall and gateway configuration are part of a remote installation rather than an optional afterthought.

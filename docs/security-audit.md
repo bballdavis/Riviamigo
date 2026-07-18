@@ -29,7 +29,7 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 | Severity | Finding | Resolution |
 |---|---|---|
-| Critical | Production Compose published the web origin directly and the documentation treated direct exposure as acceptable. | The origin is loopback-only at `127.0.0.1:8080`; user documentation requires an authenticated tunnel or identity-aware proxy. |
+| Critical | Production Compose publishes the web origin on the host. | Documentation requires host firewall protection plus an authenticated tunnel or identity-aware proxy before remote exposure. |
 | Critical | Production startup could fall back to database-generated signing and encryption keys. | Production validation now requires externally supplied JWT private/public and age keys. |
 | High | The former separate nginx image originally used the wrong upstream boundary. | The unified production image now runs nginx and the API together and intentionally proxies over container-local loopback. |
 | High | The production Compose topology omitted its Redis dependency and had stale ports/service documentation. | Redis is included as an internal password-protected service; Compose, user guide, runbook, and env documentation now agree. |

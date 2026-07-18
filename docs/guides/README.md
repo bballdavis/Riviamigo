@@ -19,7 +19,7 @@ Plan for three phases:
 2. **Install:** configure the Compose environment, start the stack, create the first owner, and connect Rivian.
 3. **Verify:** confirm runtime health, application access, ownership, and telemetry.
 
-Riviamigo is designed to stay private. Its standard Compose origin listens on the host loopback interface. Use an authenticated HTTPS gateway for remote access; never forward the application port directly to the public internet.
+Riviamigo is designed to stay private. Its standard Compose origin publishes port 8080, so use host firewall rules and an authenticated HTTPS gateway for remote access; never expose the application port directly to the public internet.
 
 ## Installation path
 

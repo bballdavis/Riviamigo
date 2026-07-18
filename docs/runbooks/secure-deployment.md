@@ -3,19 +3,19 @@
 ## Supported exposure model
 
 Riviamigo is not approved for direct Internet exposure. The production Compose
-stack binds its web origin only to `127.0.0.1:8080`; place an authenticated
-tunnel or identity-aware reverse proxy in front of that listener. A tunnel that
+stack publishes its web origin on port `8080`; place an authenticated tunnel or
+identity-aware reverse proxy and host firewall rule in front of that listener. A tunnel that
 only publishes the port without an access policy is not sufficient.
 
 The outer gateway must terminate public HTTPS, require an identity policy, and
-forward normal HTTP and WebSocket traffic to `http://127.0.0.1:8080`. Riviamigo
+forward normal HTTP and WebSocket traffic to `http://localhost:8080`. Riviamigo
 login remains enabled behind that gateway. Cloudflare Tunnel with Access and
 Authentik in front of Caddy, Nginx, or Traefik are supported deployment shapes;
 the gateway itself is operated and patched by the self-hoster.
 
 ## Required production configuration
 
-- The standard Compose stack defaults to `RIVIAMIGO_ENV=production`; do not override it for a shared deployment.
+- Riviamigo defaults to production mode; use `RIVIAMIGO_ENV=development` only for local development.
 - Let Riviamigo generate and persist its application keys in PostgreSQL, or
   supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` together from
   a secret manager. Partial overrides fail startup.
@@ -24,7 +24,7 @@ the gateway itself is operated and patched by the self-hoster.
   safely constructs its internal URLs; custom `DATABASE_URL` values must be valid URLs.
 - Keep `COOKIE_INSECURE` absent. It is local-development-only.
 - Do not publish API port 3001, PostgreSQL port 5432, Redis port 6379, or the
-  origin port 8080 beyond loopback/internal Docker networking.
+  origin port 8080 directly to the Internet.
 
 ## Gateway requirements
 
@@ -35,13 +35,13 @@ the gateway itself is operated and patched by the self-hoster.
 - Own public TLS, certificate renewal, Internet-facing rate limits, and any
   trusted-client-IP policy. The internal Riviamigo origin intentionally does
   not trust arbitrary forwarded client IP headers.
-- Restrict direct host access to the loopback listener with host firewall rules.
+- Restrict direct host access to port 8080 with host firewall rules.
 
 ## Verification
 
 1. Run `docker compose --env-file .env -f compose/docker-compose.yml config` and confirm
-   the unified app publishes only `127.0.0.1:8080:8080`.
-2. Start the stack and check `curl http://127.0.0.1:8080/health` locally.
+   the unified app publishes port `8080:8080` and no database or Redis port.
+2. Start the stack and check `curl http://localhost:8080/health` locally.
 3. Confirm external access is denied by the gateway before reaching Riviamigo,
    then authenticate through the gateway and sign in to Riviamigo.
 4. Confirm `docker compose --env-file .env -f compose/docker-compose.yml ps` shows no host
