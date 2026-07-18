@@ -30,6 +30,7 @@ RUN pnpm --filter @riviamigo/web build
 
 FROM postgres:16-bookworm AS runtime
 LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
+ENV XDG_CACHE_HOME=/data/cache
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl libssl3 nginx tini util-linux \
@@ -44,8 +45,8 @@ COPY --from=web-builder /build/apps/web/dist ./dist
 COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY compose/production-init.sh compose/production-services.sh ./
 RUN chmod 0755 /app/production-init.sh /app/production-services.sh \
-    && mkdir -p /backups /cache /tmp/nginx \
-    && chown -R 1001:1001 /app /backups /cache /tmp/nginx
+    && mkdir -p /backups /data/cache \
+    && chown -R 1001:1001 /app /backups /data/cache
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

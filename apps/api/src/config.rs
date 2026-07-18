@@ -38,7 +38,8 @@ pub struct Config {
     pub rivian_parallax_capture_enabled: bool,
     #[serde(default = "default_true")]
     pub rivian_suppress_duplicate_telemetry: bool,
-    /// Set to "production" to enable production-mode validation guards.
+    /// Defaults to production; set to development only for local development.
+    #[serde(default = "default_riviamigo_env")]
     pub riviamigo_env: Option<String>,
     /// Set to any value to allow insecure (non-Secure) cookies. Must NOT be
     /// set when `RIVIAMIGO_ENV=production`.
@@ -94,10 +95,13 @@ fn default_vehicle_image_cache_dir() -> String {
         .unwrap_or_else(std::env::temp_dir);
 
     base.join("riviamigo")
-        .join("cache")
         .join("vehicle-images")
         .to_string_lossy()
         .into_owned()
+}
+
+fn default_riviamigo_env() -> Option<String> {
+    Some("production".into())
 }
 
 fn default_backup_poll_interval_seconds() -> u64 {

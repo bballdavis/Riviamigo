@@ -26,7 +26,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 |---|---|---|
 | `RIVIAMIGO_IMAGE_REGISTRY` | `ghcr.io/bballdavis` | Registry namespace containing the unified `riviamigo` image. |
 | `IMAGE_TAG` | `latest` | Image tag; use a Calendar Version for repeatable deployments. |
-| `RIVIAMIGO_ORIGIN_PORT` | `8080` | Host loopback port mapped to the unified app container. |
+| `RIVIAMIGO_ORIGIN_PORT` | `8080` | Host port mapped to the unified app container. Protect it with host firewall rules when using a remote gateway. |
 | `RIVIAMIGO_ENV_FILE` | `../.env` relative to `compose/docker-compose.yml` | Alternate dotenv file injected into the app container. Restore and verification scripts set this automatically. |
 
 ## Application security and runtime
@@ -36,11 +36,11 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `JWT_SECRET` | Generated and stored in PostgreSQL | RSA private signing key. If overridden, the public and age keys must also be supplied. |
 | `JWT_PUBLIC_KEY` | Generated and stored in PostgreSQL | RSA public verification key. Supply only as part of the complete three-key override. |
 | `AGE_ENCRYPTION_KEY` | Generated and stored in PostgreSQL | age X25519 identity used to encrypt provider credentials. Supply only as part of the complete three-key override. |
-| `RIVIAMIGO_ENV` | `production` in standard Compose | Enables production configuration validation. Use `development` only for local development. |
+| `RIVIAMIGO_ENV` | `production` | Enables production configuration validation. Use `development` only for local development. |
 | `PORT` | `3001` | Internal API listener port. The unified production nginx expects `3001`. |
-| `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Standard production deployments normally set `info` when overriding it. |
+| `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Structured logs are written to stdout. |
 | `COOKIE_INSECURE` | Unset | Allows non-Secure cookies for local development. Any value enables it; production rejects it. |
-| `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/cache/riviamigo/vehicle-images` in production Compose | Persistent local artwork mirror. A custom production path also needs a matching mount. |
+| `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/data/cache/riviamigo/vehicle-images` in the production image | Persistent local artwork mirror. Standard Compose does not need to set it. |
 | `BACKUP_DRIVER` | `pg_dump` | Recovery-package database exporter. Other values are rejected for full recovery packages. |
 | `BACKUP_ARTIFACT_DIR` | `/backups` | Directory containing generated `.rma.tar.gz` recovery packages. |
 | `BACKUP_POLL_INTERVAL_SECONDS` | `60` | Number of seconds between backup-scheduler checks. |

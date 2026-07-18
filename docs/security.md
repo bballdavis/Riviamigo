@@ -3,7 +3,7 @@
 ## Deployment posture
 
 Riviamigo is not approved for direct Internet exposure. Production Compose binds
-the application origin to loopback only, and every shared deployment must place
+the application behind a host firewall and authenticated gateway, and every shared deployment must place
 an authenticated tunnel or identity-aware reverse proxy in front of it. The
 outer gateway owns public TLS, certificate renewal, identity enforcement, and
 Internet-facing rate limits; Riviamigo login remains required behind it.
@@ -32,7 +32,7 @@ precise vehicle locations in public issues.
 - The web app attempts one refresh on protected 401s, then emits a single auth-expired flow: toast, session clear, redirect to `/login`, and resume to the original in-app route after successful sign-in.
 
 ## Transport Security
-- Production nginx is a loopback-only internal origin, not a public TLS endpoint
+- Production nginx is an HTTP origin on port 8080, not a public TLS endpoint
 - Public HTTPS and HSTS are enforced by the authenticated outer gateway
 - `Secure` cookie flag enforced (disable only with COOKIE_INSECURE=1 in local dev)
 
@@ -84,7 +84,7 @@ precise vehicle locations in public issues.
 - [ ] Generated application keys are protected by database backups, or all three explicit key overrides are stored safely
 - [ ] `ALLOWED_ORIGINS` set to exact frontend domain(s)
 - [ ] An authenticated tunnel or identity-aware reverse proxy terminates public HTTPS
-- [ ] Riviamigo listens only on `127.0.0.1:8080` or an equivalent private Docker network
+- [ ] Host firewall rules restrict direct access to port 8080
 - [ ] Redis is reachable only on a private/internal network
 - [ ] Firewall blocks API, PostgreSQL, Redis, and origin ports from external access
 - [ ] `IMAGE_TAG` is pinned to an exact Calendar Version when repeatability matters

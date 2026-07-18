@@ -18,7 +18,7 @@ Set these before starting `compose/docker-compose.yml`:
 - `REDIS_PASSWORD` — a separate strong password.
 - `ALLOWED_ORIGINS` — the exact public HTTPS origin used by your authenticated gateway, such as `https://riviamigo.example.net`.
 
-Standard Compose fixes `RIVIAMIGO_ENV` to `production`; no production flag is required in `.env`.
+Riviamigo defaults to production mode; no production flag is required in `.env`.
 
 On first startup, Riviamigo generates its JWT signing pair and age encryption identity and stores them in PostgreSQL. They therefore survive normal restarts and recovery-package restores. Advanced deployments may supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` together; partial overrides are rejected, and rotating the age key without migrating encrypted values can make stored credentials unreadable.
 
@@ -26,7 +26,7 @@ On first startup, Riviamigo generates its JWT signing pair and age encryption id
 
 Weather, geocoding, basemap, and Iconify policies are configured in **Settings > External Connections** and stored in the database. Do not add provider URLs or API keys to `.env`; custom connection secrets are encrypted with the installation age key and remain write-only. See [external connections](./external-connections.md).
 
-- `RIVIAMIGO_ORIGIN_PORT` changes the loopback listener from `8080`.
+- `RIVIAMIGO_ORIGIN_PORT` changes the published app port from `8080`.
 - `IMAGE_TAG` selects a published release and defaults to `latest`.
 - `RIVIAMIGO_IMAGE_REGISTRY` defaults to `ghcr.io/bballdavis`.
 - `BACKUP_DRIVER`, `BACKUP_ARTIFACT_DIR`, and `BACKUP_POLL_INTERVAL_SECONDS` tune recovery packages; normal Compose already uses `/backups`.

@@ -60,7 +60,7 @@ These are live, redacted views of Riviamigo at desktop and mobile sizes.
 
 Riviamigo runs as a Docker Compose stack. You will need Git, Docker Engine with Docker Compose v2, a trusted host with persistent storage, and a safe way to reach the app.
 
-> **Keep it private:** Riviamigo is meant to run on a trusted home network. The standard stack listens only on the host's loopback interface. If you want remote access, put it behind an authenticated HTTPS tunnel or identity-aware reverse proxy. Do not forward a public port directly to Riviamigo. Read the [secure remote access guide](https://riviamigo.com/docs/operations/secure-remote-access/) before making the app available outside your local network.
+> **Keep it private:** Riviamigo is meant to run on a trusted home network. The standard stack publishes port 8080, so protect it with a host firewall and an authenticated HTTPS tunnel or identity-aware reverse proxy before allowing remote access. Read the [secure remote access guide](https://riviamigo.com/docs/operations/secure-remote-access/) before making the app available outside your local network.
 
 1. Clone the repository and enter it:
 
@@ -81,7 +81,7 @@ Riviamigo runs as a Docker Compose stack. You will need Git, Docker Engine with 
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
-4. Put your authenticated HTTPS gateway in front of the loopback-only origin, open that address, create the first owner account, and connect your Rivian.
+4. Protect port 8080 with an authenticated HTTPS gateway and host firewall, open that address, create the first owner account, and connect your Rivian.
 
 That is the short version. The [Getting Started path](https://riviamigo.com/docs/getting-started/) walks through installation and verification, while [Operations](https://riviamigo.com/docs/operations/) covers updates, logs, security, backups, and recovery.
 

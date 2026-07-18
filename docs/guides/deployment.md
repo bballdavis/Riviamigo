@@ -7,9 +7,9 @@ sidebar_label: Deployment and updates
 
 # Deployment and updates
 
-The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is bound to the host, at `127.0.0.1:8080` by default.
+The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is bound to the host, on port `8080` by default.
 
-The loopback binding is intentional. Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of it; never publish the API, database, Redis, or origin port directly.
+Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of the app and restrict direct port `8080` access with your host firewall. Never publish the API listener, database, or Redis directly.
 
 ## Initial deployment
 
@@ -24,10 +24,10 @@ The loopback binding is intentional. Place an authenticated HTTPS tunnel or iden
 
    ```bash
    docker compose --env-file .env -f compose/docker-compose.yml ps
-   curl http://127.0.0.1:8080/health
+   curl http://localhost:8080/health
    ```
 
-4. Configure an authenticated gateway that forwards to `127.0.0.1:8080` and supports WebSockets.
+4. Configure an authenticated gateway that forwards to port `8080` and supports WebSockets.
 5. Open the HTTPS address and create the first owner account.
 
 ## Persistent files
@@ -39,7 +39,7 @@ The standard stack keeps operator-visible files under `./data`:
 | `data/db` | `/db` | PostgreSQL data |
 | `data/redis` | `/data` | Redis append-only state |
 | `data/backups` | `/backups` | Downloadable recovery packages |
-| `data/cache` | `/cache` | Application cache files, including vehicle artwork |
+| `data/cache` | `/data/cache` | Application cache files, including vehicle artwork |
 
 Do not delete `data` during updates. Copy recovery packages off-host for disaster recovery.
 

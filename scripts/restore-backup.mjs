@@ -208,7 +208,7 @@ function restoreArtwork(staging) {
   run('docker', [
     ...composeArgs(), 'run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
     '-v', `${cachePath}:/restore-cache:ro`, 'api', '-c',
-    'mkdir -p /cache/riviamigo/vehicle-images && rm -rf /cache/riviamigo/vehicle-images/* && cp -a /restore-cache/. /cache/riviamigo/vehicle-images/',
+    'mkdir -p /data/cache/riviamigo/vehicle-images && rm -rf /data/cache/riviamigo/vehicle-images/* && cp -a /restore-cache/. /data/cache/riviamigo/vehicle-images/',
   ]);
 }
 
