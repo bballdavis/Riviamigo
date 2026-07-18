@@ -21,6 +21,7 @@
     "docs:serve": "pnpm --filter @riviamigo/docs serve",
     "docs:check": "node ./scripts/check-docs.mjs",
     "verify:fresh-install": "node ./scripts/verify-fresh-install.mjs",
+    "verify:release-image": "node ./scripts/verify-release-image.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
