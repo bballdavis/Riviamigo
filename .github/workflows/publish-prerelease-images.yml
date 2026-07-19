@@ -98,12 +98,14 @@ jobs:
         run: echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Create ephemeral production environment
         run: |
-          cp compose/.env.example prerelease-smoke.env
-          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=prerelease-smoke-password|' prerelease-smoke.env
-          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=prerelease-smoke-redis-password|' prerelease-smoke.env
-          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://prerelease-smoke.example.test|' prerelease-smoke.env
+          smoke_env="$RUNNER_TEMP/prerelease-smoke.env"
+          cp compose/.env.example "$smoke_env"
+          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=prerelease-smoke-password|' "$smoke_env"
+          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=prerelease-smoke-redis-password|' "$smoke_env"
+          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://prerelease-smoke.example.test|' "$smoke_env"
+          echo "PRERELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
       - name: Exercise published pre-release image stack
-        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PWD/prerelease-smoke.env" --image-tag "${{ needs.validate.outputs.version }}"
+        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-tag "${{ needs.validate.outputs.version }}"
 
   create-release:
     needs: [validate, image, release-smoke]
