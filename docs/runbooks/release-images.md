@@ -22,6 +22,9 @@ builds the same `linux/amd64,linux/arm64` image locally without pushing it and
 fails after 45 minutes instead of leaving a release check running indefinitely.
 The workflow uses native-platform Rust cross-compilation for ARM64 and a shared
 Actions cache; a clean build should complete well within that limit.
+The published-image smoke verifier prints the app container's last 200 log lines
+when startup or endpoint verification fails, so runtime failures are visible in
+the Actions job instead of only appearing as a health-check timeout.
 
 If image publication or manifest verification fails, no GitHub release is created. Correct the failure before creating another release tag; immutable releases intentionally make published release tags non-reusable.
 

@@ -13,7 +13,7 @@ shutdown() {
 
 trap 'shutdown; exit 0' TERM INT
 
-/app/riviamigo-api &
+/usr/bin/setpriv --reuid=1001 --regid=1001 --clear-groups /app/riviamigo-api &
 api_pid=$!
 nginx -g 'daemon off;' &
 nginx_pid=$!
