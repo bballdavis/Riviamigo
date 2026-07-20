@@ -89,7 +89,7 @@ export function AuthenticatedVehicleArtwork({
   }, [source]);
 
   const primaryUnavailable =
-    primaryArtwork.isError || (!primaryArtwork.src && !primaryArtwork.isLoading);
+    primaryArtwork.isError || !primaryArtwork.src;
   const usingFallback =
     Boolean(fallbackArtwork.src) &&
     (primaryFailed || primaryArtwork.restoring || primaryUnavailable);
