@@ -77,7 +77,7 @@ http            = "1"
 url             = "2"
 
 [dev-dependencies]
-testcontainers          = "0.18"
+testcontainers          = "0.20"
 testcontainers-modules  = { version = "0.4", features = ["postgres"] }
 proptest                = "1"
 tokio                   = { version = "1", features = ["full", "test-util"] }
