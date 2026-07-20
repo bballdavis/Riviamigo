@@ -14,6 +14,42 @@ use crate::{
 };
 
 const ADDRESS_CACHE_RADIUS_METERS: f64 = 100.0;
+const RECONCILIATION_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const RECONCILIATION_ADDRESS_BATCH_SIZE: i64 = 100;
+
+/// Recover enrichment skipped while a sanitized restore or provider outage left
+/// completed trips without weather or address data. The existing provider
+/// lanes still own outbound rate limiting.
+pub fn start_reconciliation_worker(pool: PgPool) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let client = match Client::builder().timeout(Duration::from_secs(20)).build() {
+            Ok(client) => client,
+            Err(error) => {
+                warn!(error = %error, "trip_enrichment.reconciler_client_build_failed");
+                return;
+            }
+        };
+        loop {
+            let addresses = backfill_trip_addresses(&pool, &client, None).await;
+            let weather = enqueue_trip_weather_enrichment(&pool, None).await;
+            match (addresses, weather) {
+                (Ok(addresses), Ok(weather)) => info!(
+                    address_scanned = addresses.scanned,
+                    address_filled = addresses.filled,
+                    weather_scanned = weather.scanned,
+                    weather_queued = weather.filled,
+                    "trip_enrichment.reconciler_complete"
+                ),
+                (addresses, weather) => warn!(
+                    address_error = ?addresses.err(),
+                    weather_error = ?weather.err(),
+                    "trip_enrichment.reconciler_failed"
+                ),
+            }
+            tokio::time::sleep(RECONCILIATION_INTERVAL).await;
+        }
+    })
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BackfillStats {
@@ -489,9 +525,11 @@ pub async fn backfill_trip_addresses(
                OR
                (end_address_id IS NULL AND end_lat IS NOT NULL AND end_lng IS NOT NULL AND NOT (end_lat = 0 AND end_lng = 0))
              )
-           ORDER BY started_at DESC"#,
+           ORDER BY started_at DESC
+           LIMIT $2"#,
     )
     .bind(vehicle_id)
+    .bind(RECONCILIATION_ADDRESS_BATCH_SIZE)
     .fetch_all(pool)
     .await?;
 
