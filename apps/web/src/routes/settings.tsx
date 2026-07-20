@@ -24,7 +24,7 @@ import {
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
-  Button, Badge, SelectPicker, ThemeToggle, Tooltip,
+  Button, Badge, Input, SelectPicker, ThemeToggle, Tooltip,
 } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
@@ -35,6 +35,7 @@ import { PlacesSection } from '../components/settings/PlacesSection';
 import { RawTelemetryExplorer } from '../components/settings/RawTelemetryExplorer';
 import { canManageSystemDashboards } from '../components/dashboard/DashboardPage';
 import { useDashboardEditButtonPreference } from '../components/dashboard/useDashboardEditButtonPreference';
+import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../components/auth/PasswordRequirements';
 import {
   Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X,
 } from 'lucide-react';
@@ -453,7 +454,7 @@ function SettingsPage() {
 }
 
 export function SettingsContent() {
-  const { accessToken, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
+  const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const authReady = useAuthReady();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -481,6 +482,11 @@ export function SettingsContent() {
   const [shareRole, setShareRole] = React.useState<VehicleMember['role']>('viewer');
   const [latestInviteToken, setLatestInviteToken] = React.useState<string | null>(null);
   const [demoPickerOpen, setDemoPickerOpen] = React.useState(false);
+  const [currentPassword, setCurrentPassword] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = React.useState('');
+  const [passwordChangeError, setPasswordChangeError] = React.useState('');
+  const [changingPassword, setChangingPassword] = React.useState(false);
   const canCreateDemoVehicle = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const isAdmin = canManageSystemDashboards(me.data?.role);
   const canManageBackups = me.data?.role === 'admin' || me.data?.role === 'super_user';
@@ -785,6 +791,25 @@ export function SettingsContent() {
   async function handleLogout() {
     await logout();
     navigate({ to: '/login' });
+  }
+
+  async function handlePasswordChange(event: React.FormEvent) {
+    event.preventDefault();
+    if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword !== confirmNewPassword || !currentPassword) return;
+
+    setChangingPassword(true);
+    setPasswordChangeError('');
+    try {
+      await api.changePassword({ current_password: currentPassword, new_password: newPassword });
+      queryClient.clear();
+      clearSession();
+      navigate({ to: '/login', search: { password_changed: '1' } });
+    } catch (error) {
+      const message = (error as { detail?: { message?: string } }).detail?.message;
+      setPasswordChangeError(message ?? 'Unable to change password. Please try again.');
+    } finally {
+      setChangingPassword(false);
+    }
   }
 
   async function copyCreatedKey() {
@@ -1733,11 +1758,55 @@ export function SettingsContent() {
                 <CardHeader>
                   <CardTitle>Account</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <Button variant="danger" size="sm" iconLeft={<LogOut className="h-3.5 w-3.5" />}
-                    onClick={handleLogout}>
-                    Sign Out
-                  </Button>
+                <CardContent className="grid gap-6">
+                  <form className="grid max-w-md gap-4" onSubmit={handlePasswordChange}>
+                    <div>
+                      <p className="text-sm font-medium text-fg">Change password</p>
+                      <p className="mt-0.5 text-xs text-fg-tertiary">Changing your password signs out every active browser session.</p>
+                    </div>
+                    <Input
+                      label="Current password"
+                      type="password"
+                      value={currentPassword}
+                      onChange={(event) => setCurrentPassword(event.target.value)}
+                      autoComplete="current-password"
+                      required
+                    />
+                    <Input
+                      label="New password"
+                      type="password"
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                      autoComplete="new-password"
+                      minLength={PASSWORD_MIN_LENGTH}
+                      required
+                    />
+                    <PasswordRequirements password={newPassword} />
+                    <Input
+                      label="Confirm new password"
+                      type="password"
+                      value={confirmNewPassword}
+                      onChange={(event) => setConfirmNewPassword(event.target.value)}
+                      autoComplete="new-password"
+                      {...(confirmNewPassword && newPassword !== confirmNewPassword ? { error: 'Passwords do not match.' } : {})}
+                      required
+                    />
+                    {passwordChangeError && <p role="alert" className="rounded-lg border border-status-danger/20 bg-status-danger/10 px-3 py-2 text-xs text-status-danger">{passwordChangeError}</p>}
+                    <Button
+                      type="submit"
+                      size="sm"
+                      loading={changingPassword}
+                      disabled={!currentPassword || newPassword.length < PASSWORD_MIN_LENGTH || newPassword !== confirmNewPassword}
+                    >
+                      Change password
+                    </Button>
+                  </form>
+                  <div className="border-t border-border pt-5">
+                    <Button variant="danger" size="sm" iconLeft={<LogOut className="h-3.5 w-3.5" />}
+                      onClick={handleLogout}>
+                      Sign Out
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             )}

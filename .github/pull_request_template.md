@@ -36,12 +36,12 @@
 Checks run locally or in CI:
 
 - [ ] Focused tests closest to the changed seam
-- [ ] `Quality` workflow passed
-- [ ] `Frontend` workflow passed when frontend or shared UI code changed
-- [ ] `Backend` workflow passed when Rust/API/database code changed
-- [ ] `Security` workflow passed for the target commit
+- [ ] `PR Quality` workflow passed
+- [ ] `PR Frontend` workflow passed when frontend or shared UI code changed
+- [ ] `PR Backend` workflow passed when Rust/API/database code changed
+- [ ] `PR Security` workflow passed for the target commit
 - [ ] `Runtime` workflow passed for deployment or release changes
-- [ ] `Fresh install acceptance` passed for release or installation changes
+- [ ] `Fresh install` passed for release or installation changes
 - [ ] `pnpm docs:check` passed when docs, routes, env, auth, or operations changed
 - [ ] Browser/mobile verification completed when shared UI behavior changed
 

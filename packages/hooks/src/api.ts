@@ -15,7 +15,7 @@ import type {
   CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
   AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
   AdminUserRecord, AdminVehicleOption, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
-  AccountInvitation, AccountInvitationPreview, AuthSetupResponse,
+  AccountInvitation, AccountInvitationPreview, AuthSetupResponse, ChangePasswordBody,
   ExternalConnectionsResponse, UpdateExternalConnectionBody, TestExternalConnectionResponse, PurgeExternalConnectionCacheResponse,
 } from '@riviamigo/types';
 
@@ -387,6 +387,10 @@ class ApiClient {
 
   async logout(): Promise<void> {
     return this.request('POST', '/v1/auth/logout');
+  }
+
+  async changePassword(body: ChangePasswordBody): Promise<void> {
+    return this.request('POST', '/v1/auth/password', body);
   }
 
   async refresh(): Promise<AuthTokens> {
