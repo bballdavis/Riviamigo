@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "license": "GPL-3.0-only",
-  "packageManager": "pnpm@11.5.1+sha512.93f7b57422ea7068257235b4c16eb60762eb68e1dc23723199cc739043ea9be2c4143274a399d8c6defa2b1176226d9ca1c4b63482d6200c1a8fbaa78c1d1485",
+  "packageManager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065",
   "engines": {
-    "node": ">=20",
-    "pnpm": ">=9"
+    "node": ">=24.18 <25",
+    "pnpm": ">=11.15 <12"
   },
   "scripts": {
     "dev": "turbo dev",
@@ -32,11 +32,13 @@
     "db:rebaseline": "cd apps/api && cargo run --bin rebaseline_db --"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@eslint-react/eslint-plugin": "^5.17.2",
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
-    "eslint": "^8.57.1",
-    "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "knip": "^6.27.0",
     "prettier": "^3.9.5",
     "turbo": "^2.10.5"
@@ -47,10 +49,6 @@
       "@cmfcmf/docusaurus-plugin-docusaurus-search-local",
       "@riviamigo/config",
       "@riviamigo/ui",
-      "@typescript-eslint/eslint-plugin",
-      "@typescript-eslint/parser",
-      "eslint-plugin-react",
-      "eslint-plugin-react-hooks",
       "prettier"
     ],
     "ignoreBinaries": [

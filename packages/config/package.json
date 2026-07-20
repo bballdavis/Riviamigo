@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "exports": {
-    "./eslint/*": "./eslint/*.js",
     "./typescript/base.json": "./typescript/base.json",
     "./typescript/react.json": "./typescript/react.json",
     "./tailwind/*": "./tailwind/*.ts"

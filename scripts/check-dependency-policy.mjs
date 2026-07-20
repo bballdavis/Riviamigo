@@ -75,8 +75,9 @@ if (!catalogsOnly) {
       `packageManager pnpm ${packageManager ?? 'missing'} does not match ${baseline.pnpm}.`
     );
   }
-  if (rootPackage.engines?.node !== `>=${baseline.node.split('.').slice(0, 2).join('.')}`) {
-    failures.push(`Node engine must be >=${baseline.node.split('.').slice(0, 2).join('.')}.`);
+  const requiredNodePrefix = `>=${baseline.node.split('.').slice(0, 2).join('.')}`;
+  if (!rootPackage.engines?.node?.startsWith(requiredNodePrefix)) {
+    failures.push(`Node engine must start with ${requiredNodePrefix}.`);
   }
 
   const expectedPatterns = [
@@ -104,6 +105,15 @@ if (!catalogsOnly) {
     for (const match of contents.matchAll(/node-version:\s*['\"]?([0-9]+)/g)) {
       if (match[1] !== baseline.node.split('.')[0]) {
         failures.push(`${relative(root, workflow)} still references Node ${match[1]}.`);
+      }
+    }
+    for (const match of contents.matchAll(
+      /NODE_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
+    )) {
+      if (match[1] !== baseline.node) {
+        failures.push(
+          `${relative(root, workflow)} pins NODE_VERSION ${match[1]}; expected ${baseline.node}.`
+        );
       }
     }
   }

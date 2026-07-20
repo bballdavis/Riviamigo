@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 const apiKey = import.meta.env.VITE_RIVIAMIGO_DEV_API_KEY as string | undefined;
-const baseUrl = (import.meta.env.VITE_RIVIAMIGO_API_BASE_URL as string | undefined) ?? 'http://localhost:3001';
+const baseUrl =
+  (import.meta.env.VITE_RIVIAMIGO_API_BASE_URL as string | undefined) ?? 'http://localhost:3001';
 const runLiveContract = import.meta.env.VITE_RIVIAMIGO_RUN_LIVE_CONTRACT === 'true';
 
 const runIfConfigured = apiKey && runLiveContract ? describe : describe.skip;
@@ -11,7 +12,7 @@ async function liveGet(path: string) {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   const text = await response.text();
-  let body: unknown = null;
+  let body: unknown;
   try {
     body = text ? JSON.parse(text) : null;
   } catch {
@@ -26,7 +27,10 @@ runIfConfigured('live API dashboard contract', () => {
     const vehicles = await liveGet('/v1/vehicles');
     const vehicle = vehicles.vehicles?.[0];
 
-    expect(vehicle?.id, 'A connected local vehicle is required for the live contract test.').toBeTruthy();
+    expect(
+      vehicle?.id,
+      'A connected local vehicle is required for the live contract test.'
+    ).toBeTruthy();
 
     const vehicleId = vehicle.id;
     const from = '2026-04-01T00:00:00Z';
