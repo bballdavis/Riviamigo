@@ -67,7 +67,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm --filter @riviamigo/web build
 
-FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296 AS runtime
+FROM postgres:18.4-trixie@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a AS runtime
 LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
 ENV XDG_CACHE_HOME=/data/cache
 
