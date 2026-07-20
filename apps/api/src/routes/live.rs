@@ -77,7 +77,7 @@ async fn live_handler(
         .on_upgrade(move |socket| handle_socket(socket, vid, redis)))
 }
 
-/// GET /v1/vehicles/:id/live-session
+/// GET /v1/vehicles/{id}/live-session
 /// Returns the latest live charging session data from Redis (written by run_poll_loop).
 /// Returns 204 No Content when no live session is active.
 async fn live_session_handler(

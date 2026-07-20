@@ -1,14 +1,14 @@
 //! Schedule and enrichment routes.
 //!
 //! Routes:
-//!   GET  /v1/vehicles/:id/charging-schedule
-//!   PUT  /v1/vehicles/:id/charging-schedule
-//!   GET  /v1/vehicles/:id/departure-schedules
-//!   POST /v1/vehicles/:id/departure-schedules
-//!   PATCH /v1/vehicles/:id/departure-schedules/:schedule_id
-//!   DELETE /v1/vehicles/:id/departure-schedules/:schedule_id
-//!   GET  /v1/vehicles/:id/wallboxes
-//!   GET  /v1/vehicles/:id/ota-details
+//!   GET  /v1/vehicles/{id}/charging-schedule
+//!   PUT  /v1/vehicles/{id}/charging-schedule
+//!   GET  /v1/vehicles/{id}/departure-schedules
+//!   POST /v1/vehicles/{id}/departure-schedules
+//!   PATCH /v1/vehicles/{id}/departure-schedules/{schedule_id}
+//!   DELETE /v1/vehicles/{id}/departure-schedules/{schedule_id}
+//!   GET  /v1/vehicles/{id}/wallboxes
+//!   GET  /v1/vehicles/{id}/ota-details
 
 use axum::{
     extract::{Path, State},
@@ -70,7 +70,7 @@ async fn reject_demo_schedule_mutation(
     Ok(())
 }
 
-// ── GET /v1/vehicles/:id/charging-schedule ───────────────────────────────────
+// ── GET /v1/vehicles/{id}/charging-schedule ───────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct ChargingScheduleRow {
@@ -106,7 +106,7 @@ async fn get_charging_schedule(
     Ok(Json(row))
 }
 
-// ── PUT /v1/vehicles/:id/charging-schedule ───────────────────────────────────
+// ── PUT /v1/vehicles/{id}/charging-schedule ───────────────────────────────────
 
 async fn put_charging_schedule(
     auth: AuthUser,
@@ -132,7 +132,7 @@ async fn put_charging_schedule(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-// ── GET /v1/vehicles/:id/departure-schedules ─────────────────────────────────
+// ── GET /v1/vehicles/{id}/departure-schedules ─────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct DepartureScheduleRow {
@@ -165,7 +165,7 @@ async fn list_departure_schedules(
     Ok(Json(rows))
 }
 
-// ── POST /v1/vehicles/:id/departure-schedules ────────────────────────────────
+// ── POST /v1/vehicles/{id}/departure-schedules ────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct CreateDepartureBody {
@@ -206,7 +206,7 @@ async fn create_departure_schedule(
     Ok(Json(serde_json::json!({ "rivian_schedule_id": rivian_id })))
 }
 
-// ── PATCH /v1/vehicles/:id/departure-schedules/:schedule_id ─────────────────
+// ── PATCH /v1/vehicles/{id}/departure-schedules/{schedule_id} ─────────────────
 
 async fn update_departure_schedule(
     auth: AuthUser,
@@ -252,7 +252,7 @@ async fn update_departure_schedule(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-// ── DELETE /v1/vehicles/:id/departure-schedules/:schedule_id ────────────────
+// ── DELETE /v1/vehicles/{id}/departure-schedules/{schedule_id} ────────────────
 
 async fn delete_departure_schedule(
     auth: AuthUser,
@@ -288,7 +288,7 @@ async fn delete_departure_schedule(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-// ── GET /v1/vehicles/:id/wallboxes ───────────────────────────────────────────
+// ── GET /v1/vehicles/{id}/wallboxes ───────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct WallboxRow {
@@ -328,7 +328,7 @@ async fn list_wallboxes(
     Ok(Json(rows))
 }
 
-// ── GET /v1/vehicles/:id/ota-details ─────────────────────────────────────────
+// ── GET /v1/vehicles/{id}/ota-details ─────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 struct OtaDetailsRow {
