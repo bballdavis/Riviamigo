@@ -21,6 +21,12 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("Rivian API error: {0}")]
     RivianApi(String),
+    #[error("Rivian rejected the account credentials")]
+    RivianCredentialsRejected,
+    #[error("Rivian rejected the verification code")]
+    RivianOtpRejected,
+    #[error("Rivian connection session expired")]
+    RivianConnectSessionExpired,
     #[error("Validation error: {0}")]
     Validation(String),
     #[error("Dependency unavailable: {0}")]
@@ -59,11 +65,14 @@ impl IntoResponse for AppError {
                     "Filesystem error".into(),
                 )
             }
-            AppError::Redis(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "INTERNAL",
-                "Internal error".into(),
-            ),
+            AppError::Redis(e) => {
+                tracing::error!(err = %e, "redis error");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "DEPENDENCY_UNAVAILABLE",
+                    "Temporary session storage is unavailable. Please try again.".into(),
+                )
+            }
             AppError::Database(e) => {
                 tracing::error!(err = %e, "database error");
                 (
@@ -73,6 +82,22 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::RivianApi(m) => (StatusCode::BAD_GATEWAY, "RIVIAN_API", m.clone()),
+            AppError::RivianCredentialsRejected => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "RIVIAN_CREDENTIALS_REJECTED",
+                "Rivian did not accept that email or password.".into(),
+            ),
+            AppError::RivianOtpRejected => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "RIVIAN_OTP_REJECTED",
+                "Rivian did not accept that verification code.".into(),
+            ),
+            AppError::RivianConnectSessionExpired => (
+                StatusCode::CONFLICT,
+                "RIVIAN_CONNECT_SESSION_EXPIRED",
+                "Your secure Rivian sign-in session expired. Start again from the account step."
+                    .into(),
+            ),
             AppError::Internal(e) => {
                 tracing::error!(err = %e, "internal error");
                 (

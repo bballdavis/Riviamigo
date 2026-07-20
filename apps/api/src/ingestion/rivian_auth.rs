@@ -640,13 +640,16 @@ fn map_login_errors(errors: Vec<GqlError>) -> RivianAuthError {
     let msg = format_gql_error(&errors);
     for error in &errors {
         let low_msg = error.message.to_lowercase();
-        if low_msg.contains("invalid") {
+        if low_msg.contains("invalid credentials")
+            || low_msg.contains("invalid email or password")
+            || low_msg.contains("incorrect email or password")
+            || low_msg.contains("invalid password")
+            || low_msg.contains("incorrect password")
+        {
             return RivianAuthError::InvalidCredentials;
         }
         if let Some(ext) = &error.extensions {
-            if ext.code.as_deref() == Some("UNAUTHENTICATED")
-                || ext.reason.as_deref() == Some("BAD_CURRENT_PASSWORD")
-            {
+            if ext.reason.as_deref() == Some("BAD_CURRENT_PASSWORD") {
                 return RivianAuthError::InvalidCredentials;
             }
         }
@@ -713,6 +716,29 @@ mod tests {
     };
     use serde_json::{json, Value};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn classifies_only_explicit_login_credential_errors_as_invalid_credentials() {
+        let error = map_login_errors(vec![GqlError {
+            message: "Invalid email or password".into(),
+            extensions: None,
+        }]);
+
+        assert!(matches!(error, RivianAuthError::InvalidCredentials));
+    }
+
+    #[test]
+    fn does_not_misclassify_csrf_errors_as_bad_passwords() {
+        let error = map_login_errors(vec![GqlError {
+            message: "Invalid CSRF token".into(),
+            extensions: Some(GqlErrorExtensions {
+                code: Some("UNAUTHENTICATED".into()),
+                reason: None,
+            }),
+        }]);
+
+        assert!(matches!(error, RivianAuthError::UnexpectedResponse(_)));
+    }
 
     #[derive(Debug, Clone)]
     struct RecordedRequest {

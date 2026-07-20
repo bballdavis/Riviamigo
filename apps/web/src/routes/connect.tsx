@@ -9,6 +9,7 @@ import { PageLayout, Button, Input, Card } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { ConnectedVehicleSuccess } from '../components/connect/ConnectedVehicleSuccess';
+import { connectErrorMessage } from '../components/connect/connectError';
 import { Car, Check, KeyRound, ShieldCheck, Zap } from 'lucide-react';
 
 export const connectRoute = createRoute({
@@ -22,7 +23,11 @@ export const connectRoute = createRoute({
 });
 
 function ConnectPage() {
-  return <ProtectedRoute><ConnectContent /></ProtectedRoute>;
+  return (
+    <ProtectedRoute>
+      <ConnectContent />
+    </ProtectedRoute>
+  );
 }
 
 export function ConnectContent() {
@@ -33,10 +38,10 @@ export function ConnectContent() {
   const { data: connectedVehicles } = useVehicles();
   const refreshVehicleId = search.mode === 'refresh' ? search.vehicle_id : undefined;
   const refreshVehicle = connectedVehicles?.find((vehicle) => vehicle.id === refreshVehicleId);
-  const [email, setEmail]       = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError]       = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
   const currentStep = successVehicleName ? 2 : loading ? 1 : 0;
@@ -50,13 +55,18 @@ export function ConnectContent() {
       if (result.requires_otp && result.challenge_id) {
         navigate({
           to: '/connect/otp',
-          search: { challenge_id: result.challenge_id, email, mode: search.mode, vehicle_id: refreshVehicleId },
+          search: {
+            challenge_id: result.challenge_id,
+            email,
+            mode: search.mode,
+            vehicle_id: refreshVehicleId,
+          },
         });
       } else {
         await finishConnectedResult(result);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connection failed');
+      setError(connectErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -68,7 +78,9 @@ export function ConnectContent() {
         setError('Choose an existing vehicle before refreshing Rivian credentials.');
         return;
       }
-      const matchingVehicle = result.vehicles.find((vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id);
+      const matchingVehicle = result.vehicles.find(
+        (vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id
+      );
       if (!matchingVehicle) {
         setError('That Rivian account does not include this vehicle.');
         return;
@@ -116,7 +128,11 @@ export function ConnectContent() {
     <AppLayout activeKey="settings">
       <PageLayout
         title={refreshVehicle ? 'Refresh Rivian Login' : 'Add a Vehicle'}
-        subtitle={refreshVehicle ? `Update encrypted credentials for ${refreshVehicle.display_name}.` : 'Connect your Rivian account so Riviamigo can securely prepare telemetry access.'}
+        subtitle={
+          refreshVehicle
+            ? `Update encrypted credentials for ${refreshVehicle.display_name}.`
+            : 'Connect your Rivian account so Riviamigo can securely prepare telemetry access.'
+        }
         className="min-h-[calc(100vh-3rem)] justify-center [&>div:first-child]:justify-center [&>div:first-child>div]:text-center"
       >
         <div className="mx-auto w-full max-w-2xl">
@@ -136,7 +152,7 @@ export function ConnectContent() {
                 onSelect={(vehicle) => {
                   setError('');
                   persistVehicle(vehicle).catch((err) => {
-                    setError(err instanceof Error ? err.message : 'Vehicle add failed');
+                    setError(connectErrorMessage(err));
                   });
                 }}
               />
@@ -148,15 +164,36 @@ export function ConnectContent() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-fg">Rivian Account</p>
-                    <p className="text-xs text-fg-tertiary">Most accounts continue through a one-time verification code.</p>
+                    <p className="text-xs text-fg-tertiary">
+                      Most accounts continue through a one-time verification code.
+                    </p>
                   </div>
                 </div>
 
                 <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-4">
-                  <Input label="Rivian Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
-                  <Input label="Rivian Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" required />
+                  <Input
+                    label="Rivian Email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    required
+                  />
+                  <Input
+                    label="Rivian Password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Password"
+                    required
+                  />
                   {error && <p className="text-xs text-status-danger">{error}</p>}
-                  <Button type="submit" loading={loading} iconLeft={<KeyRound className="h-4 w-4" />} className="mt-1">
+                  <Button
+                    type="submit"
+                    loading={loading}
+                    iconLeft={<KeyRound className="h-4 w-4" />}
+                    className="mt-1"
+                  >
                     {loading ? 'Checking account' : 'Connect Account'}
                   </Button>
                 </form>
@@ -205,12 +242,16 @@ function ConnectProgress({ currentStep }: { currentStep: number }) {
             <div
               key={step.label}
               className={`flex gap-3 rounded-lg border p-3 ${
-                active || complete ? 'border-accent/50 bg-accent-muted/20' : 'border-border bg-bg-elevated/40'
+                active || complete
+                  ? 'border-accent/50 bg-accent-muted/20'
+                  : 'border-border bg-bg-elevated/40'
               }`}
             >
-              <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                complete ? 'bg-accent text-fg-on-accent' : 'bg-bg-surface text-accent'
-              }`}>
+              <div
+                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                  complete ? 'bg-accent text-fg-on-accent' : 'bg-bg-surface text-accent'
+                }`}
+              >
                 {complete ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
               </div>
               <div>
@@ -252,8 +293,12 @@ function VehiclePicker({
             className="flex items-center justify-between rounded-lg border border-border bg-bg-elevated/40 p-4 text-left transition hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span>
-              <span className="block text-sm font-medium text-fg">{formatVehicleName(vehicle)}</span>
-              <span className="mt-1 block text-xs text-fg-tertiary">{vehicle.vin ?? vehicle.id}</span>
+              <span className="block text-sm font-medium text-fg">
+                {formatVehicleName(vehicle)}
+              </span>
+              <span className="mt-1 block text-xs text-fg-tertiary">
+                {vehicle.vin ?? vehicle.id}
+              </span>
             </span>
             <Car className="h-5 w-5 text-accent" />
           </button>
@@ -265,5 +310,9 @@ function VehiclePicker({
 }
 
 function formatVehicleName(vehicle: ConnectedRivianVehicle) {
-  return vehicle.name || [vehicle.model_year, vehicle.model].filter(Boolean).join(' ') || 'Rivian vehicle';
+  return (
+    vehicle.name ||
+    [vehicle.model_year, vehicle.model].filter(Boolean).join(' ') ||
+    'Rivian vehicle'
+  );
 }
