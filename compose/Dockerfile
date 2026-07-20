@@ -76,18 +76,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled /usr/share/nginx/html \
         /usr/local/bin/gosu \
     && groupadd -r -g 1001 riviamigo \
-    && useradd -r -u 1001 -g 1001 riviamigo
+    && useradd -r -u 1001 -g 1001 riviamigo \
+    && mkdir -p /backups /data/cache \
+    && chown -R 1001:1001 /backups /data/cache
 
 WORKDIR /app
-COPY --from=api-builder /build/apps/api/riviamigo-api ./riviamigo-api
-COPY --from=api-builder /build/apps/api/migrations ./migrations
-COPY --from=web-builder /build/apps/web/dist ./dist
+COPY --chown=1001:1001 --from=api-builder /build/apps/api/riviamigo-api ./riviamigo-api
+COPY --chown=1001:1001 --from=api-builder /build/apps/api/migrations ./migrations
+COPY --chown=1001:1001 --from=web-builder /build/apps/web/dist ./dist
 COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf
-COPY compose/production-init.sh compose/production-services.sh ./
+COPY --chown=1001:1001 compose/production-init.sh compose/production-services.sh ./
 RUN sed -i 's/\r$//' /app/production-init.sh /app/production-services.sh \
-    && chmod 0755 /app/production-init.sh /app/production-services.sh \
-    && mkdir -p /backups /data/cache \
-    && chown -R 1001:1001 /app /backups /data/cache
+    && chmod 0755 /app/production-init.sh /app/production-services.sh
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
