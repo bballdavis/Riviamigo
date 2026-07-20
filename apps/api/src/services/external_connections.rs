@@ -13,6 +13,29 @@ pub const S3_BACKUP: &str = "s3_backup";
 
 pub const OPTIONAL_CONNECTIONS: &[&str] = &[OPEN_METEO, NOMINATIM, BASEMAP, ICONIFY];
 
+/// Restore the non-secret provider defaults after a fresh install or a
+/// sanitized restore. Custom endpoints and encrypted credentials always win:
+/// this only fills rows that are entirely absent.
+pub async fn ensure_defaults(pool: &PgPool) -> Result<(), AppError> {
+    sqlx::query(
+        r#"INSERT INTO riviamigo.external_connection_settings
+             (id, enabled, mode, weather_precision, forecast_url, archive_url, base_url,
+              light_url_template, dark_url_template, attribution, attribution_url,
+              custom_autocomplete, allow_private_network)
+           VALUES
+             ('rivian_account', TRUE, 'remote', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE),
+             ('open_meteo', TRUE, 'remote', 'approximate', 'https://api.open-meteo.com/v1/forecast', 'https://archive-api.open-meteo.com/v1/archive', NULL, NULL, NULL, 'Weather data by Open-Meteo', 'https://open-meteo.com/', FALSE, FALSE),
+             ('nominatim', TRUE, 'remote', NULL, NULL, NULL, 'https://nominatim.openstreetmap.org', NULL, NULL, 'OpenStreetMap contributors', 'https://www.openstreetmap.org/copyright', FALSE, FALSE),
+             ('basemap', TRUE, 'remote', NULL, NULL, NULL, NULL, 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', 'OpenStreetMap contributors and CARTO', 'https://carto.com/attributions', FALSE, FALSE),
+             ('iconify', TRUE, 'remote', NULL, NULL, NULL, 'https://api.iconify.design', NULL, NULL, 'Iconify', 'https://iconify.design/', FALSE, FALSE),
+             ('s3_backup', FALSE, 'disabled', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE)
+           ON CONFLICT (id) DO NOTHING"#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct ConnectionSettingsRow {
     pub id: String,
@@ -187,7 +210,10 @@ pub async fn record_attempt(pool: &PgPool, id: &str) {
 
 pub async fn record_success(pool: &PgPool, id: &str) {
     let _ = sqlx::query(
-        "UPDATE riviamigo.external_connection_activity SET last_success_at = now(), last_error = NULL WHERE connection_id = $1",
+        r#"INSERT INTO riviamigo.external_connection_activity
+             (connection_id, last_attempt_at, last_success_at, last_error, usage_date, request_count)
+           VALUES ($1, now(), now(), NULL, CURRENT_DATE, 0)
+           ON CONFLICT (connection_id) DO UPDATE SET last_success_at = now(), last_error = NULL"#,
     )
     .bind(id)
     .execute(pool)
@@ -197,7 +223,10 @@ pub async fn record_success(pool: &PgPool, id: &str) {
 pub async fn record_failure(pool: &PgPool, id: &str, message: &str) {
     let sanitized = sanitize_error(message);
     let _ = sqlx::query(
-        "UPDATE riviamigo.external_connection_activity SET last_error = $2 WHERE connection_id = $1",
+        r#"INSERT INTO riviamigo.external_connection_activity
+             (connection_id, last_attempt_at, last_error, usage_date, request_count)
+           VALUES ($1, now(), $2, CURRENT_DATE, 0)
+           ON CONFLICT (connection_id) DO UPDATE SET last_error = EXCLUDED.last_error"#,
     )
     .bind(id)
     .bind(sanitized)
@@ -207,7 +236,11 @@ pub async fn record_failure(pool: &PgPool, id: &str, message: &str) {
 
 pub async fn record_test(pool: &PgPool, id: &str, ok: bool, message: Option<&str>) {
     let _ = sqlx::query(
-        "UPDATE riviamigo.external_connection_activity SET last_test_at = now(), last_test_ok = $2, last_test_error = $3 WHERE connection_id = $1",
+        r#"INSERT INTO riviamigo.external_connection_activity
+             (connection_id, last_attempt_at, usage_date, request_count, last_test_at, last_test_ok, last_test_error)
+           VALUES ($1, now(), CURRENT_DATE, 0, now(), $2, $3)
+           ON CONFLICT (connection_id) DO UPDATE SET
+             last_test_at = now(), last_test_ok = EXCLUDED.last_test_ok, last_test_error = EXCLUDED.last_test_error"#,
     )
     .bind(id)
     .bind(ok)

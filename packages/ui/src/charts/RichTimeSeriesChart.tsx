@@ -255,6 +255,30 @@ export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) 
   return precision;
 }
 
+/** Axis labels intentionally become calendar dates for multi-day views. */
+export function formatAxisDateForSpan(seconds: number, spanSeconds: number) {
+  if (spanSeconds <= 24 * 3600) return formatDateForSpan(seconds, spanSeconds);
+  const d = new Date(seconds * 1000);
+  if (spanSeconds <= 90 * 86400) return d.toLocaleString([], { month: 'short', day: 'numeric' });
+  return d.toLocaleString([], { month: 'short', year: '2-digit' });
+}
+
+/** Avoid repeated date labels from uPlot's hourly automatic splits. */
+export function getCalendarDateSplits(startSeconds: number, endSeconds: number, maximum = 7) {
+  if (endSeconds - startSeconds <= 24 * 3600) return undefined;
+  const spanDays = Math.ceil((endSeconds - startSeconds) / 86400);
+  const stepDays = Math.max(1, Math.ceil(spanDays / maximum));
+  const cursor = new Date(startSeconds * 1000);
+  cursor.setHours(0, 0, 0, 0);
+  if (cursor.getTime() / 1000 < startSeconds) cursor.setDate(cursor.getDate() + 1);
+  const splits: number[] = [];
+  while (cursor.getTime() / 1000 <= endSeconds) {
+    splits.push(cursor.getTime() / 1000);
+    cursor.setDate(cursor.getDate() + stepDays);
+  }
+  return splits.length ? splits : undefined;
+}
+
 export function formatChartNumber(value: number | null | undefined, unit?: string, precision = 0) {
   if (value == null || !Number.isFinite(value)) return '-';
   const decimals = Math.max(0, precision);
@@ -592,6 +616,9 @@ export function RichTimeSeriesChart({
 
     const xValues = alignedDataRef.current[0] as number[];
     const xSpan = xValues.length > 1 ? (xValues[xValues.length - 1]! - xValues[0]!) : 86400;
+    const calendarDateSplits = xTime && !xSplits
+      ? getCalendarDateSplits(xValues[0]!, xValues[xValues.length - 1]!)
+      : undefined;
     const fullXRange: [number, number] = xRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
 
     const hasRightAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
@@ -616,13 +643,15 @@ export function RichTimeSeriesChart({
       gap: 6,
       ...(xSplits
         ? { splits: () => xSplits }
+        : calendarDateSplits
+          ? { splits: () => calendarDateSplits }
         : {}),
       values: (_u, vals) => {
         if (xValueFormatterRef.current) {
           return vals.map((v) => xValueFormatterRef.current!(v));
         }
         if (xTimeRef.current) {
-          return vals.map((v) => formatDateForSpan(v, xSpan));
+          return vals.map((v) => formatAxisDateForSpan(v, xSpan));
         }
         return vals.map((v) => formatChartNumber(v, xUnitRef.current, 0));
       },

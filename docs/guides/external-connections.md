@@ -23,6 +23,8 @@ Rivian's usable vehicle-state subscription currently provides cabin and driver-s
 
 Remote Open-Meteo is enabled on upgrade to preserve existing behavior. Administrators can choose a custom forecast and archive URL, add a write-only encrypted API key, select exact weather coordinates, or disable weather. Disabling weather pauses queued jobs and preserves history. An Open-Meteo-compatible endpoint is the supported self-hosted contract.
 
+After a fresh install or a sanitized restore, Riviamigo restores the built-in remote connection records automatically. Custom endpoints and encrypted secrets are never recreated. Completed trips with usable coordinates are reconciled in bounded background batches for missing weather and reverse-geocoded locations; trips without usable coordinates are reported as unavailable rather than retried indefinitely.
+
 ## Geocoding
 
 Public mode sends exact coordinates or explicitly submitted search text to Nominatim through the Riviamigo server. Exact values are necessary for accurate addresses. Riviamigo checks saved places and cached results first, identifies itself with a static project User-Agent, and limits public requests to one per second. The public service is never queried on every keystroke.
@@ -38,6 +40,8 @@ Choosing **Disabled** keeps the route on a neutral background. Custom XYZ raster
 ## Local provider caches
 
 Riviamigo keeps a persistent local cache for basemap tiles and address-search results. Reopening a map or repeating an address search uses the local cache instead of contacting the provider again. Reverse-geocoded address records are also stored in the database and survive restarts.
+
+Use **Test with synthetic data** in External Connections to verify a provider without sending vehicle history. If a map has route geometry but its basemap is unavailable, Riviamigo keeps the route visible on a neutral background and identifies the tile-provider failure.
 
 The selected connection shows its entry count and storage use. Administrators can use **Purge cache** when a provider changes data or storage needs to be reclaimed. Purging map tiles means the next view may request a tile again. Purging Nominatim removes lookup-only address records and search results, while preserving addresses attached to trips, charge sessions, or saved places.
 

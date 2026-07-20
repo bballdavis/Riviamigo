@@ -47,6 +47,9 @@ async fn main() -> anyhow::Result<()> {
     routes::dashboards::seed_defaults(&pool).await?;
     tracing::info!("dashboard defaults seeded");
 
+    services::external_connections::ensure_defaults(&pool).await?;
+    tracing::info!("external connection defaults ensured");
+
     let active_keys = keys::bootstrap_keys(
         &pool,
         config.jwt_secret.clone(),
@@ -80,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
     let _backup_scheduler = services::backups::start_backup_scheduler(pool.clone(), config.clone());
     let _weather_enrichment_worker =
         services::weather_enrichment::start_worker(pool.clone(), age_key.clone());
+    let _trip_enrichment_reconciler =
+        services::trip_enrichment::start_reconciliation_worker(pool.clone());
 
     let app = routes::build_router(state);
 

@@ -13,7 +13,7 @@ export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
 export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
-export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatChartNumber, clampExplorationRange, isZoomedXRange } from './RichTimeSeriesChart';
+export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatAxisDateForSpan, formatChartNumber, getCalendarDateSplits, clampExplorationRange, isZoomedXRange } from './RichTimeSeriesChart';
 export { MiniSparkline, resolveCanvasColor } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
 export {
