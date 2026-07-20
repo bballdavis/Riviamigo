@@ -1,4 +1,4 @@
-import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
+import type { SidebarsConfig } from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
   overviewSidebar: [
@@ -62,6 +62,7 @@ const sidebars: SidebarsConfig = {
         'runbooks/README',
         'runbooks/secure-deployment',
         'runbooks/backup-restore',
+        'runbooks/dependency-maintenance',
         'runbooks/release-images',
         'runbooks/release-database-cutover',
         'runbooks/vehicle-history-rebuild',
@@ -90,14 +91,19 @@ const sidebars: SidebarsConfig = {
       items: [
         'frontend/dashboard-authoring',
         'branding',
-        {type: 'link', label: 'Security implementation', href: '/docs/security/'},
+        { type: 'link', label: 'Security implementation', href: '/docs/security/' },
       ],
     },
     {
       type: 'category',
       label: 'Governance and review',
       collapsed: false,
-      items: ['runbooks/documentation-maintenance', 'security-audit', 'decision-log'],
+      items: [
+        'runbooks/documentation-maintenance',
+        'dependency-modernization-2026-07',
+        'security-audit',
+        'decision-log',
+      ],
     },
   ],
   referenceSidebar: [
