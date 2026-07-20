@@ -13,6 +13,8 @@ use crate::{
     middleware::auth::{AppState, AuthUser},
 };
 
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 1;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -116,7 +118,7 @@ async fn by_slug(
         SELECT id, owner_id, slug, name, description, is_default, is_locked, config
         FROM dashboards
         WHERE slug = $1 AND (owner_id = $2 OR owner_id IS NULL)
-        ORDER BY (owner_id = $2) DESC
+        ORDER BY (owner_id = $2) DESC NULLS LAST
         LIMIT 1
         "#,
     )
@@ -405,13 +407,15 @@ async fn admin_restore_default(
             config = $2,
             is_default = TRUE,
             is_locked = TRUE,
+            baseline_revision = $3,
             updated_at = NOW()
-        WHERE id = $3
+        WHERE id = $4
         RETURNING id, owner_id, slug, name, description, is_default, is_locked, config
         "#,
     )
     .bind(name)
     .bind(config)
+    .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
@@ -534,11 +538,11 @@ fn bundled_default_config(id: Uuid) -> Option<Value> {
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
 
-/// Insert missing system default dashboards on startup.
+/// Insert missing system defaults and apply a newer bundled baseline once.
 ///
-/// Existing system defaults are deliberately left untouched: administrators may
-/// manage them in the UI, and an explicit restore action applies the bundled
-/// baseline when that is wanted. User-owned dashboards are never seeded here.
+/// User-owned dashboards are never seeded or updated here. A system default
+/// edited by an administrator remains untouched across restarts until a newer
+/// bundled revision intentionally supersedes it.
 pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let defaults: &[(&str, &str)] = &[
         (
@@ -573,15 +577,27 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
 
         sqlx::query(
             r#"
-            INSERT INTO dashboards (id, owner_id, slug, name, is_default, is_locked, config)
-            VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4)
-            ON CONFLICT (id) DO NOTHING
+            INSERT INTO dashboards
+              (id, owner_id, slug, name, is_default, is_locked, config, baseline_revision)
+            VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4, $5)
+            ON CONFLICT (id) DO UPDATE
+            SET slug = EXCLUDED.slug,
+                name = EXCLUDED.name,
+                is_default = TRUE,
+                is_locked = TRUE,
+                config = EXCLUDED.config,
+                baseline_revision = EXCLUDED.baseline_revision,
+                updated_at = NOW()
+            WHERE dashboards.owner_id IS NULL
+              AND dashboards.is_default = TRUE
+              AND COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision
             "#,
         )
         .bind(id)
         .bind(slug)
         .bind(name)
         .bind(config)
+        .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
         .execute(pool)
         .await?;
     }

@@ -84,9 +84,13 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 - YAML import and export
 - bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
 
+Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and user-owned dashboards are never changed by seeding. Personal same-slug dashboards continue to win normal route resolution.
+
 This package should stay framework-focused. It should not accumulate page-specific business rules.
 
 Conditional widgets use `WidgetInstance.visibility`. Rules are evaluated with AND semantics, and widgets without rules are always visible. The first registered condition is `vehicle-connection`, with `plugged` and `unplugged` values. Connected standby counts as plugged. Add future condition families to `dashboardVisibility.ts`; do not add slug, route, or widget-definition branches to the renderer.
+
+Conditional variants may intentionally share grid coordinates. Keep the always-visible content and each complete scenario compact before the next full-width section; hiding one scenario must not leave reserved blank rows in the other. The bundled Charging dashboard uses a six-row summary region in both states, followed immediately by its chart and sessions table.
 
 In view mode, `DashboardRenderer` resolves visibility from live status. In edit mode it owns a temporary, named scenario preview state, filters both the canvas and dashboard-wide data requirements to preview-visible widgets, and keeps the complete draft in `GridEditor`. The editor drawer presents the active scenario prominently, for example `Previewing: Vehicle plugged in`, and lets the user switch between registered condition values. Preview state never persists or enters the dashboard schema. Legacy `options.chargingConnectionVisibility` values are normalized to typed rules at API/import boundaries and are written in the typed form on the next save.
 

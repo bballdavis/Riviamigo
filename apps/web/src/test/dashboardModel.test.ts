@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyWidgetLayout,
   findOwnedDashboardBySlug,
+  getDefaultBySlug,
   materializeSystemDashboardDraft,
   materializeUserDashboardDraft,
   resolveDashboardViewWidgets,
@@ -134,5 +135,28 @@ describe('dashboard model helpers', () => {
       'charging_dc_share',
       'charging.connection',
     ]);
+  });
+
+  it('keeps both charging connection states compact before the chart', () => {
+    const charging = getDefaultBySlug('charging');
+    expect(charging).toBeDefined();
+
+    const chart = charging!.widgets.find((widget) => widget.definitionId === 'catalog');
+    const sessions = charging!.widgets.find(
+      (widget) => widget.definitionId === 'charging.sessions.table',
+    );
+    expect(chart?.layout).toMatchObject({ x: 0, y: 6, w: 12, h: 11 });
+    expect(sessions?.layout).toMatchObject({ x: 0, y: 17, w: 12, h: 12 });
+
+    for (const connection of ['plugged', 'unplugged'] as const) {
+      const visible = resolveDashboardViewWidgets(charging!.widgets, {
+        'vehicle-connection': connection,
+      });
+      const summaryWidgets = visible.filter((widget) => widget.layout.y < 6);
+      expect(
+        Math.max(...summaryWidgets.map((widget) => widget.layout.y + widget.layout.h)),
+      ).toBe(6);
+      expect(visible.some((widget) => widget.definitionId === 'catalog')).toBe(true);
+    }
   });
 });
