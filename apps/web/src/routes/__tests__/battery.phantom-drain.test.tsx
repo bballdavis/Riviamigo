@@ -75,19 +75,12 @@ vi.mock('@riviamigo/dashboards', () => ({
       {secondary ? <div>{secondary}</div> : null}
     </div>
   ),
-  getChartDefinition: () => ({
-    id: 'phantom-drain',
-    title: 'Phantom Drain Rate',
-    description: 'Duration-weighted battery drain rate during validated parked periods.',
-    source: 'phantom_drain',
-    yUnit: '%/h',
-    emptyTitle: 'No phantom drain data for this period',
-  }),
-  PhantomDrainChart: ({ periods, loading }: { periods: unknown[]; loading: boolean }) => (
+  DashboardChartWidget: ({ instance }: { instance: { options?: { chartId?: string; chartIds?: string[]; showPicker?: boolean } } }) => (
     <div
-      data-testid="phantom-drain-chart"
-      data-period-count={String(periods.length)}
-      data-loading={String(loading)}
+      data-testid="phantom-drain-chart-widget"
+      data-chart-id={instance.options?.chartId}
+      data-chart-ids={instance.options?.chartIds?.join('|')}
+      data-show-picker={String(instance.options?.showPicker)}
     />
   ),
   DashboardRenderer: () => <div data-testid="dashboard-renderer" />,
@@ -156,13 +149,15 @@ vi.mock('../../lib/dates', () => ({
 import { BatteryPhantomDrainPage } from '../../components/dashboard/BatteryPhantomDrainPage';
 
 describe('BatteryPhantomDrainPage', () => {
-  it('renders the shared chart above unified table controls with aligned rate copy', async () => {
+  it('renders the shared chart above unified table controls', async () => {
     render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
 
-    const chart = screen.getByTestId('phantom-drain-chart');
+    const chart = screen.getByTestId('phantom-drain-chart-widget');
     const tableSearch = screen.getByPlaceholderText('Search periods');
-    expect(chart).toHaveAttribute('data-period-count', '1');
+    expect(chart).toHaveAttribute('data-chart-id', 'phantom-drain');
+    expect(chart).toHaveAttribute('data-show-picker', 'true');
     expect(chart.compareDocumentPosition(tableSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('phantom-drain-periods-table')).not.toHaveClass('bg-bg-elevated');
 
     expect(screen.getByPlaceholderText('Search periods')).toBeInTheDocument();
     expect(screen.getByText('Rows')).toBeInTheDocument();

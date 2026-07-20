@@ -6,12 +6,18 @@ updates:
       interval: weekly
       day: monday
       time: '08:00'
-    open-pull-requests-limit: 5
+    # Routine version updates are handled intentionally during maintenance windows.
+    # Keep Dependabot focused on security fixes.
+    open-pull-requests-limit: 0
     groups:
       non-major-dependencies:
         update-types:
           - minor
           - patch
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - '*'
     labels:
       - dependencies
       - rust
@@ -22,12 +28,16 @@ updates:
       interval: weekly
       day: monday
       time: '08:00'
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       non-major-dependencies:
         update-types:
           - minor
           - patch
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - '*'
     labels:
       - dependencies
       - javascript
@@ -36,12 +46,16 @@ updates:
     directory: /
     schedule:
       interval: monthly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     groups:
       non-major-dependencies:
         update-types:
           - minor
           - patch
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - '*'
     labels:
       - dependencies
       - github-actions
@@ -52,12 +66,16 @@ updates:
       interval: weekly
       day: monday
       time: '08:00'
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       non-major-dependencies:
         update-types:
           - minor
           - patch
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - '*'
     labels:
       - dependencies
       - docker
@@ -68,12 +86,16 @@ updates:
       interval: weekly
       day: monday
       time: '08:00'
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       non-major-dependencies:
         update-types:
           - minor
           - patch
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - '*'
     labels:
       - dependencies
       - docker
