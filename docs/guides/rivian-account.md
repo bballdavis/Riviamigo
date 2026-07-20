@@ -12,6 +12,8 @@ After you create your Riviamigo owner account, open **Settings → Vehicles** an
 2. Complete the one-time passcode (OTP) Rivian sends through its normal authentication flow.
 3. Riviamigo encrypts the credentials at rest and begins collecting data for the selected vehicle.
 
+If Rivian rejects the email, password, or verification code, Riviamigo shows that specific correction beside the form. If the secure sign-in handoff expires before the vehicle is added, start again from the account step.
+
 The first update can take a little while, especially if the vehicle is asleep. Riviamigo uses Rivian's unofficial API and WebSocket behavior, so upstream changes can occasionally require a project update.
 
 ## Troubleshooting
@@ -19,5 +21,6 @@ The first update can take a little while, especially if the vehicle is asleep. R
 - Watch the app logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f app`.
 - If authentication expires, remove the vehicle in Settings and add it again.
 - If an OTP does not arrive, confirm the phone number on the Rivian account and retry from Settings.
+- If the app reports temporary secure-session storage is unavailable, retry once and inspect the app logs if it persists.
 
 Rivian requests carry the information necessary to authenticate and collect vehicle data. See [privacy](../privacy.md) for the wider data-flow picture.

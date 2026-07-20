@@ -23,7 +23,10 @@ use crate::{
     db::users::require_admin_or_super_user,
     db::vehicles::{get_default_vehicle_id, require_vehicle_role},
     errors::AppError,
-    ingestion::{rivian_auth::RivianVehicleSummary, supervisor::SupervisorCommand},
+    ingestion::{
+        rivian_auth::{RivianAuthError, RivianVehicleSummary},
+        supervisor::SupervisorCommand,
+    },
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::range_normalization::normalize_remaining_range_miles,
     services::demo_seed::seed_demo_vehicle,
@@ -77,7 +80,10 @@ pub fn router() -> Router<AppState> {
         .route("/vehicles/{id}/raw-data", get(raw_vehicle_data))
         .route("/vehicles/{id}/telemetry/lanes", get(telemetry_lanes))
         .route("/vehicles/{id}/raw-events", get(raw_vehicle_events))
-        .route("/vehicles/{id}/raw-events/{event_id}", get(raw_vehicle_event))
+        .route(
+            "/vehicles/{id}/raw-events/{event_id}",
+            get(raw_vehicle_event),
+        )
         .route("/vehicles/{id}/settings", put(update_vehicle_settings))
         .route("/vehicles/{id}/battery-config", put(update_battery_config))
         .route("/vehicles/{id}/name", put(update_vehicle_name))
@@ -966,9 +972,52 @@ async fn load_encrypted_redis<T: DeserializeOwned>(
 
     let identity = age_identity(state)?;
     let value = crate::ingestion::session_store::decrypt_json::<T>(&ciphertext, &identity)
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("corrupt encrypted session")))?;
+        .map_err(|error| {
+            warn!(key, error = %error, "vehicle.connect_session.decrypt_failed");
+            AppError::RivianConnectSessionExpired
+        })?;
 
     Ok(Some(value))
+}
+
+fn map_rivian_login_error(error: RivianAuthError) -> AppError {
+    match error {
+        RivianAuthError::InvalidCredentials => AppError::RivianCredentialsRejected,
+        RivianAuthError::Network(error) => {
+            warn!(error = %error, "vehicle.connect.rivian_network_error");
+            AppError::RivianApi("Unable to reach Rivian. Please try again shortly.".into())
+        }
+        RivianAuthError::UnexpectedResponse(error) => {
+            warn!(error = %error, "vehicle.connect.rivian_unexpected_response");
+            AppError::RivianApi(
+                "Rivian returned an unexpected sign-in response. Please try again shortly.".into(),
+            )
+        }
+        RivianAuthError::InvalidOtp => {
+            warn!("vehicle.connect.login_returned_otp_error");
+            AppError::RivianApi(
+                "Rivian returned an unexpected sign-in response. Please try again shortly.".into(),
+            )
+        }
+    }
+}
+
+fn map_rivian_otp_error(error: RivianAuthError) -> AppError {
+    match error {
+        RivianAuthError::InvalidOtp => AppError::RivianOtpRejected,
+        RivianAuthError::InvalidCredentials => AppError::RivianConnectSessionExpired,
+        RivianAuthError::Network(error) => {
+            warn!(error = %error, "vehicle.connect_otp.rivian_network_error");
+            AppError::RivianApi("Unable to reach Rivian. Please try again shortly.".into())
+        }
+        RivianAuthError::UnexpectedResponse(error) => {
+            warn!(error = %error, "vehicle.connect_otp.rivian_unexpected_response");
+            AppError::RivianApi(
+                "Rivian returned an unexpected verification response. Please try again shortly."
+                    .into(),
+            )
+        }
+    }
 }
 
 async fn connect(
@@ -990,7 +1039,7 @@ async fn connect(
         .await
         .map_err(|e| {
             warn!(user_id = %auth.user_id, error = %e, "vehicle.connect.login_failed");
-            AppError::RivianApi("Rivian authentication failed".into())
+            map_rivian_login_error(e)
         })? {
         crate::ingestion::rivian_auth::LoginResult::Authenticated(tokens) => {
             let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
@@ -1075,7 +1124,7 @@ async fn connect_otp(
             challenge_id = %body.challenge_id,
             "vehicle.connect_otp.challenge_missing"
         );
-        AppError::Validation("challenge_id expired or invalid".into())
+        AppError::RivianConnectSessionExpired
     })?;
 
     if pending.user_id != auth.user_id {
@@ -1085,9 +1134,7 @@ async fn connect_otp(
             stored_user_id = %pending.user_id,
             "vehicle.connect_otp.challenge_user_mismatch"
         );
-        return Err(AppError::Validation(
-            "challenge_id expired or invalid".into(),
-        ));
+        return Err(AppError::RivianConnectSessionExpired);
     }
 
     let challenge = crate::ingestion::rivian_auth::RivianOtpChallenge {
@@ -1111,7 +1158,7 @@ async fn connect_otp(
                     error = %e,
                     "vehicle.connect_otp.login_failed"
                 );
-                AppError::RivianApi("Rivian OTP verification failed".into())
+                map_rivian_otp_error(e)
             })?;
     let vehicles = crate::ingestion::rivian_auth::rivian_user_vehicles(&client, &tokens)
         .await
@@ -1174,7 +1221,7 @@ async fn add_vehicle(
             connect_key = %key,
             "vehicle.add.missing_connect_session"
         );
-        AppError::Validation("complete /vehicles/connect first".into())
+        AppError::RivianConnectSessionExpired
     })?;
 
     let identity = age_identity(&state)?;
@@ -1370,7 +1417,7 @@ async fn refresh_vehicle_credentials(
         &state, &mut conn, &key,
     )
     .await?
-    .ok_or_else(|| AppError::Validation("complete /vehicles/connect first".into()))?;
+    .ok_or(AppError::RivianConnectSessionExpired)?;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -4877,10 +4924,11 @@ fn raw_event_summary_json(row: RawEventSummaryRow) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_otp, load_encrypted_redis, parse_raw_fields, parse_telemetry_lanes,
-        raw_field_coverage_query, raw_telemetry_where_clause, resolve_telemetry_resolution,
-        store_encrypted_redis, validate_raw_time_bounds, OtpBody, PendingOtpChallenge,
-        RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
+        connect_otp, load_encrypted_redis, map_rivian_login_error, map_rivian_otp_error,
+        parse_raw_fields, parse_telemetry_lanes, raw_field_coverage_query,
+        raw_telemetry_where_clause, resolve_telemetry_resolution, store_encrypted_redis,
+        validate_raw_time_bounds, OtpBody, PendingOtpChallenge, RAW_TELEMETRY_FIELDS,
+        TELEMETRY_LANES_QUERY,
     };
     use axum::body::Body;
     use axum::extract::State;
@@ -4888,6 +4936,24 @@ mod tests {
     use http::{Request, StatusCode};
     use tower::ServiceExt;
     use uuid::Uuid;
+
+    #[test]
+    fn maps_rejected_rivian_credentials_to_an_actionable_error() {
+        assert!(matches!(
+            map_rivian_login_error(
+                crate::ingestion::rivian_auth::RivianAuthError::InvalidCredentials
+            ),
+            crate::errors::AppError::RivianCredentialsRejected
+        ));
+    }
+
+    #[test]
+    fn maps_rejected_rivian_otp_to_an_actionable_error() {
+        assert!(matches!(
+            map_rivian_otp_error(crate::ingestion::rivian_auth::RivianAuthError::InvalidOtp),
+            crate::errors::AppError::RivianOtpRejected
+        ));
+    }
 
     // Run with: cargo test -- --ignored
 
@@ -5393,12 +5459,10 @@ mod tests {
         )
         .await;
 
-        match result {
-            Err(crate::errors::AppError::Validation(message)) => {
-                assert_eq!(message, "challenge_id expired or invalid");
-            }
-            other => panic!("expected validation error, got {other:?}"),
-        }
+        assert!(matches!(
+            result,
+            Err(crate::errors::AppError::RivianConnectSessionExpired)
+        ));
 
         let mut conn = state
             .redis
