@@ -15,7 +15,7 @@ services:
       - internal
       - proxy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -32,7 +32,7 @@ services:
           memory: 160M
 
   timescaledb:
-    image: timescale/timescaledb:2.26.3-pg16
+    image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
     restart: unless-stopped
     environment:
       POSTGRES_DB: riviamigo
@@ -44,7 +44,7 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-riviamigo} -d riviamigo"]
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-riviamigo} -d riviamigo']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -57,9 +57,16 @@ services:
           memory: 512M
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     restart: unless-stopped
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "--appendonly", "yes"]
+    command:
+      [
+        'redis-server',
+        '--requirepass',
+        '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}',
+        '--appendonly',
+        'yes',
+      ]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     volumes:
@@ -67,7 +74,7 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping"]
+      test: ['CMD-SHELL', 'redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping']
       interval: 10s
       timeout: 5s
       retries: 5

@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 env:
-  PNPM_VERSION: '11.5.1'
-  NODE_VERSION: '20'
+  PNPM_VERSION: '11.15.1'
+  NODE_VERSION: '24.18.0'
 
 jobs:
   security:
@@ -33,7 +33,16 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Cargo audit
         working-directory: apps/api
-        run: cargo audit --deny warnings
+        shell: bash
+        run: |
+          # age 0.12.1 currently pulls the unmaintained proc-macro-error2 through
+          # i18n-embed-fl. There is no stable replacement release yet. Expire
+          # this narrow exception so it cannot silently become permanent.
+          if [[ "$(date -u +%F)" > "2026-10-01" ]]; then
+            echo "RUSTSEC-2026-0173 exception expired; upgrade age/i18n-embed-fl"
+            exit 1
+          fi
+          cargo audit --deny warnings --ignore RUSTSEC-2026-0173
       - name: pnpm audit
         run: pnpm audit --prod --audit-level=high
       - name: Secret scan
