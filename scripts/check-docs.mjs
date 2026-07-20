@@ -366,9 +366,9 @@ function checkProductionDeploymentContract() {
   for (const requiredSnippet of [
     '"${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
-    "../data/db:/db",
-    "../data/backups:/backups",
-    "../data/cache:/data/cache",
+    "${RIVIAMIGO_DATA_DIR:-../data}/db:/db",
+    "${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups",
+    "${RIVIAMIGO_DATA_DIR:-../data}/cache:/data/cache",
     "redis:",
   ]) {
     if (!productionCompose.includes(requiredSnippet)) {

@@ -6,8 +6,9 @@
  * secrets and is never copied into this repository or logged by this script.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +30,7 @@ const compose = [
 ];
 let productionStarted = false;
 let productionEnvironment;
+let productionDataRoot;
 
 function run(command, commandArgs, options = {}) {
   return execFileSync(command, commandArgs, { cwd: root, stdio: 'inherit', ...options });
@@ -128,10 +130,12 @@ function sortJson(value) {
 async function verifyProduction() {
   if (!productionEnv || !existsSync(productionEnv))
     throw new Error('--production-env must point to a valid, ephemeral production env file.');
+  productionDataRoot = mkdtempSync(join(tmpdir(), 'riviamigo-fresh-data-'));
   const environment = {
     ...process.env,
     RIVIAMIGO_ORIGIN_PORT: port,
     RIVIAMIGO_ENV_FILE: resolve(productionEnv),
+    RIVIAMIGO_DATA_DIR: productionDataRoot.replaceAll('\\', '/'),
     ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
   };
   productionEnvironment = environment;
@@ -179,4 +183,5 @@ try {
       [...compose, '--env-file', productionEnv, 'down', '-v', '--remove-orphans'],
       { cwd: root, stdio: 'inherit', env: productionEnvironment }
     );
+  if (productionDataRoot) rmSync(productionDataRoot, { recursive: true, force: true });
 }
