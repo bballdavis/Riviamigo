@@ -72,16 +72,17 @@ validation remain manual-only. Full coverage runs are kept out of the PR
 gate because they duplicate the unit-test pass; use the documented coverage
 commands when a coverage report is needed.
 
-| Area               | Current checks                                                                                                                               |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| PR Quality         | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
-| PR Frontend        | Typecheck, two-worker unit tests, and Storybook build on PRs; Playwright browser tests weekly or manually                                    |
-| PR Backend         | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
-| Runtime            | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build weekly or manually |
-| PR Security        | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
+| Area        | Current checks                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
+| PR Frontend | Typecheck, two-worker unit tests, and Storybook build on PRs; Playwright browser tests weekly or manually                                    |
+| PR Backend  | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
+| Runtime     | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build weekly or manually |
+| PR Security | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
 
 Dependency and secret failures are release blockers. High-risk Semgrep
-findings and critical/high Trivy findings are also blocking. Any reviewed
+findings and fixable critical/high Trivy findings are also blocking. Unfixed
+base-image findings remain visible for review and base-digest refreshes. Any reviewed
 exception must be time-bounded, recorded in the PR, and linked to remediation;
 it must not be silently waived. CI provides repeatable evidence, not a security
 certification or a replacement for human review. Release and exposure decisions

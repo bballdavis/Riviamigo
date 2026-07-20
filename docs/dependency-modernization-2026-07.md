@@ -31,4 +31,6 @@ Phase 2 standardizes Node 24.18.0, pnpm 11.15.1, Rust 1.97.1, PostgreSQL 18.4, T
 
 RustSec has one time-bounded warning exception for `RUSTSEC-2026-0173`, an unmaintained procedural macro pulled by the latest stable `age` release. CI expires the exception on 2026-10-01; it does not suppress vulnerabilities or high/critical advisories.
 
+The final production image passed a fresh-install smoke test and a digest-pinned Trivy 0.72.0 scan with zero fixable high/critical findings. The same scan on July 20, 2026 reported 67 high/critical Debian 13.6 base-package advisories whose status was `affected` or `fix_deferred` and for which Debian published no fixed version. CI blocks fixable high/critical findings; unfixed base-image findings remain visible in scan output and must be reevaluated whenever a new base digest is available.
+
 Final combined verification is recorded in the commits and CI run for the `dev` release-candidate branch. PostgreSQL major upgrades require dump/restore into a clean volume; Redis may fall back to a clean volume with session/provider reconnection as documented in the backup runbook.
