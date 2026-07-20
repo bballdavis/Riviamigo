@@ -1189,10 +1189,6 @@ mod tests {
 
     async fn make_app() -> axum::Router {
         use crate::middleware::auth::{AppState, JwtKeys};
-        use rsa::{
-            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
-            RsaPrivateKey,
-        };
         use std::sync::Arc;
 
         let database_url =
@@ -1204,15 +1200,9 @@ mod tests {
             .expect("create_pool");
         let redis = redis::Client::open(redis_url).expect("redis client");
 
-        let mut rng = rand::thread_rng();
-        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
-        let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key
-            .to_pkcs8_pem(LineEnding::LF)
-            .expect("pem")
-            .to_string();
-        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
-        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
+        let keys = crate::keys::generate_keys().expect("generate test keys");
+        let jwt_keys =
+            Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"));
 
         let config = crate::config::Config {
             database_url: database_url.clone(),

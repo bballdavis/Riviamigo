@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO riviamigo.charge_sessions\n           (vehicle_id, started_at, ended_at, charger_type, soc_start, soc_end, duration_minutes, kwh_added)\n           VALUES ($1, $2, $3, 'dc', $4, $5, 24, 44.0)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "charge_sessions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4d33507f572d1638c2641b4b0bad05879b25343e2d8d0e3efafb41ffaa3756b8"
+}

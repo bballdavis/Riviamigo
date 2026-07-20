@@ -720,22 +720,8 @@ mod tests {
             .expect("pool");
         let redis = redis::Client::open(&*redis_url).expect("redis");
 
-        // Generate a test RSA keypair without touching the DB.
-        let (private_pem, public_pem) = {
-            use rsa::{
-                pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
-                RsaPrivateKey,
-            };
-            let priv_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
-            (
-                priv_key.to_pkcs8_pem(LineEnding::LF).unwrap().to_string(),
-                priv_key
-                    .to_public_key()
-                    .to_public_key_pem(LineEnding::LF)
-                    .unwrap(),
-            )
-        };
-        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).unwrap());
+        let keys = crate::keys::generate_keys().expect("generate test keys");
+        let jwt_keys = Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).unwrap());
 
         let config = crate::config::Config {
             database_url: database_url.clone(),

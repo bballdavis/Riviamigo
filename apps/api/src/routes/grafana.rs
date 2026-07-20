@@ -147,7 +147,7 @@ async fn query(
             "#
         );
 
-        let rows = sqlx::query_as::<_, (f64, f64)>(&sql)
+        let rows = sqlx::query_as::<_, (f64, f64)>(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(vehicle_id)
             .bind(body.range.from)
             .bind(body.range.to)

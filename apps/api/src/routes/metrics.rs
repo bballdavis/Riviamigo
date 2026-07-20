@@ -667,7 +667,7 @@ async fn latest_telemetry_value(
         "SELECT {column}::float8 AS value, ts FROM timeseries.telemetry \
          WHERE vehicle_id = $1 AND {column} IS NOT NULL ORDER BY ts DESC LIMIT 1"
     );
-    let row = sqlx::query_as::<_, MetricSeriesPoint>(&sql)
+    let row = sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(vid)
         .fetch_optional(pool)
         .await?;
@@ -979,7 +979,7 @@ async fn summary_series(
     };
 
     if metric == "avg_efficiency" {
-        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(&sql)
+        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(vid)
             .bind(from)
             .bind(to)
@@ -998,12 +998,14 @@ async fn summary_series(
             .collect());
     }
 
-    Ok(sqlx::query_as::<_, MetricSeriesPoint>(&sql)
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 async fn telemetry_daily_series(
@@ -1027,12 +1029,14 @@ async fn telemetry_daily_series(
              WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3 AND {column} IS NOT NULL \
              ORDER BY ts"
         );
-        return Ok(sqlx::query_as::<_, MetricSeriesPoint>(&sql)
-            .bind(vid)
-            .bind(from)
-            .bind(to)
-            .fetch_all(pool)
-            .await?);
+        return Ok(
+            sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
+                .bind(vid)
+                .bind(from)
+                .bind(to)
+                .fetch_all(pool)
+                .await?,
+        );
     }
     let aggregate = match aggregation {
         "avg" | "mean" => "AVG",
@@ -1058,12 +1062,14 @@ async fn telemetry_daily_series(
          WHERE vehicle_id = $1 AND ts >= $2 AND ts <= $3 AND {column} IS NOT NULL \
          GROUP BY 1 ORDER BY 1"
     );
-    Ok(sqlx::query_as::<_, MetricSeriesPoint>(&sql)
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 #[cfg(test)]

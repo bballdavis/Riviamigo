@@ -324,10 +324,10 @@ pub async fn run_vehicle_worker(
                         }
                         raw_cleanup_tick += 1;
                         counter_flush_tick += 1;
-                        if raw_cleanup_tick % 500 == 0 {
+                        if raw_cleanup_tick.is_multiple_of(500) {
                             cleanup_raw_events(&pool, config.rivian_raw_event_retention_days).await;
                         }
-                        if counter_flush_tick % 50 == 0 {
+                        if counter_flush_tick.is_multiple_of(50) {
                             counter_batch.flush(&pool).await;
                         }
                         continue;
@@ -361,10 +361,10 @@ pub async fn run_vehicle_worker(
         handle_inbound_accounting(&pool, vehicle_id, &config, &inbound, &mut counter_batch).await;
         raw_cleanup_tick += 1;
         counter_flush_tick += 1;
-        if raw_cleanup_tick % 500 == 0 {
+        if raw_cleanup_tick.is_multiple_of(500) {
             cleanup_raw_events(&pool, config.rivian_raw_event_retention_days).await;
         }
-        if counter_flush_tick % 50 == 0 {
+        if counter_flush_tick.is_multiple_of(50) {
             counter_batch.flush(&pool).await;
         }
 
@@ -1146,7 +1146,7 @@ impl CounterBatch {
              ON CONFLICT (vehicle_id, day) DO UPDATE SET {set_clause}, updated_at = now()",
             vals = placeholders.join(", "),
         );
-        let mut q = sqlx::query(&sql)
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(self.vehicle_id)
             .bind(chrono::Utc::now().date_naive());
         for col in &cols {
@@ -1414,7 +1414,10 @@ async fn increment_counter(pool: &PgPool, vehicle_id: Uuid, column: &str) {
          ON CONFLICT (vehicle_id, day) DO UPDATE \
          SET {column} = riviamigo.rivian_stewardship_counters.{column} + 1, updated_at = now()"
     );
-    let _ = sqlx::query(&sql).bind(vehicle_id).execute(pool).await;
+    let _ = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vehicle_id)
+        .execute(pool)
+        .await;
 }
 
 fn stewardship_counter_column(column: &str) -> Option<&'static str> {

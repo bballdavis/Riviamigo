@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO riviamigo.charge_sessions\n           (vehicle_id, started_at, ended_at, kwh_added, duration_minutes)\n           VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2d92953fb8f629c2c157c451acc9d60904205db337ff69a75e6030f01fdc2b57"
+}

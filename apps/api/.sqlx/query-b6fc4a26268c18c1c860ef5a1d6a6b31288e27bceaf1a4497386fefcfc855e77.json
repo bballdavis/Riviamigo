@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO riviamigo.vehicles (user_id, rivian_vehicle_id, model, name) VALUES ($1, $2, $3, $4) RETURNING id",
+  "query": "INSERT INTO riviamigo.trips (vehicle_id, started_at, ended_at) VALUES ($1, $2, $3) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "vehicles",
+            "table": "trips",
             "name": "id"
           }
         }
@@ -18,14 +18,13 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text",
-        "Text",
-        "Text"
+        "Timestamptz",
+        "Timestamptz"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "455e44645dd3a935ba8d30f3cf45694cc486b878ed13a00a57210ce9f1a53f33"
+  "hash": "b6fc4a26268c18c1c860ef5a1d6a6b31288e27bceaf1a4497386fefcfc855e77"
 }

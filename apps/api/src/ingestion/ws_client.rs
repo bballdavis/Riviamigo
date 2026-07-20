@@ -679,7 +679,8 @@ async fn connect_and_subscribe(
                 "u-sess": &tokens.user_session_token
             }
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await?;
     let _ = tx
@@ -702,7 +703,7 @@ async fn connect_and_subscribe(
                     .send(WsInboundEvent {
                         kind: WsInboundKind::Control,
                         received_at: Utc::now(),
-                        raw: t.clone(),
+                        raw: t.to_string(),
                         message_type: message_type.clone(),
                         telemetry: None,
                     })
@@ -734,7 +735,7 @@ async fn connect_and_subscribe(
             "variables": { "vehicleID": rivian_veh_id }
         }
     });
-    ws.send(Message::Text(sub.to_string())).await?;
+    ws.send(Message::Text(sub.to_string().into())).await?;
     let _ = tx
         .send(WsInboundEvent {
             kind: WsInboundKind::Control,
@@ -748,8 +749,10 @@ async fn connect_and_subscribe(
         .await;
 
     if subscription.parallax_tx.is_some() {
-        ws.send(Message::Text(parallax::subscription_message(rivian_veh_id)))
-            .await?;
+        ws.send(Message::Text(
+            parallax::subscription_message(rivian_veh_id).into(),
+        ))
+        .await?;
         tracing::info!(
             vehicle_id = %vehicle_id,
             rvm_count = parallax::CAPTURE_RVMS.len(),
@@ -800,7 +803,7 @@ async fn connect_and_subscribe(
                                         .send(WsInboundEvent {
                                             kind: WsInboundKind::Control,
                                             received_at,
-                                            raw: text,
+                                            raw: text.to_string(),
                                             message_type: Some("parallax_next".into()),
                                             telemetry: None,
                                         })
@@ -871,7 +874,7 @@ async fn connect_and_subscribe(
                             Ok(inbound) => {
                                 let _ = tx.send(WsInboundEvent {
                                     received_at: Utc::now(),
-                                    raw: text,
+                                    raw: text.to_string(),
                                     message_type,
                                     ..inbound
                                 }).await;
@@ -881,7 +884,7 @@ async fn connect_and_subscribe(
                                 let _ = tx.send(WsInboundEvent {
                                     kind: WsInboundKind::Control,
                                     received_at: Utc::now(),
-                                    raw: text,
+                                    raw: text.to_string(),
                                     message_type,
                                     telemetry: None,
                                 }).await;
@@ -943,14 +946,14 @@ async fn connect_and_subscribe(
     }
 }
 
-fn is_rivian_connection_ttl_expired(frame: Option<&CloseFrame<'_>>) -> bool {
+fn is_rivian_connection_ttl_expired(frame: Option<&CloseFrame>) -> bool {
     frame.is_some_and(|f| {
         u16::from(f.code) == RIVIAN_CONNECTION_TTL_EXPIRED_CODE
-            && f.reason.as_ref() == RIVIAN_CONNECTION_TTL_EXPIRED_REASON
+            && f.reason.as_str() == RIVIAN_CONNECTION_TTL_EXPIRED_REASON
     })
 }
 
-fn is_rivian_no_active_subscriptions(frame: Option<&CloseFrame<'_>>) -> bool {
+fn is_rivian_no_active_subscriptions(frame: Option<&CloseFrame>) -> bool {
     frame.is_some_and(|f| u16::from(f.code) == RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE)
 }
 
@@ -1130,7 +1133,6 @@ fn rejected_vehicle_state_field(message: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::borrow::Cow;
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
     #[test]
@@ -1155,7 +1157,7 @@ mod tests {
     fn classifies_rivian_ttl_close_as_renewable() {
         let frame = CloseFrame {
             code: CloseCode::Library(RIVIAN_CONNECTION_TTL_EXPIRED_CODE),
-            reason: Cow::Borrowed(RIVIAN_CONNECTION_TTL_EXPIRED_REASON),
+            reason: RIVIAN_CONNECTION_TTL_EXPIRED_REASON.into(),
         };
 
         assert!(is_rivian_connection_ttl_expired(Some(&frame)));
@@ -1165,11 +1167,11 @@ mod tests {
     fn does_not_classify_other_rivian_closes_as_ttl() {
         let no_subscription_frame = CloseFrame {
             code: CloseCode::Library(4410),
-            reason: Cow::Borrowed("Socket with no active subscriptions, disconnecting"),
+            reason: "Socket with no active subscriptions, disconnecting".into(),
         };
         let wrong_reason_frame = CloseFrame {
             code: CloseCode::Library(RIVIAN_CONNECTION_TTL_EXPIRED_CODE),
-            reason: Cow::Borrowed("Something else"),
+            reason: "Something else".into(),
         };
 
         assert!(!is_rivian_connection_ttl_expired(Some(
@@ -1183,7 +1185,7 @@ mod tests {
     fn classifies_no_active_subscription_close() {
         let frame = CloseFrame {
             code: CloseCode::Library(RIVIAN_NO_ACTIVE_SUBSCRIPTIONS_CODE),
-            reason: Cow::Borrowed("Socket with no active subscriptions, disconnecting"),
+            reason: "Socket with no active subscriptions, disconnecting".into(),
         };
 
         assert!(is_rivian_no_active_subscriptions(Some(&frame)));
