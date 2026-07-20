@@ -34,6 +34,8 @@ export interface RichSeries {
   filterable?: boolean;
   /** Opt out supporting/derived line series from display curve shaping. */
   smoothable?: boolean;
+  /** Stack bar values with other bar series carrying the same ID. */
+  stackId?: string;
 }
 
 export interface RichTimeSeriesChartProps {
@@ -284,6 +286,72 @@ export function getUPlotBarRadius(maxBarPx: number): [number, number] {
   return [Math.min(0.5, CHART_BAR_STYLE.radius / Math.max(1, maxBarPx)), 0];
 }
 
+function buildStackedBarPaths(
+  priorStackIndices: number[],
+  followingStackIndices: number[],
+  maxBarPx: number,
+): uPlot.Series.PathBuilder {
+  return (self, seriesIndex, idx0, idx1) => uPlot.orient(
+    self,
+    seriesIndex,
+    (series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim) => {
+      // RichTimeSeriesChart is an ordinary horizontal time/value chart. Keep a
+      // safe fallback for a future vertical series rather than drawing it wrong.
+      if (scaleX.ori !== 0) {
+        return uPlot.paths.bars!({
+          size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
+          radius: 0,
+        })(self, seriesIndex, idx0, idx1);
+      }
+
+      const xPositions = dataX.map((value) => Math.round(valToPosX(value, scaleX, xDim, xOff)));
+      let minimumSpacing = Number.POSITIVE_INFINITY;
+      for (let index = 1; index < xPositions.length; index += 1) {
+        const spacing = Math.abs(xPositions[index]! - xPositions[index - 1]!);
+        if (spacing > 0 && spacing < minimumSpacing) minimumSpacing = spacing;
+      }
+      const barWidth = Math.max(1, Math.min(maxBarPx, Number.isFinite(minimumSpacing) ? minimumSpacing * CHART_BAR_STYLE.slotRatio : maxBarPx));
+      const halfWidth = barWidth / 2;
+      const fill = new Path2D();
+
+      const stackBaseAt = (pointIndex: number) => priorStackIndices.reduce((total, priorIndex) => {
+        const value = (self.data[priorIndex] as Array<number | null | undefined>)[pointIndex];
+        return total + (value != null && Number.isFinite(value) ? value : 0);
+      }, 0);
+      const isTopOfStack = (pointIndex: number) => followingStackIndices.every((followingIndex) => {
+        const value = (self.data[followingIndex] as Array<number | null | undefined>)[pointIndex];
+        return value == null || !Number.isFinite(value);
+      });
+
+      for (let pointIndex = idx0; pointIndex <= idx1; pointIndex += 1) {
+        const value = dataY[pointIndex];
+        if (value == null || !Number.isFinite(value)) continue;
+
+        const base = stackBaseAt(pointIndex);
+        const left = xPositions[pointIndex]! - halfWidth;
+        const right = xPositions[pointIndex]! + halfWidth;
+        const yTop = Math.round(valToPosY(base + value, scaleY, yDim, yOff));
+        const yBottom = Math.round(valToPosY(base, scaleY, yDim, yOff));
+        const top = Math.min(yTop, yBottom);
+        const bottom = Math.max(yTop, yBottom);
+        const radius = isTopOfStack(pointIndex)
+          ? Math.min(CHART_BAR_STYLE.radius, halfWidth, (bottom - top) / 2)
+          : 0;
+
+        fill.moveTo(left, bottom);
+        fill.lineTo(left, top + radius);
+        if (radius > 0) fill.quadraticCurveTo(left, top, left + radius, top);
+        fill.lineTo(right - radius, top);
+        if (radius > 0) fill.quadraticCurveTo(right, top, right, top + radius);
+        fill.lineTo(right, bottom);
+        fill.closePath();
+      }
+
+      return { fill, stroke: null };
+    },
+  );
+}
+
 function estimateYLabelWidth(labels: string[]): number {
   let maxLen = 4;
   for (const label of labels) {
@@ -335,10 +403,58 @@ export function buildRichTimeSeriesUPlotSeries(
       if (seriesMode === 'bar') {
         const maxBarPx = barCount > 30 ? 40 : barCount > 15 ? 60 : CHART_BAR_STYLE.maxWidth;
         next.fill = color;
-        next.paths = uPlot.paths.bars!({
+        const priorStackIndices = item.stackId
+          ? items.flatMap((candidate, candidateIndex) => (
+            candidateIndex < index && candidate.stackId === item.stackId && (candidate.mode ?? mode) === 'bar'
+              ? [candidateIndex + 1]
+              : []
+          ))
+          : [];
+        const followingStackIndices = item.stackId
+          ? items.flatMap((candidate, candidateIndex) => (
+            candidateIndex > index && candidate.stackId === item.stackId && (candidate.mode ?? mode) === 'bar'
+              ? [candidateIndex + 1]
+              : []
+          ))
+          : [];
+        const stackBaseAt = (self: uPlot, seriesIndex: number, pointIndex: number) => {
+          const ownValue = (self.data[seriesIndex] as Array<number | null | undefined>)[pointIndex];
+          if (ownValue == null || !Number.isFinite(ownValue)) return null;
+          return priorStackIndices.reduce((total, priorIndex) => {
+            const value = (self.data[priorIndex] as Array<number | null | undefined>)[pointIndex];
+            return total + (value != null && Number.isFinite(value) ? value : 0);
+          }, 0);
+        };
+        const barOptions: uPlot.Series.BarsPathBuilderOpts = {
           size: [CHART_BAR_STYLE.slotRatio, maxBarPx],
-          radius: getUPlotBarRadius(maxBarPx),
-        });
+          radius: item.stackId ? 0 : getUPlotBarRadius(maxBarPx),
+        };
+        if (item.stackId) {
+          barOptions.disp = {
+            y0: {
+              unit: 1,
+              values: (self, seriesIndex, idx0, idx1) => Array.from(
+                { length: idx1 - idx0 + 1 },
+                (_, offset) => stackBaseAt(self, seriesIndex, idx0 + offset),
+              ),
+            },
+            y1: {
+              unit: 1,
+              values: (self, seriesIndex, idx0, idx1) => Array.from(
+                { length: idx1 - idx0 + 1 },
+                (_, offset) => {
+                  const pointIndex = idx0 + offset;
+                  const base = stackBaseAt(self, seriesIndex, pointIndex);
+                  const value = (self.data[seriesIndex] as Array<number | null | undefined>)[pointIndex];
+                  return base == null || value == null || !Number.isFinite(value) ? null : base + value;
+                },
+              ),
+            },
+          };
+        }
+        next.paths = item.stackId
+          ? buildStackedBarPaths(priorStackIndices, followingStackIndices, maxBarPx)
+          : uPlot.paths.bars!(barOptions);
       }
       if (seriesMode === 'scatter') next.paths = () => null;
       if (stepInterpolation && (seriesMode === 'line' || seriesMode === 'area')) {
@@ -455,7 +571,7 @@ export function RichTimeSeriesChart({
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
       `${interactionMode}|` +
-      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
+      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
     [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
   );
@@ -681,9 +797,10 @@ export function RichTimeSeriesChart({
               }
             }
 
+            const tooltipLineCount = rows.length + (tooltipHeader ? 1 : 0) + (tooltipSubHeader ? 1 : 0);
             setTooltip({
               left: Math.min(Math.max((u.cursor.left ?? 0) + 16, 12), Math.max(12, u.width - 180)),
-              top: Math.max((u.cursor.top ?? 0) + 12, 12),
+              top: Math.max(12, Math.min((u.cursor.top ?? 0) + 12, u.height - tooltipLineCount * 18 - 16)),
               text: [tooltipHeader, tooltipSubHeader, ...rows].filter(Boolean).join('\n'),
             });
           },
@@ -781,7 +898,7 @@ export function RichTimeSeriesChart({
       ) : null}
       {tooltip ? (
         <div
-          className="pointer-events-none absolute z-10 whitespace-pre rounded-md border border-border-strong bg-bg-surface px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
+          className="pointer-events-none absolute z-30 whitespace-pre rounded-md border border-border-strong bg-bg-surface px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
           style={{ left: tooltip.left, top: tooltip.top }}
         >
           {tooltip.text}

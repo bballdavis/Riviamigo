@@ -884,8 +884,8 @@ describe('DashboardChartWidget — phantom_drain', () => {
   it('renders chart when drain data is present', () => {
     renderChart('phantom-drain');
     expectChartHasData('No phantom drain data for this period');
-    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('Drain Rate|SoC Lost|Parked|Periods');
-    expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-only-series')).toBe('SoC Lost|Parked|Periods');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-series')).toBe('Drain session 1|Daily average rate|Parked|Drain sessions');
+    expect(screen.getByTestId('rich-chart').getAttribute('data-tooltip-only-series')).toBe('Daily average rate|Parked|Drain sessions');
   });
 
   it('shows empty state when no drain data', () => {
@@ -925,7 +925,7 @@ describe('buildPhantomDrainDailySeries', () => {
     points.forEach((point) => expect(point.drainRate).toBeCloseTo(0.2));
   });
 
-  it('duration-weights multiple periods that contribute to one day', () => {
+  it('aggregates multiple same-day periods into one daily bar', () => {
     const periods = [
       {
         ...basePeriod,

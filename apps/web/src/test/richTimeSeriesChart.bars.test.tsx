@@ -39,4 +39,17 @@ describe('RichTimeSeriesChart bar rendering', () => {
     expect(getUPlotBarRadius(78)).toEqual([8 / 78, 0]);
     expect(getUPlotBarRadius(40)).toEqual([0.2, 0]);
   });
+
+  it('keeps stack segments in the shared uPlot bar renderer', () => {
+    const series = buildRichTimeSeriesUPlotSeries(
+      [
+        { key: 'first', label: 'First', values: [1], mode: 'bar', stackId: 'daily' },
+        { key: 'second', label: 'Second', values: [2], mode: 'bar', stackId: 'daily' },
+      ],
+      { barCount: 1 },
+    );
+
+    expect(series[1]?.paths).toBeDefined();
+    expect(series[2]?.paths).toBeDefined();
+  });
 });

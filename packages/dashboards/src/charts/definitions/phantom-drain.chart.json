@@ -1,11 +1,11 @@
 {
   "id": "phantom-drain",
-  "title": "Phantom Drain Rate",
-  "description": "Duration-weighted battery drain rate during validated parked periods.",
+  "title": "Daily Phantom Drain",
+  "description": "Battery lost during validated parked periods, grouped by day.",
   "pages": ["overview", "battery"],
   "source": "phantom_drain",
   "mode": "bar",
-  "yUnit": "%/h",
+  "yUnit": "% SoC lost",
   "defaultSize": { "w": 6, "h": 4 },
   "minSize": { "w": 4, "h": 3 },
   "emptyTitle": "No phantom drain data for this period"

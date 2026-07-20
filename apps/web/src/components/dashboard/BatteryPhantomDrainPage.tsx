@@ -1,5 +1,5 @@
 import React from 'react';
-import { getChartDefinition, PhantomDrainChart, SensorChipSummary } from '@riviamigo/dashboards';
+import { DashboardChartWidget, SensorChipSummary, type WidgetInstance } from '@riviamigo/dashboards';
 import { usePhantomDrainPeriods } from '@riviamigo/hooks';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
 import { DataTable, TableControls, phantomDrainColumns } from '@riviamigo/ui/tables';
@@ -7,6 +7,19 @@ import { formatPercent } from '@riviamigo/ui/lib/utils';
 import { DashboardPageShell, type DashboardPageShellRenderState } from './DashboardPageShell';
 import type { DashboardPageProps } from './DashboardPage';
 import { buildPhantomDrainSummaryCards, summarizePhantomDrainPeriods } from './phantomDrainSummary';
+
+const PHANTOM_DRAIN_CHART_INSTANCE: WidgetInstance = {
+  id: 'd2000002-0000-0000-0000-000000000010',
+  componentType: 'chart',
+  definitionId: 'catalog',
+  layout: { x: 0, y: 0, w: 12, h: 10 },
+  options: {
+    page: 'battery',
+    chartId: 'phantom-drain',
+    chartIds: ['soc-history', 'range-history', 'phantom-drain', 'battery-capacity-mileage', 'projected-range-mileage'],
+    showPicker: true,
+  },
+};
 
 function formatRatioPercent(value: number | null | undefined, decimals = 0) {
   if (value == null || Number.isNaN(value)) return null;
@@ -66,10 +79,6 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
 
   const summary = React.useMemo(() => summarizePhantomDrainPeriods(periods), [periods]);
   const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
-  const chartDefinition = getChartDefinition('phantom-drain');
-  const chartTitle = chartDefinition?.title ?? 'Phantom Drain Rate';
-  const chartDescription = chartDefinition?.description ?? 'Duration-weighted battery drain rate during validated parked periods.';
-
   return (
     <div className="grid gap-4 min-w-0">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -85,23 +94,11 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
         ))}
       </div>
 
-      <section className="min-w-0" aria-labelledby="phantom-drain-chart-title" data-testid="phantom-drain-chart-section">
-        <div className="mb-2">
-          <h2 id="phantom-drain-chart-title" className="text-sm font-medium uppercase tracking-wider text-fg-secondary">
-            {chartTitle}
-          </h2>
-          <p className="mt-0.5 text-xs text-fg-tertiary">{chartDescription}</p>
-        </div>
-        <PhantomDrainChart
-          periods={periods}
-          loading={isLoading}
-          height={300}
-          emptyTitle={chartDefinition?.emptyTitle}
-          yUnit={chartDefinition?.yUnit}
-        />
+      <section className="h-[380px] min-w-0" data-testid="phantom-drain-chart-section">
+        <DashboardChartWidget instance={PHANTOM_DRAIN_CHART_INSTANCE} ctx={ctx} />
       </section>
 
-      <div className="min-w-0 rounded-xl border border-border bg-bg-surface p-3">
+      <div data-testid="phantom-drain-periods-table" className="min-w-0 rounded-xl border border-border p-3">
         <TableControls
           search={search}
           onSearchChange={setSearch}

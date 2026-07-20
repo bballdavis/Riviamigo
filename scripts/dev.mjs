@@ -311,6 +311,25 @@ async function startInfrastructure() {
   let nextProgressLog = Date.now() + 15000;
   let dbReady = false;
   while (Date.now() < deadline) {
+    const { code: idCode, stdout: idOutput } = await capture('docker', [
+      'compose', '-f', composeFile, 'ps', '-q', 'timescaledb',
+    ]);
+    const containerId = idOutput.trim();
+    if (idCode !== 0 || !containerId) {
+      throw new Error('TimescaleDB container was not created. Inspect docker compose logs timescaledb.');
+    }
+
+    const { code: statusCode, stdout: statusOutput } = await capture('docker', [
+      'inspect', '--format', '{{.State.Status}}', containerId,
+    ]);
+    const status = statusOutput.trim();
+    if (statusCode === 0 && ['exited', 'dead'].includes(status)) {
+      const { stdout: logs } = await capture('docker', [
+        'compose', '-f', composeFile, 'logs', '--tail', '40', 'timescaledb',
+      ]);
+      throw new Error(`TimescaleDB container stopped during startup (${status}).\n${stripAnsi(logs).trim()}`);
+    }
+
     const { code } = await capture('docker', [
       'compose', '-f', composeFile, 'exec', '-T', 'timescaledb', 'pg_isready', '-U', 'riviamigo',
     ]);

@@ -29,6 +29,10 @@ pnpm docs:check
 pnpm docs:build
 ```
 
+The development and production Compose stacks both use PostgreSQL 18 with
+TimescaleDB 2.28.3, but they use separate volumes and data layouts. Keep the
+development volume separate from production data.
+
 ## Architecture
 
 - [Backend data flow](./architecture/backend-data-flow.md) follows Rivian connectivity, ingestion, storage, and API delivery.

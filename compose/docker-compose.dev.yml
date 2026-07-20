@@ -8,7 +8,7 @@ services:
     ports:
       - '${DEV_POSTGRES_PORT:-5432}:5432'
     volumes:
-      - timescaledb_data:/var/lib/postgresql
+      - timescaledb_data_pg18:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U riviamigo']
       interval: 5s
@@ -96,7 +96,7 @@ services:
           memory: 512M
 
 volumes:
-  timescaledb_data:
+  timescaledb_data_pg18:
   redis_data:
   garage_meta:
   garage_data:
