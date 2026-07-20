@@ -953,6 +953,36 @@ mod tests {
         app.oneshot(req).await.unwrap()
     }
 
+    async fn seed_test_user(email: &str, password: &str) {
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        let password_hash = argon2_hash(password).expect("hash test password");
+        sqlx::query(
+            "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, 'user')",
+        )
+        .bind(email)
+        .bind(password_hash)
+        .execute(&pool)
+        .await
+        .expect("seed test user");
+    }
+
+    async fn delete_test_user(email: &str) {
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
+        let pool = crate::db::pool::create_pool(&database_url)
+            .await
+            .expect("create_pool");
+        sqlx::query("DELETE FROM riviamigo.users WHERE email = $1")
+            .bind(email)
+            .execute(&pool)
+            .await
+            .expect("delete test user");
+    }
+
     // ── pure unit tests (no DB needed) ───────────────────────────────────────
 
     #[test]
@@ -1131,23 +1161,15 @@ mod tests {
             body.get("access_token").is_some(),
             "body should contain access_token"
         );
+        delete_test_user(&unique_email).await;
     }
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn login_wrong_password() {
         let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
-        // Register first
+        seed_test_user(&unique_email, "correctpassword123").await;
         let app = make_app().await;
-        post_json(
-            app.clone(),
-            "/v1/auth/register",
-            serde_json::json!({
-                "email": unique_email,
-                "password": "correctpassword123"
-            }),
-        )
-        .await;
         // Try to log in with wrong password
         let resp = post_json(
             app,
@@ -1163,23 +1185,15 @@ mod tests {
             StatusCode::UNAUTHORIZED,
             "wrong password should return 401"
         );
+        delete_test_user(&unique_email).await;
     }
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn login_succeeds() {
         let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
+        seed_test_user(&unique_email, "correctpassword123").await;
         let app = make_app().await;
-        // Register first
-        post_json(
-            app.clone(),
-            "/v1/auth/register",
-            serde_json::json!({
-                "email": unique_email,
-                "password": "correctpassword123"
-            }),
-        )
-        .await;
         // Login
         let resp = post_json(
             app,
@@ -1203,28 +1217,29 @@ mod tests {
             body.get("access_token").is_some(),
             "login response should have access_token"
         );
+        delete_test_user(&unique_email).await;
     }
 
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn logout_clears_cookie() {
         let unique_email = format!("test_{}@example.com", uuid::Uuid::new_v4());
+        seed_test_user(&unique_email, "correctpassword123").await;
         let app = make_app().await;
 
-        // Register (auto-logs in)
-        let reg_resp = post_json(
+        let login_resp = post_json(
             app.clone(),
-            "/v1/auth/register",
+            "/v1/auth/login",
             serde_json::json!({
                 "email": unique_email,
                 "password": "correctpassword123"
             }),
         )
         .await;
-        let set_cookie = reg_resp
+        let set_cookie = login_resp
             .headers()
             .get("set-cookie")
-            .expect("should have Set-Cookie after register")
+            .expect("should have Set-Cookie after login")
             .to_str()
             .unwrap()
             .to_string();
@@ -1277,5 +1292,6 @@ mod tests {
             StatusCode::NO_CONTENT,
             "bootstrap after logout should quietly return 204"
         );
+        delete_test_user(&unique_email).await;
     }
 }

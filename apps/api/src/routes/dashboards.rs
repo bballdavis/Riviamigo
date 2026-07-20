@@ -703,7 +703,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires DATABASE_URL"]
     async fn require_admin_returns_403_not_500_for_non_admin() {
-        use crate::middleware::auth::{AppState, JwtKeys};
+        use crate::middleware::auth::{issue_access_token, AppState, JwtKeys};
         use axum::{
             body::Body,
             http::{Request, StatusCode},
@@ -767,33 +767,18 @@ mod tests {
         };
         let app = crate::routes::build_router(state);
 
-        // Register a fresh non-admin user.
+        // Seed a non-admin directly so this test does not consume the one-time
+        // first-user registration flow shared by the auth integration tests.
         let email = format!("require-admin-test-{}@example.com", uuid::Uuid::new_v4());
-        let reg_req = Request::builder()
-            .method("POST")
-            .uri("/v1/auth/register")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                serde_json::to_vec(
-                    &serde_json::json!({"email": email, "password": "strongpassword123"}),
-                )
-                .unwrap(),
-            ))
-            .unwrap();
-        let reg_resp = app.clone().oneshot(reg_req).await.unwrap();
-        assert!(
-            reg_resp.status().is_success(),
-            "registration failed: {}",
-            reg_resp.status()
-        );
-
-        let reg_body = axum::body::to_bytes(reg_resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let tokens: serde_json::Value = serde_json::from_slice(&reg_body).unwrap();
-        let access_token = tokens["access_token"]
-            .as_str()
-            .expect("access_token in response");
+        let user_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO riviamigo.users (email, password_hash, role) VALUES ($1, $2, 'user') RETURNING id",
+        )
+        .bind(&email)
+        .bind("$argon2id$v=19$m=19456,t=2,p=1$cml2aWFtaWdvLXRlc3Q$wGJbQjdJ+E67H+YJjVqjDlUEP2r+lDVeVn/I8Hbm7Rk")
+        .fetch_one(&pool)
+        .await
+        .expect("seed non-admin user");
+        let access_token = issue_access_token(user_id, None, &jwt_keys).expect("issue token");
 
         // Non-admin trying to update a global dashboard must get 403 (not 500).
         let req = Request::builder()
