@@ -74,6 +74,7 @@ ENV XDG_CACHE_HOME=/data/cache
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl libssl3 nginx tini util-linux \
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled /usr/share/nginx/html \
+        /usr/local/bin/gosu \
     && groupadd -r -g 1001 riviamigo \
     && useradd -r -u 1001 -g 1001 riviamigo
 
