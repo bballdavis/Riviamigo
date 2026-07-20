@@ -1,0 +1,9 @@
+{
+  "node": "24.18.0",
+  "pnpm": "11.15.1",
+  "rust": "1.97.1",
+  "postgres": "18.4",
+  "timescaledb": "2.28.3-pg18",
+  "redis": "8.8.0-alpine",
+  "garage": "2.3.0"
+}
