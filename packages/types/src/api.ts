@@ -857,6 +857,11 @@ export interface AuthSetupResponse {
   setup_required: boolean;
 }
 
+export interface ChangePasswordBody {
+  current_password: string;
+  new_password: string;
+}
+
 export interface AccountInvitationPreview {
   email: string;
   expires_at: string;

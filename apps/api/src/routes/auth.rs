@@ -45,6 +45,10 @@ pub fn metadata_router() -> Router<AppState> {
         )
 }
 
+pub fn protected_router() -> Router<AppState> {
+    Router::new().route("/auth/password", post(change_password))
+}
+
 #[derive(Deserialize)]
 struct RegisterBody {
     email: String,
@@ -66,6 +70,12 @@ struct InvitationTokenBody {
 struct AcceptAccountInvitationBody {
     token: String,
     password: String,
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordBody {
+    current_password: String,
+    new_password: String,
 }
 
 #[derive(Serialize)]
@@ -118,7 +128,7 @@ async fn register(
     if body.email.len() > 254 {
         return Err(AppError::Validation("email too long".into()));
     }
-    if body.email.is_empty() || !body.email.contains('@') || body.password.len() < MIN_PASSWORD_LEN
+    if body.email.is_empty() || !body.email.contains('@') || !password_meets_minimum(&body.password)
     {
         return Err(AppError::Validation(
             "valid email required, password min 12 chars".into(),
@@ -206,7 +216,7 @@ async fn accept_account_invitation(
     State(state): State<AppState>,
     Json(body): Json<AcceptAccountInvitationBody>,
 ) -> Result<Response, AppError> {
-    if body.password.len() < MIN_PASSWORD_LEN {
+    if !password_meets_minimum(&body.password) {
         return Err(AppError::Validation("password min 12 chars".into()));
     }
     let token_hash = sha2_hash(body.token.trim());
@@ -305,6 +315,10 @@ fn validate_account_invitation(row: &sqlx::postgres::PgRow) -> Result<(), AppErr
         return Err(AppError::Validation("invitation expired".into()));
     }
     Ok(())
+}
+
+fn password_meets_minimum(password: &str) -> bool {
+    password.len() >= MIN_PASSWORD_LEN
 }
 
 // A well-formed Argon2 hash of a random dummy password. Used to perform a
@@ -462,6 +476,55 @@ async fn logout(
     }
     let clear_cookie = refresh_cookie("", 0);
     Ok(([("Set-Cookie", clear_cookie)], StatusCode::NO_CONTENT))
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<ChangePasswordBody>,
+) -> Result<Response, AppError> {
+    if !password_meets_minimum(&body.new_password) {
+        return Err(AppError::Validation("password min 12 chars".into()));
+    }
+
+    let mut tx = state.pool.begin().await?;
+    let current_password_hash: String =
+        sqlx::query_scalar("SELECT password_hash FROM riviamigo.users WHERE id = $1 FOR UPDATE")
+            .bind(auth.user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+    verify_password(&body.current_password, &current_password_hash)
+        .map_err(|_| AppError::Validation("current password is incorrect".into()))?;
+
+    let new_password_hash = hash_password(&body.new_password)?;
+    sqlx::query("UPDATE riviamigo.users SET password_hash = $1 WHERE id = $2")
+        .bind(new_password_hash)
+        .bind(auth.user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE riviamigo.refresh_tokens
+         SET revoked_at = now()
+         WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at)
+         VALUES ($1, $2, $3, now())",
+    )
+    .bind("password_changed")
+    .bind(auth.user_id)
+    .bind("user changed password and revoked active refresh sessions")
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    let clear_cookie = refresh_cookie("", 0);
+    Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
 async fn me(State(state): State<AppState>, auth: AuthUser) -> Result<impl IntoResponse, AppError> {
@@ -907,11 +970,10 @@ mod tests {
 
     #[test]
     fn register_validation_rejects_empty_email() {
-        // Mirror the handler validation: `body.email.is_empty() || body.password.len() < 8`
         let email = "";
         let password = "strongpassword123";
         assert!(
-            email.is_empty() || password.len() < 8,
+            email.is_empty() || !password_meets_minimum(password),
             "expected validation to fire for empty email"
         );
     }
@@ -919,9 +981,9 @@ mod tests {
     #[test]
     fn register_validation_rejects_short_password() {
         let email = "user@example.com";
-        let password = "short"; // < 8 chars
+        let password = "short";
         assert!(
-            email.is_empty() || password.len() < 8,
+            email.is_empty() || !password_meets_minimum(password),
             "expected validation to fire for short password"
         );
     }
@@ -929,11 +991,17 @@ mod tests {
     #[test]
     fn register_validation_passes_for_valid_input() {
         let email = "user@example.com";
-        let password = "strongpass123"; // >= 8 chars
+        let password = "strongpass123";
         assert!(
-            !(email.is_empty() || password.len() < 8),
+            !(email.is_empty() || !password_meets_minimum(password)),
             "valid input should not trigger validation error"
         );
+    }
+
+    #[test]
+    fn password_minimum_is_twelve_characters() {
+        assert!(!password_meets_minimum("elevenchars"));
+        assert!(password_meets_minimum("twelve-chars"));
     }
 
     #[test]

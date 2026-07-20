@@ -42,6 +42,7 @@ The first completed account setup becomes the installation owner. After signing 
 
 - Confirm the session survives a normal page refresh.
 - Open Settings and confirm owner-only administration surfaces are available.
+- In **Settings → Account**, confirm the password form shows its live 12-character requirement before attempting a change. A completed password change signs out every browser session; sign in again with the replacement password.
 - Do not create additional users until the first owner and access boundary are verified.
 
 ## Confirm Rivian connectivity

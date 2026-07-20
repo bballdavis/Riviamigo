@@ -202,15 +202,18 @@ export const Badge = ({ children, dot }: { children: React.ReactNode; variant?: 
 export const ThemeToggle = ({ label, showLabel }: { label?: string; showLabel?: boolean; [k: string]: unknown }) =>
   <button data-testid="theme-toggle">{showLabel ? (label ?? 'Theme') : 'Toggle theme'}</button>;
 
-export const Input = ({ label, placeholder, type, value, onChange, required }: {
-  label?: string; placeholder?: string; type?: string;
-  value?: string; onChange?: React.ChangeEventHandler<HTMLInputElement>; required?: boolean;
-}) => (
-  <div>
-    {label && <label>{label}</label>}
-    <input type={type} placeholder={placeholder} value={value} onChange={onChange} required={required} />
-  </div>
-);
+export const Input = ({ label, error, id, ...props }: {
+  label?: string; error?: string; id?: string;
+} & React.InputHTMLAttributes<HTMLInputElement>) => {
+  const inputId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
+  return (
+    <div>
+      {label && <label htmlFor={inputId}>{label}</label>}
+      <input id={inputId} {...props} />
+      {error && <p>{error}</p>}
+    </div>
+  );
+};
 
 export const Skeleton = ({ className }: { className?: string }) => <div className={className} />;
 export const ChartSkeleton = ({ className }: { className?: string }) => <div className={className} />;

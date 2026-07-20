@@ -1,4 +1,4 @@
-name: Fresh install acceptance
+name: Fresh install
 
 on:
   workflow_dispatch:
@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   fresh-install:
+    name: Checks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:

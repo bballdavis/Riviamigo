@@ -11,6 +11,7 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 const settingsMocks = vi.hoisted(() => ({
   auth: {
     logout: vi.fn(),
+    clearSession: vi.fn(),
     accessToken: undefined as string | undefined,
     defaultVehicleId: 'v1',
     setDefaultVehicleId: vi.fn(),
@@ -47,6 +48,10 @@ const dashboardMocks = vi.hoisted(() => ({
   restoreMutate: vi.fn(),
 }));
 
+const hooksMocks = vi.hoisted(() => ({
+  changePassword: vi.fn().mockResolvedValue(undefined),
+}));
+
 const mockNavigate = vi.fn();
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -56,6 +61,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 vi.mock('@riviamigo/hooks', () => ({
   api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
+    changePassword: hooksMocks.changePassword,
     listApiKeys: vi.fn().mockResolvedValue([]),
     getApiCatalog: vi.fn().mockResolvedValue({
       endpoints: [
@@ -277,10 +283,12 @@ vi.mock('lucide-react', () => ({
   Braces: () => <svg data-testid="icon-braces" />,
   Car:    () => <svg data-testid="icon-car" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
+  Circle: () => <svg data-testid="icon-circle" />,
   Clipboard: () => <svg data-testid="icon-clipboard" />,
   Database: () => <svg data-testid="icon-database" />,
   DatabaseBackup: () => <svg data-testid="icon-database-backup" />,
   Calendar: () => <svg data-testid="icon-calendar" />,
+  Check: () => <svg data-testid="icon-check" />,
   CheckCircle2: () => <svg data-testid="icon-check-circle" />,
   AlertTriangle: () => <svg data-testid="icon-alert-triangle" />,
   CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
@@ -341,6 +349,9 @@ describe('Settings page', () => {
     vi.clearAllMocks();
     mockNavigate.mockReset();
     settingsMocks.auth.logout.mockReset();
+    settingsMocks.auth.clearSession.mockReset();
+    hooksMocks.changePassword.mockReset();
+    hooksMocks.changePassword.mockResolvedValue(undefined);
     settingsMocks.auth.setDefaultVehicleId.mockReset();
     settingsMocks.auth.setActiveVehicleId.mockReset();
     settingsMocks.auth.accessToken = undefined;
@@ -935,5 +946,29 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByText('Sign Out'));
     // logout is async; just assert the click doesn't throw
     expect(screen.getByText('Sign Out')).toBeInTheDocument();
+  });
+
+  it('shows live password requirements and changes the password only after confirmation matches', async () => {
+    renderSettings();
+    fireEvent.click(screen.getByText('Account'));
+
+    const submit = screen.getByRole('button', { name: 'Change password' });
+    expect(submit).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('0/12');
+
+    fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'current-password' } });
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'replacement-password' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'different-password' } });
+    expect(screen.getByText('Passwords do not match.')).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'replacement-password' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(hooksMocks.changePassword).toHaveBeenCalledWith({
+      current_password: 'current-password',
+      new_password: 'replacement-password',
+    }));
+    expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
   });
 });

@@ -200,22 +200,102 @@ code {
   color: var(--rm-accent);
 }
 
-.navbar__search-input {
+.navbar__search-input,
+.aa-DetachedSearchButton,
+.aa-Form {
   min-height: 2.5rem;
-  border: 1px solid var(--rm-border-default);
-  color: var(--rm-text-primary);
-  background-color: var(--rm-bg-elevated);
+  border: 1px solid var(--rm-border-default) !important;
+  color: var(--rm-text-primary) !important;
+  background-color: var(--rm-bg-elevated) !important;
+}
+
+.aa-DetachedSearchButton:focus,
+.aa-Form:focus-within {
+  border-color: var(--rm-accent) !important;
+  box-shadow: 0 0 0 2px var(--rm-accent-muted),
+    inset 0 0 0 2px var(--rm-accent-muted) !important;
+}
+
+.aa-DetachedSearchButtonIcon,
+.aa-Label svg,
+.aa-LoadingIndicator svg {
+  color: var(--rm-accent) !important;
+}
+
+.aa-Input {
+  color: var(--rm-text-primary) !important;
+  background: transparent !important;
+  caret-color: var(--rm-accent);
+}
+
+.aa-Input::placeholder {
+  color: var(--rm-text-tertiary) !important;
 }
 
 .aa-Panel,
 .aa-DetachedOverlay,
-.aa-DetachedContainer {
-  color: var(--rm-text-primary);
-  background: var(--rm-bg-surface);
+.aa-DetachedContainer,
+.aa-DetachedContainer .aa-Panel,
+.aa-DetachedFormContainer {
+  color: var(--rm-text-primary) !important;
+  background: var(--rm-bg-surface) !important;
+}
+
+.aa-DetachedOverlay {
+  background: var(--rm-bg-overlay) !important;
+}
+
+.aa-DetachedFormContainer {
+  border-color: var(--rm-border-default) !important;
 }
 
 .aa-Item[aria-selected='true'] {
-  background: var(--rm-accent-muted);
+  background: var(--rm-accent-muted) !important;
+}
+
+.aa-SourceHeaderTitle {
+  color: var(--rm-accent) !important;
+  background: var(--rm-bg-surface) !important;
+}
+
+.aa-SourceHeaderLine {
+  border-color: var(--rm-accent) !important;
+}
+
+.aa-PanelHeader {
+  color: var(--rm-text-on-accent) !important;
+  background: var(--rm-accent) !important;
+}
+
+.aa-InputWrapperSuffix,
+.aa-ClearButton,
+.aa-DetachedCancelButton,
+.aa-ItemActionButton {
+  color: var(--rm-text-secondary) !important;
+}
+
+.aa-ItemActionButton svg {
+  color: var(--rm-text-secondary) !important;
+}
+
+.aa-ClearButton:hover,
+.aa-ClearButton:focus,
+.aa-DetachedCancelButton:hover,
+.aa-DetachedCancelButton:focus,
+.aa-ItemActionButton:hover,
+.aa-ItemActionButton:focus {
+  color: var(--rm-accent) !important;
+}
+
+.aa-ItemActionButton:hover svg,
+.aa-ItemActionButton:focus svg {
+  color: var(--rm-accent) !important;
+}
+
+.aa-ItemContentDescription mark,
+.aa-ItemContent mark {
+  color: var(--rm-text-primary) !important;
+  background: var(--rm-accent-muted) !important;
 }
 
 .rm-not-found {

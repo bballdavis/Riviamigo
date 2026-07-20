@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   runtime:
-    name: Backend runtime, migrations, and containers
+    name: Checks
     runs-on: ubuntu-latest
     services:
       timescaledb:

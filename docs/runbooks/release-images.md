@@ -13,8 +13,8 @@ Enable immutable releases in repository settings. Add a tag ruleset for `YYYY.MM
 Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release in July 2026 is `2026.07.0`; a later July release is `2026.07.1`.
 
 1. Ensure `main` is the intended, validated release commit.
-2. Run **Prepare calendar release** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
-3. **Publish release image** builds the unified image for `linux/amd64` and `linux/arm64`, pushes the exact version plus `latest`, records its provenance attestation, verifies the manifest, and creates the GitHub release with `images.lock`.
+2. Run **Release prep** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
+3. **Release image** builds the unified image for `linux/amd64` and `linux/arm64`, pushes the exact version plus `latest`, records its provenance attestation, verifies the manifest, and creates the GitHub release with `images.lock`.
 4. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require repeatability should pin `IMAGE_TAG` to the exact Calendar Version.
 
 Before pushing a release tag, run `pnpm verify:release-image -- --no-cache`. It
@@ -32,7 +32,7 @@ If image publication or manifest verification fails, no GitHub release is create
 
 Pre-release publishing is manual and does not run for ordinary commits or
 merges into `dev`. After the candidate has passed its pull-request checks,
-run **Publish pre-release images** from Actions and provide a version such as
+run **Preview image** from Actions and provide a version such as
 `2026.07.0-rc.1`, `2026.07.0-beta.1`, or `2026.07.0-alpha.1`.
 
 The workflow builds the current `dev` commit for `linux/amd64` and

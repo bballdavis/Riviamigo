@@ -1,4 +1,4 @@
-name: Publish release image
+name: Release image
 
 on:
   push:
@@ -11,6 +11,7 @@ env:
 
 jobs:
   validate-tag:
+    name: Validate
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -32,6 +33,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   image:
+    name: Build image
     needs: validate-tag
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -74,6 +76,7 @@ jobs:
           push-to-registry: true
 
   release-smoke:
+    name: Smoke test
     needs: [validate-tag, image]
     runs-on: ubuntu-latest
     permissions:
@@ -97,6 +100,7 @@ jobs:
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$RELEASE_SMOKE_ENV" --image-tag "${{ needs.validate-tag.outputs.version }}"
 
   create-release:
+    name: Create release
     needs: [validate-tag, image, release-smoke]
     runs-on: ubuntu-latest
     permissions:
