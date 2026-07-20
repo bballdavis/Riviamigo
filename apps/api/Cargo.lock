@@ -3316,7 +3316,7 @@ dependencies = [
  "jsonwebtoken",
  "pem",
  "proptest",
- "rand 0.8.7",
+ "rand 0.10.2",
  "redis",
  "reqwest",
  "serde",
