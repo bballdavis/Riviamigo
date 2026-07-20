@@ -28,6 +28,8 @@ This directory is canonical for operational and process runbooks. Update it when
   Calendar Version releases, public GHCR images, pre-release images from `dev`, and recovery steps.
 - [`backup-restore.md`](./backup-restore.md)
   Recovery-package validation, clean-install restore, and incident recovery steps.
+- [`dependency-maintenance.md`](./dependency-maintenance.md)
+  Catalog ownership, upgrade grouping, runtime baselines, audits, and release qualification.
 - [`parallax-capture.md`](./parallax-capture.md)
   How to inspect, retain, disable, and remove the experimental Parallax protobuf capture.
 
