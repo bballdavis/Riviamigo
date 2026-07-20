@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '24'
+  NODE_VERSION: '24.18.0'
 
 jobs:
   quality:
@@ -36,6 +36,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Dependency policy
+        run: pnpm deps:check
+      - name: Peer dependencies
+        run: pnpm peers check
       - name: Lint
         run: pnpm turbo lint
       - name: Color-token guard

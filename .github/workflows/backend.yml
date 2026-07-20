@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       timescaledb:
-        image: timescale/timescaledb:2.26.3-pg16
+        image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
         env:
           POSTGRES_DB: riviamigo
           POSTGRES_USER: riviamigo
@@ -29,7 +29,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:7-alpine
+        image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
         ports:
           - 6379:6379
         options: >-
@@ -58,8 +58,8 @@ jobs:
       - name: Run migrations for SQLx metadata validation
         run: cargo sqlx migrate run
       - name: Check sqlx offline metadata
-        run: cargo sqlx prepare --check --workspace
+        run: cargo sqlx prepare --check --workspace -- --all-targets --all-features
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --all
+        run: cargo test --all --all-features
