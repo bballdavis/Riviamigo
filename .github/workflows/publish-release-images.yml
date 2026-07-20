@@ -112,4 +112,4 @@ jobs:
         shell: bash
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
-          gh release create "$VERSION" images.lock#images.lock --title "$VERSION" --generate-notes
+          gh release create "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
