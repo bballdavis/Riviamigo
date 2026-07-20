@@ -27,13 +27,13 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 ## Findings resolved in this release
 
-| Severity | Finding | Resolution |
-|---|---|---|
-| Critical | Production Compose publishes the web origin on the host. | Documentation requires host firewall protection plus an authenticated tunnel or identity-aware proxy before remote exposure. |
-| Critical | Production startup could fall back to database-generated signing and encryption keys. | Production validation now requires externally supplied JWT private/public and age keys. |
-| High | The former separate nginx image originally used the wrong upstream boundary. | The unified production image now runs nginx and the API together and intentionally proxies over container-local loopback. |
-| High | The production Compose topology omitted its Redis dependency and had stale ports/service documentation. | Redis is included as an internal password-protected service; Compose, user guide, runbook, and env documentation now agree. |
-| High | The API production image could not install PostgreSQL 16 client tools from its Debian base. | The runtime now uses `postgres:16-bookworm`, which includes matching `pg_dump`. |
+| Severity | Finding                                                                                                 | Resolution                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Critical | Production Compose publishes the web origin on the host.                                                | Documentation requires host firewall protection plus an authenticated tunnel or identity-aware proxy before remote exposure. |
+| Critical | Production startup could fall back to database-generated signing and encryption keys.                   | Production validation now requires externally supplied JWT private/public and age keys.                                      |
+| High     | The former separate nginx image originally used the wrong upstream boundary.                            | The unified production image now runs nginx and the API together and intentionally proxies over container-local loopback.    |
+| High     | The production Compose topology omitted its Redis dependency and had stale ports/service documentation. | Redis is included as an internal password-protected service; Compose, user guide, runbook, and env documentation now agree.  |
+| High     | The API production image could not install matching PostgreSQL client tools from its Debian base.       | The runtime now uses the pinned `postgres:18.4-bookworm` image, which includes matching `pg_dump`.                           |
 
 ## Residual risks and release requirements
 

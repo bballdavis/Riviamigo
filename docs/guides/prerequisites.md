@@ -8,6 +8,8 @@ slug: /getting-started/prerequisites/
 
 Riviamigo runs as a small Docker Compose stack. A home server, NAS that supports Docker Compose, or always-on Linux machine is a good fit.
 
+The release stack pins PostgreSQL 18.4 with TimescaleDB 2.28.3, Redis 8.8, and immutable multi-architecture image digests. Operators do not need to install Node.js, pnpm, or Rust when using the published images.
+
 ## What you need
 
 - Git and Docker Engine with Docker Compose v2 (`docker compose`).
@@ -22,3 +24,7 @@ Riviamigo runs as a small Docker Compose stack. A home server, NAS that supports
 - A UPS for a home server or NAS.
 
 The database and Redis remain inside the Compose network. The web origin publishes port 8080 by default, so host firewall and gateway configuration are part of a remote installation rather than an optional afterthought.
+
+## Building from source
+
+Contributors need Node.js 24.18.x, pnpm 11.15.1, and Rust 1.97.1. The repository pins these versions in `package.json`, `rust-toolchain.toml`, and `config/dependency-baselines.json`; use those files rather than a separately remembered toolchain version.
