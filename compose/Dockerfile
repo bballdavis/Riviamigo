@@ -26,10 +26,10 @@ RUN mkdir src && printf 'fn main() {}\n' > src/main.rs \
             CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
             AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
             CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-            PKG_CONFIG_ALLOW_CROSS=1 \
-            PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
-            OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
-            OPENSSL_INCLUDE_DIR=/usr/include; \
+            PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu=1 \
+            PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig \
+            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
+            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include; \
         target_flag='--target aarch64-unknown-linux-gnu'; \
     fi \
     && cargo build --release $target_flag \
@@ -43,10 +43,10 @@ RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql \
             CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
             AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
             CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-            PKG_CONFIG_ALLOW_CROSS=1 \
-            PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
-            OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
-            OPENSSL_INCLUDE_DIR=/usr/include; \
+            PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu=1 \
+            PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig \
+            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
+            AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include; \
         target_flag='--target aarch64-unknown-linux-gnu'; \
         binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-api; \
     fi \
