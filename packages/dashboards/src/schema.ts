@@ -7,7 +7,14 @@ export const LayoutSchema = z.object({
   h: z.number().int().min(1),
 });
 
-export const ComponentTypeSchema = z.enum(['custom', 'sensor', 'chart', 'battery', 'charging', 'table']);
+export const ComponentTypeSchema = z.enum([
+  'custom',
+  'sensor',
+  'chart',
+  'battery',
+  'charging',
+  'table',
+]);
 
 export const DashboardVisibilityRuleSchema = z.discriminatedUnion('type', [
   z.object({
@@ -17,12 +24,12 @@ export const DashboardVisibilityRuleSchema = z.discriminatedUnion('type', [
 ]);
 
 export const WidgetInstanceSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   componentType: ComponentTypeSchema,
   definitionId: z.string().min(1),
   title: z.string().optional(),
   layout: LayoutSchema,
-  options: z.record(z.unknown()).optional(),
+  options: z.record(z.string(), z.unknown()).optional(),
   visibility: z.array(DashboardVisibilityRuleSchema).optional(),
 });
 
@@ -32,13 +39,13 @@ export const DashboardControlsSchema = z.object({
 
 export const DashboardConfigSchema = z.object({
   schemaVersion: z.literal(2),
-  id: z.string().uuid(),
+  id: z.guid(),
   slug: z.string().regex(/^[a-z0-9-]+$/),
   name: z.string().min(1).max(100),
   description: z.string().optional(),
   isDefault: z.boolean(),
   isLocked: z.boolean(),
-  ownerId: z.string().uuid().nullable(),
+  ownerId: z.guid().nullable(),
   controls: DashboardControlsSchema,
   widgets: z.array(WidgetInstanceSchema),
 });
@@ -47,7 +54,10 @@ export type WidgetLayout = z.infer<typeof LayoutSchema>;
 export type DashboardComponentType = z.infer<typeof ComponentTypeSchema>;
 export type DashboardVisibilityRule = z.infer<typeof DashboardVisibilityRuleSchema>;
 export type DashboardVisibilityRuleType = DashboardVisibilityRule['type'];
-export type VehicleConnectionVisibilityValue = Extract<DashboardVisibilityRule, { type: 'vehicle-connection' }>['value'];
+export type VehicleConnectionVisibilityValue = Extract<
+  DashboardVisibilityRule,
+  { type: 'vehicle-connection' }
+>['value'];
 export type WidgetInstance = z.infer<typeof WidgetInstanceSchema>;
 export type DashboardControls = z.infer<typeof DashboardControlsSchema>;
 export type DashboardConfig = z.infer<typeof DashboardConfigSchema>;

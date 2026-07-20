@@ -49,7 +49,7 @@ export function SelectPicker<TValue extends string = string>({
 
   const firstEnabledIndex = React.useMemo(
     () => options.findIndex((option) => !option.disabled),
-    [options],
+    [options]
   );
 
   React.useEffect(() => {
@@ -104,7 +104,12 @@ export function SelectPicker<TValue extends string = string>({
 
   function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (disabled) return;
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+    if (
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowUp' ||
+      event.key === 'Enter' ||
+      event.key === ' '
+    ) {
       event.preventDefault();
       openPicker();
     }
@@ -113,13 +118,15 @@ export function SelectPicker<TValue extends string = string>({
   function handleOptionKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      const nextIndex = getEnabledIndex(index + (event.key === 'ArrowDown' ? 1 : -1), event.key === 'ArrowDown' ? 1 : -1);
+      const nextIndex = getEnabledIndex(
+        index + (event.key === 'ArrowDown' ? 1 : -1),
+        event.key === 'ArrowDown' ? 1 : -1
+      );
       setActiveIndex(nextIndex);
     } else if (event.key === 'Home' || event.key === 'End') {
       event.preventDefault();
-      const nextIndex = event.key === 'Home'
-        ? getEnabledIndex(0, 1)
-        : getEnabledIndex(options.length - 1, -1);
+      const nextIndex =
+        event.key === 'Home' ? getEnabledIndex(0, 1) : getEnabledIndex(options.length - 1, -1);
       setActiveIndex(nextIndex);
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
@@ -151,13 +158,16 @@ export function SelectPicker<TValue extends string = string>({
           'hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
           'disabled:cursor-not-allowed disabled:opacity-60',
           triggerSize,
-          triggerClassName,
+          triggerClassName
         )}
       >
-        <span className="min-w-0 flex-1 truncate">
-          {selectedOption?.label ?? placeholder}
-        </span>
-        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-fg-tertiary transition-transform', open && 'rotate-180')} />
+        <span className="min-w-0 flex-1 truncate">{selectedOption?.label ?? placeholder}</span>
+        <ChevronDown
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 text-fg-tertiary transition-transform',
+            open && 'rotate-180'
+          )}
+        />
       </button>
 
       {open ? (
@@ -169,36 +179,51 @@ export function SelectPicker<TValue extends string = string>({
             'absolute z-50 max-h-72 min-w-full overflow-y-auto rounded-lg border border-border bg-bg-elevated p-1 shadow-lg',
             menuTop,
             align === 'right' ? 'right-0' : 'left-0',
-            menuClassName,
+            menuClassName
           )}
         >
-          {options.length > 0 ? options.map((option, index) => {
-            const isSelected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                ref={(element) => { optionRefs.current[index] = element; }}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                disabled={option.disabled}
-                onClick={() => selectOption(option.value)}
-                onKeyDown={(event) => handleOptionKeyDown(event, index)}
-                className={cn(
-                  'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm text-fg transition-colors',
-                  'hover:bg-bg-surface focus:bg-bg-surface focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
-                  'disabled:cursor-not-allowed disabled:opacity-45',
-                  isSelected && 'bg-accent/10 text-accent',
-                )}
-              >
-                <span className="min-w-0 truncate">
-                  <span className="block truncate">{option.label}</span>
-                  {option.description ? <span className="mt-0.5 block truncate text-xs text-fg-tertiary">{option.description}</span> : null}
-                </span>
-                {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
-              </button>
-            );
-          }) : (
+          {options.length > 0 ? (
+            options.map((option, index) => {
+              const isSelected = option.value === value;
+              const optionAriaLabel =
+                typeof option.label === 'string'
+                  ? typeof option.description === 'string'
+                    ? `${option.label} ${option.description}`
+                    : option.label
+                  : undefined;
+              return (
+                <button
+                  key={option.value}
+                  ref={(element) => {
+                    optionRefs.current[index] = element;
+                  }}
+                  type="button"
+                  role="option"
+                  aria-label={optionAriaLabel}
+                  aria-selected={isSelected}
+                  disabled={option.disabled}
+                  onClick={() => selectOption(option.value)}
+                  onKeyDown={(event) => handleOptionKeyDown(event, index)}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm text-fg transition-colors',
+                    'hover:bg-bg-surface focus:bg-bg-surface focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+                    'disabled:cursor-not-allowed disabled:opacity-45',
+                    isSelected && 'bg-accent/10 text-accent'
+                  )}
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="block truncate">{option.label}</span>
+                    {option.description ? (
+                      <span className="mt-0.5 block truncate text-xs text-fg-tertiary">
+                        {option.description}
+                      </span>
+                    ) : null}
+                  </span>
+                  {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
+                </button>
+              );
+            })
+          ) : (
             <div className="px-3 py-2 text-sm text-fg-tertiary">No options available</div>
           )}
         </div>
