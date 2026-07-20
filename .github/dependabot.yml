@@ -45,3 +45,35 @@ updates:
     labels:
       - dependencies
       - github-actions
+
+  - package-ecosystem: docker
+    directory: /compose
+    schedule:
+      interval: weekly
+      day: monday
+      time: '08:00'
+    open-pull-requests-limit: 5
+    groups:
+      non-major-dependencies:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - docker
+
+  - package-ecosystem: docker
+    directory: /apps/api
+    schedule:
+      interval: weekly
+      day: monday
+      time: '08:00'
+    open-pull-requests-limit: 5
+    groups:
+      non-major-dependencies:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - docker

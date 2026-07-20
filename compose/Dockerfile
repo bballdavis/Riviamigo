@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM rust:1.88-slim AS api-builder
+FROM --platform=$BUILDPLATFORM rust:1.97.1-slim@sha256:754a8924e308fb20a327febeda1a07053a2b0fd7474b5ac1cc460a6d33ab18f3 AS api-builder
 ARG TARGETARCH
 WORKDIR /build/apps/api
 ENV SQLX_OFFLINE=true
@@ -53,7 +53,7 @@ RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql \
     && cargo build --release $target_flag \
     && cp "$binary_path" /build/apps/api/riviamigo-api
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
+FROM --platform=$BUILDPLATFORM node:24.18.0-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS web-builder
 RUN corepack enable
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -67,7 +67,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm --filter @riviamigo/web build
 
-FROM postgres:16-bookworm AS runtime
+FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296 AS runtime
 LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
 ENV XDG_CACHE_HOME=/data/cache
 

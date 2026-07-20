@@ -1,5 +1,5 @@
 # ── Build stage ─────────────────────────────────────────────────────────────
-FROM rust:1.88-slim AS builder
+FROM rust:1.97.1-slim@sha256:754a8924e308fb20a327febeda1a07053a2b0fd7474b5ac1cc460a6d33ab18f3 AS builder
 
 WORKDIR /app
 ENV SQLX_OFFLINE=true
@@ -19,7 +19,7 @@ COPY . .
 RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql && cargo build --release
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
-FROM postgres:16-bookworm AS runtime
+FROM postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296 AS runtime
 
 LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
 
