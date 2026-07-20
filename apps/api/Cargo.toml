@@ -43,7 +43,7 @@ jsonwebtoken    = "9"
 argon2          = "0.5"
 
 # Encryption
-age             = { version = "0.10", features = ["async"] }
+age             = { version = "0.12", features = ["async"] }
 rsa             = { version = "0.9", features = ["pem"] }
 
 # Types
