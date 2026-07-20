@@ -83,7 +83,8 @@ COPY --from=api-builder /build/apps/api/migrations ./migrations
 COPY --from=web-builder /build/apps/web/dist ./dist
 COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY compose/production-init.sh compose/production-services.sh ./
-RUN chmod 0755 /app/production-init.sh /app/production-services.sh \
+RUN sed -i 's/\r$//' /app/production-init.sh /app/production-services.sh \
+    && chmod 0755 /app/production-init.sh /app/production-services.sh \
     && mkdir -p /backups /data/cache \
     && chown -R 1001:1001 /app /backups /data/cache
 
