@@ -166,6 +166,36 @@ function verifyDevSmoke() {
   run('pnpm', ['run', 'dev:stack', '--', '--once'], { env, shell: process.platform === 'win32' });
 }
 
+function cleanupProductionDataRoot() {
+  if (!productionDataRoot) return;
+  try {
+    rmSync(productionDataRoot, { recursive: true, force: true });
+  } catch (error) {
+    if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error;
+    // PostgreSQL and Redis run as container users and can leave root-owned
+    // files in the bind-mounted disposable directory. Remove only this
+    // generated temp root through a short-lived root container, then retry.
+    const cleanup = spawnSync(
+      'docker',
+      [
+        'run',
+        '--rm',
+        '--user',
+        '0:0',
+        '--mount',
+        `type=bind,source=${productionDataRoot},target=/cleanup`,
+        'alpine:3.22.1',
+        'sh',
+        '-c',
+        'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*',
+      ],
+      { cwd: root, stdio: 'inherit' }
+    );
+    if (cleanup.status !== 0) throw error;
+    rmSync(productionDataRoot, { recursive: true, force: true });
+  }
+}
+
 try {
   ensureCleanWorktree();
   if (!['all', 'production', 'dev'].includes(mode))
@@ -183,5 +213,5 @@ try {
       [...compose, '--env-file', productionEnv, 'down', '-v', '--remove-orphans'],
       { cwd: root, stdio: 'inherit', env: productionEnvironment }
     );
-  if (productionDataRoot) rmSync(productionDataRoot, { recursive: true, force: true });
+  cleanupProductionDataRoot();
 }
