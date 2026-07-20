@@ -6,17 +6,35 @@
       {
         "ordinal": 0,
         "name": "ts",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "ts"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "odometer_miles",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "odometer_miles"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "distance_to_empty_mi",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "distance_to_empty_mi"
+          }
+        }
       }
     ],
     "parameters": {

@@ -6,37 +6,79 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "started_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "started_at"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "ended_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "ended_at"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "distance_miles",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "distance_miles"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "efficiency_wh_per_mile",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "efficiency_wh_per_mile"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "soc_start",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "soc_start"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "soc_end",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "trips",
+            "name": "soc_end"
+          }
+        }
       }
     ],
     "parameters": {

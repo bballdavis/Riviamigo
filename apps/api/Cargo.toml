@@ -2,7 +2,7 @@
 name    = "riviamigo-api"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.78"
+rust-version = "1.97"
 
 [lib]
 name = "riviamigo_api"
@@ -15,7 +15,6 @@ path = "src/main.rs"
 [dependencies]
 # Web framework
 axum            = { version = "0.8", features = ["macros", "ws"] }
-axum-extra      = { version = "0.12", features = ["typed-header"] }
 tower           = { version = "0.5", features = ["full"] }
 tower-http      = { version = "0.7", features = ["cors", "compression-gzip", "request-id", "trace", "limit", "set-header"] }
 tower_governor  = "0.8"
@@ -23,13 +22,13 @@ governor        = "0.10.4"
 
 # Async runtime
 tokio           = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 
 # Database
-sqlx            = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "uuid", "chrono", "json", "migrate"] }
+sqlx            = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-native-tls", "uuid", "chrono", "json", "migrate"] }
 
 # Cache
-redis           = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+redis           = { version = "1", features = ["tokio-comp", "connection-manager"] }
 
 # HTTP client
 reqwest         = { version = "0.13", features = ["json", "native-tls", "query"] }
@@ -39,12 +38,13 @@ serde           = { version = "1", features = ["derive"] }
 serde_json      = "1"
 
 # Auth
-jsonwebtoken    = "9"
+jsonwebtoken    = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 argon2          = "0.5"
 
 # Encryption
-age             = { version = "0.10", features = ["async"] }
-rsa             = { version = "0.9", features = ["pem"] }
+age             = { version = "0.12", features = ["async"] }
+aws-lc-rs       = "1"
+pem             = "3"
 
 # Types
 uuid            = { version = "1", features = ["v4", "serde"] }
@@ -55,7 +55,7 @@ chrono-tz       = "0.10"
 envy            = "0.4"
 
 # Error handling
-thiserror       = "1"
+thiserror       = "2"
 anyhow          = "1"
 
 # Observability
@@ -63,9 +63,7 @@ tracing                   = "0.1"
 tracing-subscriber        = { version = "0.3", features = ["env-filter", "json"] }
 
 # Utilities
-once_cell       = "1"
 futures         = "0.3"
-async-trait     = "0.1"
 base64          = "0.22"
 hex             = "0.4"
 rand            = "0.8"
@@ -77,11 +75,11 @@ http            = "1"
 url             = "2"
 
 [dev-dependencies]
-testcontainers          = "0.18"
-testcontainers-modules  = { version = "0.4", features = ["postgres"] }
+testcontainers          = "0.27"
+testcontainers-modules  = { version = "0.15", features = ["postgres"] }
 proptest                = "1"
 tokio                   = { version = "1", features = ["full", "test-util"] }
-axum-test               = "18.0.0"
+axum-test               = "21"
 
 [profile.release]
 opt-level     = 3
