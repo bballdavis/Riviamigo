@@ -20,6 +20,8 @@
     "docs:build": "pnpm --filter @riviamigo/docs build",
     "docs:serve": "pnpm --filter @riviamigo/docs serve",
     "docs:check": "node ./scripts/check-docs.mjs",
+    "deps:check": "node ./scripts/check-dependency-policy.mjs && knip --dependencies",
+    "deps:catalogs": "node ./scripts/check-dependency-policy.mjs --catalogs-only",
     "verify:fresh-install": "node ./scripts/verify-fresh-install.mjs",
     "verify:release-image": "node ./scripts/verify-release-image.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
@@ -35,7 +37,24 @@
     "eslint": "^8.57.1",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "knip": "^6.27.0",
     "prettier": "^3.9.5",
     "turbo": "^2.10.5"
+  },
+  "knip": {
+    "ignoreDependencies": [
+      "@cmfcmf/docusaurus-search-local",
+      "@cmfcmf/docusaurus-plugin-docusaurus-search-local",
+      "@riviamigo/config",
+      "@riviamigo/ui",
+      "@typescript-eslint/eslint-plugin",
+      "@typescript-eslint/parser",
+      "eslint-plugin-react",
+      "eslint-plugin-react-hooks",
+      "prettier"
+    ],
+    "ignoreBinaries": [
+      "sqlx"
+    ]
   }
 }
