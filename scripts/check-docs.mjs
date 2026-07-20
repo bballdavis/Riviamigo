@@ -199,7 +199,7 @@ function checkDocusaurusContracts() {
     "onBrokenLinks: 'throw'",
     "onBrokenAnchors: 'throw'",
     "@cmfcmf/docusaurus-search-local",
-    "label: 'User Guide'",
+    "label: 'Using Riviamigo'",
     "label: 'Operations'",
     "label: 'Reference'",
   ]) {
