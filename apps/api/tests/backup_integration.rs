@@ -47,7 +47,9 @@ impl TestApp {
             .await
             .expect("admin db connect");
         admin
-            .execute(format!("CREATE DATABASE \"{db_name}\"").as_str())
+            .execute(sqlx::AssertSqlSafe(format!(
+                "CREATE DATABASE \"{db_name}\""
+            )))
             .await
             .expect("create test database");
 

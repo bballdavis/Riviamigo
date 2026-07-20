@@ -233,7 +233,7 @@ fn collect_timestamps(v: &Value, latest: &mut Option<DateTime<Utc>>) {
         Value::Object(map) => {
             if let Some(Value::String(ts)) = map.get("timeStamp") {
                 if let Ok(dt) = ts.parse::<DateTime<Utc>>() {
-                    if latest.map_or(true, |l| dt > l) {
+                    if latest.is_none_or(|l| dt > l) {
                         *latest = Some(dt);
                     }
                 }

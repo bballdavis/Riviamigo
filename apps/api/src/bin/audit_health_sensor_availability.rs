@@ -84,7 +84,7 @@ async fn audit_sensor(
         "#
     );
 
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(vehicle_filter)
         .fetch_all(pool)
         .await?;

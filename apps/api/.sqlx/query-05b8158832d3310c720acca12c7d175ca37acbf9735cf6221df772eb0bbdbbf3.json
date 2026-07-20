@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO timeseries.telemetry (ts, vehicle_id, latitude, longitude) VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05b8158832d3310c720acca12c7d175ca37acbf9735cf6221df772eb0bbdbbf3"
+}

@@ -111,21 +111,19 @@ pub async fn bootstrap_keys(
 }
 
 pub(crate) fn generate_keys() -> anyhow::Result<BootstrappedKeys> {
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-    use rsa::RsaPrivateKey;
+    use aws_lc_rs::{
+        encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der},
+        rsa::{KeySize, PrivateDecryptingKey},
+    };
 
-    let mut rng = rand::thread_rng();
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).context("RSA key generation")?;
-
-    let jwt_private_pem = private_key
-        .to_pkcs8_pem(LineEnding::LF)
-        .context("encode private key")?
-        .to_string();
-
-    let jwt_public_pem = private_key
-        .to_public_key()
-        .to_public_key_pem(LineEnding::LF)
-        .context("encode public key")?;
+    let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048)
+        .map_err(|_| anyhow::anyhow!("RSA key generation failed"))?;
+    let private_der = AsDer::<Pkcs8V1Der>::as_der(&private_key)
+        .map_err(|_| anyhow::anyhow!("encode private key failed"))?;
+    let public_der = AsDer::<PublicKeyX509Der>::as_der(&private_key.public_key())
+        .map_err(|_| anyhow::anyhow!("encode public key failed"))?;
+    let jwt_private_pem = pem::encode(&pem::Pem::new("PRIVATE KEY", private_der.as_ref()));
+    let jwt_public_pem = pem::encode(&pem::Pem::new("PUBLIC KEY", public_der.as_ref()));
 
     let age_identity = age::x25519::Identity::generate();
     let age_key = age_identity.to_string().expose_secret().to_owned();

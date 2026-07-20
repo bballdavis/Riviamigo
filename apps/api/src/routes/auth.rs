@@ -924,21 +924,8 @@ mod tests {
 
     /// Generate an RSA-2048 key pair in PEM format for testing.
     fn generate_test_rsa_keys() -> (String, String) {
-        use rsa::{
-            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
-            RsaPrivateKey,
-        };
-        let mut rng = rand::thread_rng();
-        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate rsa key");
-        let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key
-            .to_pkcs8_pem(LineEnding::LF)
-            .expect("private pem")
-            .to_string();
-        let public_pem = pub_key
-            .to_public_key_pem(LineEnding::LF)
-            .expect("public pem");
-        (private_pem, public_pem)
+        let keys = crate::keys::generate_keys().expect("generate test keys");
+        (keys.jwt_private_pem, keys.jwt_public_pem)
     }
 
     /// Send a POST request with a JSON body.

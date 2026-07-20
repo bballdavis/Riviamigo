@@ -20,7 +20,9 @@ async fn telemetry_minute_refresh_policy_is_hourly_and_real_time() {
         .await
         .expect("admin db connect");
     admin
-        .execute(format!("CREATE DATABASE \"{db_name}\"").as_str())
+        .execute(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE \"{db_name}\""
+        )))
         .await
         .expect("create test database");
 
@@ -50,7 +52,7 @@ async fn telemetry_minute_refresh_policy_is_hourly_and_real_time() {
 
     pool.close().await;
     admin
-        .execute(format!("DROP DATABASE \"{db_name}\"").as_str())
+        .execute(sqlx::AssertSqlSafe(format!("DROP DATABASE \"{db_name}\"")))
         .await
         .expect("drop test database");
 }

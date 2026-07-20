@@ -782,6 +782,7 @@ struct CompletedSessionsData {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct CompletedSessionItem {
     /// Rivian's own session identifier
     transaction_id: Option<String>,

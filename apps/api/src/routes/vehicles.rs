@@ -4553,7 +4553,7 @@ async fn raw_vehicle_data(
         raw_telemetry_where_clause(&selected_fields, params.populated_only.unwrap_or(false));
 
     let samples = sqlx::query_as::<_, RawVehicleSampleRow>(
-        &format!(r#"
+        sqlx::AssertSqlSafe(format!(r#"
         SELECT ts, latitude, longitude, altitude_m, speed_mph,
                battery_level, battery_capacity_wh, distance_to_empty_mi, battery_limit,
                power_state, charger_state, charger_status, time_to_end_of_charge_min,
@@ -4571,7 +4571,7 @@ async fn raw_vehicle_data(
         WHERE {where_clause}
         ORDER BY t.ts DESC
         LIMIT $5 OFFSET $6
-        "#)
+        "#))
     )
     .bind(vid)
     .bind(params.from)
@@ -4582,7 +4582,7 @@ async fn raw_vehicle_data(
     .fetch_all(&state.pool)
     .await?;
 
-    let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(&format!(
+    let coverage = sqlx::query_as::<_, RawVehicleCoverageRow>(sqlx::AssertSqlSafe(format!(
         r#"
         SELECT min(ts) AS first_event_at,
                max(ts) AS last_event_at,
@@ -4599,7 +4599,7 @@ async fn raw_vehicle_data(
         FROM timeseries.telemetry t
         WHERE {where_clause}
         "#
-    ))
+    )))
     .bind(vid)
     .bind(params.from)
     .bind(params.to)
@@ -4607,9 +4607,9 @@ async fn raw_vehicle_data(
     .fetch_one(&state.pool)
     .await?;
 
-    let total: i64 = sqlx::query_scalar(&format!(
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT COUNT(*)::BIGINT FROM timeseries.telemetry t WHERE {where_clause}",
-    ))
+    )))
     .bind(vid)
     .bind(params.from)
     .bind(params.to)
@@ -4617,14 +4617,15 @@ async fn raw_vehicle_data(
     .fetch_one(&state.pool)
     .await?;
 
-    let field_coverage =
-        sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(&raw_field_coverage_query(&where_clause))
-            .bind(vid)
-            .bind(params.from)
-            .bind(params.to)
-            .bind(search)
-            .fetch_all(&state.pool)
-            .await?;
+    let field_coverage = sqlx::query_as::<_, RawTelemetryFieldCoverageRow>(sqlx::AssertSqlSafe(
+        raw_field_coverage_query(&where_clause),
+    ))
+    .bind(vid)
+    .bind(params.from)
+    .bind(params.to)
+    .bind(search)
+    .fetch_all(&state.pool)
+    .await?;
 
     Ok(Json(serde_json::json!({
         "vehicle_id": vid,
@@ -5020,10 +5021,6 @@ mod tests {
 
     async fn make_app() -> axum::Router {
         use crate::middleware::auth::{AppState, JwtKeys};
-        use rsa::{
-            pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
-            RsaPrivateKey,
-        };
         use std::sync::Arc;
 
         let database_url =
@@ -5035,15 +5032,9 @@ mod tests {
             .expect("create_pool");
         let redis = redis::Client::open(redis_url).expect("redis client");
 
-        let mut rng = rand::thread_rng();
-        let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
-        let pub_key = priv_key.to_public_key();
-        let private_pem = priv_key
-            .to_pkcs8_pem(LineEnding::LF)
-            .expect("pem")
-            .to_string();
-        let public_pem = pub_key.to_public_key_pem(LineEnding::LF).expect("pem");
-        let jwt_keys = Arc::new(JwtKeys::new(&private_pem, &public_pem).expect("jwt keys"));
+        let keys = crate::keys::generate_keys().expect("generate test keys");
+        let jwt_keys =
+            Arc::new(JwtKeys::new(&keys.jwt_private_pem, &keys.jwt_public_pem).expect("jwt keys"));
 
         let config = crate::config::Config {
             database_url: database_url.clone(),

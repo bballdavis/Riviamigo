@@ -49,8 +49,8 @@ pub fn encrypt_json<T: Serialize>(
     let recipient = identity.to_public();
     let plaintext = serde_json::to_vec(value)?;
 
-    let encryptor = age::Encryptor::with_recipients(vec![Box::new(recipient)])
-        .ok_or_else(|| anyhow::anyhow!("no recipients"))?;
+    let encryptor =
+        age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))?;
 
     let mut ciphertext = vec![];
     let mut writer = encryptor.wrap_output(&mut ciphertext)?;
@@ -63,10 +63,7 @@ pub fn decrypt_json<T: DeserializeOwned>(
     ciphertext: &[u8],
     identity: &x25519::Identity,
 ) -> anyhow::Result<T> {
-    let decryptor = match age::Decryptor::new(ciphertext)? {
-        age::Decryptor::Recipients(d) => d,
-        _ => return Err(anyhow::anyhow!("unexpected age format")),
-    };
+    let decryptor = age::Decryptor::new(ciphertext)?;
 
     let mut plaintext = vec![];
     let mut reader = decryptor.decrypt(std::iter::once(identity as &dyn age::Identity))?;

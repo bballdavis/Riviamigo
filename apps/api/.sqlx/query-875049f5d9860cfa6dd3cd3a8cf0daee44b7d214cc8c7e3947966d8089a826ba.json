@@ -6,27 +6,57 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "vehicle_state_periods",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "state",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "vehicle_state_periods",
+            "name": "state"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "started_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "vehicle_state_periods",
+            "name": "started_at"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "ended_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "vehicle_state_periods",
+            "name": "ended_at"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "duration_seconds",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "vehicle_state_periods",
+            "name": "duration_seconds"
+          }
+        }
       }
     ],
     "parameters": {

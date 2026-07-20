@@ -6,32 +6,68 @@
       {
         "ordinal": 0,
         "name": "battery_level",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "battery_level"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "distance_to_empty_mi",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "distance_to_empty_mi"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "power_state",
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "power_state"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "odometer_miles",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "odometer_miles"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "outside_temp_c",
-        "type_info": "Float8"
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "outside_temp_c"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "ts",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "timeseries.telemetry",
+            "name": "ts"
+          }
+        }
       }
     ],
     "parameters": {
