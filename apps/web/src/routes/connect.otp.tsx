@@ -9,6 +9,7 @@ import { PageLayout, Button, Input, Card } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { ConnectedVehicleSuccess } from '../components/connect/ConnectedVehicleSuccess';
+import { connectErrorMessage } from '../components/connect/connectError';
 import { Car, Check, KeyRound, ShieldCheck } from 'lucide-react';
 
 const searchSchema = z.object({
@@ -26,7 +27,11 @@ export const connectOtpRoute = createRoute({
 });
 
 function ConnectOtpPage() {
-  return <ProtectedRoute><ConnectOtpContent /></ProtectedRoute>;
+  return (
+    <ProtectedRoute>
+      <ConnectOtpContent />
+    </ProtectedRoute>
+  );
 }
 
 export function ConnectOtpContent() {
@@ -37,8 +42,8 @@ export function ConnectOtpContent() {
   const { data: connectedVehicles } = useVehicles();
   const refreshVehicleId = mode === 'refresh' ? vehicle_id : undefined;
   const refreshVehicle = connectedVehicles?.find((vehicle) => vehicle.id === refreshVehicleId);
-  const [otp, setOtp]         = useState('');
-  const [error, setError]     = useState('');
+  const [otp, setOtp] = useState('');
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
@@ -51,7 +56,7 @@ export function ConnectOtpContent() {
       const result = await api.connectRivianOtp(challenge_id, otp);
       await finishConnectedResult(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'OTP verification failed');
+      setError(connectErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -63,7 +68,9 @@ export function ConnectOtpContent() {
         setError('Choose an existing vehicle before refreshing Rivian credentials.');
         return;
       }
-      const matchingVehicle = result.vehicles.find((vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id);
+      const matchingVehicle = result.vehicles.find(
+        (vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id
+      );
       if (!matchingVehicle) {
         setError('That Rivian account does not include this vehicle.');
         return;
@@ -107,7 +114,11 @@ export function ConnectOtpContent() {
     <AppLayout activeKey="settings">
       <PageLayout
         title={refreshVehicle ? 'Refresh Rivian Login' : 'Add a Vehicle'}
-        subtitle={refreshVehicle ? `Complete verification to update credentials for ${refreshVehicle.display_name}.` : 'Complete Rivian verification so encrypted vehicle access can be saved.'}
+        subtitle={
+          refreshVehicle
+            ? `Complete verification to update credentials for ${refreshVehicle.display_name}.`
+            : 'Complete Rivian verification so encrypted vehicle access can be saved.'
+        }
         className="min-h-[calc(100vh-3rem)] justify-center [&>div:first-child]:justify-center [&>div:first-child>div]:text-center"
       >
         <div className="mx-auto w-full max-w-2xl">
@@ -127,7 +138,7 @@ export function ConnectOtpContent() {
                 onSelect={(vehicle) => {
                   setError('');
                   persistVehicle(vehicle).catch((err) => {
-                    setError(err instanceof Error ? err.message : 'Vehicle add failed');
+                    setError(connectErrorMessage(err));
                     setLoading(false);
                   });
                 }}
@@ -139,7 +150,8 @@ export function ConnectOtpContent() {
                   <p className="mt-1 text-sm text-fg-secondary">
                     {email ? (
                       <>
-                        Enter the code Rivian sent for <span className="font-medium text-fg">{email}</span>.
+                        Enter the code Rivian sent for{' '}
+                        <span className="font-medium text-fg">{email}</span>.
                       </>
                     ) : (
                       'Enter the code from your Rivian email or authenticator app.'
@@ -160,7 +172,11 @@ export function ConnectOtpContent() {
                     autoFocus
                   />
                   {error && <p className="text-xs text-status-danger">{error}</p>}
-                  <Button type="submit" loading={loading} iconLeft={<ShieldCheck className="h-4 w-4" />}>
+                  <Button
+                    type="submit"
+                    loading={loading}
+                    iconLeft={<ShieldCheck className="h-4 w-4" />}
+                  >
                     {loading ? 'Verifying code' : 'Verify and Connect'}
                   </Button>
                 </form>
@@ -176,7 +192,11 @@ export function ConnectOtpContent() {
 function ConnectOtpProgress({ loading, success }: { loading: boolean; success: boolean }) {
   const items = [
     { label: 'Credentials accepted', icon: Check, complete: true },
-    { label: loading ? 'Verifying code' : 'MFA required', icon: loading ? ShieldCheck : KeyRound, complete: false },
+    {
+      label: loading ? 'Verifying code' : 'MFA required',
+      icon: loading ? ShieldCheck : KeyRound,
+      complete: false,
+    },
     { label: success ? 'Vehicle saved' : 'Save vehicle', icon: Car, complete: success },
   ];
 
@@ -193,9 +213,11 @@ function ConnectOtpProgress({ loading, success }: { loading: boolean; success: b
               key={item.label}
               className="flex gap-3 rounded-lg border border-accent/50 bg-accent-muted/20 p-3"
             >
-              <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                item.complete ? 'bg-accent text-fg-on-accent' : 'bg-bg-surface text-accent'
-              }`}>
+              <div
+                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                  item.complete ? 'bg-accent text-fg-on-accent' : 'bg-bg-surface text-accent'
+                }`}
+              >
                 <Icon className="h-4 w-4" />
               </div>
               <div>
@@ -241,8 +263,12 @@ function VehiclePicker({
             className="flex items-center justify-between rounded-lg border border-border bg-bg-elevated/40 p-4 text-left transition hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span>
-              <span className="block text-sm font-medium text-fg">{formatVehicleName(vehicle)}</span>
-              <span className="mt-1 block text-xs text-fg-tertiary">{vehicle.vin ?? vehicle.id}</span>
+              <span className="block text-sm font-medium text-fg">
+                {formatVehicleName(vehicle)}
+              </span>
+              <span className="mt-1 block text-xs text-fg-tertiary">
+                {vehicle.vin ?? vehicle.id}
+              </span>
             </span>
             <Car className="h-5 w-5 text-accent" />
           </button>
@@ -254,5 +280,9 @@ function VehiclePicker({
 }
 
 function formatVehicleName(vehicle: ConnectedRivianVehicle) {
-  return vehicle.name || [vehicle.model_year, vehicle.model].filter(Boolean).join(' ') || 'Rivian vehicle';
+  return (
+    vehicle.name ||
+    [vehicle.model_year, vehicle.model].filter(Boolean).join(' ') ||
+    'Rivian vehicle'
+  );
 }

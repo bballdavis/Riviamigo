@@ -4,19 +4,84 @@
  */
 
 import type {
-  Vehicle, VehicleStatus, VehicleImages, Trip, TrackPoint, TripPowerPoint, TripPowerSource, TripDetailSeriesPoint, TripMapResponse, TripDetailResponse, ChargeSession, ChargeCurvePoint, ChargeCurveAnalysisPoint,
-  StatsSummary, EfficiencyByMode, EfficiencySummary, ChargingSummary, ChargingChartSeries, PaginatedResponse,
-  AuthTokens, AuthMeResponse, ConnectResult, ApiError, AddVehicleBody, AddVehicleResult,
-  CreateDemoVehicleBody, CreateDemoVehicleResult,
-  ApiKeyRecord, CreateApiKeyBody, CreateApiKeyResult, ApiCatalog, RawTelemetryResponse, RawTelemetryQuery, TelemetryLaneFrame, TelemetryLaneQuery, RawEventDetail, RawEventListResponse, RawEventQuery,
-  Place, PlaceSearchSuggestion, UpsertPlaceBody, VehicleHealth, BatteryHealthSummary,
-  BatteryMileagePoint, RivianStewardshipResponse, MetricCatalogEntry, MetricSeriesPoint,
-  MetricValueResponse, MetricBatchRequest, MetricBatchResponse, BackupOverview, UpdateBackupSettingsBody, RunBackupResponse, UnitPreferences,
-  CreateBackupRestoreRequestBody, BackupRestoreRequest, IdleDrainResponse, VehicleMember,
-  AddVehicleMemberBody, UpdateVehicleMemberBody, CreateVehicleInviteBody, VehicleInvite, UpdateVehicleSettingsBody,
-  AdminUserRecord, AdminVehicleOption, CreateAccountInvitationBody, UpdateAdminUserBody, AdminUserDetail, AdminUserMembership, AdminUserInvite,
-  AccountInvitation, AccountInvitationPreview, AuthSetupResponse, ChangePasswordBody,
-  ExternalConnectionsResponse, UpdateExternalConnectionBody, TestExternalConnectionResponse, PurgeExternalConnectionCacheResponse,
+  Vehicle,
+  VehicleStatus,
+  VehicleImages,
+  Trip,
+  TrackPoint,
+  TripPowerPoint,
+  TripPowerSource,
+  TripDetailSeriesPoint,
+  TripMapResponse,
+  TripDetailResponse,
+  ChargeSession,
+  ChargeCurvePoint,
+  ChargeCurveAnalysisPoint,
+  StatsSummary,
+  EfficiencyByMode,
+  EfficiencySummary,
+  ChargingSummary,
+  ChargingChartSeries,
+  PaginatedResponse,
+  AuthTokens,
+  AuthMeResponse,
+  ConnectResult,
+  ApiError,
+  AddVehicleBody,
+  AddVehicleResult,
+  CreateDemoVehicleBody,
+  CreateDemoVehicleResult,
+  ApiKeyRecord,
+  CreateApiKeyBody,
+  CreateApiKeyResult,
+  ApiCatalog,
+  RawTelemetryResponse,
+  RawTelemetryQuery,
+  TelemetryLaneFrame,
+  TelemetryLaneQuery,
+  RawEventDetail,
+  RawEventListResponse,
+  RawEventQuery,
+  Place,
+  PlaceSearchSuggestion,
+  UpsertPlaceBody,
+  VehicleHealth,
+  BatteryHealthSummary,
+  BatteryMileagePoint,
+  RivianStewardshipResponse,
+  MetricCatalogEntry,
+  MetricSeriesPoint,
+  MetricValueResponse,
+  MetricBatchRequest,
+  MetricBatchResponse,
+  BackupOverview,
+  UpdateBackupSettingsBody,
+  RunBackupResponse,
+  UnitPreferences,
+  CreateBackupRestoreRequestBody,
+  BackupRestoreRequest,
+  IdleDrainResponse,
+  VehicleMember,
+  AddVehicleMemberBody,
+  UpdateVehicleMemberBody,
+  CreateVehicleInviteBody,
+  VehicleInvite,
+  UpdateVehicleSettingsBody,
+  AdminUserRecord,
+  AdminVehicleOption,
+  CreateAccountInvitationBody,
+  UpdateAdminUserBody,
+  AdminUserDetail,
+  AdminUserMembership,
+  AdminUserInvite,
+  AccountInvitation,
+  AccountInvitationPreview,
+  AuthSetupResponse,
+  ChangePasswordBody,
+  ExternalConnectionsResponse,
+  UpdateExternalConnectionBody,
+  TestExternalConnectionResponse,
+  PurgeExternalConnectionCacheResponse,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -103,12 +168,16 @@ function isLoopbackHostname(hostname: string) {
 
 export function resolveApiBaseUrl(
   configuredBaseUrl = (() => {
-    const env = typeof import.meta !== 'undefined'
-      ? (import.meta as { env?: { VITE_API_URL?: string; VITE_RIVIAMIGO_API_BASE_URL?: string } }).env
-      : undefined;
+    const env =
+      typeof import.meta !== 'undefined'
+        ? (import.meta as { env?: { VITE_API_URL?: string; VITE_RIVIAMIGO_API_BASE_URL?: string } })
+            .env
+        : undefined;
     return env?.VITE_API_URL ?? env?.VITE_RIVIAMIGO_API_BASE_URL ?? '';
   })(),
-  location: Pick<Location, 'hostname' | 'origin'> | undefined = typeof window === 'undefined' ? undefined : window.location,
+  location: Pick<Location, 'hostname' | 'origin'> | undefined = typeof window === 'undefined'
+    ? undefined
+    : window.location
 ) {
   if (!configuredBaseUrl || !location) {
     return configuredBaseUrl;
@@ -206,7 +275,7 @@ class ApiClient {
         undefined,
         undefined,
         false,
-        false,
+        false
       ).finally(() => {
         this.refreshPromise = null;
       });
@@ -227,12 +296,14 @@ class ApiClient {
    * the normal typed request method directly.
    */
   proxyFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const rawUrl =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const origin = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
     let firstPartyProxy = false;
     try {
       const url = new URL(rawUrl, origin);
-      firstPartyProxy = url.origin === origin && /^\/v1\/external\/(basemap|iconify)(?:\/|$)/.test(url.pathname);
+      firstPartyProxy =
+        url.origin === origin && /^\/v1\/external\/(basemap|iconify)(?:\/|$)/.test(url.pathname);
     } catch {
       // Let fetch report an invalid URL; it is not a connection proxy request.
     }
@@ -280,12 +351,23 @@ class ApiClient {
       retryAfterSeconds,
       rateLimitResetSeconds: retryAfterSeconds,
     };
-    throw Object.assign(new Error(formatApiError(detail)), { status: 429, code: detail.code, detail });
+    throw Object.assign(new Error(formatApiError(detail)), {
+      status: 429,
+      code: detail.code,
+      detail,
+    });
   }
 
-  private rememberRateLimitCooldown(detail: Pick<ApiFailureDetail, 'method' | 'path' | 'rateLimitClass' | 'retryAfterSeconds' | 'rateLimitResetSeconds'>) {
-    const limiterClass = detail.rateLimitClass ?? inferClientRateLimitClass(detail.method, detail.path);
-    const waitSeconds = detail.retryAfterSeconds ?? detail.rateLimitResetSeconds ?? DEFAULT_CLIENT_BACKOFF_SECONDS;
+  private rememberRateLimitCooldown(
+    detail: Pick<
+      ApiFailureDetail,
+      'method' | 'path' | 'rateLimitClass' | 'retryAfterSeconds' | 'rateLimitResetSeconds'
+    >
+  ) {
+    const limiterClass =
+      detail.rateLimitClass ?? inferClientRateLimitClass(detail.method, detail.path);
+    const waitSeconds =
+      detail.retryAfterSeconds ?? detail.rateLimitResetSeconds ?? DEFAULT_CLIENT_BACKOFF_SECONDS;
     this.rateLimitCooldowns.set(limiterClass, Date.now() + waitSeconds * 1000);
   }
 
@@ -297,7 +379,14 @@ class ApiClient {
     retryOnUnauthorized = true,
     reportErrors = true
   ): Promise<T> {
-    const res = await this.requestResponse(method, path, body, params, retryOnUnauthorized, reportErrors);
+    const res = await this.requestResponse(
+      method,
+      path,
+      body,
+      params,
+      retryOnUnauthorized,
+      reportErrors
+    );
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
   }
@@ -308,7 +397,7 @@ class ApiClient {
     body?: unknown,
     params?: Record<string, string | number>,
     retryOnUnauthorized = true,
-    reportErrors = true,
+    reportErrors = true
   ): Promise<Response> {
     this.assertRateLimitCooldown(method, path);
 
@@ -330,7 +419,12 @@ class ApiClient {
     if (!res.ok) {
       const rateLimitHeaders = parseRateLimitHeaders(res.headers, method, path);
 
-      if (res.status === 401 && retryOnUnauthorized && this.accessToken && !AUTH_REFRESH_EXCLUDED_PATHS.has(path)) {
+      if (
+        res.status === 401 &&
+        retryOnUnauthorized &&
+        this.accessToken &&
+        !AUTH_REFRESH_EXCLUDED_PATHS.has(path)
+      ) {
         try {
           const tokens = await this.refreshAccessToken();
           this.applyTokens(tokens);
@@ -346,7 +440,11 @@ class ApiClient {
             ...rateLimitHeaders,
           };
           this.reportFailure(detail);
-          throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: detail.code, detail });
+          throw Object.assign(new Error(formatApiError(detail)), {
+            status: res.status,
+            code: detail.code,
+            detail,
+          });
         }
       }
 
@@ -362,7 +460,11 @@ class ApiClient {
       };
       if (res.status === 429) this.rememberRateLimitCooldown(detail);
       if (reportErrors) this.reportFailure(detail);
-      throw Object.assign(new Error(formatApiError(detail)), { status: res.status, code: err.code, detail });
+      throw Object.assign(new Error(formatApiError(detail)), {
+        status: res.status,
+        code: err.code,
+        detail,
+      });
     }
 
     return res;
@@ -403,15 +505,36 @@ class ApiClient {
   }
 
   async previewAccountInvitation(token: string): Promise<AccountInvitationPreview> {
-    return this.request('POST', '/v1/auth/account-invitations/preview', { token }, undefined, true, false);
+    return this.request(
+      'POST',
+      '/v1/auth/account-invitations/preview',
+      { token },
+      undefined,
+      true,
+      false
+    );
   }
 
   async acceptAccountInvitation(token: string, password: string): Promise<AuthTokens> {
-    return this.request('POST', '/v1/auth/account-invitations/accept', { token, password }, undefined, true, false);
+    return this.request(
+      'POST',
+      '/v1/auth/account-invitations/accept',
+      { token, password },
+      undefined,
+      true,
+      false
+    );
   }
 
   async resumeSession(): Promise<AuthTokens | null> {
-    const res = await this.requestResponse('POST', '/v1/auth/bootstrap', undefined, undefined, false, false);
+    const res = await this.requestResponse(
+      'POST',
+      '/v1/auth/bootstrap',
+      undefined,
+      undefined,
+      false,
+      false
+    );
     if (res.status === 204) return null;
     return res.json() as Promise<AuthTokens>;
   }
@@ -452,7 +575,7 @@ class ApiClient {
   }
 
   async addVehicle(body: AddVehicleBody): Promise<AddVehicleResult> {
-    return this.request('POST', '/v1/vehicles', body);
+    return this.request('POST', '/v1/vehicles', body, undefined, true, false);
   }
 
   async createDemoVehicle(body: CreateDemoVehicleBody): Promise<CreateDemoVehicleResult> {
@@ -463,22 +586,48 @@ class ApiClient {
     return this.request('POST', `/v1/vehicles/${vehicleId}/demo/refresh`);
   }
 
-  async deleteVehicle(vehicleId: string): Promise<{ ok: boolean; default_vehicle_id: string | null }> {
+  async deleteVehicle(
+    vehicleId: string
+  ): Promise<{ ok: boolean; default_vehicle_id: string | null }> {
     return this.request('DELETE', `/v1/vehicles/${vehicleId}`);
   }
 
-  async refreshVehicleCredentials(vehicleId: string, rivianVehicleId?: string): Promise<{ ok: boolean; vehicle_id: string }> {
-    return this.request('PUT', `/v1/vehicles/${vehicleId}/credentials`, {
-      rivian_vehicle_id: rivianVehicleId,
-    });
+  async refreshVehicleCredentials(
+    vehicleId: string,
+    rivianVehicleId?: string
+  ): Promise<{ ok: boolean; vehicle_id: string }> {
+    return this.request(
+      'PUT',
+      `/v1/vehicles/${vehicleId}/credentials`,
+      {
+        rivian_vehicle_id: rivianVehicleId,
+      },
+      undefined,
+      true,
+      false
+    );
   }
 
   async connectRivian(email: string, password: string): Promise<ConnectResult> {
-    return this.request('POST', '/v1/vehicles/connect', { email, password });
+    return this.request(
+      'POST',
+      '/v1/vehicles/connect',
+      { email, password },
+      undefined,
+      true,
+      false
+    );
   }
 
   async connectRivianOtp(challengeId: string, otp: string): Promise<ConnectResult> {
-    return this.request('POST', '/v1/vehicles/connect/otp', { challenge_id: challengeId, otp_code: otp });
+    return this.request(
+      'POST',
+      '/v1/vehicles/connect/otp',
+      { challenge_id: challengeId, otp_code: otp },
+      undefined,
+      true,
+      false
+    );
   }
 
   async updateVehicleBatteryConfig(
@@ -501,15 +650,25 @@ class ApiClient {
   }
 
   async listVehicleMembers(vehicleId: string): Promise<VehicleMember[]> {
-    const res = await this.request<{ members: VehicleMember[] }>('GET', `/v1/vehicles/${vehicleId}/members`);
+    const res = await this.request<{ members: VehicleMember[] }>(
+      'GET',
+      `/v1/vehicles/${vehicleId}/members`
+    );
     return res.members ?? [];
   }
 
-  async addVehicleMember(vehicleId: string, body: AddVehicleMemberBody): Promise<{ ok: boolean; invite_created: boolean; invite_token?: string }> {
+  async addVehicleMember(
+    vehicleId: string,
+    body: AddVehicleMemberBody
+  ): Promise<{ ok: boolean; invite_created: boolean; invite_token?: string }> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/members`, body);
   }
 
-  async updateVehicleMember(vehicleId: string, userId: string, body: UpdateVehicleMemberBody): Promise<void> {
+  async updateVehicleMember(
+    vehicleId: string,
+    userId: string,
+    body: UpdateVehicleMemberBody
+  ): Promise<void> {
     return this.request('PUT', `/v1/vehicles/${vehicleId}/members/${userId}`, body);
   }
 
@@ -518,11 +677,17 @@ class ApiClient {
   }
 
   async listVehicleInvites(vehicleId: string): Promise<VehicleInvite[]> {
-    const res = await this.request<{ invites: VehicleInvite[] }>('GET', `/v1/vehicles/${vehicleId}/invites`);
+    const res = await this.request<{ invites: VehicleInvite[] }>(
+      'GET',
+      `/v1/vehicles/${vehicleId}/invites`
+    );
     return res.invites ?? [];
   }
 
-  async createVehicleInvite(vehicleId: string, body: CreateVehicleInviteBody): Promise<{ ok: boolean; invite_token: string; expires_at: string }> {
+  async createVehicleInvite(
+    vehicleId: string,
+    body: CreateVehicleInviteBody
+  ): Promise<{ ok: boolean; invite_token: string; expires_at: string }> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/invites`, body);
   }
 
@@ -539,7 +704,12 @@ class ApiClient {
   }
 
   async listUsers(search = ''): Promise<AdminUserRecord[]> {
-    const res = await this.request<{ users: AdminUserRecord[] }>('GET', '/v1/admin/users', undefined, search ? { search } : undefined);
+    const res = await this.request<{ users: AdminUserRecord[] }>(
+      'GET',
+      '/v1/admin/users',
+      undefined,
+      search ? { search } : undefined
+    );
     return res.users ?? [];
   }
 
@@ -549,11 +719,22 @@ class ApiClient {
   }
 
   async listAccountInvitations(): Promise<AccountInvitation[]> {
-    const res = await this.request<{ invitations: AccountInvitation[] }>('GET', '/v1/admin/account-invitations');
+    const res = await this.request<{ invitations: AccountInvitation[] }>(
+      'GET',
+      '/v1/admin/account-invitations'
+    );
     return res.invitations ?? [];
   }
 
-  async createAccountInvitation(body: CreateAccountInvitationBody): Promise<{ id: string; invitee_email: string; vehicle_id: string | null; expires_at: string; activation_token: string }> {
+  async createAccountInvitation(
+    body: CreateAccountInvitationBody
+  ): Promise<{
+    id: string;
+    invitee_email: string;
+    vehicle_id: string | null;
+    expires_at: string;
+    activation_token: string;
+  }> {
     return this.request('POST', '/v1/admin/account-invitations', body);
   }
 
@@ -569,8 +750,22 @@ class ApiClient {
     return this.request('DELETE', `/v1/admin/users/${id}`);
   }
 
-  async listUserVehicleMemberships(id: string): Promise<Array<{ vehicle_id: string; role: string; is_default: boolean; created_at: string; model: string; display_name: string | null }>> {
-    const res = await this.request<{ memberships: AdminUserMembership[] }>('GET', `/v1/admin/users/${id}/vehicles`);
+  async listUserVehicleMemberships(
+    id: string
+  ): Promise<
+    Array<{
+      vehicle_id: string;
+      role: string;
+      is_default: boolean;
+      created_at: string;
+      model: string;
+      display_name: string | null;
+    }>
+  > {
+    const res = await this.request<{ memberships: AdminUserMembership[] }>(
+      'GET',
+      `/v1/admin/users/${id}/vehicles`
+    );
     return res.memberships ?? [];
   }
 
@@ -579,7 +774,10 @@ class ApiClient {
   }
 
   async listUserInvites(id: string): Promise<AdminUserInvite[]> {
-    const res = await this.request<{ invites: AdminUserInvite[] }>('GET', `/v1/admin/users/${id}/invites`);
+    const res = await this.request<{ invites: AdminUserInvite[] }>(
+      'GET',
+      `/v1/admin/users/${id}/invites`
+    );
     return res.invites ?? [];
   }
 
@@ -587,11 +785,19 @@ class ApiClient {
     return this.request('POST', `/v1/admin/users/${userId}/invites/${inviteId}/revoke`);
   }
 
-  async grantUserVehicleMembership(userId: string, vehicleId: string, role: 'owner' | 'manager' | 'viewer'): Promise<void> {
+  async grantUserVehicleMembership(
+    userId: string,
+    vehicleId: string,
+    role: 'owner' | 'manager' | 'viewer'
+  ): Promise<void> {
     return this.request('POST', `/v1/admin/users/${userId}/vehicles/${vehicleId}`, { role });
   }
 
-  async updateUserVehicleMembership(userId: string, vehicleId: string, role: 'owner' | 'manager' | 'viewer'): Promise<void> {
+  async updateUserVehicleMembership(
+    userId: string,
+    vehicleId: string,
+    role: 'owner' | 'manager' | 'viewer'
+  ): Promise<void> {
     return this.request('PATCH', `/v1/admin/users/${userId}/vehicles/${vehicleId}`, { role });
   }
 
@@ -643,10 +849,12 @@ class ApiClient {
       'GET',
       '/v1/admin/backups',
       undefined,
-      options ? {
-        ...(options.page !== undefined ? { page: options.page } : {}),
-        ...(options.perPage !== undefined ? { per_page: options.perPage } : {}),
-      } : undefined,
+      options
+        ? {
+            ...(options.page !== undefined ? { page: options.page } : {}),
+            ...(options.perPage !== undefined ? { per_page: options.perPage } : {}),
+          }
+        : undefined
     );
   }
 
@@ -654,16 +862,29 @@ class ApiClient {
     return this.request('GET', '/v1/settings/external-connections');
   }
 
-  async updateExternalConnection(id: string, body: UpdateExternalConnectionBody): Promise<ExternalConnectionsResponse> {
+  async updateExternalConnection(
+    id: string,
+    body: UpdateExternalConnectionBody
+  ): Promise<ExternalConnectionsResponse> {
     return this.request('PUT', `/v1/settings/external-connections/${encodeURIComponent(id)}`, body);
   }
 
-  async testExternalConnection(id: string, body: UpdateExternalConnectionBody): Promise<TestExternalConnectionResponse> {
-    return this.request('POST', `/v1/settings/external-connections/${encodeURIComponent(id)}/test`, body);
+  async testExternalConnection(
+    id: string,
+    body: UpdateExternalConnectionBody
+  ): Promise<TestExternalConnectionResponse> {
+    return this.request(
+      'POST',
+      `/v1/settings/external-connections/${encodeURIComponent(id)}/test`,
+      body
+    );
   }
 
   async purgeExternalConnectionCache(id: string): Promise<PurgeExternalConnectionCacheResponse> {
-    return this.request<PurgeExternalConnectionCacheResponse>('POST', `/v1/settings/external-connections/${encodeURIComponent(id)}/cache/purge`);
+    return this.request<PurgeExternalConnectionCacheResponse>(
+      'POST',
+      `/v1/settings/external-connections/${encodeURIComponent(id)}/cache/purge`
+    );
   }
 
   async disableOptionalExternalConnections(): Promise<ExternalConnectionsResponse> {
@@ -689,7 +910,7 @@ class ApiClient {
       undefined,
       undefined,
       true,
-      true,
+      true
     );
 
     const disposition = res.headers.get('content-disposition') ?? '';
@@ -703,26 +924,46 @@ class ApiClient {
   // ── Battery ───────────────────────────────────────────────────────────────
 
   async getSoc(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    return this.request<{ ts: string; value: number | null }[]>('GET', '/v1/battery/soc', undefined, {
-      vehicle_id: vehicleId,
-      ...buildTimeframeParams(from, to, lifetime),
-    });
-  }
-
-  async getRange(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    return this.request<{ ts: string; value: number | null }[]>('GET', '/v1/battery/range', undefined, {
-      vehicle_id: vehicleId,
-      ...buildTimeframeParams(from, to, lifetime),
-    });
-  }
-
-  async getPhantomDrain(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    return this.request<{ day: string; total_soc_lost: number | null; avg_drain_rate: number | null; hours_parked: number | null }[]>(
-      'GET', '/v1/battery/phantom-drain', undefined, {
+    return this.request<{ ts: string; value: number | null }[]>(
+      'GET',
+      '/v1/battery/soc',
+      undefined,
+      {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),
       }
     );
+  }
+
+  async getRange(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
+    return this.request<{ ts: string; value: number | null }[]>(
+      'GET',
+      '/v1/battery/range',
+      undefined,
+      {
+        vehicle_id: vehicleId,
+        ...buildTimeframeParams(from, to, lifetime),
+      }
+    );
+  }
+
+  async getPhantomDrain(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
+    return this.request<
+      {
+        day: string;
+        total_soc_lost: number | null;
+        avg_drain_rate: number | null;
+        hours_parked: number | null;
+      }[]
+    >('GET', '/v1/battery/phantom-drain', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+    });
   }
 
   async getIdleDrainPeriods(
@@ -731,34 +972,45 @@ class ApiClient {
     to: string | null,
     limit = 250,
     minDurationHours = 6,
-    lifetime = false,
+    lifetime = false
   ): Promise<IdleDrainResponse> {
-    return this.request(
-      'GET',
-      `/v1/vehicles/${vehicleId}/idle-drain`,
-      undefined,
-      {
-        ...buildTimeframeParams(from, to, lifetime),
-        limit,
-        min_duration_hours: minDurationHours,
-      },
-    );
+    return this.request('GET', `/v1/vehicles/${vehicleId}/idle-drain`, undefined, {
+      ...buildTimeframeParams(from, to, lifetime),
+      limit,
+      min_duration_hours: minDurationHours,
+    });
   }
 
-  async getDegradation(vehicleId: string, from?: string | null, to?: string | null, lifetime = false) {
-    return this.request<{ ts: string; usable_kwh: number; rated_kwh: number | null; capacity_pct: number; odometer_mi?: number | null }[]>(
-      'GET', '/v1/battery/degradation', undefined, {
-        vehicle_id: vehicleId,
-        ...buildTimeframeParams(from ?? null, to ?? null, lifetime),
-      }
-    );
+  async getDegradation(
+    vehicleId: string,
+    from?: string | null,
+    to?: string | null,
+    lifetime = false
+  ) {
+    return this.request<
+      {
+        ts: string;
+        usable_kwh: number;
+        rated_kwh: number | null;
+        capacity_pct: number;
+        odometer_mi?: number | null;
+      }[]
+    >('GET', '/v1/battery/degradation', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from ?? null, to ?? null, lifetime),
+    });
   }
 
   async getBatteryHealth(vehicleId: string): Promise<BatteryHealthSummary> {
     return this.request('GET', '/v1/battery/health', undefined, { vehicle_id: vehicleId });
   }
 
-  async getBatteryMileage(vehicleId: string, from?: string | null, to?: string | null, lifetime = false): Promise<BatteryMileagePoint[]> {
+  async getBatteryMileage(
+    vehicleId: string,
+    from?: string | null,
+    to?: string | null,
+    lifetime = false
+  ): Promise<BatteryMileagePoint[]> {
     const rows = await this.request<Array<Record<string, unknown>>>(
       'GET',
       '/v1/battery/mileage',
@@ -766,7 +1018,7 @@ class ApiClient {
       {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from ?? null, to ?? null, lifetime),
-      },
+      }
     );
 
     return rows.map((row) => ({
@@ -781,10 +1033,20 @@ class ApiClient {
 
   // ── Trips ─────────────────────────────────────────────────────────────────
 
-  async listTrips(vehicleId: string, from: string | null, to: string | null, page = 1, perPage = 25, search = '', lifetime = false) {
+  async listTrips(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    page = 1,
+    perPage = 25,
+    search = '',
+    lifetime = false
+  ) {
     const offset = (page - 1) * perPage;
     const trimmedSearch = search.trim();
-    const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/trips', undefined, {
+    const response = await this.request<
+      PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }
+    >('GET', '/v1/trips', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
       page,
@@ -800,7 +1062,13 @@ class ApiClient {
     } satisfies PaginatedResponse<Trip>;
   }
 
-  async getTripMap(vehicleId: string, from: string | null, to: string | null, search = '', lifetime = false) {
+  async getTripMap(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    search = '',
+    lifetime = false
+  ) {
     return this.request<TripMapResponse>('GET', '/v1/trips/map', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
@@ -809,14 +1077,21 @@ class ApiClient {
   }
 
   async getTrip(tripId: string, vehicleId: string) {
-    const trip = await this.request<unknown>('GET', `/v1/trips/${tripId}`, undefined, { vehicle_id: vehicleId });
+    const trip = await this.request<unknown>('GET', `/v1/trips/${tripId}`, undefined, {
+      vehicle_id: vehicleId,
+    });
     return normalizeTrip(trip);
   }
 
   async getTripDetailData(tripId: string, vehicleId: string) {
-    const response = await this.request<TripDetailResponse>('GET', `/v1/trips/${tripId}/detail`, undefined, {
-      vehicle_id: vehicleId,
-    });
+    const response = await this.request<TripDetailResponse>(
+      'GET',
+      `/v1/trips/${tripId}/detail`,
+      undefined,
+      {
+        vehicle_id: vehicleId,
+      }
+    );
     return {
       ...response,
       trip: normalizeTrip(response.trip),
@@ -824,13 +1099,15 @@ class ApiClient {
   }
 
   async getTripTrack(tripId: string, vehicleId: string) {
-    return this.request<TrackPoint[]>('GET', `/v1/trips/${tripId}/track`, undefined, { vehicle_id: vehicleId });
+    return this.request<TrackPoint[]>('GET', `/v1/trips/${tripId}/track`, undefined, {
+      vehicle_id: vehicleId,
+    });
   }
 
   async getSpeedProfile(tripId: string, vehicleId: string) {
-    const rows = await this.request<Array<{ elapsed_s?: number; speed_mph?: number; ts?: string; value?: number | null }>>(
-      'GET', `/v1/trips/${tripId}/speed`, undefined, { vehicle_id: vehicleId }
-    );
+    const rows = await this.request<
+      Array<{ elapsed_s?: number; speed_mph?: number; ts?: string; value?: number | null }>
+    >('GET', `/v1/trips/${tripId}/speed`, undefined, { vehicle_id: vehicleId });
     return rows
       .map((row, index) => ({
         elapsed_s: finiteNumber(row.elapsed_s) ?? index * 60,
@@ -841,13 +1118,19 @@ class ApiClient {
 
   async getElevationProfile(tripId: string, vehicleId: string) {
     return this.request<{ ts: string; value: number | null }[]>(
-      'GET', `/v1/trips/${tripId}/elevation`, undefined, { vehicle_id: vehicleId }
+      'GET',
+      `/v1/trips/${tripId}/elevation`,
+      undefined,
+      { vehicle_id: vehicleId }
     );
   }
 
   async getTripPowerProfile(tripId: string, vehicleId: string) {
     const rows = await this.request<Array<Record<string, unknown>>>(
-      'GET', `/v1/trips/${tripId}/power`, undefined, { vehicle_id: vehicleId }
+      'GET',
+      `/v1/trips/${tripId}/power`,
+      undefined,
+      { vehicle_id: vehicleId }
     );
 
     return rows
@@ -868,7 +1151,10 @@ class ApiClient {
 
   async getTripDetailSeries(tripId: string, vehicleId: string) {
     const rows = await this.request<Array<Record<string, unknown>>>(
-      'GET', `/v1/trips/${tripId}/series`, undefined, { vehicle_id: vehicleId }
+      'GET',
+      `/v1/trips/${tripId}/series`,
+      undefined,
+      { vehicle_id: vehicleId }
     );
 
     return rows
@@ -905,11 +1191,13 @@ class ApiClient {
     perPage = 25,
     search = '',
     lifetime = false,
-    sessionDayLocal: string | null = null,
+    sessionDayLocal: string | null = null
   ) {
     const offset = (page - 1) * perPage;
     const trimmedSearch = search.trim();
-    const response = await this.request<PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }>('GET', '/v1/charging', undefined, {
+    const response = await this.request<
+      PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }
+    >('GET', '/v1/charging', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
       page,
@@ -927,13 +1215,20 @@ class ApiClient {
   }
 
   async getChargeSession(sessionId: string, vehicleId: string) {
-    const response = await this.request<unknown>('GET', `/v1/charging/${sessionId}`, undefined, { vehicle_id: vehicleId });
-    return normalizeChargeSession(isRecord(response) && 'session' in response ? response.session : response);
+    const response = await this.request<unknown>('GET', `/v1/charging/${sessionId}`, undefined, {
+      vehicle_id: vehicleId,
+    });
+    return normalizeChargeSession(
+      isRecord(response) && 'session' in response ? response.session : response
+    );
   }
 
   async getChargeCurve(sessionId: string, vehicleId: string) {
     const rows = await this.request<Array<Record<string, unknown>>>(
-      'GET', `/v1/charging/sessions/${sessionId}/curve`, undefined, { vehicle_id: vehicleId }
+      'GET',
+      `/v1/charging/sessions/${sessionId}/curve`,
+      undefined,
+      { vehicle_id: vehicleId }
     );
     return rows.map((row) => ({
       minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
@@ -944,9 +1239,17 @@ class ApiClient {
     })) satisfies ChargeCurvePoint[];
   }
 
-  async getChargeCurveAnalysis(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
+  async getChargeCurveAnalysis(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
     const rows = await this.request<Array<Record<string, unknown>>>(
-      'GET', '/v1/charging/curve-analysis', undefined, {
+      'GET',
+      '/v1/charging/curve-analysis',
+      undefined,
+      {
         vehicle_id: vehicleId,
         ...buildTimeframeParams(from, to, lifetime),
       }
@@ -956,15 +1259,21 @@ class ApiClient {
       minutes_elapsed: finiteNumber(row.minutes_elapsed) ?? null,
       soc_pct: finiteNumber(row.soc_pct) ?? finiteNumber(row.soc) ?? null,
       charge_rate_kw: finiteNumber(row.charge_rate_kw) ?? finiteNumber(row.power_kw) ?? 0,
-      charger_type: typeof row.charger_type === 'string'
-        ? row.charger_type as ChargeCurveAnalysisPoint['charger_type']
-        : null,
+      charger_type:
+        typeof row.charger_type === 'string'
+          ? (row.charger_type as ChargeCurveAnalysisPoint['charger_type'])
+          : null,
       sample_source: typeof row.sample_source === 'string' ? row.sample_source : 'telemetry',
       ...(typeof row.power_method === 'string' ? { power_method: row.power_method } : {}),
     })) satisfies ChargeCurveAnalysisPoint[];
   }
 
-  async getChargingSummary(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
+  async getChargingSummary(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
     const summary = await this.request<{
       total_energy_kwh?: number;
       total_kwh?: number;
@@ -1000,7 +1309,9 @@ class ApiClient {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
     });
-    const acKwh = (summary.ac_kwh ?? summary.by_type?.ac_kwh ?? 0) + (summary.ac_l2_kwh ?? summary.by_type?.ac_l2_kwh ?? 0);
+    const acKwh =
+      (summary.ac_kwh ?? summary.by_type?.ac_kwh ?? 0) +
+      (summary.ac_l2_kwh ?? summary.by_type?.ac_l2_kwh ?? 0);
     const dcKwh = summary.dc_kwh ?? summary.by_type?.dc_kwh ?? 0;
     return {
       total_energy_kwh: summary.total_energy_kwh ?? summary.total_kwh ?? 0,
@@ -1031,7 +1342,12 @@ class ApiClient {
     } satisfies ChargingSummary;
   }
 
-  async getChargingChartSeries(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
+  async getChargingChartSeries(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
     const response = await this.request<{
       daily?: Array<{
         day_local?: string;
@@ -1059,9 +1375,10 @@ class ApiClient {
         started_at: typeof row.started_at === 'string' ? row.started_at : new Date().toISOString(),
         energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? null,
         cost_usd: finiteNumber(row.cost_usd) ?? null,
-        charger_type: typeof row.charger_type === 'string'
-          ? row.charger_type as ChargingChartSeries['daily_sessions'][number]['charger_type']
-          : null,
+        charger_type:
+          typeof row.charger_type === 'string'
+            ? (row.charger_type as ChargingChartSeries['daily_sessions'][number]['charger_type'])
+            : null,
         location_name: typeof row.location_name === 'string' ? row.location_name : null,
       })),
     } satisfies ChargingChartSeries;
@@ -1083,12 +1400,23 @@ class ApiClient {
     return this.request('GET', `/v1/vehicles/${vehicleId}/departure-schedules`);
   }
 
-  async createDepartureSchedule(vehicleId: string, body: DepartureScheduleInput): Promise<{ rivian_schedule_id: string }> {
+  async createDepartureSchedule(
+    vehicleId: string,
+    body: DepartureScheduleInput
+  ): Promise<{ rivian_schedule_id: string }> {
     return this.request('POST', `/v1/vehicles/${vehicleId}/departure-schedules`, body);
   }
 
-  async updateDepartureSchedule(vehicleId: string, scheduleId: string, body: DepartureScheduleInput): Promise<void> {
-    return this.request('PATCH', `/v1/vehicles/${vehicleId}/departure-schedules/${scheduleId}`, body);
+  async updateDepartureSchedule(
+    vehicleId: string,
+    scheduleId: string,
+    body: DepartureScheduleInput
+  ): Promise<void> {
+    return this.request(
+      'PATCH',
+      `/v1/vehicles/${vehicleId}/departure-schedules/${scheduleId}`,
+      body
+    );
   }
 
   async deleteDepartureSchedule(vehicleId: string, scheduleId: string): Promise<void> {
@@ -1097,7 +1425,10 @@ class ApiClient {
 
   async getLiveSession(vehicleId: string): Promise<LiveSession | null> {
     // 204 = no active session → returns undefined from request()
-    const result = await this.request<LiveSession | undefined>('GET', `/v1/vehicles/${vehicleId}/live-session`);
+    const result = await this.request<LiveSession | undefined>(
+      'GET',
+      `/v1/vehicles/${vehicleId}/live-session`
+    );
     return result ?? null;
   }
 
@@ -1115,7 +1446,12 @@ class ApiClient {
     return this.request<StatsSummary>('GET', '/v1/stats', undefined, { vehicle_id: vehicleId });
   }
 
-  async getEfficiencySummary(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
+  async getEfficiencySummary(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
     const summary = await this.request<{
       avg_wh_per_mi: number;
       p10_wh_per_mi: number;
@@ -1138,12 +1474,19 @@ class ApiClient {
     } satisfies EfficiencySummary;
   }
 
-  async getEfficiencyByMode(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    const rows = await this.request<Array<{
-      drive_mode: string;
-      avg_wh_per_mi: number;
-      trip_count: number;
-    }>>('GET', '/v1/efficiency/by-mode', undefined, {
+  async getEfficiencyByMode(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
+    const rows = await this.request<
+      Array<{
+        drive_mode: string;
+        avg_wh_per_mi: number;
+        trip_count: number;
+      }>
+    >('GET', '/v1/efficiency/by-mode', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
     });
@@ -1157,26 +1500,46 @@ class ApiClient {
     })) satisfies EfficiencyByMode[];
   }
 
-  async getEfficiencyTrend(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    return this.request<{ ts: string; trip_efficiency_wh_mi: number | null; rolling_24h_wh_mi: number | null }[]>(
-      'GET', '/v1/efficiency/trend', undefined, {
-        vehicle_id: vehicleId,
-        ...buildTimeframeParams(from, to, lifetime),
-      }
-    );
+  async getEfficiencyTrend(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
+    return this.request<
+      { ts: string; trip_efficiency_wh_mi: number | null; rolling_24h_wh_mi: number | null }[]
+    >('GET', '/v1/efficiency/trend', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+    });
   }
 
-  async getEfficiencyVsTemp(vehicleId: string, from: string | null, to: string | null, lifetime = false) {
-    return this.request<{ temp_c_low: number; temp_c_high: number; avg_efficiency_wh_mi: number | null; trip_count: number; total_miles: number | null; avg_speed_mph: number | null }[]>(
-      'GET', '/v1/efficiency/vs-temp', undefined, {
-        vehicle_id: vehicleId,
-        ...buildTimeframeParams(from, to, lifetime),
-      }
-    );
+  async getEfficiencyVsTemp(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false
+  ) {
+    return this.request<
+      {
+        temp_c_low: number;
+        temp_c_high: number;
+        avg_efficiency_wh_mi: number | null;
+        trip_count: number;
+        total_miles: number | null;
+        avg_speed_mph: number | null;
+      }[]
+    >('GET', '/v1/efficiency/vs-temp', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+    });
   }
 
   async getMetricCatalog(): Promise<MetricCatalogEntry[]> {
-    const response = await this.request<{ metrics: MetricCatalogEntry[] }>('GET', '/v1/metrics/catalog');
+    const response = await this.request<{ metrics: MetricCatalogEntry[] }>(
+      'GET',
+      '/v1/metrics/catalog'
+    );
     return response.metrics ?? [];
   }
 
@@ -1185,7 +1548,7 @@ class ApiClient {
     metric: string,
     from: string | null = null,
     to: string | null = null,
-    lifetime = false,
+    lifetime = false
   ): Promise<MetricValueResponse> {
     return this.request('GET', '/v1/metrics/value', undefined, {
       vehicle_id: vehicleId,
@@ -1200,7 +1563,7 @@ class ApiClient {
     from: string | null,
     to: string | null,
     bucket = 'day',
-    lifetime = false,
+    lifetime = false
   ): Promise<MetricSeriesPoint[]> {
     return this.request('GET', '/v1/metrics/series', undefined, {
       vehicle_id: vehicleId,
@@ -1218,36 +1581,55 @@ class ApiClient {
     const legacyLimit = typeof options === 'number' ? options : undefined;
     const query = typeof options === 'number' ? {} : options;
     const fields = query.fields?.filter(Boolean).join(',');
-    return this.request<RawTelemetryResponse>('GET', `/v1/vehicles/${vehicleId}/raw-data`, undefined, {
-      ...(query.from ? { from: query.from } : {}),
-      ...(query.to ? { to: query.to } : {}),
-      ...(query.page ? { page: query.page } : {}),
-      ...(legacyLimit ? { limit: legacyLimit } : query.per_page ? { per_page: query.per_page } : {}),
-      ...(query.search?.trim() ? { search: query.search.trim() } : {}),
-      ...(fields ? { fields } : {}),
-      ...(query.populated_only ? { populated_only: 'true' } : {}),
-    });
+    return this.request<RawTelemetryResponse>(
+      'GET',
+      `/v1/vehicles/${vehicleId}/raw-data`,
+      undefined,
+      {
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+        ...(query.page ? { page: query.page } : {}),
+        ...(legacyLimit
+          ? { limit: legacyLimit }
+          : query.per_page
+            ? { per_page: query.per_page }
+            : {}),
+        ...(query.search?.trim() ? { search: query.search.trim() } : {}),
+        ...(fields ? { fields } : {}),
+        ...(query.populated_only ? { populated_only: 'true' } : {}),
+      }
+    );
   }
 
   async getTelemetryLanes(vehicleId: string, query: TelemetryLaneQuery = {}) {
-    return this.request<TelemetryLaneFrame>('GET', `/v1/vehicles/${vehicleId}/telemetry/lanes`, undefined, {
-      ...(query.from ? { from: query.from } : {}),
-      ...(query.to ? { to: query.to } : {}),
-      ...(query.lanes?.length ? { lanes: query.lanes.join(',') } : {}),
-      ...(query.resolution ? { resolution: query.resolution } : {}),
-      ...(query.max_points ? { max_points: query.max_points } : {}),
-    });
+    return this.request<TelemetryLaneFrame>(
+      'GET',
+      `/v1/vehicles/${vehicleId}/telemetry/lanes`,
+      undefined,
+      {
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+        ...(query.lanes?.length ? { lanes: query.lanes.join(',') } : {}),
+        ...(query.resolution ? { resolution: query.resolution } : {}),
+        ...(query.max_points ? { max_points: query.max_points } : {}),
+      }
+    );
   }
 
   async getRawEvents(vehicleId: string, query: RawEventQuery = {}) {
-    return this.request<RawEventListResponse>('GET', `/v1/vehicles/${vehicleId}/raw-events`, undefined, {
-      ...(query.from ? { from: query.from } : {}),
-      ...(query.to ? { to: query.to } : {}),
-      ...(query.page ? { page: query.page } : {}),
-      ...(query.per_page ? { per_page: query.per_page } : {}),
-      ...(query.event_type ? { event_type: query.event_type } : {}),
-      ...(query.message_type ? { message_type: query.message_type } : {}),
-    });
+    return this.request<RawEventListResponse>(
+      'GET',
+      `/v1/vehicles/${vehicleId}/raw-events`,
+      undefined,
+      {
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+        ...(query.page ? { page: query.page } : {}),
+        ...(query.per_page ? { per_page: query.per_page } : {}),
+        ...(query.event_type ? { event_type: query.event_type } : {}),
+        ...(query.message_type ? { message_type: query.message_type } : {}),
+      }
+    );
   }
 
   async getRawEvent(vehicleId: string, eventId: string) {
@@ -1290,21 +1672,22 @@ class ApiClient {
       }
 
       const { title, message } = friendlyApiError(detail);
-      window.dispatchEvent(new CustomEvent('riviamigo:toast', {
-        detail: {
-          title,
-          message,
-          variant: 'error',
-          code: detail.code,
-        },
-      }));
+      window.dispatchEvent(
+        new CustomEvent('riviamigo:toast', {
+          detail: {
+            title,
+            message,
+            variant: 'error',
+            code: detail.code,
+          },
+        })
+      );
 
       if (detail.code === 'AUTH_EXPIRED') {
         window.dispatchEvent(new CustomEvent('riviamigo:auth-expired', { detail }));
       }
     }
   }
-
 }
 
 export const api = new ApiClient();
@@ -1312,10 +1695,12 @@ export const api = new ApiClient();
 function normalizePaginated<T>(
   response: PaginatedResponse<T> & { data?: T[]; limit?: number; offset?: number },
   requestedPage: number,
-  requestedPerPage: number,
+  requestedPerPage: number
 ): PaginatedResponse<T> {
   const perPage = response.per_page ?? response.limit ?? requestedPerPage;
-  const page = response.page ?? (response.offset !== undefined ? Math.floor(response.offset / perPage) + 1 : requestedPage);
+  const page =
+    response.page ??
+    (response.offset !== undefined ? Math.floor(response.offset / perPage) + 1 : requestedPage);
   return {
     items: response.items ?? response.data ?? [],
     total: response.total ?? 0,
@@ -1327,12 +1712,16 @@ function normalizePaginated<T>(
 function normalizeTrip(raw: unknown): Trip {
   const row = isRecord(raw) ? raw : {};
   const distance = finiteNumber(row.distance_mi) ?? finiteNumber(row.distance_miles) ?? 0;
-  const durationMin = finiteNumber(row.duration_min)
-    ?? (finiteNumber(row.duration_seconds) !== undefined ? finiteNumber(row.duration_seconds)! / 60 : 0);
+  const durationMin =
+    finiteNumber(row.duration_min) ??
+    (finiteNumber(row.duration_seconds) !== undefined
+      ? finiteNumber(row.duration_seconds)! / 60
+      : 0);
   const efficiency = finiteNumber(row.efficiency_wh_mi) ?? finiteNumber(row.efficiency_wh_per_mile);
-  const energy = finiteNumber(row.energy_used_kwh)
-    ?? (finiteNumber(row.energy_wh) !== undefined ? finiteNumber(row.energy_wh)! / 1000 : undefined)
-    ?? (efficiency !== undefined && distance > 0 ? efficiency * distance / 1000 : undefined);
+  const energy =
+    finiteNumber(row.energy_used_kwh) ??
+    (finiteNumber(row.energy_wh) !== undefined ? finiteNumber(row.energy_wh)! / 1000 : undefined) ??
+    (efficiency !== undefined && distance > 0 ? (efficiency * distance) / 1000 : undefined);
   const startCoordinate = normalizeCoordinateValue(row.start_lat, row.start_lng);
   const endCoordinate = normalizeCoordinateValue(row.end_lat, row.end_lng);
 
@@ -1346,7 +1735,7 @@ function normalizeTrip(raw: unknown): Trip {
     energy_used_kwh: energy ?? null,
     efficiency_wh_mi: efficiency ?? null,
     max_speed_mph: finiteNumber(row.max_speed_mph) ?? null,
-    drive_mode: typeof row.drive_mode === 'string' ? row.drive_mode as Trip['drive_mode'] : null,
+    drive_mode: typeof row.drive_mode === 'string' ? (row.drive_mode as Trip['drive_mode']) : null,
     soc_start: finiteNumber(row.soc_start) ?? null,
     soc_end: finiteNumber(row.soc_end) ?? null,
     start_lat: startCoordinate?.lat ?? null,
@@ -1355,12 +1744,18 @@ function normalizeTrip(raw: unknown): Trip {
     end_lng: endCoordinate?.lng ?? null,
     start_address: typeof row.start_address === 'string' ? row.start_address : null,
     end_address: typeof row.end_address === 'string' ? row.end_address : null,
-    start_place: typeof row.start_place === 'string'
-      ? row.start_place
-      : (typeof row.start_place_name === 'string' ? row.start_place_name : null),
-    end_place: typeof row.end_place === 'string'
-      ? row.end_place
-      : (typeof row.end_place_name === 'string' ? row.end_place_name : null),
+    start_place:
+      typeof row.start_place === 'string'
+        ? row.start_place
+        : typeof row.start_place_name === 'string'
+          ? row.start_place_name
+          : null,
+    end_place:
+      typeof row.end_place === 'string'
+        ? row.end_place
+        : typeof row.end_place_name === 'string'
+          ? row.end_place_name
+          : null,
   };
 }
 
@@ -1370,7 +1765,9 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
   const row = isRecord(raw) ? raw : {};
   const id = String(row.id ?? '');
   if (!id) throw new Error('normalizeChargeSession: missing id in response');
-  const coordinateLocation = formatCoordinateLabel(normalizeCoordinateValue(row.location_lat, row.location_lng));
+  const coordinateLocation = formatCoordinateLabel(
+    normalizeCoordinateValue(row.location_lat, row.location_lng)
+  );
   const locationName = normalizeCoordinateLabel(row.location_name);
   return {
     id,
@@ -1379,15 +1776,23 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     session_day_local: typeof row.session_day_local === 'string' ? row.session_day_local : null,
     ended_at: row.ended_at == null ? null : String(row.ended_at),
     location_name: locationName ?? (row.is_home === true ? 'Home' : coordinateLocation),
-    charger_type: typeof row.charger_type === 'string' && VALID_CHARGER_TYPES.has(row.charger_type)
-      ? row.charger_type as ChargeSession['charger_type']
-      : null,
-    energy_added_kwh: finiteNumber(row.energy_added_kwh) ?? finiteNumber(row.kwh_added) ?? (
-      finiteNumber(row.energy_added_wh) !== undefined ? finiteNumber(row.energy_added_wh)! / 1000 : null
-    ),
+    charger_type:
+      typeof row.charger_type === 'string' && VALID_CHARGER_TYPES.has(row.charger_type)
+        ? (row.charger_type as ChargeSession['charger_type'])
+        : null,
+    energy_added_kwh:
+      finiteNumber(row.energy_added_kwh) ??
+      finiteNumber(row.kwh_added) ??
+      (finiteNumber(row.energy_added_wh) !== undefined
+        ? finiteNumber(row.energy_added_wh)! / 1000
+        : null),
     soc_start: finiteNumber(row.soc_start) ?? null,
     soc_end: finiteNumber(row.soc_end) ?? null,
-    peak_power_kw: finiteNumber(row.peak_power_kw) ?? finiteNumber(row.max_charge_rate_kw) ?? finiteNumber(row.avg_charge_rate_kw) ?? null,
+    peak_power_kw:
+      finiteNumber(row.peak_power_kw) ??
+      finiteNumber(row.max_charge_rate_kw) ??
+      finiteNumber(row.avg_charge_rate_kw) ??
+      null,
     cost_usd: finiteNumber(row.cost_usd) ?? null,
     cost_method: typeof row.cost_method === 'string' ? row.cost_method : null,
     duration_min: finiteNumber(row.duration_min) ?? finiteNumber(row.duration_minutes) ?? null,
@@ -1401,13 +1806,15 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     is_free_session: typeof row.is_free_session === 'boolean' ? row.is_free_session : null,
     is_rivian_network: typeof row.is_rivian_network === 'boolean' ? row.is_rivian_network : null,
     rivian_paid_total: finiteNumber(row.rivian_paid_total) ?? null,
-    rivian_charger_type: typeof row.rivian_charger_type === 'string' ? row.rivian_charger_type : null,
+    rivian_charger_type:
+      typeof row.rivian_charger_type === 'string' ? row.rivian_charger_type : null,
     currency_code: typeof row.currency_code === 'string' ? row.currency_code : null,
     rivian_city: typeof row.rivian_city === 'string' ? row.rivian_city : null,
     is_public: typeof row.is_public === 'boolean' ? row.is_public : null,
     charger_id: typeof row.charger_id === 'string' ? row.charger_id : null,
     live_current_price: finiteNumber(row.live_current_price) ?? null,
-    live_current_currency: typeof row.live_current_currency === 'string' ? row.live_current_currency : null,
+    live_current_currency:
+      typeof row.live_current_currency === 'string' ? row.live_current_currency : null,
     live_total_charged_kwh: finiteNumber(row.live_total_charged_kwh) ?? null,
     live_range_added_km: finiteNumber(row.live_range_added_km) ?? null,
     live_power_kw: finiteNumber(row.live_power_kw) ?? null,
@@ -1432,13 +1839,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseRateLimitHeaders(headers: Headers, method: string, path: string) {
   const rateLimitSource = headers.get('x-riviamigo-ratelimit-source') ?? undefined;
-  const rateLimitClass = headers.get('x-riviamigo-ratelimit-class') ?? inferClientRateLimitClass(method, path);
+  const rateLimitClass =
+    headers.get('x-riviamigo-ratelimit-class') ?? inferClientRateLimitClass(method, path);
   const rateLimitLimit = parsePositiveNumberHeader(headers.get('x-ratelimit-limit'));
   const rateLimitRemaining = parsePositiveNumberHeader(headers.get('x-ratelimit-remaining'));
   const rateLimitResetSeconds = parsePositiveNumberHeader(
-    headers.get('x-riviamigo-ratelimit-reset') ?? headers.get('x-ratelimit-after'),
+    headers.get('x-riviamigo-ratelimit-reset') ?? headers.get('x-ratelimit-after')
   );
-  const retryAfterSeconds = parsePositiveNumberHeader(headers.get('retry-after')) ?? rateLimitResetSeconds;
+  const retryAfterSeconds =
+    parsePositiveNumberHeader(headers.get('retry-after')) ?? rateLimitResetSeconds;
 
   return {
     ...(rateLimitSource ? { rateLimitSource } : {}),
@@ -1481,9 +1890,11 @@ function inferClientRateLimitClass(method: string, path: string) {
     return 'auth_public';
   }
 
-  if (path.startsWith('/v1/auth/me')
-    || path.startsWith('/v1/auth/preferences')
-    || path.startsWith('/v1/dashboards/by-slug/')) {
+  if (
+    path.startsWith('/v1/auth/me') ||
+    path.startsWith('/v1/auth/preferences') ||
+    path.startsWith('/v1/dashboards/by-slug/')
+  ) {
     return 'auth_metadata';
   }
 
@@ -1499,12 +1910,14 @@ function inferClientRateLimitClass(method: string, path: string) {
 }
 
 function isPublicAuthPath(path: string) {
-  return path.startsWith('/v1/auth/login')
-    || path.startsWith('/v1/auth/register')
-    || path.startsWith('/v1/auth/setup')
-    || path.startsWith('/v1/auth/account-invitations/')
-    || path.startsWith('/v1/auth/bootstrap')
-    || path.startsWith('/v1/auth/refresh');
+  return (
+    path.startsWith('/v1/auth/login') ||
+    path.startsWith('/v1/auth/register') ||
+    path.startsWith('/v1/auth/setup') ||
+    path.startsWith('/v1/auth/account-invitations/') ||
+    path.startsWith('/v1/auth/bootstrap') ||
+    path.startsWith('/v1/auth/refresh')
+  );
 }
 
 function classifyClientRequestSource(path: string) {
@@ -1517,10 +1930,12 @@ function classifyClientRequestSource(path: string) {
 }
 
 function isStartupProtectedPath(path: string) {
-  return path === '/v1/auth/me'
-    || path === '/v1/auth/preferences'
-    || path.startsWith('/v1/dashboards/by-slug/')
-    || path === '/v1/vehicles/live';
+  return (
+    path === '/v1/auth/me' ||
+    path === '/v1/auth/preferences' ||
+    path.startsWith('/v1/dashboards/by-slug/') ||
+    path === '/v1/vehicles/live'
+  );
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -1544,23 +1959,40 @@ function formatApiError(detail: ApiFailureDetail) {
 
 function friendlyApiError(detail: ApiFailureDetail): { title: string; message: string } {
   const { status, code } = detail;
-  if (code === 'AUTH_EXPIRED') return { title: 'Session expired', message: 'Please sign in again to continue.' };
-  if (status === 401) return { title: 'Session expired', message: 'Please sign in again to continue.' };
-  if (status === 403) return { title: 'Access denied', message: 'You don\'t have permission to do that.' };
-  if (status === 404) return { title: 'Not found', message: 'The requested resource could not be found.' };
+  if (code === 'AUTH_EXPIRED')
+    return { title: 'Session expired', message: 'Please sign in again to continue.' };
+  if (status === 401)
+    return { title: 'Session expired', message: 'Please sign in again to continue.' };
+  if (status === 403)
+    return { title: 'Access denied', message: "You don't have permission to do that." };
+  if (status === 404)
+    return { title: 'Not found', message: 'The requested resource could not be found.' };
   if (status === 429) {
     const source = detail.rateLimitSource;
-    const waitHint = detail.retryAfterSeconds != null ? ` Try again in about ${Math.max(1, Math.ceil(detail.retryAfterSeconds))}s.` : '';
+    const waitHint =
+      detail.retryAfterSeconds != null
+        ? ` Try again in about ${Math.max(1, Math.ceil(detail.retryAfterSeconds))}s.`
+        : '';
     if (source === 'nginx') {
       return { title: 'Too many requests', message: `Edge proxy rate limit reached.${waitHint}` };
     }
     if (source === 'api') {
       return { title: 'Too many requests', message: `API rate limit reached.${waitHint}` };
     }
-    return { title: 'Too many requests', message: `Please wait a moment and try again.${waitHint}` };
+    return {
+      title: 'Too many requests',
+      message: `Please wait a moment and try again.${waitHint}`,
+    };
   }
-  if (status != null && status >= 500) return { title: 'Server error', message: 'Something went wrong on our end. Please try again later.' };
-  return { title: 'Something went wrong', message: truncate(detail.message, 120) || 'An unexpected error occurred.' };
+  if (status != null && status >= 500)
+    return {
+      title: 'Server error',
+      message: 'Something went wrong on our end. Please try again later.',
+    };
+  return {
+    title: 'Something went wrong',
+    message: truncate(detail.message, 120) || 'An unexpected error occurred.',
+  };
 }
 
 function truncate(value: string, maxLength: number) {
