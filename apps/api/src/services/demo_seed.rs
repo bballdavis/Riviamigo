@@ -928,12 +928,15 @@ mod tests {
     async fn seeds_every_model_with_stable_relational_counts() {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let test_email = format!("demo-seed-{}@example.com", Uuid::new_v4());
         let user_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM riviamigo.users ORDER BY created_at LIMIT 1",
+            "INSERT INTO riviamigo.users (email, password_hash, role)
+             VALUES ($1, 'demo-seed-test-only', 'user') RETURNING id",
         )
+        .bind(&test_email)
         .fetch_one(&pool)
         .await
-        .expect("fixture database must contain a user");
+        .expect("create demo seed test user");
 
         for model in ["R1T", "R1S", "R2S"] {
             let mut tx = pool.begin().await.unwrap();
@@ -1123,5 +1126,11 @@ mod tests {
             assert_eq!(preserved_name, "Keep this demo name");
             tx.rollback().await.unwrap();
         }
+
+        sqlx::query("DELETE FROM riviamigo.users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("delete demo seed test user");
     }
 }
