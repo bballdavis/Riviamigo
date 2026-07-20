@@ -169,11 +169,11 @@ describe('dashboard component registry', () => {
 
     const widgets = charging?.widgets ?? [];
     const connectedChip = widgets.find((widget) => widget.definitionId === 'charging.connection');
-    // Connection chip lives in the top-right of the top three rows. When plugged in
+    // Connection chip fills the top-right of the compact six-row summary. When plugged in
     // it replaces the hide-when-unplugged sensor chips that share the same coordinates.
     expect(connectedChip).toMatchObject({
       componentType: 'custom',
-      layout: { x: 6, y: 2, w: 6, h: 6 },
+      layout: { x: 6, y: 0, w: 6, h: 6 },
       visibility: [{ type: 'vehicle-connection', value: 'plugged' }],
     });
 
@@ -182,7 +182,7 @@ describe('dashboard component registry', () => {
     expect(widgets.find((widget) => widget.definitionId === 'charging_efficiency_summary')).toMatchObject({
       componentType: 'sensor',
       visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
-      layout: { x: 9, y: 8, w: 3, h: 2 },
+      layout: { x: 9, y: 0, w: 3, h: 2 },
     });
     expect(widgets.find((widget) => widget.definitionId === 'charging_max_limit')).toMatchObject({
       componentType: 'sensor',
@@ -192,12 +192,12 @@ describe('dashboard component registry', () => {
     expect(widgets.find((widget) => widget.definitionId === 'charging_max_rate')).toMatchObject({
       componentType: 'sensor',
       visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
-      layout: { x: 6, y: 8, w: 3, h: 2 },
+      layout: { x: 6, y: 2, w: 3, h: 2 },
     });
     expect(widgets.find((widget) => widget.definitionId === 'charging_avg_session')).toMatchObject({
       componentType: 'sensor',
       visibility: [{ type: 'vehicle-connection', value: 'unplugged' }],
-      layout: { x: 9, y: 10, w: 3, h: 2 },
+      layout: { x: 9, y: 2, w: 3, h: 2 },
     });
 
     expect(widgets.find((widget) => widget.id === 'd4000004-0000-0000-0000-000000000009')).toMatchObject({
