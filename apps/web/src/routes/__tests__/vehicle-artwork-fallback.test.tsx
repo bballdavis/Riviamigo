@@ -158,4 +158,18 @@ describe('vehicle artwork fallback contract', () => {
       expect(chargingAsset?.visible_bbox?.[2]).toBeGreaterThanOrEqual(chargingAsset!.width * 0.98);
     }
   });
+
+  it('shows packaged artwork on the first render while protected artwork is pending', () => {
+    renderArtwork(
+      <AuthenticatedVehicleArtwork
+        source="/v1/vehicle-image-cache/00000000-0000-0000-0000-000000000000/overview.webp"
+        fallbackSource="/vehicle-images/fallbacks/r1t/overview.webp"
+        alt="Pending protected Rivian"
+      />,
+    );
+
+    const image = screen.getByRole('img', { name: 'Pending protected Rivian' });
+    expect(image.getAttribute('src')).toBe('/vehicle-images/fallbacks/r1t/overview.webp');
+    expect(image.getAttribute('data-artwork-fallback')).toBe('true');
+  });
 });

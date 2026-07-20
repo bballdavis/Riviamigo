@@ -326,7 +326,7 @@ function VehicleArtFrame({
 }) {
   const artwork = useVehicleArtwork(source);
   const fallbackArtwork = useVehicleArtwork(fallbackSource);
-  const frameArtworkSrc = artwork.src ?? (!artwork.isLoading ? fallbackArtwork.src : null);
+  const frameArtworkSrc = artwork.src ?? fallbackArtwork.src;
   const [rotatedAspectRatio, setRotatedAspectRatio] = useState(2.25);
   useEffect(() => {
     const image = new Image();
