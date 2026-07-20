@@ -37,7 +37,7 @@ The recovery action depends on who owns the row:
 - **Delete** removes a standalone personal dashboard that does not override a system slug.
 - **Restore bundled** is an administrator action for system defaults. It replaces that system row with the layout shipped in the installed Riviamigo version.
 
-Resetting a personal copy does not restore or modify the system row. Restoring a bundled system dashboard does not delete personal copies. Riviamigo upgrades also leave existing system edits and personal dashboards untouched unless an administrator explicitly restores a bundled version.
+Resetting a personal copy does not restore or modify the system row. Restoring a bundled system dashboard does not delete personal copies. Personal dashboards are never replaced by an upgrade. System edits survive ordinary restarts, but a release that intentionally ships a newer dashboard baseline updates the shared system row once; users with a same-slug personal copy continue to see their own version.
 
 ## Conditional dashboard previews
 
