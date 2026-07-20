@@ -232,7 +232,7 @@ try {
   const manifest = verifyManifest(staging);
   const postgresUser = readEnvValue('POSTGRES_USER') ?? 'riviamigo';
 
-  run('docker', [...composeArgs(), 'stop', 'app']);
+  run('docker', [...composeArgs(), 'stop', 'riviamigo']);
   run('docker', [...composeArgs(), 'up', '-d', 'timescaledb']);
   await waitForDatabase(postgresUser);
   ensureDatabaseState(postgresUser);
@@ -240,7 +240,7 @@ try {
   restoreDatabase(postgresUser, join(staging, 'database.dump'));
   restoreBackupSettings(postgresUser, staging);
   restoreArtwork(staging);
-  run('docker', [...composeArgs(), 'up', ...(sourceBuild ? ['--build'] : []), '-d', 'app']);
+  run('docker', [...composeArgs(), 'up', ...(sourceBuild ? ['--build'] : []), '-d', 'riviamigo']);
 
   const port = readEnvValue('RIVIAMIGO_ORIGIN_PORT') ?? '8080';
   await waitForHealth(`http://localhost:${port}/health`);
