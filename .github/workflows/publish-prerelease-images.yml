@@ -124,4 +124,4 @@ jobs:
         shell: bash
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
-          gh release create "$VERSION" images.lock#images.lock --target "$SOURCE_SHA" --title "$VERSION" --prerelease --generate-notes
+          gh release create "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$VERSION" --prerelease --generate-notes
