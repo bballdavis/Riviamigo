@@ -41,6 +41,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Structured logs are written to stdout. |
 | `COOKIE_INSECURE` | Unset | Allows non-Secure cookies for local development. Any value enables it; production rejects it. |
 | `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/data/cache/riviamigo/vehicle-images` in the production image | Persistent local artwork mirror. Standard Compose does not need to set it. |
+| `RIVIAMIGO_DATA_DIR` | `../data` relative to `compose/docker-compose.yml` | Overrides the host directory used for PostgreSQL, Redis, backups, and cache data. Primarily useful for isolated verification stacks. |
 | `BACKUP_DRIVER` | `pg_dump` | Recovery-package database exporter. Other values are rejected for full recovery packages. |
 | `BACKUP_ARTIFACT_DIR` | `/backups` | Directory containing generated `.rma.tar.gz` recovery packages. |
 | `BACKUP_POLL_INTERVAL_SECONDS` | `60` | Number of seconds between backup-scheduler checks. |
