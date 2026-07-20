@@ -25,6 +25,6 @@ Keep Lucide, Iconify, and React Icons. They serve app-native, dynamic catalog, a
 
 ## Automation policy
 
-Dependabot monitors Cargo, npm, GitHub Actions, Dockerfiles, and Compose. Patch/minor changes are grouped; majors remain separate. CI rejects catalog drift, undeclared/unused dependencies, peer failures, lockfile drift, unsupported runtime references, high/critical npm or Rust advisories, leaked secrets, and high/critical container findings.
+Dependabot monitors Cargo, npm, GitHub Actions, Dockerfiles, and Compose. Patch/minor changes are grouped; majors remain separate. CI rejects catalog drift, undeclared/unused dependencies, peer failures, lockfile drift, unsupported runtime references, high/critical npm or Rust advisories, leaked secrets, and fixable high/critical container findings. Unfixed base-image findings stay in Trivy output and require review whenever the pinned base digest changes.
 
 Do not add unbounded advisory exceptions. Any temporary exception needs an owner, upstream link, expiry, and removal condition.
