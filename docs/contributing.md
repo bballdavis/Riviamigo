@@ -67,18 +67,18 @@ and pre-release images from an approved `dev` candidate.
 PRs run deterministic quality, typecheck, unit-test, build, SQLx, and security
 checks. Browser E2E, live runtime/container validation, and fresh-install
 acceptance are intentionally outside the PR gate: E2E and runtime checks run
-weekly or by manual dispatch, while fresh-install and vehicle-artwork
+weekly or by manual dispatch, while `Fresh install` and `Artwork`
 validation remain manual-only. Full coverage runs are kept out of the PR
 gate because they duplicate the unit-test pass; use the documented coverage
 commands when a coverage report is needed.
 
 | Area               | Current checks                                                                                                                               |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quality            | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
-| Frontend           | Typecheck, two-worker unit tests, and Storybook build on PRs; Playwright browser tests weekly or manually                                    |
-| Backend            | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
-| Runtime/deployment | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build weekly or manually |
-| Security           | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
+| PR Quality         | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
+| PR Frontend        | Typecheck, two-worker unit tests, and Storybook build on PRs; Playwright browser tests weekly or manually                                    |
+| PR Backend         | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
+| Runtime            | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build weekly or manually |
+| PR Security        | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
 
 Dependency and secret failures are release blockers. High-risk Semgrep
 findings and critical/high Trivy findings are also blocking. Any reviewed

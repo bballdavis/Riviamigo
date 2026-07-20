@@ -7,12 +7,14 @@ import { api, useAuth, useDocumentTheme } from '@riviamigo/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
 import { Zap, Route, Battery } from 'lucide-react';
 import { normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
+import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../components/auth/PasswordRequirements';
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   validateSearch: z.object({
     redirect: z.string().optional(),
+    password_changed: z.literal('1').optional(),
   }),
   component: LoginPage,
 });
@@ -48,6 +50,9 @@ export function LoginPage() {
         setError('Incorrect email or password. Please try again.');
       } else if (status === 429) {
         setError('Too many sign-in attempts. Please wait a moment and try again.');
+      } else if (status === 422) {
+        const message = (err as { detail?: { message?: string } }).detail?.message;
+        setError(message ?? 'Check the password requirements and try again.');
       } else if (status != null && status >= 500) {
         setError('Something went wrong on our end. Please try again later.');
       } else {
@@ -101,6 +106,11 @@ export function LoginPage() {
           <p className="text-[11px] font-semibold text-fg-tertiary uppercase tracking-widest mb-5">
             {setupRequired ? 'Set up Riviamigo' : 'Sign in'}
           </p>
+          {search.password_changed === '1' && (
+            <p role="status" className="mb-4 rounded-lg border border-status-positive/30 bg-status-positive/10 px-3 py-2 text-xs text-status-positive">
+              Password changed. Sign in with your new password.
+            </p>
+          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <Input
@@ -119,9 +129,10 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               required
+              minLength={setupRequired ? PASSWORD_MIN_LENGTH : undefined}
               autoComplete={setupRequired ? 'new-password' : 'current-password'}
             />
-            {setupRequired && <p className="text-xs text-fg-tertiary">Create the first owner account. Passwords must be at least 12 characters.</p>}
+            {setupRequired && <PasswordRequirements password={password} />}
             {error && (
               <p className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
                 {error}

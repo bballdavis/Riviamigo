@@ -61,6 +61,7 @@ Common usage:
 - Prefer icon-plus-label patterns already established by shared primitives instead of inventing one-off controls.
 - Keep control order stable when editing existing flows unless the redesign intentionally updates the documented pattern.
 - Text inputs and textareas use the active theme surface for normal, focused, selected, and browser-autofilled values. The caret and selection use the accent token; browser-default autofill colors are not part of the product palette.
+- New-password inputs keep their real requirement directly below the field. Start neutral, show unmet requirements while the user types, and use the positive status treatment only once every displayed rule is satisfied; do not make users discover password policy through a failed submission.
 - Dashboard toolbar controls use the elevated surface consistently across vehicle selection, efficiency toggles, and date-range triggers.
 - Dashboard management rows use matching secondary icon-plus-label buttons for Open, Edit, and Export. Action groups wrap on small screens without shrinking below touch-safe targets; destructive Reset, Delete, and Restore actions remain visually distinct.
 - User-facing choice menus use the shared `SelectPicker` surface with a checkmarked selected state, keyboard navigation, and in-app dismissal; native browser select menus are not part of the product UI.
@@ -133,6 +134,7 @@ Common usage:
 - Documentation must support light, dark, and system modes through the same token values used by the app. Theme-specific selectors must include Docusaurus's `data-theme` attributes.
 - Section landing cards clarify audience and reading order without becoming a separate marketing system. Technical pages remain direct, readable, and content-first.
 - Desktop navigation and the mobile drawer expose the same Overview, Getting Started, User Guide, Operations, Development, and Reference structure. At approximately 390px, controls remain touch-safe, search remains reachable, and content never relies on horizontal scrolling.
+- Documentation search uses the app tokens for its trigger, detached text-entry field, panel, focus ring, and selected results; the search UI must not fall back to the plugin's default purple palette.
 - The documentation site contains no analytics, tracking pixels, cookies, or hosted search service. Production search is generated locally with the static site.
 
 ## Copy Tone

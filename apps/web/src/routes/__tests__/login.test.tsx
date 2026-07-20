@@ -47,6 +47,8 @@ describe('LoginPage', () => {
     render(<LoginPage />);
     expect(screen.getByRole('button', { name: /create owner account/i })).toBeInTheDocument();
     expect(screen.getByText(/at least 12 characters/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('0/12');
+    expect(document.querySelector('input[type="password"]')).toHaveAttribute('minlength', '12');
   });
 
   it('logs in and preserves the requested redirect', async () => {

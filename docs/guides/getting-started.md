@@ -34,7 +34,7 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
-4. Put an authenticated HTTPS gateway and host firewall rule in front of port `8080`, then open that address. Your first account becomes the instance owner and can connect the first Rivian.
+4. Put an authenticated HTTPS gateway and host firewall rule in front of port `8080`, then open that address. Your first account becomes the instance owner and can connect the first Rivian. Use a password with at least 12 characters; the setup screen shows the live requirement as you type.
 
 The standard stack defaults to production mode and publishes port `8080`. Follow [secure deployment](./secure-deployment.md) before making it available outside your local network.
 

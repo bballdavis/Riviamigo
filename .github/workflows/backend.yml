@@ -1,4 +1,4 @@
-name: Backend
+name: PR Backend
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ env:
 
 jobs:
   backend:
-    name: Format, SQLx, Clippy, and tests
+    name: Checks
     runs-on: ubuntu-latest
     services:
       timescaledb:

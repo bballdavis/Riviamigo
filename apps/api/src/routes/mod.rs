@@ -262,6 +262,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(idle_drain::router())
         .merge(locations::router())
         .merge(grafana::router())
+        .merge(auth::protected_router())
         .merge(users::router());
 
     let protected_metadata = Router::new()
