@@ -9,7 +9,7 @@
     "./tailwind/*": "./tailwind/*.ts"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.4",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.4.5"
   }
 }
