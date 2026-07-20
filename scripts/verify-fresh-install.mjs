@@ -156,7 +156,7 @@ function printProductionLogs() {
   console.error('Published production smoke-test container logs:');
   spawnSync(
     'docker',
-    [...compose, '--env-file', productionEnv, 'logs', '--no-color', '--tail', '200', 'app'],
+    [...compose, '--env-file', productionEnv, 'logs', '--no-color', '--tail', '200', 'riviamigo'],
     { cwd: root, stdio: 'inherit', env: productionEnvironment }
   );
 }

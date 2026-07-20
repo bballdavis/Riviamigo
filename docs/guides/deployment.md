@@ -47,7 +47,7 @@ Do not delete `data` during updates. Copy recovery packages off-host for disaste
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml logs -f
-docker compose --env-file .env -f compose/docker-compose.yml logs -f app
+docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo
 docker compose --env-file .env -f compose/docker-compose.yml pull
 docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```

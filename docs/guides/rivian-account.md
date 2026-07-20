@@ -18,7 +18,7 @@ The first update can take a little while, especially if the vehicle is asleep. R
 
 ## Troubleshooting
 
-- Watch the app logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f app`.
+- Watch the app logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`.
 - If authentication expires, remove the vehicle in Settings and add it again.
 - If an OTP does not arrive, confirm the phone number on the Rivian account and retry from Settings.
 - If the app reports temporary secure-session storage is unavailable, retry once and inspect the app logs if it persists.

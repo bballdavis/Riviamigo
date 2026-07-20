@@ -1,5 +1,5 @@
 services:
-  app:
+  riviamigo:
     image: riviamigo:local
     build:
       context: ..
