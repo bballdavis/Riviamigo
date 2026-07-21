@@ -283,13 +283,17 @@ fn populate_compose_connection_urls() -> anyhow::Result<()> {
     if std::env::var_os("REDIS_URL").is_none() {
         let password = std::env::var("REDIS_PASSWORD")
             .map_err(|_| anyhow::anyhow!("REDIS_URL or REDIS_PASSWORD is required"))?;
-        let mut url = url::Url::parse("redis://redis:6379")?;
-        url.set_password(Some(&password))
-            .map_err(|_| anyhow::anyhow!("REDIS_PASSWORD cannot be encoded in REDIS_URL"))?;
-        std::env::set_var("REDIS_URL", url.as_str());
+        std::env::set_var("REDIS_URL", compose_redis_url(&password)?);
     }
 
     Ok(())
+}
+
+fn compose_redis_url(password: &str) -> anyhow::Result<String> {
+    let mut url = url::Url::parse("redis://redis:6379")?;
+    url.set_password(Some(password))
+        .map_err(|_| anyhow::anyhow!("REDIS_PASSWORD cannot be encoded in REDIS_URL"))?;
+    Ok(url.into())
 }
 
 impl Default for RateLimitConfig {
@@ -352,6 +356,7 @@ impl RateLimitConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use redis::IntoConnectionInfo;
 
     fn production_config() -> Config {
         Config {
@@ -380,6 +385,15 @@ mod tests {
             cookie_insecure: None,
             rate_limit: RateLimitConfig::default(),
         }
+    }
+
+    #[test]
+    fn compose_redis_url_round_trips_uri_sensitive_passwords() {
+        let password = "session:@/?#% password";
+        let url = compose_redis_url(password).expect("compose Redis URL");
+        let connection = url.into_connection_info().expect("parse Redis URL");
+
+        assert_eq!(connection.redis_settings().password(), Some(password));
     }
 
     #[test]

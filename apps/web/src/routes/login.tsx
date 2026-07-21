@@ -8,6 +8,7 @@ import { Button, Input } from '@riviamigo/ui/primitives';
 import { Zap, Route, Battery } from 'lucide-react';
 import { normalizeLoginRedirectTarget } from '../components/layout/AuthGuard';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../components/auth/PasswordRequirements';
+import { emitAuthError } from '../components/feedback/toast';
 
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -46,18 +47,21 @@ export function LoginPage() {
       navigate({ to: (redirectTarget ?? '/') as never });
     } catch (err) {
       const status = (err as { status?: number }).status;
+      let message: string;
       if (status === 401) {
-        setError('Incorrect email or password. Please try again.');
+        message = 'Incorrect email or password. Please try again.';
       } else if (status === 429) {
-        setError('Too many sign-in attempts. Please wait a moment and try again.');
+        message = 'Too many sign-in attempts. Please wait a moment and try again.';
       } else if (status === 422) {
-        const message = (err as { detail?: { message?: string } }).detail?.message;
-        setError(message ?? 'Check the password requirements and try again.');
+        message = (err as { detail?: { message?: string } }).detail?.message
+          ?? 'Check the password requirements and try again.';
       } else if (status != null && status >= 500) {
-        setError('Something went wrong on our end. Please try again later.');
+        message = 'Something went wrong on our end. Please try again later.';
       } else {
-        setError('Unable to sign in. Please check your connection and try again.');
+        message = 'Unable to sign in. Please check your connection and try again.';
       }
+      setError(message);
+      emitAuthError('Sign-in failed', message);
     } finally {
       setLoading(false);
     }

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import type { ToastPayload } from './toast';
 
 // Use crypto.randomUUID() for toast IDs so they remain unique across HMR
 // reloads (a module-level counter resets to 0 every time the module is
@@ -7,13 +8,6 @@ function nextToastId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-interface ToastPayload {
-  title: string;
-  message: string;
-  code?: string;
-  variant?: 'error' | 'warning' | 'success' | 'info';
 }
 
 interface Toast extends ToastPayload {

@@ -336,8 +336,19 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health() -> &'static str {
-    "ok"
+async fn health(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> impl axum::response::IntoResponse {
+    match crate::services::redis_health::ping(&state.redis).await {
+        Ok(()) => (StatusCode::OK, "ok"),
+        Err(error) => {
+            tracing::error!(operation = "health", error = %error, "secure_session_store.unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "secure session storage unavailable",
+            )
+        }
+    }
 }
 
 fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClass {

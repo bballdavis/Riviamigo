@@ -209,14 +209,26 @@ describe('ConnectContent', () => {
 
     const user = userEvent.setup();
     renderWithQueryClient(<ConnectContent />);
+    const toast = vi.fn();
+    window.addEventListener('riviamigo:toast', toast as EventListener);
 
     await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
     await user.type(screen.getByPlaceholderText('Password'), 'correct-password');
     await user.click(screen.getByRole('button', { name: /connect account/i }));
 
-    expect(
-      await screen.findByText('Temporary secure-session storage is unavailable. Please try again.')
-    ).toBeInTheDocument();
+    try {
+      const message = 'Temporary secure-session storage is unavailable. Please try again.';
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      await waitFor(() => expect(toast).toHaveBeenCalled());
+      const event = toast.mock.calls.at(0)?.at(0) as CustomEvent | undefined;
+      expect(event?.detail).toMatchObject({
+        title: 'Rivian connection failed',
+        message,
+        variant: 'error',
+      });
+    } finally {
+      window.removeEventListener('riviamigo:toast', toast as EventListener);
+    }
   });
 
   it('shows the vehicle picker when multiple vehicles are returned', async () => {

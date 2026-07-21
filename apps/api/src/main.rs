@@ -64,6 +64,11 @@ async fn main() -> anyhow::Result<()> {
     )?);
 
     let redis = redis::Client::open(config.redis_url.clone())?;
+    services::redis_health::ping(&redis).await.map_err(|error| {
+        tracing::error!(operation = "startup", error = %error, "secure_session_store.unavailable");
+        anyhow::anyhow!("secure session storage is unavailable; Redis authentication failed or Redis is unreachable")
+    })?;
+    tracing::info!(operation = "startup", "secure_session_store.ready");
 
     let age_key = active_keys.age_key;
 
