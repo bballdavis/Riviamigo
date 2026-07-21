@@ -17,13 +17,15 @@ From the repository root, inspect the production stack:
 docker compose --env-file .env -f compose/docker-compose.yml ps
 ```
 
-The unified app, database, and Redis services should be running, and services with health checks should become healthy. If a service is restarting or unhealthy, inspect its recent logs before changing configuration:
+The unified app, database, and Redis services should be running, and services with health checks should become healthy. Riviamigo's app health check verifies its Redis-backed secure-session store, so it remains unhealthy if Redis is unreachable or rejects the configured password. If a service is restarting or unhealthy, inspect its recent logs before changing configuration:
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml logs --tail=200
 ```
 
 For one service, append its Compose service name to the logs command.
+
+For a secure-session failure, inspect the Riviamigo logs for `secure_session_store.unavailable` and confirm the app and Redis containers use the same current `REDIS_PASSWORD`; do not expose either password in a terminal, ticket, or log. Correct the configuration and restart through your normal deployment workflow. The app must become healthy before attempting owner or vehicle setup.
 
 ## Check the private origin
 

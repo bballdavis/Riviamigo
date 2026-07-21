@@ -7,6 +7,7 @@ pub mod demo_seed;
 pub mod external_connections;
 pub mod geofences;
 pub mod nominatim;
+pub mod redis_health;
 pub mod trip_enrichment;
 pub mod trip_routes;
 pub mod weather_enrichment;

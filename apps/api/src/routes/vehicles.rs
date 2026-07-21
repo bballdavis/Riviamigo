@@ -956,7 +956,12 @@ async fn store_encrypted_redis<T: Serialize>(
     let ciphertext = crate::ingestion::session_store::encrypt_json(value, &identity)
         .map_err(AppError::Internal)?;
 
-    let _: () = redis::AsyncCommands::set_ex(conn, key, ciphertext, ttl_secs).await?;
+    let _: () = redis::AsyncCommands::set_ex(conn, key, ciphertext, ttl_secs)
+        .await
+        .map_err(|error| {
+            warn!(operation = "connect_session.write", error = %error, "secure_session_store.unavailable");
+            AppError::Redis(error)
+        })?;
     Ok(())
 }
 
@@ -965,7 +970,12 @@ async fn load_encrypted_redis<T: DeserializeOwned>(
     conn: &mut redis::aio::MultiplexedConnection,
     key: &str,
 ) -> Result<Option<T>, AppError> {
-    let ciphertext: Option<Vec<u8>> = redis::AsyncCommands::get(conn, key).await?;
+    let ciphertext: Option<Vec<u8>> = redis::AsyncCommands::get(conn, key)
+        .await
+        .map_err(|error| {
+            warn!(operation = "connect_session.read", error = %error, "secure_session_store.unavailable");
+            AppError::Redis(error)
+        })?;
     let Some(ciphertext) = ciphertext else {
         return Ok(None);
     };

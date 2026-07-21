@@ -10,6 +10,7 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { ProtectedRoute } from '../components/layout/ProtectedRoute';
 import { ConnectedVehicleSuccess } from '../components/connect/ConnectedVehicleSuccess';
 import { connectErrorMessage } from '../components/connect/connectError';
+import { emitAuthError } from '../components/feedback/toast';
 import { Car, Check, KeyRound, ShieldCheck, Zap } from 'lucide-react';
 
 export const connectRoute = createRoute({
@@ -45,6 +46,10 @@ export function ConnectContent() {
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
   const currentStep = successVehicleName ? 2 : loading ? 1 : 0;
+  const reportError = (message: string) => {
+    setError(message);
+    emitAuthError('Rivian connection failed', message);
+  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -66,7 +71,7 @@ export function ConnectContent() {
         await finishConnectedResult(result);
       }
     } catch (err) {
-      setError(connectErrorMessage(err));
+      reportError(connectErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -75,14 +80,14 @@ export function ConnectContent() {
   async function finishConnectedResult(result: ConnectResult) {
     if (refreshVehicleId) {
       if (!refreshVehicle) {
-        setError('Choose an existing vehicle before refreshing Rivian credentials.');
+        reportError('Choose an existing vehicle before refreshing Rivian credentials.');
         return;
       }
       const matchingVehicle = result.vehicles.find(
         (vehicle) => vehicle.id === refreshVehicle.rivian_vehicle_id
       );
       if (!matchingVehicle) {
-        setError('That Rivian account does not include this vehicle.');
+        reportError('That Rivian account does not include this vehicle.');
         return;
       }
       await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
@@ -94,7 +99,7 @@ export function ConnectContent() {
     }
 
     if (!result.vehicles.length) {
-      setError('Rivian sign-in succeeded, but no vehicles were returned for this account.');
+      reportError('Rivian sign-in succeeded, but no vehicles were returned for this account.');
       return;
     }
     if (result.vehicles.length > 1) {
@@ -152,7 +157,7 @@ export function ConnectContent() {
                 onSelect={(vehicle) => {
                   setError('');
                   persistVehicle(vehicle).catch((err) => {
-                    setError(connectErrorMessage(err));
+                    reportError(connectErrorMessage(err));
                   });
                 }}
               />

@@ -60,6 +60,32 @@ describe('LoginPage', () => {
     await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging?view=table' }));
   });
 
+  it('keeps a sign-in failure inline and announces it as an error toast', async () => {
+    mockLogin.mockRejectedValue({ status: 401 });
+    const toast = vi.fn();
+    window.addEventListener('riviamigo:toast', toast as EventListener);
+    const user = userEvent.setup();
+    render(<LoginPage />);
+
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'owner@example.com');
+    await user.type(document.querySelector('input[type="password"]')!, 'wrong-password');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    try {
+      const message = 'Incorrect email or password. Please try again.';
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      await waitFor(() => expect(toast).toHaveBeenCalled());
+      const event = toast.mock.calls.at(0)?.at(0) as CustomEvent | undefined;
+      expect(event?.detail).toMatchObject({
+        title: 'Sign-in failed',
+        message,
+        variant: 'error',
+      });
+    } finally {
+      window.removeEventListener('riviamigo:toast', toast as EventListener);
+    }
+  });
+
   it('registers the owner and opens Rivian connection only during setup', async () => {
     setupRequired = true; mockRegister.mockResolvedValue(undefined);
     const user = userEvent.setup(); render(<LoginPage />);

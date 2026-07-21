@@ -21,6 +21,6 @@ The first update can take a little while, especially if the vehicle is asleep. R
 - Watch the app logs with `docker compose --env-file .env -f compose/docker-compose.yml logs -f riviamigo`.
 - If authentication expires, remove the vehicle in Settings and add it again.
 - If an OTP does not arrive, confirm the phone number on the Rivian account and retry from Settings.
-- If the app reports temporary secure-session storage is unavailable, retry once and inspect the app logs if it persists.
+- If the app reports temporary secure-session storage is unavailable, do not keep retrying Rivian credentials. Confirm the Riviamigo container is healthy, then inspect its logs for `secure_session_store.unavailable`; this means the server cannot authenticate to or reach its Redis session store.
 
 Rivian requests carry the information necessary to authenticate and collect vehicle data. See [privacy](../privacy.md) for the wider data-flow picture.
