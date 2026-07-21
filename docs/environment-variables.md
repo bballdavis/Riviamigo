@@ -18,7 +18,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `ALLOWED_ORIGINS` | Yes | None in production | Comma-separated exact HTTPS browser origins. Paths, queries, fragments, and HTTP origins are rejected in production. |
 | `POSTGRES_USER` | No | `riviamigo` | Database role used by production Compose. |
 | `DATABASE_URL` | No | Built from `POSTGRES_USER` and `POSTGRES_PASSWORD` | Complete PostgreSQL URL. Overrides the standard Compose-derived URL and is required for direct API runs without `POSTGRES_PASSWORD`. |
-| `REDIS_URL` | No | Built from `REDIS_PASSWORD` | Complete Redis URL. Overrides the standard Compose-derived URL and is required for direct API runs without `REDIS_PASSWORD`. |
+| `REDIS_URL` | No | Built from `REDIS_PASSWORD` | Complete Redis URL using the Redis ACL `default` user. Overrides the standard Compose-derived URL and is required for direct API runs without `REDIS_PASSWORD`. |
 
 ## Image and Compose values
 

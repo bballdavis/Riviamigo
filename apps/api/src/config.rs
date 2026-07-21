@@ -291,6 +291,11 @@ fn populate_compose_connection_urls() -> anyhow::Result<()> {
 
 fn compose_redis_url(password: &str) -> anyhow::Result<String> {
     let mut url = url::Url::parse("redis://redis:6379")?;
+    // Redis `requirepass` authenticates the built-in ACL `default` user. An
+    // empty username in a redis URL is parsed by current clients as an ACL
+    // username rather than as the legacy one-argument AUTH form.
+    url.set_username("default")
+        .map_err(|_| anyhow::anyhow!("REDIS_URL cannot contain the Redis username"))?;
     url.set_password(Some(password))
         .map_err(|_| anyhow::anyhow!("REDIS_PASSWORD cannot be encoded in REDIS_URL"))?;
     Ok(url.into())
@@ -393,6 +398,7 @@ mod tests {
         let url = compose_redis_url(password).expect("compose Redis URL");
         let connection = url.into_connection_info().expect("parse Redis URL");
 
+        assert_eq!(connection.redis_settings().username(), Some("default"));
         assert_eq!(connection.redis_settings().password(), Some(password));
     }
 
