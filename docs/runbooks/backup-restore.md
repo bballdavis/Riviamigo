@@ -35,7 +35,7 @@ For an in-app restore:
 2. Confirm the required safety package is written under the backup volume before the API stops.
 3. Follow the phase shown in the UI or inspect the matching `.restore-jobs/<job-id>.json` file on the host.
 4. If restoration fails, preserve both the uploaded and safety packages. The supervisor removes the maintenance marker and attempts to relaunch the API so diagnostics remain available.
-5. If the API does not recover, use the safety package with `scripts/restore-backup.mjs --force` after preserving PostgreSQL and artwork storage.
+5. If the API does not recover, preserve PostgreSQL and artwork storage, then use the safety package with `scripts/restore-backup.mjs --force`; the script reconstructs the SQLx ledger from the package manifest before starting the API.
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the destructive window. Public `/health` remains unavailable until the restored API is ready.
 

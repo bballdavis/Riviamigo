@@ -9,7 +9,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -208,6 +208,55 @@ function restoreDatabase(postgresUser, dumpPath) {
   if (result.status !== 0) throw new Error(`pg_restore failed with exit code ${result.status}.`);
 }
 
+function migrationLedgerEntries(sourceVersion) {
+  const migrationsDir = join(root, 'apps', 'api', 'migrations');
+  const migrations = readdirSync(migrationsDir)
+    .map((fileName) => {
+      const match = /^(\d+)_([^.]+)\.sql$/.exec(fileName);
+      if (!match) return null;
+      const version = Number.parseInt(match[1], 10);
+      return {
+        version,
+        description: match[2].replaceAll("'", "''"),
+        checksum: createHash('sha384').update(readFileSync(join(migrationsDir, fileName))).digest('hex'),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.version - right.version);
+  const latest = migrations.at(-1)?.version ?? 0;
+  if (!Number.isInteger(sourceVersion) || sourceVersion < 1 || sourceVersion > latest) {
+    throw new Error(`Recovery package migration version ${sourceVersion} is not supported by this release (latest ${latest}).`);
+  }
+  return migrations.filter((migration) => migration.version <= sourceVersion);
+}
+
+function restoreMigrationLedger(postgresUser, manifest) {
+  const sourceVersion = manifest.source?.migration_version;
+  const entries = migrationLedgerEntries(sourceVersion);
+  const values = entries
+    .map((entry) => `(${entry.version}, '${entry.description}', TRUE, decode('${entry.checksum}', 'hex'), 0)`)
+    .join(',\n      ');
+  const sql = `
+    CREATE SCHEMA IF NOT EXISTS public;
+    CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
+      version BIGINT PRIMARY KEY,
+      description TEXT NOT NULL,
+      installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
+      success BOOLEAN NOT NULL,
+      checksum BYTEA NOT NULL,
+      execution_time BIGINT NOT NULL
+    );
+    DROP TABLE IF EXISTS riviamigo._sqlx_migrations;
+    DELETE FROM public._sqlx_migrations;
+    INSERT INTO public._sqlx_migrations (version, description, success, checksum, execution_time)
+    VALUES ${values};
+  `;
+  run('docker', [
+    ...composeArgs(), 'exec', '-T', 'timescaledb', 'psql', '-U', postgresUser,
+    '-d', 'riviamigo', '-v', 'ON_ERROR_STOP=1', '-c', sql,
+  ]);
+}
+
 function restoreArtwork(staging) {
   const cachePath = join(staging, 'vehicle-image-cache');
   run('docker', [
@@ -243,6 +292,7 @@ try {
   ensureDatabaseState(postgresUser);
   if (force) clearApplicationDatabase(postgresUser);
   restoreDatabase(postgresUser, join(staging, 'database.dump'));
+  restoreMigrationLedger(postgresUser, manifest);
   restoreBackupSettings(postgresUser, staging);
   restoreArtwork(staging);
   run('docker', [...composeArgs(), 'up', ...(sourceBuild ? ['--build'] : []), '-d', 'riviamigo']);
