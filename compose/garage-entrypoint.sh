@@ -23,7 +23,7 @@ if [ ! -f "$INIT_MARKER" ]; then
   garage -c /etc/garage.toml layout assign "$NODE_ID" -z dc1 -c 1G
   garage -c /etc/garage.toml layout apply --version 1
 
-  garage -c /etc/garage.toml key import -n dev-key "$DEV_KEY_ID" "$DEV_SECRET"
+  garage -c /etc/garage.toml key import --yes -n dev-key "$DEV_KEY_ID" "$DEV_SECRET"
   garage -c /etc/garage.toml bucket create "$DEV_BUCKET"
   garage -c /etc/garage.toml bucket allow --read --write --owner "$DEV_BUCKET" --key "$DEV_KEY_ID"
 

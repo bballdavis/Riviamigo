@@ -13,12 +13,17 @@ use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
-use tar::{Archive, Builder, EntryType};
+use tar::{Archive, Builder};
 use tokio::{fs, process::Command, time::MissedTickBehavior};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use crate::{config::Config, errors::AppError};
+use crate::{
+    config::Config,
+    errors::AppError,
+    ingestion::session_store::decrypt_json,
+    services::s3_backups::{self, S3Settings},
+};
 
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
@@ -48,7 +53,7 @@ impl BackupRunTrigger {
 #[derive(Debug)]
 pub struct BackupExecutionResult {
     pub run_id: Uuid,
-    pub artifact_id: Uuid,
+    pub artifact_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +80,13 @@ struct BackupSettingsRow {
     day_of_month: Option<i16>,
     retention_count: i32,
     prefix: String,
+    local_enabled: bool,
+    s3_enabled: bool,
+    endpoint: String,
+    region: Option<String>,
+    bucket: String,
+    access_key: Option<String>,
+    secret_key_encrypted: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -87,6 +99,9 @@ struct BackupSettings {
     day_of_month: Option<i16>,
     retention_count: i32,
     prefix: String,
+    local_enabled: bool,
+    s3_enabled: bool,
+    s3: Option<S3Settings>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -267,7 +282,7 @@ async fn run_backup_inner(
     requested_by: Option<Uuid>,
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
-    let settings = load_settings(pool).await?;
+    let settings = load_settings(pool, config).await?;
     let run_id = sqlx::query_scalar(
         r#"
         INSERT INTO riviamigo.backup_runs (trigger, status, requested_by, started_at, updated_at)
@@ -301,7 +316,7 @@ async fn run_backup_inner(
         let checksum_sha256 = compute_sha256(&artifact_path).await?;
         let database_name = current_database_name(pool).await?;
         let timescale_version = current_timescale_version(pool).await?;
-        let manifest = json!({
+        let base_manifest = json!({
             "artifact_kind": driver.label(),
             "format": RECOVERY_PACKAGE_FORMAT,
             "package": package_manifest,
@@ -311,26 +326,29 @@ async fn run_backup_inner(
             "trigger": trigger.as_str(),
             "prefix": settings.prefix,
             "retention_count": settings.retention_count,
-            "storage_type": "local",
         });
+        let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+        let retain_local = settings.local_enabled || matches!(trigger, BackupRunTrigger::PreRestore);
+        let mut artifact_ids = Vec::new();
+        if retain_local {
+            let storage_type = if matches!(trigger, BackupRunTrigger::PreRestore) { "safety" } else { "local" };
+            artifact_ids.push(insert_artifact(pool, Some(run_id), storage_type, &file_name, &storage_path, size_bytes, &checksum_sha256, with_storage(&base_manifest, storage_type, false)).await?);
+        }
 
-        let artifact_id = sqlx::query_scalar(
-            r#"
-            INSERT INTO riviamigo.backup_artifacts (
-                run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest
-            )
-            VALUES ($1, 'local', $2, $3, $4, $5, $6)
-            RETURNING id
-            "#,
-        )
-        .bind(run_id)
-        .bind(&file_name)
-        .bind(&storage_path)
-        .bind(i64::try_from(metadata.len()).unwrap_or(i64::MAX))
-        .bind(&checksum_sha256)
-        .bind(manifest)
-        .fetch_one(pool)
-        .await?;
+        let mut published_key = retain_local.then_some(storage_path.clone());
+        if settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore) {
+            let s3 = settings.s3.as_ref().ok_or_else(|| AppError::Validation("S3 is enabled but its credentials are incomplete".into()))?;
+            let key = s3_backups::object_key(&settings.prefix, created_at, run_id);
+            if let Err(error) = s3_backups::upload(s3, &key, &artifact_path, &checksum_sha256, run_id, created_at).await {
+                if !retain_local {
+                    artifact_ids.push(insert_artifact(pool, Some(run_id), "local", &file_name, &storage_path, size_bytes, &checksum_sha256, with_storage(&base_manifest, "local", true)).await?);
+                }
+                return Err(AppError::DependencyUnavailable(format!("S3 upload failed; the recovery package was retained locally at {storage_path}: {error}")));
+            }
+            let remote_locator = s3_backups::locator(&s3.bucket, &key);
+            artifact_ids.push(insert_artifact(pool, Some(run_id), "s3", &file_name, &remote_locator, size_bytes, &checksum_sha256, with_storage(&base_manifest, "s3", false)).await?);
+            published_key = Some(remote_locator);
+        }
 
         sqlx::query(
             r#"
@@ -340,13 +358,32 @@ async fn run_backup_inner(
             "#,
         )
         .bind(run_id)
-        .bind(&storage_path)
+        .bind(published_key)
         .execute(pool)
         .await?;
 
         prune_retained_artifacts(pool, settings.retention_count).await?;
+        if let Some(s3) = settings.s3.as_ref().filter(|_| settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore)) {
+            if let Err(error) = prune_remote_artifacts(pool, s3, settings.retention_count).await {
+                if !retain_local {
+                    artifact_ids.push(insert_artifact(pool, Some(run_id), "local", &file_name, &storage_path, size_bytes, &checksum_sha256, with_storage(&base_manifest, "local", true)).await?);
+                }
+                return Err(AppError::DependencyUnavailable(format!(
+                    "S3 retention failed; the recovery package was retained locally at {storage_path}: {error}"
+                )));
+            }
+        }
+        if settings.s3_enabled && !retain_local && !matches!(trigger, BackupRunTrigger::PreRestore) {
+            if let Err(error) = fs::remove_file(&artifact_path).await {
+                tracing::warn!(
+                    path = %artifact_path.display(),
+                    error = %error,
+                    "backup.cleanup.s3_staging_failed"
+                );
+            }
+        }
 
-        Ok::<BackupExecutionResult, AppError>(BackupExecutionResult { run_id, artifact_id })
+        Ok::<BackupExecutionResult, AppError>(BackupExecutionResult { run_id, artifact_ids })
     }
     .await;
 
@@ -363,7 +400,19 @@ async fn run_backup_inner(
         .execute(pool)
         .await?;
 
-        if fs::try_exists(&artifact_path).await.unwrap_or(false) {
+        let package_is_cataloged_locally: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM riviamigo.backup_artifacts
+                WHERE run_id = $1 AND storage_type IN ('local', 'safety')
+            )
+            "#,
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await?;
+        if !package_is_cataloged_locally && fs::try_exists(&artifact_path).await.unwrap_or(false) {
             let _ = fs::remove_file(&artifact_path).await;
         }
     }
@@ -392,7 +441,7 @@ async fn maybe_run_scheduled_backup(
         PG_DUMP_UNAVAILABLE_LOGGED.store(false, Ordering::Relaxed);
     }
 
-    let settings = load_settings(pool).await?;
+    let settings = load_settings(pool, config).await?;
     if !settings.enabled {
         return Ok(None);
     }
@@ -403,7 +452,7 @@ async fn maybe_run_scheduled_backup(
         SELECT id
         FROM riviamigo.backup_runs
         WHERE trigger IN ('manual', 'scheduled')
-          AND status IN ('pending', 'running', 'succeeded')
+          AND status IN ('pending', 'running', 'succeeded', 'failed')
           AND created_at >= $1
         ORDER BY created_at DESC
         LIMIT 1
@@ -421,10 +470,11 @@ async fn maybe_run_scheduled_backup(
     Ok(Some(result.run_id))
 }
 
-async fn load_settings(pool: &PgPool) -> Result<BackupSettings, AppError> {
+async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings, AppError> {
     let row = sqlx::query_as::<_, BackupSettingsRow>(
         r#"
-        SELECT enabled, frequency, run_at, timezone, day_of_week, day_of_month, retention_count, prefix
+        SELECT enabled, frequency, run_at, timezone, day_of_week, day_of_month, retention_count, prefix,
+               local_enabled, s3_enabled, endpoint, region, bucket, access_key, secret_key_encrypted
         FROM riviamigo.backup_settings
         WHERE id = TRUE
         "#,
@@ -433,18 +483,24 @@ async fn load_settings(pool: &PgPool) -> Result<BackupSettings, AppError> {
     .await?;
 
     match row {
-        Some(row) => Ok(BackupSettings {
-            enabled: row.enabled,
-            frequency: BackupFrequency::try_from(row.frequency.as_str())?,
-            run_at: row.run_at,
-            timezone: row.timezone.parse::<Tz>().map_err(|_| {
-                AppError::Validation("timezone must be a valid IANA timezone".into())
-            })?,
-            day_of_week: row.day_of_week,
-            day_of_month: row.day_of_month,
-            retention_count: row.retention_count.max(1),
-            prefix: normalize_prefix(&row.prefix),
-        }),
+        Some(row) => {
+            let s3 = resolve_s3_settings(&row, config)?;
+            Ok(BackupSettings {
+                enabled: row.enabled,
+                frequency: BackupFrequency::try_from(row.frequency.as_str())?,
+                run_at: row.run_at,
+                timezone: row.timezone.parse::<Tz>().map_err(|_| {
+                    AppError::Validation("timezone must be a valid IANA timezone".into())
+                })?,
+                day_of_week: row.day_of_week,
+                day_of_month: row.day_of_month,
+                retention_count: row.retention_count.max(1),
+                prefix: normalize_prefix(&row.prefix),
+                local_enabled: row.local_enabled,
+                s3_enabled: row.s3_enabled,
+                s3,
+            })
+        }
         None => Ok(BackupSettings {
             enabled: false,
             frequency: BackupFrequency::Weekly,
@@ -454,8 +510,69 @@ async fn load_settings(pool: &PgPool) -> Result<BackupSettings, AppError> {
             day_of_month: Some(1),
             retention_count: 8,
             prefix: "riviamigo".into(),
+            local_enabled: true,
+            s3_enabled: false,
+            s3: None,
         }),
     }
+}
+
+fn resolve_s3_settings(
+    row: &BackupSettingsRow,
+    config: &Config,
+) -> Result<Option<S3Settings>, AppError> {
+    if !row.s3_enabled {
+        return Ok(None);
+    }
+    let saved_secret = match row.secret_key_encrypted.as_deref() {
+        Some(ciphertext) => {
+            let identity = config
+                .age_encryption_key
+                .as_deref()
+                .ok_or_else(|| {
+                    AppError::Internal(anyhow::anyhow!("age encryption key is unavailable"))
+                })?
+                .parse::<age::x25519::Identity>()
+                .map_err(|_| AppError::Internal(anyhow::anyhow!("invalid age encryption key")))?;
+            Some(decrypt_json::<String>(ciphertext, &identity).map_err(AppError::Internal)?)
+        }
+        None => None,
+    };
+    let saved_pair = row.access_key.clone().zip(saved_secret);
+    let env_pair = config
+        .s3_access_key
+        .clone()
+        .zip(config.s3_secret_key.clone());
+    let (access_key, secret_key) = saved_pair
+        .or(env_pair)
+        .ok_or_else(|| AppError::Validation("S3 access key and secret key are required".into()))?;
+    let endpoint = if row.endpoint.trim().is_empty() {
+        config.s3_endpoint.clone().unwrap_or_default()
+    } else {
+        row.endpoint.clone()
+    };
+    if row.bucket.trim().is_empty() {
+        return Err(AppError::Validation("S3 bucket is required".into()));
+    }
+    Ok(Some(S3Settings {
+        endpoint,
+        region: row
+            .region
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "us-east-1".into()),
+        bucket: row.bucket.clone(),
+        prefix: row.prefix.clone(),
+        access_key,
+        secret_key,
+    }))
+}
+
+pub async fn configured_s3_settings(
+    pool: &PgPool,
+    config: &Config,
+) -> Result<Option<S3Settings>, AppError> {
+    Ok(load_settings(pool, config).await?.s3)
 }
 
 fn build_artifact_path(
@@ -513,6 +630,7 @@ async fn execute_recovery_package(
             &manifest_bytes,
         )
         .await?;
+        validate_recovery_package(artifact_path).await?;
         Ok::<serde_json::Value, AppError>(manifest)
     }
     .await;
@@ -551,16 +669,17 @@ fn validate_recovery_package_sync(
         let mut entry = entry.map_err(|error| {
             AppError::Validation(format!("Invalid recovery archive entry: {error}"))
         })?;
-        let entry_type = entry.header().entry_type();
-        if !matches!(entry_type, EntryType::Regular | EntryType::Directory) {
-            return Err(AppError::Validation(
-                "Recovery packages may contain only regular files and directories.".into(),
-            ));
-        }
         let path = entry
             .path()
             .map_err(|error| AppError::Validation(format!("Invalid archive path: {error}")))?;
         let normalized = path.to_string_lossy().replace('\\', "/");
+        let entry_type = entry.header().entry_type();
+        if !entry_type.is_file() && !entry_type.is_dir() {
+            return Err(AppError::Validation(format!(
+                "Recovery package member {normalized} has unsupported archive type {}.",
+                entry_type.as_byte()
+            )));
+        }
         if path.is_absolute()
             || normalized.starts_with('/')
             || normalized.split('/').any(|segment| segment == "..")
@@ -579,7 +698,7 @@ fn validate_recovery_package_sync(
                 "Unexpected recovery package member: {normalized}"
             )));
         }
-        if entry_type == EntryType::Directory {
+        if entry_type.is_dir() {
             continue;
         }
 
@@ -945,6 +1064,8 @@ async fn write_sanitized_backup_settings(pool: &PgPool, path: &Path) -> Result<(
                 'day_of_week', day_of_week,
                 'day_of_month', day_of_month,
                 'retention_count', retention_count,
+                'local_enabled', local_enabled,
+                's3_enabled', s3_enabled,
                 'target_type', target_type,
                 'endpoint', endpoint,
                 'region', region,
@@ -1013,6 +1134,34 @@ async fn write_recovery_archive(
     let cache_root = cache_root.to_path_buf();
     let manifest_bytes = manifest_bytes.to_vec();
     tokio::task::spawn_blocking(move || {
+        fn append_regular_file(
+            archive: &mut Builder<GzEncoder<File>>,
+            source: &Path,
+            archive_path: &str,
+        ) -> Result<(), anyhow::Error> {
+            let mut source_file = File::open(source)?;
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_size(source_file.metadata()?.len());
+            header.set_mode(0o600);
+            header.set_cksum();
+            archive.append_data(&mut header, archive_path, &mut source_file)?;
+            Ok(())
+        }
+
+        fn append_directory(
+            archive: &mut Builder<GzEncoder<File>>,
+            archive_path: &str,
+        ) -> Result<(), anyhow::Error> {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o700);
+            header.set_cksum();
+            archive.append_data(&mut header, archive_path, Cursor::new(Vec::<u8>::new()))?;
+            Ok(())
+        }
+
         let file = File::create(&artifact_path)?;
         let encoder = GzEncoder::new(file, Compression::default());
         let mut archive = Builder::new(encoder);
@@ -1026,22 +1175,30 @@ async fn write_recovery_archive(
             "manifest.json",
             Cursor::new(manifest_bytes),
         )?;
-        archive.append_path_with_name(&dump_path, "database.dump")?;
-        archive.append_path_with_name(&settings_path, "backup-settings.json")?;
+        append_regular_file(&mut archive, &dump_path, "database.dump")?;
+        append_regular_file(&mut archive, &settings_path, "backup-settings.json")?;
 
+        append_directory(&mut archive, "vehicle-image-cache")?;
         if cache_root.is_dir() {
-            archive.append_dir_all("vehicle-image-cache", &cache_root)?;
-        } else {
-            let mut directory_header = tar::Header::new_gnu();
-            directory_header.set_entry_type(tar::EntryType::Directory);
-            directory_header.set_size(0);
-            directory_header.set_mode(0o700);
-            directory_header.set_cksum();
-            archive.append_data(
-                &mut directory_header,
-                "vehicle-image-cache",
-                Cursor::new(Vec::<u8>::new()),
-            )?;
+            let mut cache_files = WalkDir::new(&cache_root)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.into_path())),
+                    Ok(_) => None,
+                    Err(error) => Some(Err(anyhow::anyhow!(error))),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            cache_files.sort();
+            for cache_file in cache_files {
+                let relative = cache_file.strip_prefix(&cache_root)?;
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                append_regular_file(
+                    &mut archive,
+                    &cache_file,
+                    &format!("vehicle-image-cache/{relative}"),
+                )?;
+            }
         }
 
         let encoder = archive.into_inner()?;
@@ -1103,6 +1260,51 @@ async fn compute_sha256(path: &Path) -> Result<String, AppError> {
     .map_err(AppError::from)
 }
 
+fn with_storage(
+    base: &serde_json::Value,
+    storage_type: &str,
+    emergency_fallback: bool,
+) -> serde_json::Value {
+    let mut value = base.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.insert("storage_type".into(), json!(storage_type));
+        if emergency_fallback {
+            object.insert("emergency_fallback".into(), json!(true));
+        }
+    }
+    value
+}
+
+async fn insert_artifact(
+    pool: &PgPool,
+    run_id: Option<Uuid>,
+    storage_type: &str,
+    file_name: &str,
+    storage_path: &str,
+    size_bytes: i64,
+    checksum_sha256: &str,
+    manifest: serde_json::Value,
+) -> Result<Uuid, AppError> {
+    Ok(sqlx::query_scalar(
+        r#"INSERT INTO riviamigo.backup_artifacts
+           (run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (storage_path) WHERE storage_type = 's3'
+           DO UPDATE SET file_name = EXCLUDED.file_name, size_bytes = EXCLUDED.size_bytes,
+                         checksum_sha256 = EXCLUDED.checksum_sha256, manifest = EXCLUDED.manifest
+           RETURNING id"#,
+    )
+    .bind(run_id)
+    .bind(storage_type)
+    .bind(file_name)
+    .bind(storage_path)
+    .bind(size_bytes)
+    .bind(checksum_sha256)
+    .bind(manifest)
+    .fetch_one(pool)
+    .await?)
+}
+
 async fn prune_retained_artifacts(pool: &PgPool, retention_count: i32) -> Result<(), AppError> {
     let rows = sqlx::query_as::<_, PrunableArtifactRow>(
         r#"
@@ -1129,6 +1331,26 @@ async fn prune_retained_artifacts(pool: &PgPool, retention_count: i32) -> Result
             .await?;
     }
 
+    Ok(())
+}
+
+async fn prune_remote_artifacts(
+    pool: &PgPool,
+    settings: &S3Settings,
+    retention_count: i32,
+) -> Result<(), AppError> {
+    let rows = s3_backups::list(settings)
+        .await
+        .map_err(|error| AppError::DependencyUnavailable(error.to_string()))?;
+    for row in rows.into_iter().skip(retention_count.max(1) as usize) {
+        s3_backups::delete(settings, &row.key)
+            .await
+            .map_err(|error| AppError::DependencyUnavailable(error.to_string()))?;
+        sqlx::query("DELETE FROM riviamigo.backup_artifacts WHERE storage_type = 's3' AND storage_path = $1")
+            .bind(s3_backups::locator(&settings.bucket, &row.key))
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 

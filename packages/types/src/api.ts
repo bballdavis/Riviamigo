@@ -644,7 +644,7 @@ export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | '
 
 export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore' | 'upload' | 'pre_restore';
 
-export type BackupArtifactStorageType = 'local' | 'uploaded' | 'safety';
+export type BackupArtifactStorageType = 'local' | 'uploaded' | 'safety' | 's3';
 
 export interface BackupArtifactManifest {
   artifact_kind?: string;
@@ -685,6 +685,8 @@ export interface BackupSettings {
   day_of_week: number | null;
   day_of_month: number | null;
   retention_count: number;
+  local_enabled: boolean;
+  s3_enabled: boolean;
   target_type: BackupTargetType;
   endpoint: string;
   region: string | null;
@@ -709,7 +711,7 @@ export interface BackupRun {
 
 export interface BackupArtifact {
   id: string;
-  run_id: string;
+  run_id: string | null;
   storage_type: BackupArtifactStorageType;
   file_name: string;
   storage_path: string;
@@ -748,11 +750,12 @@ export interface BackupOverview {
     restore_automation_reason?: string | null;
     reason: string | null;
   };
+  s3_catalog_error: string | null;
 }
 
 export interface RunBackupResponse {
   run: BackupRun;
-  artifact: BackupArtifact;
+  artifacts: BackupArtifact[];
 }
 
 export interface CreateBackupRestoreRequestBody {
@@ -801,6 +804,8 @@ export interface UpdateBackupSettingsBody {
   day_of_week: number | null;
   day_of_month: number | null;
   retention_count: number;
+  local_enabled: boolean;
+  s3_enabled: boolean;
   target_type: BackupTargetType;
   endpoint: string;
   region: string | null;

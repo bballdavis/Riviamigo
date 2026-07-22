@@ -141,7 +141,7 @@ async fn build_response(
 ) -> Result<ExternalConnectionsResponse, AppError> {
     let rows = connections::list(&state.pool).await?;
     let backup = sqlx::query_as::<_, (bool, Option<String>)>(
-        "SELECT enabled, NULLIF(endpoint, '') FROM riviamigo.backup_settings WHERE id = TRUE",
+        "SELECT s3_enabled, NULLIF(endpoint, '') FROM riviamigo.backup_settings WHERE id = TRUE",
     )
     .fetch_optional(&state.pool)
     .await?

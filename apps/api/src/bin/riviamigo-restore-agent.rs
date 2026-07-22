@@ -91,6 +91,9 @@ async fn execute_job(
         if let Err(error) = perform_restore(&state.config, job_id).await {
             let _ = restore_jobs::fail(&state.config, job_id, &error).await;
             let _ = fs::remove_file(restore_marker_path()).await;
+            if let Ok(job) = restore_jobs::read(&state.config, job_id).await {
+                cleanup_remote_staging(&job.artifact_path).await;
+            }
         }
     });
     Ok((StatusCode::ACCEPTED, Json(json!({ "accepted": true }))))
@@ -181,7 +184,20 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
         "Restore completed successfully",
     )
     .await?;
+    cleanup_remote_staging(&job.artifact_path).await;
     Ok(())
+}
+
+async fn cleanup_remote_staging(path: &str) {
+    let path = Path::new(path);
+    if path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some(".remote-staging")
+    {
+        let _ = fs::remove_file(path).await;
+    }
 }
 
 fn api_pid_path() -> PathBuf {
@@ -331,23 +347,27 @@ async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result
     let json_literal = serde_json::to_string(&value)?.replace('\'', "''");
     let sql = format!(
         r#"
+        ALTER TABLE riviamigo.backup_settings
+          ADD COLUMN IF NOT EXISTS local_enabled boolean NOT NULL DEFAULT true,
+          ADD COLUMN IF NOT EXISTS s3_enabled boolean NOT NULL DEFAULT false;
         INSERT INTO riviamigo.backup_settings (
           id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
-          retention_count, target_type, endpoint, region, bucket, prefix, access_key,
+          retention_count, local_enabled, s3_enabled, target_type, endpoint, region, bucket, prefix, access_key,
           secret_key_encrypted, updated_at, updated_by
         )
         SELECT TRUE, enabled, frequency, run_at::time, timezone, day_of_week, day_of_month,
-          retention_count, target_type, endpoint, region, bucket, prefix, access_key,
+          retention_count, COALESCE(local_enabled, TRUE), COALESCE(s3_enabled, FALSE), target_type, endpoint, region, bucket, prefix, access_key,
           NULL, now(), NULL
         FROM jsonb_to_record('{json_literal}'::jsonb) AS settings(
           present boolean, enabled boolean, frequency text, run_at text, timezone text,
-          day_of_week smallint, day_of_month smallint, retention_count integer,
+          day_of_week smallint, day_of_month smallint, retention_count integer, local_enabled boolean, s3_enabled boolean,
           target_type text, endpoint text, region text, bucket text, prefix text, access_key text
         )
         ON CONFLICT (id) DO UPDATE SET
           enabled = EXCLUDED.enabled, frequency = EXCLUDED.frequency, run_at = EXCLUDED.run_at,
           timezone = EXCLUDED.timezone, day_of_week = EXCLUDED.day_of_week,
           day_of_month = EXCLUDED.day_of_month, retention_count = EXCLUDED.retention_count,
+          local_enabled = EXCLUDED.local_enabled, s3_enabled = EXCLUDED.s3_enabled,
           target_type = EXCLUDED.target_type, endpoint = EXCLUDED.endpoint,
           region = EXCLUDED.region, bucket = EXCLUDED.bucket, prefix = EXCLUDED.prefix,
           access_key = EXCLUDED.access_key, secret_key_encrypted = NULL,
