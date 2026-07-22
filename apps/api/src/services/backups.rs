@@ -22,7 +22,10 @@ use crate::{
     config::Config,
     errors::AppError,
     ingestion::session_store::decrypt_json,
-    services::s3_backups::{self, S3Settings},
+    services::{
+        restore_compatibility::{self, RECOVERY_FORMAT_V1, RECOVERY_FORMAT_V2},
+        s3_backups::{self, S3Settings},
+    },
 };
 
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
@@ -31,7 +34,7 @@ static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
 const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools before creating a full recovery package";
 const BACKUP_DRIVER_UNSUPPORTED_MESSAGE: &str =
     "manifest-only JSON backups are not valid recovery packages; use BACKUP_DRIVER=pg_dump";
-const RECOVERY_PACKAGE_FORMAT: &str = "riviamigo-recovery-v1";
+const RECOVERY_PACKAGE_FORMAT: &str = RECOVERY_FORMAT_V2;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -606,15 +609,18 @@ async fn execute_recovery_package(
     fs::create_dir_all(&temp_root).await?;
     let dump_path = temp_root.join("database.dump");
     let settings_path = temp_root.join("backup-settings.json");
+    let history_path = temp_root.join("operational-history.json");
     let cache_root = PathBuf::from(&config.vehicle_image_cache_dir);
 
     let result = async {
         execute_pg_dump(config, &dump_path).await?;
         write_sanitized_backup_settings(pool, &settings_path).await?;
+        write_operational_history(pool, &history_path).await?;
         let manifest = build_recovery_manifest(
             pool,
             &dump_path,
             &settings_path,
+            &history_path,
             &cache_root,
             trigger,
             created_at,
@@ -626,6 +632,7 @@ async fn execute_recovery_package(
             artifact_path,
             &dump_path,
             &settings_path,
+            &history_path,
             &cache_root,
             &manifest_bytes,
         )
@@ -650,6 +657,111 @@ pub async fn validate_recovery_package(
         })?
 }
 
+/// Rebuild missing local catalog rows from the persistent backup directory.
+/// Restore never deletes this directory, so the files are authoritative when
+/// operational-history rows are absent or came from a different host.
+pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<usize, AppError> {
+    let root = PathBuf::from(&config.backup_artifact_dir);
+    if !fs::try_exists(&root).await.unwrap_or(false) {
+        return Ok(0);
+    }
+    let scan_root = root.clone();
+    let paths = tokio::task::spawn_blocking(move || {
+        let mut paths = WalkDir::new(scan_root)
+            .into_iter()
+            .filter_entry(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !name.starts_with('.'))
+            })
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .map(|entry| entry.into_path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".rma.tar.gz"))
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    })
+    .await
+    .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+
+    let mut inserted = 0;
+    for path in paths {
+        let storage_path = path.to_string_lossy().into_owned();
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM riviamigo.backup_artifacts WHERE storage_type <> 's3' AND storage_path = $1)",
+        )
+        .bind(&storage_path)
+        .fetch_one(pool)
+        .await?;
+        if exists {
+            continue;
+        }
+        let validated = match validate_recovery_package(&path).await {
+            Ok(validated) => validated,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), error = %error, "backup.catalog.invalid_local_package");
+                continue;
+            }
+        };
+        let storage_type = if path.starts_with(root.join("imports")) {
+            "uploaded"
+        } else if validated
+            .manifest
+            .get("trigger")
+            .and_then(serde_json::Value::as_str)
+            == Some("pre_restore")
+        {
+            "safety"
+        } else {
+            "local"
+        };
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("recovery-package.rma.tar.gz");
+        let created_at = validated
+            .manifest
+            .get("created_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+            .unwrap_or_else(Utc::now);
+        let result = sqlx::query(
+            r#"
+            INSERT INTO riviamigo.backup_artifacts
+              (run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
+            SELECT NULL, $1, $2, $3, $4, $5, $6, $7
+            WHERE NOT EXISTS (
+              SELECT 1 FROM riviamigo.backup_artifacts
+              WHERE storage_type <> 's3' AND storage_path = $3
+            )
+            "#,
+        )
+        .bind(storage_type)
+        .bind(file_name)
+        .bind(&storage_path)
+        .bind(validated.size_bytes)
+        .bind(&validated.checksum_sha256)
+        .bind(json!({
+            "artifact_kind": "recovery_package",
+            "format": validated.manifest.get("format").cloned().unwrap_or(serde_json::Value::Null),
+            "package": validated.manifest,
+            "restore_availability": "available",
+            "catalog_source": "filesystem_rescan"
+        }))
+        .bind(created_at)
+        .execute(pool)
+        .await?;
+        inserted += result.rows_affected() as usize;
+    }
+    Ok(inserted)
+}
+
 fn validate_recovery_package_sync(
     package_path: &Path,
 ) -> Result<ValidatedRecoveryPackage, AppError> {
@@ -660,6 +772,7 @@ fn validate_recovery_package_sync(
     let mut archive = Archive::new(decoder);
     let mut manifest_bytes = None;
     let mut file_checksums = HashMap::<String, String>::new();
+    let mut file_sizes = HashMap::<String, u64>::new();
     let mut database_magic = Vec::with_capacity(5);
 
     for entry in archive
@@ -690,7 +803,7 @@ fn validate_recovery_package_sync(
         }
         let allowed = matches!(
             normalized.as_str(),
-            "manifest.json" | "database.dump" | "backup-settings.json"
+            "manifest.json" | "database.dump" | "backup-settings.json" | "operational-history.json"
         ) || normalized == "vehicle-image-cache"
             || normalized.starts_with("vehicle-image-cache/");
         if !allowed {
@@ -714,6 +827,7 @@ fn validate_recovery_package_sync(
             continue;
         }
 
+        let entry_size = entry.size();
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
@@ -727,6 +841,7 @@ fn validate_recovery_package_sync(
             }
             hasher.update(&buffer[..read]);
         }
+        file_sizes.insert(normalized.clone(), entry_size);
         file_checksums.insert(normalized, hex::encode(hasher.finalize()));
     }
 
@@ -735,22 +850,84 @@ fn validate_recovery_package_sync(
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
         AppError::Validation(format!("Recovery manifest is invalid JSON: {error}"))
     })?;
-    if manifest.get("format").and_then(|value| value.as_str()) != Some(RECOVERY_PACKAGE_FORMAT) {
+    let format = manifest
+        .get("format")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let format_version = manifest
+        .get("format_version")
+        .and_then(|value| value.as_u64());
+    let supported_format = matches!(
+        (format, format_version),
+        (RECOVERY_FORMAT_V1, Some(1)) | (RECOVERY_FORMAT_V2, Some(2))
+    );
+    if !supported_format {
         return Err(AppError::Validation(
             "Unsupported recovery package format.".into(),
         ));
     }
-    if manifest
-        .get("format_version")
-        .and_then(|value| value.as_u64())
-        != Some(1)
-    {
-        return Err(AppError::Validation(
-            "Unsupported recovery package version.".into(),
-        ));
+    if format == RECOVERY_FORMAT_V2 {
+        for pointer in [
+            "/source/postgres_major",
+            "/source/migration_version",
+            "/source/migration_ledger",
+            "/source/schema_fingerprint",
+            "/restore/engine_version",
+        ] {
+            if manifest.pointer(pointer).is_none() {
+                return Err(AppError::Validation(format!(
+                    "Recovery v2 manifest is missing {pointer}."
+                )));
+            }
+        }
+        let engine_version = manifest
+            .pointer("/restore/engine_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default();
+        if engine_version == 0
+            || engine_version > u64::from(restore_compatibility::RESTORE_ENGINE_VERSION)
+        {
+            return Err(AppError::Validation(format!(
+                "Recovery package requires unsupported restore engine version {engine_version}."
+            )));
+        }
+        validate_v2_migration_ledger(&manifest)?;
+        for component in [
+            "database",
+            "backup_settings",
+            "operational_history",
+            "vehicle_image_cache",
+        ] {
+            let value = manifest
+                .pointer(&format!("/components/{component}"))
+                .ok_or_else(|| {
+                    AppError::Validation(format!(
+                        "Recovery v2 manifest is missing component {component}."
+                    ))
+                })?;
+            if value.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+                || value
+                    .get("restore_policy")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(str::is_empty)
+                || !value
+                    .get("redactions")
+                    .is_some_and(serde_json::Value::is_array)
+            {
+                return Err(AppError::Validation(format!(
+                    "Recovery v2 component {component} has an invalid contract."
+                )));
+            }
+        }
     }
 
-    verify_manifest_component(&manifest, &file_checksums, "database", "database.dump")?;
+    verify_manifest_component(
+        &manifest,
+        &file_checksums,
+        &file_sizes,
+        "database",
+        "database.dump",
+    )?;
     if database_magic != b"PGDMP" {
         return Err(AppError::Validation(
             "Recovery package database.dump is not a PostgreSQL custom-format dump.".into(),
@@ -759,9 +936,19 @@ fn validate_recovery_package_sync(
     verify_manifest_component(
         &manifest,
         &file_checksums,
+        &file_sizes,
         "backup_settings",
         "backup-settings.json",
     )?;
+    if format == RECOVERY_FORMAT_V2 {
+        verify_manifest_component(
+            &manifest,
+            &file_checksums,
+            &file_sizes,
+            "operational_history",
+            "operational-history.json",
+        )?;
+    }
     if let Some(files) = manifest
         .pointer("/components/vehicle_image_cache/files")
         .and_then(|value| value.as_array())
@@ -784,6 +971,20 @@ fn validate_recovery_package_sync(
                     "Recovery package checksum mismatch for {path}."
                 )));
             }
+            let expected_size = file
+                .get("size_bytes")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    AppError::Validation("Artwork manifest entry is missing its size.".into())
+                })?;
+            if file_sizes.get(path).copied() != Some(expected_size) {
+                return Err(AppError::Validation(format!(
+                    "Recovery package size mismatch for {path}."
+                )));
+            }
+        }
+        if format == RECOVERY_FORMAT_V2 {
+            validate_v2_artwork_component(&manifest, files)?;
         }
     }
 
@@ -797,6 +998,7 @@ fn validate_recovery_package_sync(
 fn verify_manifest_component(
     manifest: &serde_json::Value,
     checksums: &HashMap<String, String>,
+    sizes: &HashMap<String, u64>,
     component: &str,
     expected_path: &str,
 ) -> Result<(), AppError> {
@@ -821,6 +1023,97 @@ fn verify_manifest_component(
         return Err(AppError::Validation(format!(
             "Recovery package checksum mismatch for {expected_path}."
         )));
+    }
+    let expected_size = component
+        .get("size_bytes")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "Recovery manifest is missing the size for {expected_path}."
+            ))
+        })?;
+    if sizes.get(path).copied() != Some(expected_size) {
+        return Err(AppError::Validation(format!(
+            "Recovery package size mismatch for {expected_path}."
+        )));
+    }
+    Ok(())
+}
+
+fn validate_v2_migration_ledger(manifest: &serde_json::Value) -> Result<(), AppError> {
+    let migration_version = manifest
+        .pointer("/source/migration_version")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_default();
+    let ledger = manifest
+        .pointer("/source/migration_ledger")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| AppError::Validation("Recovery v2 migration ledger is invalid.".into()))?;
+    if migration_version < 1 || ledger.is_empty() {
+        return Err(AppError::Validation(
+            "Recovery v2 migration ledger is incomplete.".into(),
+        ));
+    }
+    let mut previous_version = None;
+    for migration in ledger {
+        let version = migration
+            .get("version")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default();
+        if version < 1
+            || previous_version.is_some_and(|previous| version <= previous)
+            || migration
+                .get("checksum_sha384")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            return Err(AppError::Validation(format!(
+                "Recovery v2 migration ledger entry {version} is invalid."
+            )));
+        }
+        previous_version = Some(version);
+    }
+    if previous_version != Some(migration_version) {
+        return Err(AppError::Validation(
+            "Recovery v2 migration ledger does not end at the declared migration version.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_v2_artwork_component(
+    manifest: &serde_json::Value,
+    files: &[serde_json::Value],
+) -> Result<(), AppError> {
+    let component = manifest
+        .pointer("/components/vehicle_image_cache")
+        .ok_or_else(|| AppError::Validation("Recovery v2 artwork component is missing.".into()))?;
+    let expected_checksum = component
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AppError::Validation("Recovery v2 artwork component checksum is missing.".into())
+        })?;
+    let actual_checksum = hex::encode(Sha256::digest(
+        serde_json::to_vec(files).map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?,
+    ));
+    let actual_size = files
+        .iter()
+        .filter_map(|file| file.get("size_bytes").and_then(serde_json::Value::as_u64))
+        .sum::<u64>();
+    if expected_checksum != actual_checksum
+        || component
+            .get("size_bytes")
+            .and_then(serde_json::Value::as_u64)
+            != Some(actual_size)
+        || component
+            .get("file_count")
+            .and_then(serde_json::Value::as_u64)
+            != Some(files.len() as u64)
+    {
+        return Err(AppError::Validation(
+            "Recovery v2 artwork component summary is inconsistent.".into(),
+        ));
     }
     Ok(())
 }
@@ -982,38 +1275,47 @@ async fn build_recovery_manifest(
     pool: &PgPool,
     dump_path: &Path,
     settings_path: &Path,
+    history_path: &Path,
     cache_root: &Path,
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
 ) -> Result<serde_json::Value, AppError> {
     let current_database = current_database_name(pool).await?;
-    let timescale_version = current_timescale_version(pool).await?;
-    let migration_version: Option<i64> =
-        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = TRUE")
-            .fetch_one(pool)
-            .await
-            .map_err(AppError::from)?;
+    let database_profile = restore_compatibility::runtime_database_profile(pool).await?;
     let database_checksum = compute_sha256(dump_path).await?;
     let settings_checksum = compute_sha256(settings_path).await?;
+    let history_checksum = compute_sha256(history_path).await?;
     let cache_files = collect_cache_files(cache_root).await?;
+    let cache_size_bytes = cache_files
+        .iter()
+        .filter_map(|file| file.get("size_bytes").and_then(serde_json::Value::as_u64))
+        .sum::<u64>();
+    let cache_checksum = hex::encode(Sha256::digest(
+        serde_json::to_vec(&cache_files)
+            .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?,
+    ));
 
     Ok(json!({
         "format": RECOVERY_PACKAGE_FORMAT,
-        "format_version": 1,
+        "format_version": 2,
         "created_at": created_at,
         "trigger": trigger.as_str(),
         "source": {
-            "app_version": env!("CARGO_PKG_VERSION"),
+            "app_version": std::env::var("RIVIAMIGO_BUILD_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into()),
             "database": current_database,
-            "timescale_version": timescale_version,
-            "migration_version": migration_version,
+            "postgres_major": database_profile.postgres_major,
+            "timescale_version": database_profile.timescale_version,
+            "migration_version": database_profile.migration_version,
+            "migration_ledger": database_profile.migration_ledger,
+            "schema_fingerprint": database_profile.schema_fingerprint,
         },
         "scope": {
             "included": [
                 "PostgreSQL durable application data",
                 "TimescaleDB telemetry and enrichment data",
                 "vehicle artwork cache files",
-                "sanitized backup schedule and target configuration"
+                "sanitized backup schedule and target configuration",
+                "backup execution, package catalog, and restore request history"
             ],
             "redacted": [
                 "vehicle_credentials table data (provider credential tokens)",
@@ -1024,30 +1326,48 @@ async fn build_recovery_manifest(
             ],
             "excluded": [
                 "Redis live state, pub/sub messages, and OTP challenges",
-                "backup artifact catalog and restore request history",
                 "browser localStorage and sessionStorage",
                 "external provider connection cache state and activity history"
             ]
         },
         "components": {
             "database": {
+                "version": 1,
                 "path": "database.dump",
                 "sha256": database_checksum,
-                "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0)
+                "size_bytes": std::fs::metadata(dump_path).map(|metadata| metadata.len()).unwrap_or(0),
+                "restore_policy": "replace_isolated_candidate",
+                "redactions": ["vehicle_credentials", "external_connection_settings", "system_config", "refresh_tokens", "external_connection_activity", "backup_settings", "backup_runs", "backup_artifacts", "backup_restore_requests"]
             },
             "backup_settings": {
+                "version": 1,
                 "path": "backup-settings.json",
                 "sha256": settings_checksum,
                 "size_bytes": std::fs::metadata(settings_path).map(|metadata| metadata.len()).unwrap_or(0),
-                "sensitive_fields_redacted": ["secret_key_encrypted"]
+                "restore_policy": "replace_sanitized_settings",
+                "redactions": ["secret_key_encrypted"]
+            },
+            "operational_history": {
+                "version": 1,
+                "path": "operational-history.json",
+                "sha256": history_checksum,
+                "size_bytes": std::fs::metadata(history_path).map(|metadata| metadata.len()).unwrap_or(0),
+                "restore_policy": "merge_target_wins",
+                "redactions": ["requested_by"]
             },
             "vehicle_image_cache": {
+                "version": 1,
                 "path": "vehicle-image-cache",
+                "sha256": cache_checksum,
+                "size_bytes": cache_size_bytes,
                 "file_count": cache_files.len(),
+                "restore_policy": "replace_atomically",
+                "redactions": [],
                 "files": cache_files
             }
         },
         "restore": {
+            "engine_version": restore_compatibility::RESTORE_ENGINE_VERSION,
             "requires": "same or newer Riviamigo release",
             "provider_credentials": "re-authenticate after restore",
             "operator_command": "node scripts/restore-backup.mjs <package>"
@@ -1084,6 +1404,13 @@ async fn write_sanitized_backup_settings(pool: &PgPool, path: &Path) -> Result<(
     .await
     .map_err(AppError::from)?;
     let bytes = serde_json::to_vec_pretty(&settings)
+        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
+    fs::write(path, bytes).await.map_err(AppError::from)
+}
+
+async fn write_operational_history(pool: &PgPool, path: &Path) -> Result<(), AppError> {
+    let snapshot = crate::services::restore_jobs::snapshot_catalog(pool).await?;
+    let bytes = serde_json::to_vec_pretty(&snapshot)
         .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?;
     fs::write(path, bytes).await.map_err(AppError::from)
 }
@@ -1128,12 +1455,14 @@ async fn write_recovery_archive(
     artifact_path: &Path,
     dump_path: &Path,
     settings_path: &Path,
+    history_path: &Path,
     cache_root: &Path,
     manifest_bytes: &[u8],
 ) -> Result<(), AppError> {
     let artifact_path = artifact_path.to_path_buf();
     let dump_path = dump_path.to_path_buf();
     let settings_path = settings_path.to_path_buf();
+    let history_path = history_path.to_path_buf();
     let cache_root = cache_root.to_path_buf();
     let manifest_bytes = manifest_bytes.to_vec();
     tokio::task::spawn_blocking(move || {
@@ -1180,6 +1509,7 @@ async fn write_recovery_archive(
         )?;
         append_regular_file(&mut archive, &dump_path, "database.dump")?;
         append_regular_file(&mut archive, &settings_path, "backup-settings.json")?;
+        append_regular_file(&mut archive, &history_path, "operational-history.json")?;
 
         append_directory(&mut archive, "vehicle-image-cache")?;
         if cache_root.is_dir() {
@@ -1495,8 +1825,9 @@ mod tests {
         runtime_dependency_error_if_unavailable, sha256_file, should_log_scheduler_failure,
         validate_recovery_package, write_recovery_archive, BackupDriver,
     };
-    use crate::errors::AppError;
+    use crate::{errors::AppError, services::restore_compatibility};
     use flate2::read::GzDecoder;
+    use sha2::{Digest, Sha256};
     use std::io::Read;
     use tar::Archive;
     use uuid::Uuid;
@@ -1545,22 +1876,29 @@ mod tests {
         let cache = root.join("cache");
         let dump = root.join("database.dump");
         let settings = root.join("backup-settings.json");
+        let history = root.join("operational-history.json");
         let archive = root.join("backup.rma.tar.gz");
         std::fs::create_dir_all(cache.join("vehicle-1")).expect("cache directory");
         std::fs::write(cache.join("vehicle-1/artwork.webp"), b"artwork").expect("artwork");
         std::fs::write(&dump, b"PGDMPdatabase").expect("dump");
         std::fs::write(&settings, br#"{"present":false}"#).expect("settings");
+        std::fs::write(
+            &history,
+            br#"{"runs":[],"artifacts":[],"restore_requests":[]}"#,
+        )
+        .expect("history");
 
         let manifest = serde_json::json!({
             "format": "riviamigo-recovery-v1",
             "format_version": 1,
             "components": {
-                "database": { "path": "database.dump", "sha256": sha256_file(&dump).expect("dump checksum") },
-                "backup_settings": { "path": "backup-settings.json", "sha256": sha256_file(&settings).expect("settings checksum") },
+                "database": { "path": "database.dump", "sha256": sha256_file(&dump).expect("dump checksum"), "size_bytes": std::fs::metadata(&dump).expect("dump metadata").len() },
+                "backup_settings": { "path": "backup-settings.json", "sha256": sha256_file(&settings).expect("settings checksum"), "size_bytes": std::fs::metadata(&settings).expect("settings metadata").len() },
                 "vehicle_image_cache": {
                     "files": [{
                         "path": "vehicle-image-cache/vehicle-1/artwork.webp",
-                        "sha256": sha256_file(&cache.join("vehicle-1/artwork.webp")).expect("artwork checksum")
+                        "sha256": sha256_file(&cache.join("vehicle-1/artwork.webp")).expect("artwork checksum"),
+                        "size_bytes": std::fs::metadata(cache.join("vehicle-1/artwork.webp")).expect("artwork metadata").len()
                     }]
                 }
             }
@@ -1569,6 +1907,7 @@ mod tests {
             &archive,
             &dump,
             &settings,
+            &history,
             &cache,
             &serde_json::to_vec(&manifest).expect("manifest"),
         )
@@ -1600,9 +1939,91 @@ mod tests {
         assert!(names.iter().any(|name| name == "manifest.json"));
         assert!(names.iter().any(|name| name == "database.dump"));
         assert!(names.iter().any(|name| name == "backup-settings.json"));
+        assert!(names.iter().any(|name| name == "operational-history.json"));
         assert!(names
             .iter()
             .any(|name| name.ends_with("vehicle-1/artwork.webp")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn recovery_v2_archive_enforces_the_versioned_component_contract() {
+        let root = std::env::temp_dir().join(format!("riviamigo-backup-v2-{}", Uuid::new_v4()));
+        let cache = root.join("cache");
+        let artwork = cache.join("vehicle-1/artwork.webp");
+        let dump = root.join("database.dump");
+        let settings = root.join("backup-settings.json");
+        let history = root.join("operational-history.json");
+        let archive = root.join("backup-v2.rma.tar.gz");
+        std::fs::create_dir_all(artwork.parent().expect("artwork parent")).expect("cache");
+        std::fs::write(&artwork, b"artwork").expect("artwork");
+        std::fs::write(&dump, b"PGDMPdatabase").expect("dump");
+        std::fs::write(&settings, br#"{"present":false}"#).expect("settings");
+        std::fs::write(
+            &history,
+            br#"{"runs":[],"artifacts":[],"restore_requests":[]}"#,
+        )
+        .expect("history");
+        let cache_files = vec![serde_json::json!({
+            "path": "vehicle-image-cache/vehicle-1/artwork.webp",
+            "sha256": sha256_file(&artwork).expect("artwork checksum"),
+            "size_bytes": std::fs::metadata(&artwork).expect("artwork metadata").len()
+        })];
+        let cache_checksum = hex::encode(Sha256::digest(
+            serde_json::to_vec(&cache_files).expect("cache manifest"),
+        ));
+        let contract = |path: &str, checksum: String, size: u64, policy: &str| {
+            serde_json::json!({
+                "version": 1,
+                "path": path,
+                "sha256": checksum,
+                "size_bytes": size,
+                "restore_policy": policy,
+                "redactions": []
+            })
+        };
+        let manifest = serde_json::json!({
+            "format": "riviamigo-recovery-v2",
+            "format_version": 2,
+            "source": {
+                "postgres_major": 18,
+                "timescale_version": "2.28.3",
+                "migration_version": restore_compatibility::latest_migration_version(),
+                "migration_ledger": restore_compatibility::compiled_migration_ledger(),
+                "schema_fingerprint": "test-fingerprint"
+            },
+            "components": {
+                "database": contract("database.dump", sha256_file(&dump).expect("dump checksum"), std::fs::metadata(&dump).expect("dump metadata").len(), "replace_isolated_candidate"),
+                "backup_settings": contract("backup-settings.json", sha256_file(&settings).expect("settings checksum"), std::fs::metadata(&settings).expect("settings metadata").len(), "replace_sanitized_settings"),
+                "operational_history": contract("operational-history.json", sha256_file(&history).expect("history checksum"), std::fs::metadata(&history).expect("history metadata").len(), "merge_target_wins"),
+                "vehicle_image_cache": {
+                    "version": 1,
+                    "path": "vehicle-image-cache",
+                    "sha256": cache_checksum,
+                    "size_bytes": std::fs::metadata(&artwork).expect("artwork metadata").len(),
+                    "file_count": 1,
+                    "restore_policy": "replace_atomically",
+                    "redactions": [],
+                    "files": cache_files
+                }
+            },
+            "restore": { "engine_version": restore_compatibility::RESTORE_ENGINE_VERSION }
+        });
+        write_recovery_archive(
+            &archive,
+            &dump,
+            &settings,
+            &history,
+            &cache,
+            &serde_json::to_vec(&manifest).expect("manifest"),
+        )
+        .await
+        .expect("archive");
+
+        let validated = validate_recovery_package(&archive)
+            .await
+            .expect("valid v2 package");
+        assert_eq!(validated.manifest["format"], "riviamigo-recovery-v2");
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -11,13 +11,7 @@ export interface TimeSeriesPoint {
 }
 
 export type MetricValueKind =
-  | 'number'
-  | 'percent'
-  | 'distance'
-  | 'energy'
-  | 'temperature'
-  | 'pressure'
-  | 'speed';
+  'number' | 'percent' | 'distance' | 'energy' | 'temperature' | 'pressure' | 'speed';
 
 export interface MetricCatalogEntry {
   id: string;
@@ -670,12 +664,7 @@ export interface BackupArtifactManifest {
 }
 
 export type BackupRestoreRequestStatus =
-  | 'pending'
-  | 'approved'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'canceled';
+  'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'canceled';
 
 export interface BackupSettings {
   enabled: boolean;
@@ -764,15 +753,76 @@ export interface CreateBackupRestoreRequestBody {
   notes?: string | null;
 }
 
+export type RestoreBlockingCode =
+  | 'unsupported_package_format'
+  | 'invalid_source_migration'
+  | 'newer_source_schema'
+  | 'unsupported_postgres_version'
+  | 'unsupported_timescale_version'
+  | 'migration_checksum_mismatch'
+  | 'unknown_legacy_schema'
+  | 'schema_contract_mismatch';
+
+export interface RestoreDatabaseProfile {
+  postgres_major: number | null;
+  timescale_version: string | null;
+  migration_version: number;
+  migration_ledger: Array<{
+    version: number;
+    description: string;
+    checksum_sha384: string;
+  }>;
+  schema_fingerprint: string | null;
+}
+
+export interface RestorePlan {
+  plan_id: string;
+  engine_version: number;
+  package_checksum_sha256: string;
+  package_format: string;
+  compatible: boolean;
+  source: RestoreDatabaseProfile;
+  target: RestoreDatabaseProfile;
+  pending_migrations: number[];
+  transforms: Array<{
+    id: string;
+    from_migration: number;
+    to_migration: number;
+    transactional: boolean;
+  }>;
+  validation_checks: string[];
+  warnings: string[];
+  blocking_errors: Array<{ code: RestoreBlockingCode; message: string }>;
+  planned_at: string;
+}
+
+export interface RestorePreflightResponse {
+  plan: RestorePlan;
+}
+
+export interface StartBackupRestoreBody extends CreateBackupRestoreRequestBody {
+  plan_id: string;
+  package_checksum_sha256: string;
+}
+
 export type RestoreJobPhase =
   | 'queued'
+  | 'validating_package'
+  | 'planning'
+  | 'preparing_candidate'
+  | 'applying_transforms'
+  | 'migrating_candidate'
+  | 'validating_candidate'
   | 'safety_backup'
   | 'stopping_application'
+  | 'merging_host_state'
+  | 'swapping_database'
   | 'restoring_database'
   | 'restoring_settings'
   | 'restoring_artwork'
   | 'starting_application'
   | 'verifying_health'
+  | 'rolling_back'
   | 'completed'
   | 'failed';
 
@@ -785,6 +835,24 @@ export interface RestoreJob {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+  plan: RestorePlan | null;
+  validation_report: {
+    source_schema: RestoreSchemaContractReport;
+    target_schema: RestoreSchemaContractReport;
+    legacy_profile: string | null;
+    applied_transforms: RestorePlan['transforms'];
+    migrations_applied: number[];
+    foreign_keys_validated: boolean;
+  } | null;
+  retryable: boolean;
+  rollback_state: 'not_required' | 'available' | 'in_progress' | 'succeeded' | 'failed';
+}
+
+export interface RestoreSchemaContractReport {
+  schema_fingerprint: string;
+  required_relations_present: boolean;
+  missing_relations: string[];
+  telemetry_hypertable: boolean;
 }
 
 export interface UploadBackupResponse {
@@ -1165,7 +1233,8 @@ export interface RawTelemetryResponse {
   field_coverage?: RawTelemetryFieldCoverage[];
 }
 
-export type TelemetryLaneName = 'battery' | 'drive' | 'location' | 'climate' | 'charging' | 'health';
+export type TelemetryLaneName =
+  'battery' | 'drive' | 'location' | 'climate' | 'charging' | 'health';
 
 export interface TelemetryLaneQuery {
   from?: string;

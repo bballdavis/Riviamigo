@@ -18,7 +18,7 @@ use crate::{
     errors::AppError,
     ingestion::session_store::encrypt_json,
     middleware::auth::{AppState, AuthUser},
-    services::{backups as backup_service, restore_jobs, s3_backups},
+    services::{backups as backup_service, restore_compatibility, restore_jobs, s3_backups},
 };
 
 pub fn router() -> Router<AppState> {
@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
             delete(delete_uploaded_artifact),
         )
         .route("/admin/backups/restores", post(start_restore))
+        .route("/admin/backups/restores/preflight", post(preflight_restore))
         .route(
             "/admin/backups/artifacts/{artifact_id}/download",
             get(download_backup_artifact),
@@ -275,6 +276,25 @@ struct CreateRestoreRequestBody {
     notes: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct StartRestoreBody {
+    artifact_id: Uuid,
+    confirmation_phrase: String,
+    notes: Option<String>,
+    plan_id: String,
+    package_checksum_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreflightRestoreBody {
+    artifact_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct RestorePreflightResponse {
+    plan: restore_compatibility::RestorePlan,
+}
+
 #[derive(Debug, Serialize)]
 struct UploadBackupResponse {
     artifact: BackupArtifactResponse,
@@ -353,6 +373,8 @@ async fn get_backup_overview(
 ) -> Result<Json<BackupOverviewResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
 
+    backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
+
     let settings = load_settings(&state).await?;
     let recent_runs_page = query.page.unwrap_or(1).max(1);
     let recent_runs_per_page = query.per_page.unwrap_or(10).clamp(1, 100);
@@ -402,6 +424,15 @@ async fn reconcile_s3_catalog(state: &AppState) -> Result<(), AppError> {
     .await
     .map_err(|_| AppError::DependencyUnavailable("S3 catalog listing timed out".into()))?
     .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+    sqlx::query(
+        r#"
+        UPDATE riviamigo.backup_artifacts
+        SET manifest = jsonb_set(manifest, '{restore_availability}', '"unavailable"'::jsonb, true)
+        WHERE storage_type = 's3'
+        "#,
+    )
+    .execute(&state.pool)
+    .await?;
     for row in rows {
         let storage_path = s3_backups::locator(&settings.bucket, &row.key);
         let checksum = row.checksum_sha256.unwrap_or_default();
@@ -410,6 +441,7 @@ async fn reconcile_s3_catalog(state: &AppState) -> Result<(), AppError> {
             "format": row.metadata.get("riviamigo-format").cloned().unwrap_or_else(|| "riviamigo-recovery-v1".into()),
             "storage_type": "s3",
             "object_key": row.key,
+            "restore_availability": "available",
         });
         sqlx::query(
             r#"INSERT INTO riviamigo.backup_artifacts
@@ -568,7 +600,7 @@ async fn delete_uploaded_artifact(
 async fn start_restore(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(body): Json<CreateRestoreRequestBody>,
+    Json(body): Json<StartRestoreBody>,
 ) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
     require_admin(&state, auth.user_id).await?;
     if !restore_jobs::agent_is_ready(&state.config).await {
@@ -585,7 +617,34 @@ async fn start_restore(
     }
     let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
     let restore_path = materialize_artifact(&state, &artifact).await?;
-    backup_service::validate_recovery_package(std::path::Path::new(&restore_path)).await?;
+    let validated =
+        backup_service::validate_recovery_package(std::path::Path::new(&restore_path)).await?;
+    let dump_inspection =
+        restore_compatibility::inspect_recovery_dump(std::path::Path::new(&restore_path)).await?;
+    let plan = restore_compatibility::plan_restore(
+        &validated.manifest,
+        &validated.checksum_sha256,
+        &state.pool,
+        Some(&dump_inspection),
+    )
+    .await?;
+    if !plan.compatible {
+        cleanup_remote_staging_path(&restore_path).await;
+        return Err(AppError::Validation(
+            plan.blocking_errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
+    }
+    if body.plan_id != plan.plan_id || body.package_checksum_sha256 != validated.checksum_sha256 {
+        cleanup_remote_staging_path(&restore_path).await;
+        return Err(AppError::Conflict(
+            "The recovery package or target schema changed after preflight. Run preflight again."
+                .into(),
+        ));
+    }
     let request_id = backup_service::create_restore_request(
         &state.pool,
         body.artifact_id,
@@ -594,14 +653,18 @@ async fn start_restore(
         body.notes,
     )
     .await?;
-    let (job, capability_token) =
-        restore_jobs::create(&state.config, body.artifact_id, restore_path, request_id).await?;
+    let (job, capability_token) = restore_jobs::create(
+        &state.config,
+        body.artifact_id,
+        restore_path,
+        request_id,
+        plan,
+    )
+    .await?;
     let background_state = state.clone();
     let job_id = job.id;
     tokio::spawn(async move {
-        if let Err(error) =
-            prepare_and_handoff_restore(background_state.clone(), job_id, auth.user_id).await
-        {
+        if let Err(error) = prepare_and_handoff_restore(background_state.clone(), job_id).await {
             if let Ok(job) = restore_jobs::read(&background_state.config, job_id).await {
                 cleanup_remote_staging_path(&job.artifact_path).await;
             }
@@ -625,6 +688,34 @@ async fn start_restore(
     ))
 }
 
+async fn preflight_restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<PreflightRestoreBody>,
+) -> Result<Json<RestorePreflightResponse>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
+    let restore_path = materialize_artifact(&state, &artifact).await?;
+    let result = async {
+        let validated =
+            backup_service::validate_recovery_package(std::path::Path::new(&restore_path)).await?;
+        let dump_inspection =
+            restore_compatibility::inspect_recovery_dump(std::path::Path::new(&restore_path))
+                .await?;
+        let plan = restore_compatibility::plan_restore(
+            &validated.manifest,
+            &validated.checksum_sha256,
+            &state.pool,
+            Some(&dump_inspection),
+        )
+        .await?;
+        Ok::<_, AppError>(RestorePreflightResponse { plan })
+    }
+    .await;
+    cleanup_remote_staging_path(&restore_path).await;
+    result.map(Json)
+}
+
 async fn cleanup_remote_staging_path(path: &str) {
     let path = std::path::Path::new(path);
     if path
@@ -637,36 +728,11 @@ async fn cleanup_remote_staging_path(path: &str) {
     }
 }
 
-async fn prepare_and_handoff_restore(
-    state: AppState,
-    job_id: Uuid,
-    requested_by: Uuid,
-) -> Result<(), AppError> {
-    restore_jobs::update(
-        &state.config,
-        job_id,
-        restore_jobs::RestorePhase::SafetyBackup,
-        15,
-        "Creating required safety backup",
-    )
-    .await?;
-    let safety = backup_service::run_backup_now(
-        &state.pool,
-        &state.config,
-        Some(requested_by),
-        backup_service::BackupRunTrigger::PreRestore,
-    )
-    .await?;
-    let (safety_artifact_id, safety_path): (Uuid, String) = sqlx::query_as(
-        "SELECT id, storage_path FROM riviamigo.backup_artifacts WHERE run_id = $1 AND storage_type = 'safety' ORDER BY created_at DESC LIMIT 1"
-    ).bind(safety.run_id).fetch_one(&state.pool).await?;
+async fn prepare_and_handoff_restore(state: AppState, job_id: Uuid) -> Result<(), AppError> {
     let mut job = restore_jobs::read(&state.config, job_id).await?;
-    job.safety_artifact_path = Some(safety_path);
-    job.safety_run_id = Some(safety.run_id);
-    job.safety_artifact_id = Some(safety_artifact_id);
-    job.phase = restore_jobs::RestorePhase::StoppingApplication;
-    job.progress_percent = 25;
-    job.message = "Safety backup complete; handing off to restore supervisor".into();
+    job.phase = restore_jobs::RestorePhase::PreparingCandidate;
+    job.progress_percent = 15;
+    job.message = "Preparing isolated restore candidate while Riviamigo remains available".into();
     job.updated_at = Utc::now();
     restore_jobs::write(&state.config, &job).await?;
 
@@ -676,6 +742,8 @@ async fn prepare_and_handoff_restore(
     .bind(job.restore_request_id)
     .execute(&state.pool)
     .await?;
+
+    backup_service::reconcile_local_catalog(&state.pool, &state.config).await?;
 
     // The database restore replaces these operational tables. Keep their current
     // contents beside the packages so the restarted API can merge the catalog,
