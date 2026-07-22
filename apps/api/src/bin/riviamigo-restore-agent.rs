@@ -11,6 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use flate2::read::GzDecoder;
 use serde_json::json;
 use tar::Archive;
@@ -39,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         agent_key: agent_key.trim().into(),
     };
+    let recovery_state = state.clone();
     let app = Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
         .route("/v1/restore-runtime/jobs/{job_id}", get(get_job))
@@ -47,7 +49,69 @@ async fn main() -> anyhow::Result<()> {
     let port = std::env::var("RESTORE_AGENT_PORT").unwrap_or_else(|_| "3002".into());
     let address: SocketAddr = format!("127.0.0.1:{port}").parse()?;
     let listener = TcpListener::bind(address).await?;
+    tokio::spawn(async move {
+        if let Err(error) = retry_interrupted_restore(&recovery_state).await {
+            tracing::error!(error = ?error, "interrupted restore retry failed");
+        }
+    });
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
+    let directory = restore_jobs::jobs_dir(&state.config);
+    if !fs::try_exists(&directory).await.unwrap_or(false) {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(directory).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let id = match entry
+            .path()
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .and_then(|value| value.parse().ok())
+        {
+            Some(id) => id,
+            None => continue,
+        };
+        let job = match restore_jobs::read(&state.config, id).await {
+            Ok(job) => job,
+            Err(_) => continue,
+        };
+        if job.phase != RestorePhase::Failed || job.automatic_retry_count > 0 {
+            continue;
+        }
+        let staging = Path::new(&state.config.backup_artifact_dir)
+            .join(".restore-staging")
+            .join(job.id.to_string());
+        if !fs::try_exists(staging.join("manifest.json"))
+            .await
+            .unwrap_or(false)
+            || !fs::try_exists(staging.join("database.dump"))
+                .await
+                .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let mut retry = job;
+        retry.phase = RestorePhase::StoppingApplication;
+        retry.progress_percent = 25;
+        retry.message = "Retrying interrupted restore with an isolated database".into();
+        retry.error_message = None;
+        retry.automatic_retry_count = 1;
+        retry.updated_at = Utc::now();
+        restore_jobs::write(&state.config, &retry).await?;
+        fs::write(restore_marker_path(), retry.id.to_string()).await?;
+        if let Err(error) = perform_restore(&state.config, retry.id).await {
+            let _ = fs::remove_file(restore_marker_path()).await;
+            let _ = restore_jobs::fail(&state.config, retry.id, error).await;
+        }
+        return Ok(());
+    }
     Ok(())
 }
 
@@ -132,10 +196,14 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     )
     .await?;
     terminate_database_sessions(config).await?;
-    let _ = run_psql(config, "SELECT timescaledb_pre_restore();").await;
-    run_pg_restore(config, &staging.join("database.dump")).await?;
-    restore_migration_ledger(config, &staging.join("manifest.json")).await?;
-    let _ = run_psql(config, "SELECT timescaledb_post_restore();").await;
+    let previous_database = restore_database_atomically(
+        config,
+        job_id,
+        &staging.join("database.dump"),
+        &staging.join("manifest.json"),
+        &staging.join("backup-settings.json"),
+    )
+    .await?;
 
     restore_jobs::update(
         config,
@@ -145,7 +213,6 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
         "Restoring sanitized backup settings",
     )
     .await?;
-    restore_backup_settings(config, &staging.join("backup-settings.json")).await?;
 
     restore_jobs::update(
         config,
@@ -177,6 +244,9 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     )
     .await?;
     wait_for_api_health(config).await?;
+    if let Err(error) = drop_database(config, &previous_database).await {
+        tracing::warn!(database = %previous_database, error = ?error, "could not remove the previous database after a successful restore");
+    }
     restore_jobs::update(
         config,
         job_id,
@@ -229,7 +299,14 @@ fn restore_marker_path() -> PathBuf {
 
 #[cfg(not(windows))]
 async fn stop_api_process() -> anyhow::Result<()> {
-    let pid = fs::read_to_string(api_pid_path()).await?;
+    let pid = match fs::read_to_string(api_pid_path()).await {
+        Ok(pid) => pid,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !Path::new(&format!("/proc/{}", pid.trim())).exists() {
+        return Ok(());
+    }
     let status = Command::new("kill")
         .arg("-TERM")
         .arg(pid.trim())
@@ -294,7 +371,28 @@ async fn terminate_database_sessions(config: &Config) -> anyhow::Result<()> {
     .await
 }
 
-async fn run_pg_restore(config: &Config, dump: &Path) -> anyhow::Result<()> {
+async fn build_restore_toc(dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
+    let output = Command::new("pg_restore")
+        .arg("--list")
+        .arg(dump)
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "pg_restore could not inspect the recovery dump: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let list = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.contains(" TABLE DATA riviamigo external_connection_activity "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(toc_path, format!("{list}\n")).await?;
+    Ok(())
+}
+
+async fn run_pg_restore(config: &Config, dump: &Path, toc_path: &Path) -> anyhow::Result<()> {
     let mut command = postgres_command("pg_restore", config)?;
     let output = command
         .arg("--no-owner")
@@ -302,6 +400,8 @@ async fn run_pg_restore(config: &Config, dump: &Path) -> anyhow::Result<()> {
         .arg("--clean")
         .arg("--if-exists")
         .arg("--exit-on-error")
+        .arg("--single-transaction")
+        .arg(format!("--use-list={}", toc_path.display()))
         .arg(dump)
         .output()
         .await?;
@@ -314,8 +414,90 @@ async fn run_pg_restore(config: &Config, dump: &Path) -> anyhow::Result<()> {
     )
 }
 
-async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
-    let mut command = postgres_command("psql", config)?;
+async fn restore_database_atomically(
+    config: &Config,
+    job_id: Uuid,
+    dump: &Path,
+    manifest: &Path,
+    settings: &Path,
+) -> anyhow::Result<String> {
+    let restore_database = format!("riviamigo_restore_{}", job_id.simple());
+    let previous_database = format!("riviamigo_previous_{}", job_id.simple());
+    let restore_config = config_with_database(config, &restore_database)?;
+    let toc_path = dump.with_extension("restore-toc");
+
+    create_database(config, &restore_database).await?;
+    let restore_result = async {
+        build_restore_toc(dump, &toc_path).await?;
+        run_pg_restore(&restore_config, dump, &toc_path).await?;
+        restore_migration_ledger(&restore_config, manifest).await?;
+        let _ = run_psql(&restore_config, "SELECT timescaledb_post_restore();").await;
+        restore_backup_settings(&restore_config, settings).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = restore_result {
+        let _ = drop_database(config, &restore_database).await;
+        let _ = fs::remove_file(&toc_path).await;
+        return Err(error);
+    }
+
+    if let Err(error) = swap_databases(config, &restore_database, &previous_database).await {
+        let _ = drop_database(config, &restore_database).await;
+        let _ = fs::remove_file(&toc_path).await;
+        return Err(error);
+    }
+    let _ = fs::remove_file(&toc_path).await;
+    Ok(previous_database)
+}
+
+fn config_with_database(config: &Config, database: &str) -> anyhow::Result<Config> {
+    let mut cloned = config.clone();
+    let mut url = url::Url::parse(&config.database_url)?;
+    url.set_path(&format!("/{database}"));
+    cloned.database_url = url.to_string();
+    Ok(cloned)
+}
+
+async fn create_database(config: &Config, database: &str) -> anyhow::Result<()> {
+    let sql = format!(
+        "CREATE DATABASE {database} TEMPLATE template0;",
+        database = quote_identifier(database)
+    );
+    run_psql_on_database(config, "postgres", &sql).await
+}
+
+async fn swap_databases(
+    config: &Config,
+    restore_database: &str,
+    previous_database: &str,
+) -> anyhow::Result<()> {
+    let sql = format!(
+        r#"
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname IN ('riviamigo', {restore_database_literal})
+          AND pid <> pg_backend_pid();
+        ALTER DATABASE riviamigo RENAME TO {previous_database};
+        ALTER DATABASE {restore_database} RENAME TO riviamigo;
+        "#,
+        restore_database_literal = quote_literal(restore_database),
+        previous_database = quote_identifier(previous_database),
+        restore_database = quote_identifier(restore_database),
+    );
+    run_psql_on_database(config, "postgres", &sql).await
+}
+
+async fn drop_database(config: &Config, database: &str) -> anyhow::Result<()> {
+    let sql = format!(
+        "DROP DATABASE IF EXISTS {database} WITH (FORCE);",
+        database = quote_identifier(database)
+    );
+    run_psql_on_database(config, "postgres", &sql).await
+}
+
+async fn run_psql_on_database(config: &Config, database: &str, sql: &str) -> anyhow::Result<()> {
+    let mut command = postgres_command_for_database("psql", config, database)?;
     let output = command
         .arg("-v")
         .arg("ON_ERROR_STOP=1")
@@ -332,7 +514,27 @@ async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
     )
 }
 
+async fn run_psql(config: &Config, sql: &str) -> anyhow::Result<()> {
+    let database = url::Url::parse(&config.database_url)?
+        .path()
+        .trim_start_matches('/')
+        .to_string();
+    run_psql_on_database(config, &database, sql).await
+}
+
 fn postgres_command(program: &str, config: &Config) -> anyhow::Result<Command> {
+    let database = url::Url::parse(&config.database_url)?
+        .path()
+        .trim_start_matches('/')
+        .to_string();
+    postgres_command_for_database(program, config, &database)
+}
+
+fn postgres_command_for_database(
+    program: &str,
+    config: &Config,
+    database: &str,
+) -> anyhow::Result<Command> {
     let url = url::Url::parse(&config.database_url)?;
     let mut command = Command::new(program);
     if let Some(host) = url.host_str() {
@@ -344,7 +546,6 @@ fn postgres_command(program: &str, config: &Config) -> anyhow::Result<Command> {
     if !url.username().is_empty() {
         command.arg(format!("--username={}", url.username()));
     }
-    let database = url.path().trim_start_matches('/');
     if !database.is_empty() {
         command.arg(format!("--dbname={database}"));
     }
@@ -352,6 +553,14 @@ fn postgres_command(program: &str, config: &Config) -> anyhow::Result<Command> {
         command.env("PGPASSWORD", password);
     }
     Ok(command)
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result<()> {

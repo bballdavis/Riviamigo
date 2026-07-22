@@ -200,12 +200,45 @@ function clearApplicationDatabase(postgresUser) {
 }
 
 function restoreDatabase(postgresUser, dumpPath) {
-  const result = spawnSync('docker', [
-    ...composeArgs(), 'exec', '-T', 'timescaledb', 'pg_restore', '-U', postgresUser, '-d', 'riviamigo',
-    '--no-owner', '--no-privileges', '--clean', '--if-exists', '--exit-on-error',
-  ], { cwd: root, input: readFileSync(dumpPath), stdio: ['pipe', 'inherit', 'inherit'] });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`pg_restore failed with exit code ${result.status}.`);
+  const remoteDump = '/tmp/riviamigo-restore.dump';
+  const remoteToc = '/tmp/riviamigo-restore.toc';
+  const execArgs = [...composeArgs(), 'exec', '-T', 'timescaledb'];
+  try {
+    const copy = spawnSync('docker', [...execArgs, 'sh', '-c', `cat > ${remoteDump}`], {
+      cwd: root, input: readFileSync(dumpPath), stdio: ['pipe', 'inherit', 'inherit'], env: composeEnvironment,
+    });
+    if (copy.error) throw copy.error;
+    if (copy.status !== 0) throw new Error(`Could not stage database.dump in the PostgreSQL container (exit ${copy.status}).`);
+
+    run('docker', [
+      ...execArgs, 'psql', '-U', postgresUser, '-d', 'riviamigo', '-v', 'ON_ERROR_STOP=1', '-c',
+      'CREATE EXTENSION IF NOT EXISTS timescaledb; SELECT timescaledb_pre_restore();',
+    ]);
+    const toc = capture('docker', [...execArgs, 'pg_restore', '--list', remoteDump])
+      .split(/\r?\n/)
+      .filter((line) => !line.includes(' TABLE DATA riviamigo external_connection_activity '))
+      .join('\n');
+    const tocCopy = spawnSync('docker', [...execArgs, 'sh', '-c', `cat > ${remoteToc}`], {
+      cwd: root, input: `${toc}\n`, stdio: ['pipe', 'inherit', 'inherit'], env: composeEnvironment,
+    });
+    if (tocCopy.error) throw tocCopy.error;
+    if (tocCopy.status !== 0) throw new Error(`Could not stage the PostgreSQL restore list (exit ${tocCopy.status}).`);
+    const result = spawnSync('docker', [
+      ...execArgs, 'pg_restore', '-U', postgresUser, '-d', 'riviamigo',
+      '--no-owner', '--no-privileges', '--clean', '--if-exists', '--exit-on-error', '--single-transaction',
+      `--use-list=${remoteToc}`, remoteDump,
+    ], { cwd: root, stdio: 'inherit', env: composeEnvironment });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`pg_restore failed with exit code ${result.status}.`);
+    run('docker', [
+      ...execArgs, 'psql', '-U', postgresUser, '-d', 'riviamigo', '-v', 'ON_ERROR_STOP=1', '-c',
+      'SELECT timescaledb_post_restore();',
+    ]);
+  } finally {
+    spawnSync('docker', [...execArgs, 'rm', '-f', remoteDump, remoteToc], {
+      cwd: root, stdio: 'ignore', env: composeEnvironment,
+    });
+  }
 }
 
 function migrationLedgerEntries(sourceVersion) {

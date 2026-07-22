@@ -8,7 +8,7 @@ slug: /operations/backup-and-restore/
 
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
 
-Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean installation can rebuild its S3 catalog from the configured bucket.
+Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, provider connection activity history, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean installation can rebuild its S3 catalog from the configured bucket.
 
 ## Create and download a recovery package
 
@@ -33,12 +33,12 @@ Select **Restore selected backup**, review the replacement warning, and type `RE
 
 1. Creates and verifies a fresh safety recovery package of the target installation. The restore stops if this fails.
 2. Stops the API and ingestion workers while keeping nginx and the restore-progress endpoint available.
-3. Restores PostgreSQL, sanitized backup settings, and vehicle artwork.
-4. Reconstructs the SQLx migration ledger from the package's recorded source version, then starts a fresh API process so only genuinely newer migrations run.
+3. Restores PostgreSQL into an isolated temporary database, reconstructs its SQLx migration ledger from the package's recorded source version, and swaps it into service only after the dump and settings restore succeed. This keeps a failed TimescaleDB restore from leaving the live database half-restored.
+4. Starts a fresh API process so only genuinely newer migrations run, then restores vehicle artwork.
 5. Reconciles the persistent backup catalog, execution history, and completed restore request into the restored database.
 6. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
 
-PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package.
+PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package. If the container is interrupted after PostgreSQL work begins, the restore supervisor retries the staged job once using the same isolated-database path; the retry is bounded so a permanently invalid package does not loop forever.
 
 ## Restore with the host command
 
