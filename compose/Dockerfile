@@ -68,7 +68,12 @@ COPY packages/hooks/package.json packages/hooks/
 COPY packages/types/package.json packages/types/
 COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile
-COPY . .
+COPY apps/web/ apps/web/
+COPY packages/config/ packages/config/
+COPY packages/dashboards/ packages/dashboards/
+COPY packages/hooks/ packages/hooks/
+COPY packages/types/ packages/types/
+COPY packages/ui/ packages/ui/
 RUN pnpm --filter @riviamigo/web build
 
 FROM postgres:18.4-trixie@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a AS runtime

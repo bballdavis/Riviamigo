@@ -2,22 +2,34 @@
 .gitignore
 .github
 .codex
+.codex_tmp
+**/.codex_tmp
+.codex_tmp/**
+**/.codex_tmp/**
 .agents
 
 node_modules
 **/node_modules
+node_modules/**
+**/node_modules/**
 target
 **/target
+target/**
+**/target/**
 target-*
 **/target-*
-\.pnpm-store
-**/\.pnpm-store
+.pnpm-store
+**/.pnpm-store
+.pnpm-store/**
+**/.pnpm-store/**
 dist
 **/dist
 coverage
 **/coverage
 .turbo
 **/.turbo
+.playwright-cli
+output
 data
 
 .env
