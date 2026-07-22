@@ -642,9 +642,9 @@ export type BackupTargetType = 's3';
 
 export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
-export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore';
+export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore' | 'upload' | 'pre_restore';
 
-export type BackupArtifactStorageType = 'local';
+export type BackupArtifactStorageType = 'local' | 'uploaded' | 'safety';
 
 export interface BackupArtifactManifest {
   artifact_kind?: string;
@@ -744,6 +744,7 @@ export interface BackupOverview {
   runtime_readiness: {
     pg_dump_available: boolean;
     run_now_allowed: boolean;
+    restore_automation_available: boolean;
     reason: string | null;
   };
 }
@@ -757,6 +758,38 @@ export interface CreateBackupRestoreRequestBody {
   artifact_id: string;
   confirmation_phrase: string;
   notes?: string | null;
+}
+
+export type RestoreJobPhase =
+  | 'queued'
+  | 'safety_backup'
+  | 'stopping_application'
+  | 'restoring_database'
+  | 'restoring_settings'
+  | 'restoring_artwork'
+  | 'starting_application'
+  | 'verifying_health'
+  | 'completed'
+  | 'failed';
+
+export interface RestoreJob {
+  id: string;
+  artifact_id: string;
+  phase: RestoreJobPhase;
+  progress_percent: number;
+  message: string;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UploadBackupResponse {
+  artifact: BackupArtifact;
+}
+
+export interface StartRestoreResponse {
+  job: RestoreJob;
+  capability_token: string;
 }
 
 export interface UpdateBackupSettingsBody {

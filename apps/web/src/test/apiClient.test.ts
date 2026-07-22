@@ -251,6 +251,7 @@ describe('api client dashboard contracts', () => {
           runtime_readiness: {
             pg_dump_available: true,
             run_now_allowed: true,
+            restore_automation_available: true,
             reason: null,
           },
         }),

@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "riviamigo-api"
 path = "src/main.rs"
 
+[[bin]]
+name = "riviamigo-restore-agent"
+path = "src/bin/riviamigo-restore-agent.rs"
+
 [dependencies]
 # Web framework
 axum            = { version = "0.8", features = ["macros", "ws"] }

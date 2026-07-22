@@ -60,6 +60,9 @@ import type {
   UnitPreferences,
   CreateBackupRestoreRequestBody,
   BackupRestoreRequest,
+  RestoreJob,
+  StartRestoreResponse,
+  UploadBackupResponse,
   IdleDrainResponse,
   VehicleMember,
   AddVehicleMemberBody,
@@ -901,6 +904,54 @@ class ApiClient {
 
   async requestBackupRestore(body: CreateBackupRestoreRequestBody): Promise<BackupRestoreRequest> {
     return this.request('POST', '/v1/admin/backups/restore-requests', body);
+  }
+
+  async uploadBackupArtifact(
+    file: File,
+    onProgress?: (loaded: number, total: number) => void
+  ): Promise<UploadBackupResponse> {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', `${getBase()}/v1/admin/backups/imports`);
+      request.withCredentials = true;
+      request.setRequestHeader('Content-Type', file.type || 'application/gzip');
+      request.setRequestHeader('X-Riviamigo-File-Name', file.name.replace(/[^a-zA-Z0-9._-]/g, '_'));
+      if (this.accessToken) request.setRequestHeader('Authorization', `Bearer ${this.accessToken}`);
+      request.upload.onprogress = (event) => onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size);
+      request.onerror = () => reject(new Error('Backup upload was interrupted.'));
+      request.onload = () => {
+        let payload: unknown;
+        try {
+          payload = request.responseText ? JSON.parse(request.responseText) : null;
+        } catch {
+          payload = null;
+        }
+        if (request.status >= 200 && request.status < 300) {
+          resolve(payload as UploadBackupResponse);
+          return;
+        }
+        const message = (payload as { error?: { message?: string } } | null)?.error?.message;
+        reject(Object.assign(new Error(message || `Backup upload failed (${request.status}).`), { status: request.status }));
+      };
+      request.send(file);
+    });
+  }
+
+  async deleteUploadedBackup(artifactId: string): Promise<void> {
+    return this.request('DELETE', `/v1/admin/backups/imports/${artifactId}`);
+  }
+
+  async startBackupRestore(body: CreateBackupRestoreRequestBody): Promise<StartRestoreResponse> {
+    return this.request('POST', '/v1/admin/backups/restores', body);
+  }
+
+  async getRestoreJob(jobId: string, capabilityToken: string): Promise<RestoreJob> {
+    const response = await fetch(`${getBase()}/v1/restore-runtime/jobs/${jobId}`, {
+      headers: { 'X-Riviamigo-Restore-Token': capabilityToken },
+      credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error(`Restore status is unavailable (${response.status}).`);
+    return response.json() as Promise<RestoreJob>;
   }
 
   async downloadBackupArtifact(artifactId: string): Promise<{ blob: Blob; fileName: string }> {

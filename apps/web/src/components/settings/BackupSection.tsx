@@ -1,7 +1,7 @@
 import React from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
-import type { BackupFrequency, BackupOverview, BackupTargetType, UpdateBackupSettingsBody } from '@riviamigo/types';
+import type { BackupFrequency, BackupOverview, BackupTargetType, RestoreJob, UpdateBackupSettingsBody } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import {
   AlertTriangle,
@@ -19,6 +19,8 @@ import {
   Save,
   Server,
   Timer,
+  Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 
@@ -235,6 +237,10 @@ export function BackupSection() {
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
   const [pendingRestoreArtifact, setPendingRestoreArtifact] = React.useState<BackupOverview['artifacts'][number] | null>(null);
+  const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
+  const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
+  const [activeRestore, setActiveRestore] = React.useState<{ job: RestoreJob; token: string } | null>(null);
+  const uploadInputRef = React.useRef<HTMLInputElement>(null);
   const detectedTimezone = React.useMemo(() => detectTimezone(), []);
 
   React.useEffect(() => {
@@ -294,21 +300,68 @@ export function BackupSection() {
     },
   });
 
+  const uploadArtifact = useMutation({
+    mutationFn: (file: File) => api.uploadBackupArtifact(file, (loaded, total) => {
+      setUploadProgress(total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0);
+    }),
+    onSuccess: ({ artifact }) => {
+      setUploadProgress(null);
+      setExpandedArtifactId(artifact.id);
+      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
+    },
+    onError: (error) => {
+      setUploadProgress(null);
+      emitToast('Import recovery package', error instanceof Error ? error.message : 'The recovery package could not be imported.');
+    },
+  });
+
+  const deleteUploadedArtifact = useMutation({
+    mutationFn: (artifactId: string) => api.deleteUploadedBackup(artifactId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backup-overview'] }),
+    onError: (error) => emitToast('Delete imported package', error instanceof Error ? error.message : 'The imported package could not be deleted.'),
+  });
+
   const requestRestore = useMutation({
     mutationFn: (artifact: BackupOverview['artifacts'][number]) =>
-      api.requestBackupRestore({
+      api.startBackupRestore({
         artifact_id: artifact.id,
-        confirmation_phrase: 'RESTORE',
+        confirmation_phrase: restoreConfirmation,
         notes: null,
       }),
-    onSuccess: () => {
+    onSuccess: ({ job, capability_token }) => {
+      setActiveRestore({ job, token: capability_token });
       setPendingRestoreArtifact(null);
+      setRestoreConfirmation('');
       queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
     },
     onError: (error) => {
       emitToast('Restore request', error instanceof Error ? error.message : 'Restore request could not be created.');
     },
   });
+
+  React.useEffect(() => {
+    if (!activeRestore || activeRestore.job.phase === 'completed' || activeRestore.job.phase === 'failed') return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const job = await api.getRestoreJob(activeRestore.job.id, activeRestore.token);
+        if (stopped) return;
+        setActiveRestore((current) => current ? { ...current, job } : current);
+        if (job.phase === 'completed') {
+          window.setTimeout(() => window.location.reload(), 1200);
+        }
+      } catch {
+        // The API process intentionally disappears during restore. The
+        // supervisor endpoint remains available and the next poll reconnects.
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [activeRestore?.job.id, activeRestore?.job.phase, activeRestore?.token]);
 
   function updateDraft<K extends keyof BackupDraft>(key: K, value: BackupDraft[K]) {
     setDraft((cur) => cur ? { ...cur, [key]: value } : cur);
@@ -696,9 +749,42 @@ export function BackupSection() {
             <DatabaseBackup className="h-4 w-4 text-fg-secondary" />
             <CardTitle>Backups</CardTitle>
           </div>
-          <Badge variant="default">Local catalog</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="default">Local catalog</Badge>
+            <input
+              ref={uploadInputRef}
+              type="file"
+              accept=".rma.tar.gz,application/gzip,application/octet-stream"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) uploadArtifact.mutate(file);
+                event.target.value = '';
+              }}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              iconLeft={<Upload className="h-3.5 w-3.5" />}
+              loading={uploadArtifact.isPending}
+              onClick={() => uploadInputRef.current?.click()}
+            >
+              Import recovery package
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-3">
+          {uploadArtifact.isPending && (
+            <div aria-label="Backup upload progress" className="rounded-lg border border-border bg-bg-elevated/30 p-3">
+              <div className="flex items-center justify-between gap-3 text-xs text-fg-secondary">
+                <span>{uploadProgress === 100 ? 'Validating recovery package…' : 'Uploading recovery package…'}</span>
+                <span className="tabular-nums">{uploadProgress ?? 0}%</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-elevated">
+                <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${uploadProgress ?? 0}%` }} />
+              </div>
+            </div>
+          )}
           {overview.data.artifacts.length === 0 ? (
             <p className="text-sm text-fg-tertiary">No backup artifact has been written yet.</p>
           ) : (
@@ -751,6 +837,21 @@ export function BackupSection() {
                             downloadArtifact.mutate(artifact);
                           }}
                         />
+                        {artifact.storage_type === 'uploaded' && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            aria-label={`Delete imported backup ${artifact.id}`}
+                            iconLeft={<Trash2 className="h-3.5 w-3.5" />}
+                            loading={deleteUploadedArtifact.isPending && deleteUploadedArtifact.variables === artifact.id}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (window.confirm(`Delete imported recovery package "${artifact.file_name}"?`)) {
+                                deleteUploadedArtifact.mutate(artifact.id);
+                              }
+                            }}
+                          />
+                        )}
                         <Button
                           variant="secondary"
                           size="sm"
@@ -850,8 +951,8 @@ export function BackupSection() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-fg">Restore this backup?</p>
                 <p className="mt-1 text-sm text-fg-tertiary">
-                  This records an operator restore request for <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
-                  It does not overwrite the database. Use the downloaded package with <span className="font-mono text-fg">scripts/restore-backup.mjs</span> on a new install.
+                  This replaces the current users, dashboards, telemetry, settings, and artwork with <span className="font-mono text-fg">{pendingRestoreArtifact.file_name}</span>.
+                  Riviamigo creates a required safety package first, stops its API and ingestion workers, restores the package, and starts cleanly on the restored data.
                 </p>
               </div>
               <button
@@ -863,19 +964,63 @@ export function BackupSection() {
                 <X className="h-4 w-4" />
               </button>
             </div>
+            <label className="mt-4 grid gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Type RESTORE to continue</span>
+              <input
+                autoFocus
+                value={restoreConfirmation}
+                onChange={(event) => setRestoreConfirmation(event.target.value)}
+                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 font-mono text-sm text-fg outline-none focus:border-accent"
+              />
+            </label>
             <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setPendingRestoreArtifact(null)}>
+              <Button variant="secondary" size="sm" onClick={() => { setPendingRestoreArtifact(null); setRestoreConfirmation(''); }}>
                 Cancel
               </Button>
               <Button
                 variant="danger"
                 size="sm"
                 loading={requestRestore.isPending}
+                disabled={restoreConfirmation !== 'RESTORE' || !overview.data.runtime_readiness.restore_automation_available}
                 onClick={() => requestRestore.mutate(pendingRestoreArtifact)}
               >
-                Record restore request
+                Create safety backup and restore
               </Button>
             </div>
+            {!overview.data.runtime_readiness.restore_automation_available && (
+              <p className="mt-3 text-xs text-status-warning">Automated restore is unavailable in this runtime. Use the documented restore script on the host.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeRestore && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-bg-page/90 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl rounded-2xl border border-border bg-bg-surface p-6 shadow-2xl" role="status" aria-live="polite">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent/10 text-accent">
+                <RotateCcw className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-fg">Restoring Riviamigo</p>
+                <p className="mt-1 text-sm text-fg-tertiary">{activeRestore.job.message}</p>
+              </div>
+              <span className="text-sm tabular-nums text-fg-secondary">{activeRestore.job.progress_percent}%</span>
+            </div>
+            <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-bg-elevated">
+              <div className={`h-full rounded-full transition-[width] duration-500 ${activeRestore.job.phase === 'failed' ? 'bg-status-danger' : 'bg-accent'}`} style={{ width: `${activeRestore.job.progress_percent}%` }} />
+            </div>
+            <p className="mt-3 text-xs capitalize text-fg-tertiary">{activeRestore.job.phase.replaceAll('_', ' ')}</p>
+            {activeRestore.job.error_message && (
+              <div className="mt-4 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">
+                {activeRestore.job.error_message}
+              </div>
+            )}
+            {activeRestore.job.phase === 'failed' && (
+              <div className="mt-4 flex justify-end">
+                <Button variant="secondary" size="sm" onClick={() => setActiveRestore(null)}>Close</Button>
+              </div>
+            )}
           </div>
         </div>
       )}

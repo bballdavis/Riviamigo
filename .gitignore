@@ -38,6 +38,9 @@ output/
 compose/resolv.conf
 .codex_tmp/
 
+# Local Rivian protocol exploration (credentials and raw vehicle data)
+tools/graph-exploration/local/**
+
 # IDE and system
 .vscode/settings.json
 .idea/

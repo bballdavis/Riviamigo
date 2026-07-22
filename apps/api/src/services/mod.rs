@@ -8,6 +8,7 @@ pub mod external_connections;
 pub mod geofences;
 pub mod nominatim;
 pub mod redis_health;
+pub mod restore_jobs;
 pub mod trip_enrichment;
 pub mod trip_routes;
 pub mod weather_enrichment;

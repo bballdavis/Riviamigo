@@ -26,6 +26,10 @@ pub struct Config {
     pub backup_driver: String,
     #[serde(default = "default_backup_poll_interval_seconds")]
     pub backup_poll_interval_seconds: u64,
+    #[serde(default = "default_restore_agent_url")]
+    pub restore_agent_url: String,
+    #[serde(default = "default_restore_agent_key_file")]
+    pub restore_agent_key_file: String,
     #[serde(default = "default_rivian_ws_reconnect_initial_seconds")]
     pub rivian_ws_reconnect_initial_seconds: u64,
     #[serde(default = "default_rivian_ws_reconnect_max_seconds")]
@@ -106,6 +110,14 @@ fn default_riviamigo_env() -> Option<String> {
 
 fn default_backup_poll_interval_seconds() -> u64 {
     60
+}
+
+fn default_restore_agent_url() -> String {
+    "http://127.0.0.1:3002".into()
+}
+
+fn default_restore_agent_key_file() -> String {
+    "/backups/.restore-agent-key".into()
 }
 
 fn default_origins() -> Vec<String> {
@@ -380,6 +392,8 @@ mod tests {
             vehicle_image_cache_dir: default_vehicle_image_cache_dir(),
             backup_driver: default_backup_driver(),
             backup_poll_interval_seconds: default_backup_poll_interval_seconds(),
+            restore_agent_url: default_restore_agent_url(),
+            restore_agent_key_file: default_restore_agent_key_file(),
             rivian_ws_reconnect_initial_seconds: default_rivian_ws_reconnect_initial_seconds(),
             rivian_ws_reconnect_max_seconds: default_rivian_ws_reconnect_max_seconds(),
             rivian_raw_event_retention_days: default_rivian_raw_event_retention_days(),
