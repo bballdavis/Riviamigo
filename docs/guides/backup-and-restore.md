@@ -38,7 +38,7 @@ Select **Restore selected backup**, review the replacement warning, and type `RE
 5. Reconciles the persistent backup catalog, execution history, and completed restore request into the restored database.
 6. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
 
-PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package. If the container is interrupted after PostgreSQL work begins, the restore supervisor retries the staged job once using the same isolated-database path; the retry is bounded so a permanently invalid package does not loop forever.
+PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package. If the container is interrupted after PostgreSQL work begins, the restore supervisor retries the staged job up to two times using the same isolated-database path; the retries are bounded so a permanently invalid package does not loop forever.
 
 ## Restore with the host command
 

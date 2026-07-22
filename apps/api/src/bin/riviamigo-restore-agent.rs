@@ -81,7 +81,7 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
             Ok(job) => job,
             Err(_) => continue,
         };
-        if job.phase != RestorePhase::Failed || job.automatic_retry_count > 0 {
+        if job.phase != RestorePhase::Failed || job.automatic_retry_count >= 2 {
             continue;
         }
         let staging = Path::new(&state.config.backup_artifact_dir)
@@ -428,6 +428,11 @@ async fn restore_database_atomically(
 
     create_database(config, &restore_database).await?;
     let restore_result = async {
+        run_psql(
+            &restore_config,
+            "CREATE EXTENSION IF NOT EXISTS timescaledb; SELECT timescaledb_pre_restore();",
+        )
+        .await?;
         build_restore_toc(dump, &toc_path).await?;
         run_pg_restore(&restore_config, dump, &toc_path).await?;
         restore_migration_ledger(&restore_config, manifest).await?;
