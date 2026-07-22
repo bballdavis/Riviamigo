@@ -28,6 +28,18 @@ async fn main() -> anyhow::Result<()> {
     let mut config = Config::from_env()?;
     let pool = create_pool(&config.database_url).await?;
 
+    if let Some(repair) =
+        services::restore_compatibility::reconcile_verified_live_migration_drift(&pool).await?
+    {
+        tracing::warn!(
+            ledger_version_before = repair.ledger_version_before,
+            schema_version = repair.schema_version,
+            ledger_versions_added = ?repair.ledger_versions_added,
+            applied_transform = ?repair.applied_transform,
+            "verified restore-induced migration drift repaired before startup migrations"
+        );
+    }
+
     let migration_pool = PgPoolOptions::new()
         .max_connections(1)
         .after_connect(|connection, _| {

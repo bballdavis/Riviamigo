@@ -45,7 +45,7 @@ For an in-app restore:
 2. Confirm the isolated candidate reaches validation before the safety package is written and before the API stops.
 3. Follow the phase shown in the UI or inspect `.restore-jobs/<job-id>.json` for the plan, candidate validation report, retryability, and rollback state.
 4. If verification fails, confirm rollback state becomes `succeeded` and the previous API becomes healthy. Preserve the uploaded package, safety package, failed candidate, and journal if rollback fails.
-5. Do not edit `_sqlx_migrations` on the live database. Ledger verification or reconstruction is permitted only in an isolated candidate after its complete source schema contract passes.
+5. Do not edit `_sqlx_migrations` manually. Normal ledger reconstruction occurs only in an isolated candidate after its complete source schema contract passes. At startup, Riviamigo has one narrowly scoped compatibility bridge for databases left behind by older restore releases: it may add missing compiled ledger entries only after the complete live schema, every existing migration checksum, and a registered schema profile agree. The registered partial migration-5 profile is completed with its idempotent transform first. Unknown, incomplete, or contradictory states fail closed.
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the short swap window. Public `/health` remains available during candidate preparation and unavailable only while the API is intentionally stopped for swap or rollback.
 
