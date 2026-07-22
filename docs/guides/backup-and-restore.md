@@ -16,11 +16,12 @@ Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma
 
 If S3 is an enabled destination and its upload fails, the run is marked failed and Riviamigo retains the valid package locally even when Local retention was disabled. This prevents a remote-storage outage from silently appearing as a protected backup.
 
-Every package contains:
+New packages use the `riviamigo-recovery-v2` contract and contain:
 
-- `manifest.json` with the package format, source release, migration version, scope, redactions, and checksums.
+- `manifest.json` with the source release/build, PostgreSQL and TimescaleDB versions, complete migration ledger and checksums, canonical schema fingerprint, component policies, redactions, sizes, and checksums.
 - `database.dump`, a custom-format PostgreSQL dump with sensitive and ephemeral data excluded.
 - `backup-settings.json`, containing non-secret backup schedule and target configuration.
+- `operational-history.json`, containing a sanitized, independently versioned snapshot of backup runs, artifact metadata, and restore requests.
 - `vehicle-image-cache/`, containing the persistent first-party vehicle artwork mirror.
 
 The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid recovery mode and is rejected as manifest-only metadata.
@@ -29,16 +30,17 @@ The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid
 
 On the target installation, sign in as an administrator and open **Settings > Backups**. In **Restore from backup**, choose a package from the local catalog or select **Import recovery package** to upload a `.rma.tar.gz` file from another Riviamigo server. Wait for upload and package validation to finish. Uploaded packages have no artificial size limit, but the backup filesystem must have enough space for the package, validation staging, and the required safety backup. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
 
-Select **Restore selected backup**, review the replacement warning, and type `RESTORE`. Riviamigo then:
+Select **Restore selected backup**. Riviamigo first performs an authenticated compatibility preflight and shows source and target schema versions, pending migrations, required transforms, warnings, or a stable blocking reason. Starting the restore requires that exact plan ID and package checksum. Review the replacement warning and type `RESTORE`. Riviamigo then:
 
-1. Creates and verifies a fresh safety recovery package of the target installation. The restore stops if this fails.
-2. Stops the API and ingestion workers while keeping nginx and the restore-progress endpoint available.
-3. Restores PostgreSQL into an isolated temporary database, reconstructs its SQLx migration ledger from the package's recorded source version, and swaps it into service only after the dump and settings restore succeed. This keeps a failed TimescaleDB restore from leaving the live database half-restored.
-4. Starts a fresh API process so only genuinely newer migrations run, then restores vehicle artwork.
-5. Reconciles the persistent backup catalog, execution history, and completed restore request into the restored database.
-6. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
+1. Restores PostgreSQL and TimescaleDB into an isolated candidate while the current application remains available.
+2. Verifies the actual source schema, applies only registered idempotent compatibility transforms, reconstructs SQLx bookkeeping inside the candidate, runs pending migrations, and validates required relations, hypertables, checksums, and foreign keys.
+3. Creates and verifies a fresh safety recovery package only after the candidate is ready. The restore stops if this fails.
+4. Merges source operational history with the target host snapshot; target records win UUID conflicts and the host catalogs determine physical package availability.
+5. Stops the API and ingestion workers, then atomically activates the candidate database and versioned artwork directory.
+6. Starts the API and verifies health, setup state, migrations, and restored data. A failed verification automatically swaps the previous database and artwork back.
+7. Reconciles the durable journal and reloads the browser. Sign in with an account from the restored backup if prompted.
 
-PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package. If the container is interrupted after PostgreSQL work begins, the restore supervisor retries the staged job up to two times using the same isolated-database path; the retries are bounded so a permanently invalid package does not loop forever.
+PostgreSQL and Redis remain running during this workflow. The durable journal checkpoints candidate preparation, transforms, migrations, validation, safety backup, history merge, swap, verification, rollback, and completion. A restart resumes an idempotent phase or rebuilds only the candidate. Retryable failures are bounded; invalid or incompatible packages are terminal.
 
 ## Restore with the host command
 
@@ -54,9 +56,9 @@ For a source checkout, add `--source-build`. The command:
 
 1. Validates the archive, manifest, checksums, and archive paths.
 2. Starts only PostgreSQL and refuses a database that already contains users.
-3. Restores the database before starting the API, allowing the new release to apply pending migrations.
-4. Restores the vehicle artwork cache directory.
-5. Starts the unified app service and verifies health plus the restored setup state.
+3. Runs the same Rust compatibility planner, candidate engine, transforms, migrations, and validation report used by in-app restores.
+4. Creates a safety package of the target host, merges its operational history, and atomically activates the validated database and artwork while retaining the previous state.
+5. Starts the unified app service, verifies health plus setup state, and finalizes the swap; a failed verification invokes the shared rollback path.
 
 Use `--force` only when intentionally replacing the target installation:
 
@@ -73,10 +75,10 @@ The in-app flow and host command do not restore Rivian credentials or live sessi
 
 ## Persistent artifact storage
 
-Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, remote-staging, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. The retention count applies independently to generated Local and S3 packages. Imported and safety packages are never pruned by scheduled retention.
+Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, remote-staging, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. Restore never replaces or recreates the backup directory; startup and the Backups page rescan valid local packages and rebuild any missing catalog rows from disk. The retention count applies independently to generated Local and S3 packages. Imported and safety packages are never pruned by scheduled retention.
 
 ## Compatibility and verification
 
-Recovery is forward-compatible: an older package may be restored into a newer release. The restore reconstructs migration bookkeeping from the package manifest, then the newer release runs only its pending migrations. Downgrading is not supported.
+Recovery is forward-compatible: a recognized older package may be restored into an equal or newer supported PostgreSQL/TimescaleDB and Riviamigo schema. Downgrades, unknown v1 schema profiles, contradictory manifests, changed migration checksums, unknown fingerprints, incomplete schemas, and newer-source packages are rejected before swap. Legacy `riviamigo-recovery-v1` packages remain readable, but their declared migration and actual restored schema must match a registered profile. Migration bookkeeping is never reconstructed on the live database.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.
