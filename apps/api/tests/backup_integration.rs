@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -10,8 +11,11 @@ use axum::{
     },
     Router,
 };
+use flate2::{write::GzEncoder, Compression};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{Executor, PgPool};
+use tar::{Builder, Header};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -93,7 +97,6 @@ impl TestApp {
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
                 rivian_persist_raw_events: true,
-                rivian_parallax_capture_enabled: true,
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
@@ -215,6 +218,67 @@ fn replace_database_name(database_url: &str, database_name: &str) -> String {
         .rsplit_once('/')
         .expect("database url with db name");
     format!("{prefix}/{database_name}")
+}
+
+fn test_recovery_package() -> Vec<u8> {
+    let mut database = b"PGDMP".to_vec();
+    let mut state = 0x9e37_79b9_u32;
+    for _ in 0..(96 * 1024) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        database.push(state as u8);
+    }
+    let settings = br#"{"present":false}"#;
+    let manifest = serde_json::to_vec(&json!({
+        "format": "riviamigo-recovery-v1",
+        "format_version": 1,
+        "components": {
+            "database": {
+                "path": "database.dump",
+                "sha256": hex::encode(Sha256::digest(&database))
+            },
+            "backup_settings": {
+                "path": "backup-settings.json",
+                "sha256": hex::encode(Sha256::digest(settings))
+            },
+            "vehicle_image_cache": { "files": [] }
+        }
+    }))
+    .expect("manifest JSON");
+
+    let encoder = GzEncoder::new(Vec::new(), Compression::default());
+    let mut archive = Builder::new(encoder);
+    for (path, bytes) in [
+        ("manifest.json", manifest.as_slice()),
+        ("database.dump", database.as_slice()),
+        ("backup-settings.json", settings.as_slice()),
+    ] {
+        let mut header = Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o600);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, path, Cursor::new(bytes))
+            .expect("append recovery component");
+    }
+    let mut directory = Header::new_gnu();
+    directory.set_entry_type(tar::EntryType::Directory);
+    directory.set_size(0);
+    directory.set_mode(0o700);
+    directory.set_cksum();
+    archive
+        .append_data(
+            &mut directory,
+            "vehicle-image-cache",
+            Cursor::new(Vec::<u8>::new()),
+        )
+        .expect("append artwork directory");
+    archive
+        .into_inner()
+        .expect("finish tar")
+        .finish()
+        .expect("finish gzip")
 }
 
 async fn register_and_login(app: &TestApp, email: &str) -> String {
@@ -387,27 +451,18 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
 }
 
 #[tokio::test]
-async fn admin_can_import_a_generated_recovery_package() {
+async fn admin_can_import_external_recovery_package() {
     let app = TestApp::new().await;
     let email = "backup-import-admin@example.com";
     let token = register_and_login(&app, email).await;
     let user_id = lookup_user_id(&app.pool, email).await;
     promote_admin(&app.pool, user_id).await;
 
-    let generated = app
-        .request(
-            Method::POST,
-            "/v1/admin/backups/run",
-            None,
-            Some(&token),
-            None,
-        )
-        .await;
-    assert_eq!(generated.status, StatusCode::CREATED, "{}", generated.body);
-    let path = generated.body["artifact"]["storage_path"]
-        .as_str()
-        .expect("artifact path");
-    let bytes = tokio::fs::read(path).await.expect("recovery package bytes");
+    let bytes = test_recovery_package();
+    assert!(
+        bytes.len() > 64 * 1024,
+        "fixture must exercise large upload routing"
+    );
 
     let imported = app
         .request_bytes(

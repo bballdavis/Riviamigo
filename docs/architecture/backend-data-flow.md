@@ -29,14 +29,11 @@ tail. `odometer_daily` has a separate hourly, materialized-only policy.
 
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
-The API can also run an experimental, read-only Parallax capture alongside the
-legacy vehicle-state WebSocket. Raw Parallax events are stored separately in
-`riviamigo.rivian_parallax_events` with the RVM topic, server/receive
-timestamps, base64 protobuf payload, and the active trip or charge-session ID
-when one is available. This is a discovery store, not part of the typed
-telemetry contract; `RIVIAN_PARALLAX_CAPTURE_ENABLED` controls it and the
-normal raw-event retention setting removes old rows. Decode and analyze these
-payloads offline before promoting any field into production telemetry.
+Experimental Parallax protobuf discovery is intentionally kept out of the
+production ingestion worker. The local `graph-exploration` harness owns that
+read-only subscription and stores captures outside the application database;
+only verified fields should later be promoted through the normal typed
+telemetry path.
 
 ## Major Backend Areas
 
