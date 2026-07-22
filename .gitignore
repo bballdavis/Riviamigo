@@ -41,6 +41,9 @@ compose/resolv.conf
 # Local Rivian protocol exploration (credentials and raw vehicle data)
 tools/graph-exploration/local/**
 
+# Local restore compatibility lab (fixtures, credentials, stacks, and reports)
+tools/restore-lab/local/**
+
 # IDE and system
 .vscode/settings.json
 .idea/
