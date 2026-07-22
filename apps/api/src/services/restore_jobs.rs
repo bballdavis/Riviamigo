@@ -47,6 +47,8 @@ pub struct RestoreJob {
     #[serde(default)]
     pub reconciled_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    pub automatic_retry_count: u8,
+    #[serde(default)]
     pub catalog_snapshot: Option<BackupCatalogSnapshot>,
 }
 
@@ -148,6 +150,7 @@ pub async fn create(
         created_at: now,
         updated_at: now,
         reconciled_at: None,
+        automatic_retry_count: 0,
         catalog_snapshot: None,
     };
     write(config, &job).await?;

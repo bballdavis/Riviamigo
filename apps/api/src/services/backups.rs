@@ -859,6 +859,9 @@ async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppErr
         .arg("--exclude-table-data=riviamigo.external_connection_settings")
         .arg("--exclude-table-data=riviamigo.system_config")
         .arg("--exclude-table-data=riviamigo.refresh_tokens")
+        // Activity rows reference redacted external connection settings and
+        // cannot be restored without the corresponding provider records.
+        .arg("--exclude-table-data=riviamigo.external_connection_activity")
         // Backup settings are restored from backup-settings.json after the
         // dump, which keeps the encrypted target secret out of the package.
         .arg("--exclude-table-data=riviamigo.backup_settings")
@@ -1023,7 +1026,7 @@ async fn build_recovery_manifest(
                 "Redis live state, pub/sub messages, and OTP challenges",
                 "backup artifact catalog and restore request history",
                 "browser localStorage and sessionStorage",
-                "external provider connection cache state"
+                "external provider connection cache state and activity history"
             ]
         },
         "components": {

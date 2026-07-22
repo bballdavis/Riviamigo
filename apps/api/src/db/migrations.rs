@@ -16,6 +16,9 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// carry a usable `_sqlx_migrations` table. The schema itself is not changed:
 /// the package's source migration version determines which migrations are
 /// already represented, and normal startup applies only later migrations.
+/// Refuse to reconstruct the ledger when the restore left the baseline schema
+/// incomplete; marking migrations as applied in that state would hide a
+/// partial restore and make later migrations fail with misleading errors.
 pub async fn restore_ledger(pool: &PgPool, source_version: i64) -> anyhow::Result<()> {
     if source_version < 1 {
         bail!("recovery package has an invalid source migration version: {source_version}");
@@ -28,6 +31,17 @@ pub async fn restore_ledger(pool: &PgPool, source_version: i64) -> anyhow::Resul
         bail!(
             "recovery package requires migration version {source_version}, but this release only knows through {}",
             latest.version
+        );
+    }
+
+    let schema_ready: bool = sqlx::query_scalar(
+        "SELECT to_regclass('timeseries.telemetry') IS NOT NULL AND to_regclass('riviamigo.backup_runs') IS NOT NULL AND to_regclass('riviamigo.users') IS NOT NULL AND to_regclass('riviamigo.vehicles') IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !schema_ready {
+        bail!(
+            "cannot reconstruct the migration ledger because the restored application schema is incomplete"
         );
     }
 
@@ -96,11 +110,12 @@ pub async fn recover_interrupted_restore_ledger(
         return Ok(false);
     }
 
-    let telemetry_exists: bool =
-        sqlx::query_scalar("SELECT to_regclass('timeseries.telemetry') IS NOT NULL")
-            .fetch_one(pool)
-            .await?;
-    if !telemetry_exists {
+    let restore_schema_exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('timeseries.telemetry') IS NOT NULL AND to_regclass('riviamigo.backup_runs') IS NOT NULL AND to_regclass('riviamigo.users') IS NOT NULL AND to_regclass('riviamigo.vehicles') IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !restore_schema_exists {
         return Ok(false);
     }
 
