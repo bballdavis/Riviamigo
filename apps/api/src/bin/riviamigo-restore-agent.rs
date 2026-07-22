@@ -97,12 +97,13 @@ async fn retry_interrupted_restore(state: &AgentState) -> anyhow::Result<()> {
             continue;
         }
 
+        let next_retry_count = job.automatic_retry_count.saturating_add(1);
         let mut retry = job;
         retry.phase = RestorePhase::StoppingApplication;
         retry.progress_percent = 25;
         retry.message = "Retrying interrupted restore with an isolated database".into();
         retry.error_message = None;
-        retry.automatic_retry_count = job.automatic_retry_count.saturating_add(1);
+        retry.automatic_retry_count = next_retry_count;
         retry.updated_at = Utc::now();
         restore_jobs::write(&state.config, &retry).await?;
         fs::write(restore_marker_path(), retry.id.to_string()).await?;
