@@ -1,0 +1,14 @@
+{
+  "fixtures": [
+    {
+      "id": "legacy-migration-3",
+      "file_name": "backup-20260721T221811Z-0d2ed2cf4a254126a4e2ed42f35d35a2.rma.tar.gz",
+      "sha256": "fb265fc0ccc061117dd1dfbf7419fa59cf48c8df0da0b1236cf64db4a226dee7",
+      "format": "riviamigo-recovery-v1",
+      "declared_migration": 3,
+      "expected_profile": "v1-migration-3",
+      "expected_migrations_applied": [4, 5],
+      "data_committed": false
+    }
+  ]
+}
