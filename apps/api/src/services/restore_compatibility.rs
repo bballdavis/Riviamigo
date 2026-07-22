@@ -98,6 +98,14 @@ pub struct CandidatePreparationReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveMigrationRepairReport {
+    pub ledger_version_before: i64,
+    pub schema_version: i64,
+    pub ledger_versions_added: Vec<i64>,
+    pub applied_transform: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DumpInspection {
     pub has_riviamigo_schema: bool,
     pub has_timeseries_schema: bool,
@@ -113,6 +121,18 @@ struct LegacyProfileInspection {
     s3_settings_columns: bool,
     artifact_run_id_not_null: bool,
     s3_locator_index: bool,
+}
+
+fn registered_legacy_profile_version(actual: &LegacyProfileInspection) -> Option<i64> {
+    (1..=latest_migration_version()).find(|version| legacy_profile_matches(*version, actual))
+}
+
+fn is_partial_s3_v5_profile(actual: &LegacyProfileInspection) -> bool {
+    actual.baseline_revision
+        && actual.hourly_telemetry_refresh
+        && actual.s3_settings_columns
+        && actual.artifact_run_id_not_null
+        && !actual.s3_locator_index
 }
 
 pub async fn inspect_recovery_dump(package: &Path) -> Result<DumpInspection, AppError> {
@@ -358,6 +378,133 @@ pub async fn validate_schema_contract(pool: &PgPool) -> Result<SchemaContractRep
     })
 }
 
+/// Repair restore-induced SQLx bookkeeping drift only when the live database
+/// can be proven to match a registered schema profile. This is intentionally
+/// additive: it never deletes ledger rows or infers state from PostgreSQL error
+/// text. Unknown, incomplete, or checksum-divergent databases fail closed and
+/// remain available for operator inspection.
+pub async fn reconcile_verified_live_migration_drift(
+    pool: &PgPool,
+) -> anyhow::Result<Option<LiveMigrationRepairReport>> {
+    let ledger_exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+    if !ledger_exists {
+        return Ok(None);
+    }
+
+    let schema_contract = validate_schema_contract(pool).await?;
+    if !schema_contract.required_relations_present || !schema_contract.telemetry_hypertable {
+        return Ok(None);
+    }
+
+    let compiled = MIGRATOR.migrations.iter().collect::<Vec<_>>();
+    let ledger = sqlx::query_as::<_, (i64, String)>(
+        "SELECT version, encode(checksum, 'hex') FROM public._sqlx_migrations WHERE success = TRUE ORDER BY version",
+    )
+    .fetch_all(pool)
+    .await?;
+    for (version, checksum) in &ledger {
+        let migration = compiled
+            .iter()
+            .find(|migration| migration.version == *version)
+            .ok_or_else(|| {
+                anyhow::anyhow!("live migration ledger contains unknown migration {version}")
+            })?;
+        let expected = hex::encode(migration.checksum.as_ref());
+        if checksum != &expected {
+            anyhow::bail!(
+                "live migration ledger checksum mismatch for migration {version}; automatic repair refused"
+            );
+        }
+    }
+
+    let ledger_version_before = ledger.last().map(|(version, _)| *version).unwrap_or(0);
+    for migration in compiled
+        .iter()
+        .filter(|migration| migration.version <= ledger_version_before)
+    {
+        if !ledger
+            .iter()
+            .any(|(version, _)| *version == migration.version)
+        {
+            anyhow::bail!(
+                "live migration ledger is missing migration {} below its recorded high-water mark; automatic repair refused",
+                migration.version
+            );
+        }
+    }
+
+    let actual = inspect_legacy_profile(pool).await?;
+    let mut applied_transform = None;
+    let schema_version = if let Some(version) = registered_legacy_profile_version(&actual) {
+        version
+    } else if is_partial_s3_v5_profile(&actual) && ledger_version_before <= 4 {
+        apply_partial_s3_v5_transform(pool).await?;
+        applied_transform = Some("complete-partial-s3-v5".to_string());
+        5
+    } else {
+        anyhow::bail!(
+            "live database schema does not match a registered migration profile; automatic ledger repair refused: {actual:?}"
+        );
+    };
+
+    if schema_version < ledger_version_before {
+        anyhow::bail!(
+            "live database schema matches migration {schema_version}, but its ledger records migration {ledger_version_before}; automatic repair refused"
+        );
+    }
+    if schema_version == ledger_version_before && applied_transform.is_none() {
+        return Ok(None);
+    }
+
+    let missing = compiled
+        .iter()
+        .filter(|migration| {
+            migration.version <= schema_version
+                && !ledger
+                    .iter()
+                    .any(|(version, _)| *version == migration.version)
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('riviamigo-live-migration-repair'))")
+        .execute(&mut *transaction)
+        .await?;
+    for migration in &missing {
+        sqlx::query(
+            r#"
+            INSERT INTO public._sqlx_migrations
+                (version, description, success, checksum, execution_time)
+            VALUES ($1, $2, TRUE, $3, 0)
+            ON CONFLICT (version) DO NOTHING
+            "#,
+        )
+        .bind(migration.version)
+        .bind(migration.description.as_ref())
+        .bind(migration.checksum.as_ref())
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+
+    let repaired = inspect_legacy_profile(pool).await?;
+    if !legacy_profile_matches(schema_version, &repaired) {
+        anyhow::bail!(
+            "live database failed registered schema validation after migration repair: {repaired:?}"
+        );
+    }
+
+    Ok(Some(LiveMigrationRepairReport {
+        ledger_version_before,
+        schema_version,
+        ledger_versions_added: missing.iter().map(|migration| migration.version).collect(),
+        applied_transform,
+    }))
+}
+
 /// Reconcile and migrate an isolated restore candidate. This is intentionally
 /// unavailable to normal application startup: historical bookkeeping may only
 /// be reconstructed after the restored schema has passed its source contract.
@@ -520,11 +667,7 @@ async fn identify_and_transform_legacy_profile(
         );
     }
     let actual = inspect_legacy_profile(pool).await?;
-    let partial_s3_v5 = declared_migration == 3
-        && actual.baseline_revision
-        && actual.hourly_telemetry_refresh
-        && actual.s3_settings_columns
-        && actual.artifact_run_id_not_null;
+    let partial_s3_v5 = declared_migration == 3 && is_partial_s3_v5_profile(&actual);
     if partial_s3_v5 {
         inject_candidate_fault("compatibility_transform")?;
         apply_partial_s3_v5_transform(pool).await?;
@@ -636,7 +779,7 @@ async fn column_is_not_null(
 
 async fn apply_partial_s3_v5_transform(pool: &PgPool) -> anyhow::Result<()> {
     let mut transaction = pool.begin().await?;
-    sqlx::query(
+    sqlx::raw_sql(
         r#"
         ALTER TABLE riviamigo.backup_runs DROP CONSTRAINT IF EXISTS backup_runs_trigger_check;
         ALTER TABLE riviamigo.backup_runs ADD CONSTRAINT backup_runs_trigger_check
@@ -980,6 +1123,34 @@ mod tests {
         assert!(ledger
             .iter()
             .all(|migration| !migration.checksum_sha384.is_empty()));
+    }
+
+    #[test]
+    fn partial_s3_profile_is_registered_without_matching_complete_v5() {
+        let partial = LegacyProfileInspection {
+            baseline_revision: true,
+            hourly_telemetry_refresh: true,
+            upload_restore_constraints: true,
+            s3_settings_columns: true,
+            artifact_run_id_not_null: true,
+            s3_locator_index: false,
+        };
+        assert!(is_partial_s3_v5_profile(&partial));
+        assert_eq!(registered_legacy_profile_version(&partial), None);
+    }
+
+    #[test]
+    fn complete_v5_profile_is_not_treated_as_partial() {
+        let complete = LegacyProfileInspection {
+            baseline_revision: true,
+            hourly_telemetry_refresh: true,
+            upload_restore_constraints: true,
+            s3_settings_columns: true,
+            artifact_run_id_not_null: false,
+            s3_locator_index: true,
+        };
+        assert!(!is_partial_s3_v5_profile(&complete));
+        assert_eq!(registered_legacy_profile_version(&complete), Some(5));
     }
 
     #[test]
