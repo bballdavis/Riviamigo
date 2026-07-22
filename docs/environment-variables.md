@@ -62,7 +62,6 @@ Generated keys are part of the PostgreSQL backup and therefore survive restore. 
 | `RIVIAN_WS_RECONNECT_MAX_SECONDS` | `900` | Maximum websocket reconnect delay. |
 | `RIVIAN_RAW_EVENT_RETENTION_DAYS` | `7` | Raw telemetry retention window in days. |
 | `RIVIAN_PERSIST_RAW_EVENTS` | `true` | Persists raw Rivian events for diagnostics and repair. |
-| `RIVIAN_PARALLAX_CAPTURE_ENABLED` | `true` | Captures parallax data when supported by the upstream payload. |
 | `RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY` | `true` | Avoids storing unchanged duplicate telemetry samples. |
 
 ## API rate limits

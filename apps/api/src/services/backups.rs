@@ -542,6 +542,7 @@ fn validate_recovery_package_sync(
     let mut archive = Archive::new(decoder);
     let mut manifest_bytes = None;
     let mut file_checksums = HashMap::<String, String>::new();
+    let mut database_magic = Vec::with_capacity(5);
 
     for entry in archive
         .entries()
@@ -601,6 +602,10 @@ fn validate_recovery_package_sync(
             if read == 0 {
                 break;
             }
+            if normalized == "database.dump" && database_magic.len() < 5 {
+                let remaining = 5 - database_magic.len();
+                database_magic.extend_from_slice(&buffer[..read.min(remaining)]);
+            }
             hasher.update(&buffer[..read]);
         }
         file_checksums.insert(normalized, hex::encode(hasher.finalize()));
@@ -627,6 +632,11 @@ fn validate_recovery_package_sync(
     }
 
     verify_manifest_component(&manifest, &file_checksums, "database", "database.dump")?;
+    if database_magic != b"PGDMP" {
+        return Err(AppError::Validation(
+            "Recovery package database.dump is not a PostgreSQL custom-format dump.".into(),
+        ));
+    }
     verify_manifest_component(
         &manifest,
         &file_checksums,
@@ -1313,7 +1323,7 @@ mod tests {
         let archive = root.join("backup.rma.tar.gz");
         std::fs::create_dir_all(cache.join("vehicle-1")).expect("cache directory");
         std::fs::write(cache.join("vehicle-1/artwork.webp"), b"artwork").expect("artwork");
-        std::fs::write(&dump, b"database").expect("dump");
+        std::fs::write(&dump, b"PGDMPdatabase").expect("dump");
         std::fs::write(&settings, br#"{"present":false}"#).expect("settings");
 
         let manifest = serde_json::json!({

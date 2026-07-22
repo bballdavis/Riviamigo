@@ -23,6 +23,6 @@ This section begins after the first installation works. It owns ongoing availabi
 
 ## Maintainer runbooks
 
-Runbooks contain exact procedures, recovery steps, and acceptance evidence for secure deployment, backup restoration, image releases, database cutovers, vehicle-history repair, and Parallax diagnostic capture.
+Runbooks contain exact procedures, recovery steps, and acceptance evidence for secure deployment, backup restoration, image releases, database cutovers, and vehicle-history repair.
 
 Use the user-facing guides for normal installation ownership. Use a runbook when the operation changes shared infrastructure, release state, stored data, or diagnostic evidence.

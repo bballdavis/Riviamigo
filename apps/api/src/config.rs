@@ -39,8 +39,6 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub rivian_persist_raw_events: bool,
     #[serde(default = "default_true")]
-    pub rivian_parallax_capture_enabled: bool,
-    #[serde(default = "default_true")]
     pub rivian_suppress_duplicate_telemetry: bool,
     /// Defaults to production; set to development only for local development.
     #[serde(default = "default_riviamigo_env")]
@@ -398,7 +396,6 @@ mod tests {
             rivian_ws_reconnect_max_seconds: default_rivian_ws_reconnect_max_seconds(),
             rivian_raw_event_retention_days: default_rivian_raw_event_retention_days(),
             rivian_persist_raw_events: true,
-            rivian_parallax_capture_enabled: true,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: Some("production".into()),
             cookie_insecure: None,

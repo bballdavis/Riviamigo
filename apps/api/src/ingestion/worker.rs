@@ -11,7 +11,6 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ActiveChargeSessionSnapshot, ChargeDetectorState, ChargeEvent},
-        parallax::ParallaxEvent,
         rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
@@ -143,7 +142,6 @@ pub async fn run_vehicle_worker(
     .await;
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<WsInboundEvent>(256);
-    let (parallax_tx, mut parallax_rx) = mpsc::channel::<ParallaxEvent>(256);
 
     // Get rivian_vehicle_id
     let riv_id: Option<String> =
@@ -179,18 +177,12 @@ pub async fn run_vehicle_worker(
         let tokens_clone = tokens.clone();
         let riv_id_clone = rivian_vehicle_id.clone();
         let ws_config = config.clone();
-        let parallax_tx_ws = if ws_config.rivian_parallax_capture_enabled {
-            Some(parallax_tx.clone())
-        } else {
-            None
-        };
         tokio::spawn(async move {
             ws_client::run_ws_loop(
                 vehicle_id,
                 riv_id_clone,
                 tokens_clone,
                 ev_tx_ws,
-                parallax_tx_ws,
                 ws_shutdown,
                 ws_config,
             )
@@ -198,8 +190,6 @@ pub async fn run_vehicle_worker(
         })
     };
     let mut ws_handle = spawn_ws_loop();
-
-    let parallax_capture_enabled = config.rivian_parallax_capture_enabled;
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -313,27 +303,6 @@ pub async fn run_vehicle_worker(
             msg = ev_rx.recv() => match msg {
                 Some(ev) => ev,
                 None => break,
-            },
-            parallax_event = parallax_rx.recv(), if parallax_capture_enabled => {
-                match parallax_event {
-                    Some(event) => {
-                        let trip_id = trip_det.active_trip_id();
-                        let charge_session_id = charge_det.active_session_id();
-                        if persist_parallax_event(&pool, vehicle_id, &event, trip_id, charge_session_id).await {
-                            counter_batch.increment("parallax_events_persisted");
-                        }
-                        raw_cleanup_tick += 1;
-                        counter_flush_tick += 1;
-                        if raw_cleanup_tick.is_multiple_of(500) {
-                            cleanup_raw_events(&pool, config.rivian_raw_event_retention_days).await;
-                        }
-                        if counter_flush_tick.is_multiple_of(50) {
-                            counter_batch.flush(&pool).await;
-                        }
-                        continue;
-                    }
-                    None => continue,
-                }
             },
             // Monitor the WS task; log if it exits unexpectedly.
             result = &mut ws_handle => {
@@ -1198,7 +1167,7 @@ async fn handle_inbound_accounting(
             .await;
         }
         Some("reconnect") => batch.increment("ws_reconnects"),
-        Some("connection_init" | "subscribe" | "parallax_subscribe") => {
+        Some("connection_init" | "subscribe") => {
             batch.increment("outbound_messages_sent");
         }
         _ => {}
@@ -1238,7 +1207,6 @@ fn is_synthetic_control(message_type: Option<&str>) -> bool {
             "connection_open"
                 | "connection_init"
                 | "subscribe"
-                | "parallax_subscribe"
                 | "reconnect"
                 | "ws_handshake_rejected"
                 | "ws_schema_rejected"
@@ -1299,14 +1267,6 @@ fn runtime_health_update_for_ws_control(inbound: &WsInboundEvent) -> Option<Runt
             auth_state: "authorized",
             auth_reason_code: Some("rivian_ws_no_active_subscriptions"),
         }),
-        Some("parallax_subscription_rejected") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: read_ws_detail_message(&inbound.raw)
-                .unwrap_or_else(|| "Rivian Parallax subscription rejected".into()),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_parallax_subscription_rejected"),
-        }),
         _ => None,
     }
 }
@@ -1345,32 +1305,6 @@ async fn persist_raw_event(
     if result.is_ok() {
         batch.increment("raw_events_persisted");
     }
-}
-
-async fn persist_parallax_event(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    event: &ParallaxEvent,
-    trip_id: Option<Uuid>,
-    charge_session_id: Option<Uuid>,
-) -> bool {
-    sqlx::query(
-        r#"
-        INSERT INTO riviamigo.rivian_parallax_events
-          (vehicle_id, trip_id, charge_session_id, received_at, server_timestamp, rvm, payload_b64)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#,
-    )
-    .bind(vehicle_id)
-    .bind(trip_id)
-    .bind(charge_session_id)
-    .bind(event.received_at)
-    .bind(event.server_timestamp)
-    .bind(&event.rvm)
-    .bind(&event.payload_b64)
-    .execute(pool)
-    .await
-    .is_ok()
 }
 
 async fn cleanup_raw_events(pool: &PgPool, retention_days: i64) {
@@ -1437,7 +1371,6 @@ fn stewardship_counter_column(column: &str) -> Option<&'static str> {
         "telemetry_suppressed_threshold" => Some("telemetry_suppressed_threshold"),
         "collector_lock_skips" => Some("collector_lock_skips"),
         "raw_events_persisted" => Some("raw_events_persisted"),
-        "parallax_events_persisted" => Some("parallax_events_persisted"),
         _ => None,
     }
 }
