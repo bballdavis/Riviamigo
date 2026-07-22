@@ -33,6 +33,14 @@ The development and production Compose stacks both use PostgreSQL 18 with
 TimescaleDB 2.28.3, but they use separate volumes and data layouts. Keep the
 development volume separate from production data.
 
+`pnpm dev:stack` also starts the local restore supervisor alongside the
+host-run API. Its capability key is generated under the ignored `data/`
+directory, while backup artifacts continue to use the local `/backups` path.
+This keeps the in-app restore path testable without putting development
+credentials or restore data in Git.
+Vite proxies restore-runtime status requests directly to that supervisor so
+the status poll can survive the API process restart.
+
 ## Architecture
 
 - [Backend data flow](./architecture/backend-data-flow.md) follows Rivian connectivity, ingestion, storage, and API delivery.

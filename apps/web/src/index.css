@@ -119,3 +119,25 @@
 .rm-hills-y {
   animation: rm-hills-y 2.2s ease-in-out infinite;
 }
+
+@keyframes rm-restore-stripes {
+  from { background-position: 0 0; }
+  to { background-position: 2rem 0; }
+}
+
+.rm-restore-activity {
+  background-color: var(--rm-accent);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--rm-accent) 72%, white) 0,
+    color-mix(in srgb, var(--rm-accent) 72%, white) 0.5rem,
+    var(--rm-accent) 0.5rem,
+    var(--rm-accent) 1rem
+  );
+  background-size: 2rem 2rem;
+  animation: rm-restore-stripes 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-restore-activity { animation: none; }
+}

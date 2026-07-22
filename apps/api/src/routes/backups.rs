@@ -174,6 +174,7 @@ struct BackupRuntimeReadinessResponse {
     pg_dump_available: bool,
     run_now_allowed: bool,
     restore_automation_available: bool,
+    restore_automation_reason: Option<String>,
     reason: Option<String>,
 }
 
@@ -353,6 +354,7 @@ async fn get_backup_overview(
     let latest_successful_run = load_latest_successful_run(&state).await?;
     let next_run_at = compute_next_run(&settings)?;
     let readiness = backup_service::runtime_readiness(&state.config).await;
+    let restore_readiness = restore_jobs::agent_readiness(&state.config).await;
 
     Ok(Json(BackupOverviewResponse {
         settings,
@@ -367,7 +369,8 @@ async fn get_backup_overview(
         runtime_readiness: BackupRuntimeReadinessResponse {
             pg_dump_available: readiness.pg_dump_available,
             run_now_allowed: readiness.run_now_allowed,
-            restore_automation_available: restore_jobs::agent_is_ready(&state.config).await,
+            restore_automation_available: restore_readiness.is_ok(),
+            restore_automation_reason: restore_readiness.err(),
             reason: readiness.reason,
         },
     }))
@@ -609,6 +612,13 @@ async fn prepare_and_handoff_restore(
     .bind(job.restore_request_id)
     .execute(&state.pool)
     .await?;
+
+    // The database restore replaces these operational tables. Keep their current
+    // contents beside the packages so the restarted API can merge the catalog,
+    // execution history, and this restore request back into the restored database.
+    job.catalog_snapshot = Some(restore_jobs::snapshot_catalog(&state.pool).await?);
+    job.updated_at = Utc::now();
+    restore_jobs::write(&state.config, &job).await?;
 
     let key = fs::read_to_string(restore_jobs::agent_key_path(&state.config)).await?;
     let response = reqwest::Client::new()

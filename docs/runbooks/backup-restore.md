@@ -27,7 +27,7 @@ Confirm that the restored instance contains the expected users, vehicles, dashbo
 
 ## In-app restore diagnostics
 
-The unified production image runs nginx, the API, and a local-only restore supervisor. A restore job is journaled under `/backups/.restore-jobs`; nginx proxies its capability-token status endpoint even while the API process is intentionally stopped. The supervisor never receives Docker access and does not restart PostgreSQL or Redis.
+The unified production image runs nginx, the API, and a local-only restore supervisor. A restore job is journaled under `/backups/.restore-jobs`; nginx proxies its capability-token status endpoint even while the API process is intentionally stopped. Before handoff, that journal also snapshots the backup runs, artifact catalog, and restore request history. The restarted API merges the snapshot back after the supervisor marks the job complete. The supervisor never receives Docker access and does not restart PostgreSQL or Redis.
 
 For an in-app restore:
 
@@ -39,7 +39,7 @@ For an in-app restore:
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the destructive window. Public `/health` remains unavailable until the restored API is ready.
 
-The package does not restore Redis live state, browser state, refresh sessions, provider credentials, installation keys, or old backup artifact history. S3 upload is not currently performed by the backup worker; retain a downloaded package on separate storage.
+The package does not restore Redis live state, browser state, refresh sessions, provider credentials, or installation keys. In-app restores preserve the existing host's local backup catalog and operational history through the restore journal; clean-install command restores do not have a source-host catalog to merge. S3 upload is not currently performed by the backup worker; retain a downloaded package on separate storage.
 
 ## PostgreSQL 16 to 18 cutover
 

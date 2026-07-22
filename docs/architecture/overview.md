@@ -34,7 +34,7 @@ scripts/        dev/build/docs utilities
 - `packages/dashboards` owns dashboard rendering and widget registration, not route-level page concerns.
 - `packages/ui` owns shared visual primitives and tokens.
 - `apps/web` owns route composition, page-specific UX, and integration of shared packages.
-- `compose/Dockerfile` owns the unified production image containing the API, built SPA, nginx, backup tools, and the local restore supervisor. During an in-app restore nginx and the supervisor remain available while the API/ingestion process is replaced; development remains split through `compose/docker-compose.dev.yml`.
+- `compose/Dockerfile` owns the unified production image containing the API, built SPA, nginx, backup tools, and the local restore supervisor. During an in-app restore nginx and the supervisor remain available while the API/ingestion process is replaced; development keeps infrastructure in `compose/docker-compose.dev.yml` while `scripts/dev.mjs` runs the API and restore supervisor as managed host processes.
 
 ## Change Triggers
 
