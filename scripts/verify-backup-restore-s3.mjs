@@ -153,7 +153,15 @@ try {
   const overview = await request(targetUrl, '/v1/admin/backups', { token: targetToken });
   const remote = overview.artifacts?.find((artifact) => artifact.storage_type === 's3');
   if (!remote) throw new Error('Clean target did not discover the Garage recovery package.');
-  const started = await request(targetUrl, '/v1/admin/backups/restores', { token: targetToken, method: 'POST', body: { artifact_id: remote.id, confirmation_phrase: 'RESTORE', notes: 'Automated S3 drill' } });
+  const preflight = await request(targetUrl, '/v1/admin/backups/restores/preflight', { token: targetToken, method: 'POST', body: { artifact_id: remote.id } });
+  if (!preflight.plan?.compatible) throw new Error(`Remote restore preflight was blocked: ${JSON.stringify(preflight.plan?.blocking_errors ?? [])}`);
+  const started = await request(targetUrl, '/v1/admin/backups/restores', { token: targetToken, method: 'POST', body: {
+    artifact_id: remote.id,
+    confirmation_phrase: 'RESTORE',
+    notes: 'Automated S3 drill',
+    plan_id: preflight.plan.plan_id,
+    package_checksum_sha256: preflight.plan.package_checksum_sha256,
+  } });
   const deadline = Date.now() + 360000;
   let phase;
   while (Date.now() < deadline) {

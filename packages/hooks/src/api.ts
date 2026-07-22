@@ -61,6 +61,8 @@ import type {
   CreateBackupRestoreRequestBody,
   BackupRestoreRequest,
   RestoreJob,
+  RestorePreflightResponse,
+  StartBackupRestoreBody,
   StartRestoreResponse,
   UploadBackupResponse,
   IdleDrainResponse,
@@ -729,9 +731,7 @@ class ApiClient {
     return res.invitations ?? [];
   }
 
-  async createAccountInvitation(
-    body: CreateAccountInvitationBody
-  ): Promise<{
+  async createAccountInvitation(body: CreateAccountInvitationBody): Promise<{
     id: string;
     invitee_email: string;
     vehicle_id: string | null;
@@ -753,9 +753,7 @@ class ApiClient {
     return this.request('DELETE', `/v1/admin/users/${id}`);
   }
 
-  async listUserVehicleMemberships(
-    id: string
-  ): Promise<
+  async listUserVehicleMemberships(id: string): Promise<
     Array<{
       vehicle_id: string;
       role: string;
@@ -921,7 +919,8 @@ class ApiClient {
       request.setRequestHeader('Content-Type', file.type || 'application/gzip');
       request.setRequestHeader('X-Riviamigo-File-Name', file.name.replace(/[^a-zA-Z0-9._-]/g, '_'));
       if (this.accessToken) request.setRequestHeader('Authorization', `Bearer ${this.accessToken}`);
-      request.upload.onprogress = (event) => onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size);
+      request.upload.onprogress = (event) =>
+        onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size);
       request.onerror = () => reject(new Error('Backup upload was interrupted.'));
       request.onload = () => {
         let payload: unknown;
@@ -935,7 +934,11 @@ class ApiClient {
           return;
         }
         const message = (payload as { error?: { message?: string } } | null)?.error?.message;
-        reject(Object.assign(new Error(message || `Backup upload failed (${request.status}).`), { status: request.status }));
+        reject(
+          Object.assign(new Error(message || `Backup upload failed (${request.status}).`), {
+            status: request.status,
+          })
+        );
       };
       request.send(file);
     });
@@ -945,7 +948,13 @@ class ApiClient {
     return this.request('DELETE', `/v1/admin/backups/imports/${artifactId}`);
   }
 
-  async startBackupRestore(body: CreateBackupRestoreRequestBody): Promise<StartRestoreResponse> {
+  async preflightBackupRestore(artifactId: string): Promise<RestorePreflightResponse> {
+    return this.request('POST', '/v1/admin/backups/restores/preflight', {
+      artifact_id: artifactId,
+    });
+  }
+
+  async startBackupRestore(body: StartBackupRestoreBody): Promise<StartRestoreResponse> {
     return this.request('POST', '/v1/admin/backups/restores', body);
   }
 
