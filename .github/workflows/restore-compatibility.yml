@@ -1,0 +1,56 @@
+name: Restore compatibility contracts
+
+on:
+  pull_request:
+    paths:
+      - 'apps/api/migrations/**'
+      - 'apps/api/src/bin/riviamigo-restore-agent.rs'
+      - 'apps/api/src/services/backups.rs'
+      - 'apps/api/src/services/restore_compatibility.rs'
+      - 'apps/api/src/services/restore_jobs.rs'
+      - 'scripts/restore-backup.mjs'
+      - 'tools/restore-lab/**'
+      - '.github/workflows/restore-compatibility.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/api
+      - name: Compile restore supervisor
+        run: cargo check --manifest-path apps/api/Cargo.toml --bin riviamigo-restore-agent
+      - name: Verify planner and package contracts
+        run: |
+          cargo test --manifest-path apps/api/Cargo.toml restore_compatibility::tests --lib
+          cargo test --manifest-path apps/api/Cargo.toml backups::tests --lib
+      - name: Verify host orchestration and lab syntax
+        run: |
+          node --check scripts/restore-backup.mjs
+          node --check tools/restore-lab/run.mjs
+
+  historical-fixture:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: self-hosted
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Restore registered private fixture
+        shell: pwsh
+        run: pnpm verify:restore-compatibility -- --package $env:RIVIAMIGO_RESTORE_FIXTURE --source-build
