@@ -116,4 +116,9 @@ jobs:
         shell: bash
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
-          gh release create "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; updating its digest lock asset."
+            gh release upload "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
+          fi
