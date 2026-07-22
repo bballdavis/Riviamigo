@@ -15,14 +15,24 @@ node scripts/restore-backup.mjs \
 
 Confirm that the restored instance contains the expected users, vehicles, dashboards, historical telemetry, trips, charging history, and vehicle artwork. Confirm that the Rivian account is disconnected and can be reconnected from Settings.
 
+For repeatable regression of a private historical package, use the gitignored restore lab:
+
+```powershell
+pnpm verify:restore-compatibility -- `
+  --package C:\path\to\backup.rma.tar.gz `
+  --source-build
+```
+
+The lab rechecks the package SHA-256, creates disposable Compose storage and credentials, verifies the API and restore supervisor, records a data-free report under `tools/restore-lab/local/reports/`, and removes the stack unless `--keep` is supplied. Never commit packages or lab credentials.
+
 ## Incident restore
 
 1. Preserve the recovery package and record its SHA-256 before using it.
 2. Prepare the target host with the same or newer Riviamigo release and a valid Compose env file.
-3. Stop or isolate any existing application services.
+3. Leave an existing application running while the command builds and validates its isolated candidate; the wrapper stops the app only after the candidate is ready for the atomic swap.
 4. Run `scripts/restore-backup.mjs` without `--force` first. It must refuse a target that already contains users.
-5. Use `--force` only after confirming the target is disposable or intentionally being replaced.
-6. Wait for the health check and complete provider re-authentication.
+5. Use `--force` only after confirming the target is intentionally being replaced.
+6. Wait for the health and setup-state checks and complete provider re-authentication.
 7. Download a fresh recovery package from the restored installation after verifying it.
 
 ## In-app restore diagnostics
@@ -31,13 +41,15 @@ The unified production image runs nginx, the API, and a local-only restore super
 
 For an in-app restore:
 
-1. Confirm the package finishes import validation before starting the restore.
-2. Confirm the required safety package is written under the backup volume before the API stops.
-3. Follow the phase shown in the UI or inspect the matching `.restore-jobs/<job-id>.json` file on the host.
-4. If restoration fails, preserve both the uploaded and safety packages. The supervisor keeps the staged package and retries an interrupted restore up to two times using an isolated temporary database; if those retries also fail, it records the failure and does not loop indefinitely.
-5. If the API does not recover, preserve PostgreSQL and artwork storage, then use the safety package with `scripts/restore-backup.mjs --force`; the script reconstructs the SQLx ledger from the package manifest before starting the API.
+1. Confirm the package finishes import validation and preflight records the expected package checksum and source/target profiles.
+2. Confirm the isolated candidate reaches validation before the safety package is written and before the API stops.
+3. Follow the phase shown in the UI or inspect `.restore-jobs/<job-id>.json` for the plan, candidate validation report, retryability, and rollback state.
+4. If verification fails, confirm rollback state becomes `succeeded` and the previous API becomes healthy. Preserve the uploaded package, safety package, failed candidate, and journal if rollback fails.
+5. Do not edit `_sqlx_migrations` on the live database. Ledger verification or reconstruction is permitted only in an isolated candidate after its complete source schema contract passes.
 
-The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the destructive window. Public `/health` remains unavailable until the restored API is ready.
+The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the short swap window. Public `/health` remains available during candidate preparation and unavailable only while the API is intentionally stopped for swap or rollback.
+
+For disposable fault-injection drills, set `RIVIAMIGO_RESTORE_FAULT_PHASE` to one of `package_validated`, `timescale_pre_restore`, `dump_restored`, `compatibility_transform`, `target_migrations`, `candidate_validated`, `safety_backup`, `history_merged`, `database_swapped`, `artwork_activated`, or `health_verification`. Never enable this variable on a production installation. Pre-swap faults must leave the live database untouched; post-swap faults must report a successful rollback and restore health.
 
 The package does not restore Redis live state, browser state, refresh sessions, provider credentials, installation keys, or S3 secrets. In-app restores preserve the existing host's backup catalog and operational history through the restore journal. Remote packages are downloaded beneath `/backups/.remote-staging`, fully validated before the safety backup begins, and removed by the restore supervisor when the job completes or fails.
 

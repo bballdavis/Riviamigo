@@ -528,3 +528,46 @@ async fn admin_can_create_restore_request_for_artifact() {
         Some(1)
     );
 }
+
+#[tokio::test]
+async fn admin_can_preflight_a_versioned_recovery_package() {
+    let app = TestApp::new().await;
+    let email = "restore-preflight-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let run = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(run.status, StatusCode::CREATED, "{}", run.body);
+    let artifact_id = run.body["artifact"]["id"].as_str().expect("artifact id");
+
+    let preflight = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/restores/preflight",
+            Some(json!({ "artifact_id": artifact_id })),
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(preflight.status, StatusCode::OK, "{}", preflight.body);
+    assert_eq!(preflight.body["plan"]["compatible"], true);
+    assert_eq!(
+        preflight.body["plan"]["package_format"],
+        "riviamigo-recovery-v2"
+    );
+    assert_eq!(preflight.body["plan"]["source"]["migration_version"], 5);
+    assert_eq!(preflight.body["plan"]["target"]["migration_version"], 5);
+    assert!(preflight.body["plan"]["plan_id"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+}

@@ -9,20 +9,44 @@ use sqlx::PgPool;
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::{config::Config, errors::AppError};
+use crate::{
+    config::Config,
+    errors::AppError,
+    services::restore_compatibility::{CandidatePreparationReport, RestorePlan},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RestorePhase {
     Queued,
+    ValidatingPackage,
+    Planning,
+    PreparingCandidate,
+    ApplyingTransforms,
+    MigratingCandidate,
+    ValidatingCandidate,
     SafetyBackup,
     StoppingApplication,
+    MergingHostState,
+    SwappingDatabase,
     RestoringDatabase,
     RestoringSettings,
     RestoringArtwork,
     StartingApplication,
     VerifyingHealth,
+    RollingBack,
     Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RollbackState {
+    #[default]
+    NotRequired,
+    Available,
+    InProgress,
+    Succeeded,
     Failed,
 }
 
@@ -50,6 +74,18 @@ pub struct RestoreJob {
     pub automatic_retry_count: u8,
     #[serde(default)]
     pub catalog_snapshot: Option<BackupCatalogSnapshot>,
+    #[serde(default)]
+    pub plan: Option<RestorePlan>,
+    #[serde(default)]
+    pub validation_report: Option<CandidatePreparationReport>,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default)]
+    pub rollback_state: RollbackState,
+    #[serde(default)]
+    pub candidate_database: Option<String>,
+    #[serde(default)]
+    pub previous_database: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -107,6 +143,10 @@ pub struct RestoreJobPublic {
     pub error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub plan: Option<RestorePlan>,
+    pub validation_report: Option<CandidatePreparationReport>,
+    pub retryable: bool,
+    pub rollback_state: RollbackState,
 }
 
 impl RestoreJob {
@@ -120,6 +160,10 @@ impl RestoreJob {
             error_message: self.error_message.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            plan: self.plan.clone(),
+            validation_report: self.validation_report.clone(),
+            retryable: self.retryable,
+            rollback_state: self.rollback_state.clone(),
         }
     }
 }
@@ -129,6 +173,7 @@ pub async fn create(
     artifact_id: Uuid,
     artifact_path: String,
     restore_request_id: Uuid,
+    plan: RestorePlan,
 ) -> Result<(RestoreJob, String), AppError> {
     let mut token_bytes = [0_u8; 32];
     rand::thread_rng().fill_bytes(&mut token_bytes);
@@ -152,6 +197,12 @@ pub async fn create(
         reconciled_at: None,
         automatic_retry_count: 0,
         catalog_snapshot: None,
+        plan: Some(plan),
+        validation_report: None,
+        retryable: true,
+        rollback_state: RollbackState::NotRequired,
+        candidate_database: None,
+        previous_database: None,
     };
     write(config, &job).await?;
     Ok((job, token))
@@ -289,12 +340,14 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
             Ok(job) => job,
             Err(_) => continue,
         };
-        if job.phase != RestorePhase::Completed || job.reconciled_at.is_some() {
+        if !matches!(job.phase, RestorePhase::Completed | RestorePhase::Failed)
+            || job.reconciled_at.is_some()
+        {
             continue;
         }
 
         if let Some(snapshot) = &job.catalog_snapshot {
-            restore_catalog_snapshot(pool, snapshot).await?;
+            merge_catalog_snapshot(pool, snapshot).await?;
         }
 
         if job.catalog_snapshot.is_none() {
@@ -330,17 +383,24 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
             )
             .await?;
         }
+        let final_status = if job.phase == RestorePhase::Completed {
+            "completed"
+        } else {
+            "failed"
+        };
         sqlx::query(
             r#"
             INSERT INTO riviamigo.backup_restore_requests (
-                id, artifact_id, requested_by, status, confirmation_phrase, notes, requested_at, updated_at
-            ) VALUES ($1, $2, NULL, 'completed', 'RESTORE', 'Automated in-app restore completed', $3, now())
+                id, artifact_id, requested_by, status, confirmation_phrase, notes, error_message, requested_at, updated_at
+            ) VALUES ($1, $2, NULL, $3, 'RESTORE', 'Automated in-app restore', $4, $5, now())
             ON CONFLICT (id) DO UPDATE SET
-                status = 'completed', error_message = NULL, updated_at = now()
+                status = EXCLUDED.status, error_message = EXCLUDED.error_message, updated_at = now()
             "#,
         )
         .bind(job.restore_request_id)
         .bind(job.artifact_id)
+        .bind(final_status)
+        .bind(&job.error_message)
         .bind(job.created_at)
         .execute(pool)
         .await?;
@@ -350,7 +410,7 @@ pub async fn reconcile_completed_jobs(pool: &PgPool, config: &Config) -> Result<
     Ok(())
 }
 
-async fn restore_catalog_snapshot(
+pub async fn merge_catalog_snapshot(
     pool: &PgPool,
     snapshot: &BackupCatalogSnapshot,
 ) -> Result<(), AppError> {
@@ -394,6 +454,40 @@ async fn restore_catalog_snapshot(
     Ok(())
 }
 
+pub fn mark_source_artifact_availability(
+    source: &mut BackupCatalogSnapshot,
+    target: Option<&BackupCatalogSnapshot>,
+) {
+    for artifact in &mut source.artifacts {
+        let available = target.is_some_and(|target| {
+            target.artifacts.iter().any(|candidate| {
+                candidate.storage_type == artifact.storage_type
+                    && candidate.storage_path == artifact.storage_path
+                    && candidate.checksum_sha256 == artifact.checksum_sha256
+                    && (candidate.storage_type != "s3"
+                        || candidate
+                            .manifest
+                            .get("restore_availability")
+                            .and_then(Value::as_str)
+                            == Some("available"))
+            })
+        });
+        if let Some(manifest) = artifact.manifest.as_object_mut() {
+            manifest.insert(
+                "restore_availability".into(),
+                Value::String(
+                    if available {
+                        "available"
+                    } else {
+                        "unavailable"
+                    }
+                    .into(),
+                ),
+            );
+        }
+    }
+}
+
 pub fn start_reconciler(pool: PgPool, config: Config) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -419,6 +513,12 @@ async fn insert_reconciled_artifact(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("recovery-package.rma.tar.gz");
+    let package_format = validated
+        .manifest
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
     sqlx::query(
         r#"
         INSERT INTO riviamigo.backup_runs (
@@ -449,7 +549,7 @@ async fn insert_reconciled_artifact(
     .bind(validated.checksum_sha256)
     .bind(serde_json::json!({
         "artifact_kind": "recovery_package",
-        "format": "riviamigo-recovery-v1",
+        "format": package_format,
         "package": validated.manifest,
     }))
     .execute(pool)

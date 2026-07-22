@@ -28,12 +28,6 @@ async fn main() -> anyhow::Result<()> {
     let mut config = Config::from_env()?;
     let pool = create_pool(&config.database_url).await?;
 
-    if db::migrations::recover_interrupted_restore_ledger(&pool, &config).await? {
-        tracing::warn!(
-            "reconstructed SQLx migration ledger from an interrupted restore before startup"
-        );
-    }
-
     let migration_pool = PgPoolOptions::new()
         .max_connections(1)
         .after_connect(|connection, _| {
@@ -53,6 +47,13 @@ async fn main() -> anyhow::Result<()> {
     match services::restore_jobs::reconcile_completed_jobs(&pool, &config).await {
         Ok(()) => tracing::info!("restore job journal reconciled"),
         Err(error) => tracing::error!(error = ?error, "restore job journal reconciliation failed"),
+    }
+    match services::backups::reconcile_local_catalog(&pool, &config).await {
+        Ok(inserted) if inserted > 0 => {
+            tracing::info!(inserted, "local backup catalog reconciled from disk")
+        }
+        Ok(_) => {}
+        Err(error) => tracing::error!(error = ?error, "local backup catalog reconciliation failed"),
     }
 
     routes::dashboards::seed_defaults(&pool).await?;
