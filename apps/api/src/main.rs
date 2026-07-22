@@ -28,6 +28,12 @@ async fn main() -> anyhow::Result<()> {
     let mut config = Config::from_env()?;
     let pool = create_pool(&config.database_url).await?;
 
+    if db::migrations::recover_interrupted_restore_ledger(&pool, &config).await? {
+        tracing::warn!(
+            "reconstructed SQLx migration ledger from an interrupted restore before startup"
+        );
+    }
+
     let migration_pool = PgPoolOptions::new()
         .max_connections(1)
         .after_connect(|connection, _| {
