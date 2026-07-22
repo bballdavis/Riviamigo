@@ -224,6 +224,23 @@ vi.mock('@riviamigo/hooks', () => ({
     requestBackupRestore: vi.fn().mockResolvedValue({}),
     uploadBackupArtifact: vi.fn().mockResolvedValue({}),
     deleteUploadedBackup: vi.fn().mockResolvedValue(undefined),
+    preflightBackupRestore: vi.fn().mockResolvedValue({
+      plan: {
+        plan_id: 'plan-1',
+        engine_version: 2,
+        package_checksum_sha256: 'abc123',
+        package_format: 'riviamigo-recovery-v2',
+        compatible: true,
+        source: { postgres_major: 17, timescale_version: '2.19.3', migration_version: 3, migration_ledger: [], schema_fingerprint: 'source' },
+        target: { postgres_major: 17, timescale_version: '2.19.3', migration_version: 5, migration_ledger: [], schema_fingerprint: 'target' },
+        pending_migrations: [4, 5],
+        transforms: [],
+        validation_checks: [],
+        warnings: [],
+        blocking_errors: [],
+        planned_at: '2026-05-04T12:02:00Z',
+      },
+    }),
     startBackupRestore: vi.fn().mockResolvedValue({
       job: {
         id: 'restore-job-1',
@@ -949,13 +966,15 @@ describe('Settings page', () => {
       expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
     });
     fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), { target: { value: 'RESTORE' } });
-    fireEvent.click(screen.getByText('Create safety backup and restore'));
+    fireEvent.click(screen.getByText('Validate candidate and restore'));
 
     await waitFor(() => {
       expect(hooks.api.startBackupRestore).toHaveBeenCalledWith({
         artifact_id: 'artifact-1',
         confirmation_phrase: 'RESTORE',
         notes: null,
+        plan_id: 'plan-1',
+        package_checksum_sha256: 'abc123',
       });
     });
     expect(screen.getByRole('progressbar', { name: 'Restore activity' })).toBeInTheDocument();

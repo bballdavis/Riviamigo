@@ -1,7 +1,7 @@
 import React from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
-import type { BackupFrequency, BackupOverview, BackupTargetType, RestoreJob, UpdateBackupSettingsBody } from '@riviamigo/types';
+import type { BackupFrequency, BackupOverview, BackupTargetType, RestoreJob, RestorePlan, UpdateBackupSettingsBody } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import {
   AlertTriangle,
@@ -199,6 +199,10 @@ function storageLabel(storageType: BackupOverview['artifacts'][number]['storage_
   return manifest?.emergency_fallback ? 'Local fallback' : 'Local';
 }
 
+function artifactIsAvailable(artifact: BackupOverview['artifacts'][number]): boolean {
+  return artifact.manifest.restore_availability !== 'unavailable';
+}
+
 function Toggle({
   checked,
   onChange,
@@ -305,6 +309,7 @@ export function BackupSection() {
   const [catalogSource, setCatalogSource] = React.useState<'all' | 'local' | 's3' | null>(null);
   const [restoreArtifactId, setRestoreArtifactId] = React.useState('');
   const [pendingRestoreArtifact, setPendingRestoreArtifact] = React.useState<BackupOverview['artifacts'][number] | null>(null);
+  const [pendingRestorePlan, setPendingRestorePlan] = React.useState<RestorePlan | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [activeRestore, setActiveRestore] = React.useState<{ job: RestoreJob; token: string } | null>(null);
@@ -335,7 +340,7 @@ export function BackupSection() {
     setRestoreArtifactId((current) => (
       current && overview.data.artifacts.some((artifact) => artifact.id === current)
         ? current
-        : overview.data.artifacts[0]?.id ?? ''
+        : overview.data.artifacts.find(artifactIsAvailable)?.id ?? ''
     ));
   }, [overview.data?.artifacts]);
 
@@ -411,19 +416,36 @@ export function BackupSection() {
     onError: (error) => emitToast('Delete imported package', error instanceof Error ? error.message : 'The imported package could not be deleted.'),
   });
 
+  const preflightRestore = useMutation({
+    mutationFn: (artifact: BackupOverview['artifacts'][number]) => api.preflightBackupRestore(artifact.id),
+    onSuccess: ({ plan }, artifact) => {
+      setPendingRestoreArtifact(artifact);
+      setPendingRestorePlan(plan);
+      setRestoreConfirmation('');
+    },
+    onError: (error) => emitToast('Restore compatibility', error instanceof Error ? error.message : 'The recovery package could not be inspected.'),
+  });
+
+  const closeRestoreConfirmation = React.useCallback(() => {
+    setPendingRestoreArtifact(null);
+    setPendingRestorePlan(null);
+    setRestoreConfirmation('');
+  }, []);
+
   const requestRestore = useMutation({
     mutationFn: (artifact: BackupOverview['artifacts'][number]) =>
       api.startBackupRestore({
         artifact_id: artifact.id,
         confirmation_phrase: restoreConfirmation,
         notes: null,
+        plan_id: pendingRestorePlan?.plan_id ?? '',
+        package_checksum_sha256: pendingRestorePlan?.package_checksum_sha256 ?? '',
       }),
     onSuccess: ({ job, capability_token }, artifact) => {
       setActiveRestore({ job, token: capability_token });
       setActiveRestoreSizeBytes(artifact.size_bytes);
       setRestoreStatusUnavailable(false);
-      setPendingRestoreArtifact(null);
-      setRestoreConfirmation('');
+      closeRestoreConfirmation();
       queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
     },
     onError: (error) => {
@@ -490,7 +512,8 @@ export function BackupSection() {
   const restoreArtifactOptions = overview.data.artifacts.map((artifact) => ({
     value: artifact.id,
     label: new Date(artifact.created_at).toLocaleString(),
-    description: `${storageLabel(artifact.storage_type, artifact.manifest)} · ${artifact.file_name}`,
+    description: `${storageLabel(artifact.storage_type, artifact.manifest)} - ${artifact.file_name}${artifactIsAvailable(artifact) ? '' : ' - unavailable on this host'}`,
+    disabled: !artifactIsAvailable(artifact),
   }));
   const restoreAutomationReason = overview.data.runtime_readiness?.restore_automation_reason;
   const hasLocalArtifacts = overview.data.artifacts.some((artifact) => (artifact.storage_type as string) !== 's3');
@@ -978,11 +1001,26 @@ export function BackupSection() {
                 type="button"
                 className="rounded-md p-1 text-fg-tertiary hover:bg-bg-elevated hover:text-fg"
                 aria-label="Close restore confirmation"
-                onClick={() => setPendingRestoreArtifact(null)}
+                onClick={closeRestoreConfirmation}
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
+            {pendingRestorePlan && (
+              <div className="mt-4 rounded-lg border border-border bg-bg-elevated/40 p-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-fg">Compatibility preflight</span>
+                  <Badge variant={pendingRestorePlan.compatible ? 'success' : 'danger'}>{pendingRestorePlan.compatible ? 'Compatible' : 'Blocked'}</Badge>
+                </div>
+                <p className="mt-2 text-fg-secondary">
+                  Schema migration {pendingRestorePlan.source.migration_version} to {pendingRestorePlan.target.migration_version}
+                  {pendingRestorePlan.pending_migrations.length > 0 ? ` - ${pendingRestorePlan.pending_migrations.length} pending migration${pendingRestorePlan.pending_migrations.length === 1 ? '' : 's'}` : ' - no pending migrations'}
+                </p>
+                {pendingRestorePlan.transforms.length > 0 && <p className="mt-1 text-fg-secondary">Transforms: {pendingRestorePlan.transforms.map((transform) => transform.id).join(', ')}</p>}
+                {pendingRestorePlan.warnings.map((warning) => <p key={warning} className="mt-1 text-status-warning">{warning}</p>)}
+                {pendingRestorePlan.blocking_errors.map((error) => <p key={`${error.code}-${error.message}`} className="mt-1 text-status-danger">{error.message} ({error.code})</p>)}
+              </div>
+            )}
             <label className="mt-4 grid gap-1">
               <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Type RESTORE to continue</span>
               <input
@@ -993,17 +1031,17 @@ export function BackupSection() {
               />
             </label>
             <div className="mt-4 flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => { setPendingRestoreArtifact(null); setRestoreConfirmation(''); }}>
+              <Button variant="secondary" size="sm" onClick={closeRestoreConfirmation}>
                 Cancel
               </Button>
               <Button
                 variant="danger"
                 size="sm"
                 loading={requestRestore.isPending}
-                disabled={restoreConfirmation !== 'RESTORE' || !overview.data.runtime_readiness.restore_automation_available}
+                disabled={restoreConfirmation !== 'RESTORE' || !pendingRestorePlan?.compatible || !overview.data.runtime_readiness.restore_automation_available}
                 onClick={() => requestRestore.mutate(pendingRestoreArtifact)}
               >
-                Create safety backup and restore
+                Validate candidate and restore
               </Button>
             </div>
             {!overview.data.runtime_readiness.restore_automation_available && (
@@ -1044,7 +1082,21 @@ export function BackupSection() {
             </div>
             {restoreStatusUnavailable && activeRestore.job.phase !== 'failed' && (
               <div className="mt-4 rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning">
-                The application is restarting for the restore. The restore may continue while this page cannot reach the API; we’ll keep checking and reload when the server returns. You may be asked to sign in again.
+                The application is restarting for the restore. The restore may continue while this page cannot reach the API; we&apos;ll keep checking and reload when the server returns. You may be asked to sign in again.
+              </div>
+            )}
+            {activeRestore.job.validation_report && (
+              <div className="mt-4 rounded-lg border border-status-positive/30 bg-status-positive/10 p-3 text-xs text-fg-secondary">
+                <p className="font-medium text-status-positive">Candidate validation passed</p>
+                <p className="mt-1">
+                  {activeRestore.job.validation_report.legacy_profile ?? 'Versioned schema profile'}
+                  {activeRestore.job.validation_report.applied_transforms.length > 0 ? ` - ${activeRestore.job.validation_report.applied_transforms.map((transform) => transform.id).join(', ')}` : ' - no compatibility transforms'}
+                </p>
+              </div>
+            )}
+            {activeRestore.job.rollback_state && activeRestore.job.rollback_state !== 'not_required' && activeRestore.job.rollback_state !== 'available' && (
+              <div className={`mt-4 rounded-lg border p-3 text-sm ${activeRestore.job.rollback_state === 'succeeded' ? 'border-status-positive/30 bg-status-positive/10 text-status-positive' : 'border-status-warning/30 bg-status-warning/10 text-status-warning'}`}>
+                Rollback {activeRestore.job.rollback_state.replaceAll('_', ' ')}.
               </div>
             )}
             {activeRestore.job.error_message && (
@@ -1152,8 +1204,9 @@ export function BackupSection() {
                 <Button
                   variant="danger"
                   size="sm"
-                  disabled={!overview.data.runtime_readiness.restore_automation_available}
-                  onClick={() => setPendingRestoreArtifact(restoreArtifact)}
+                  loading={preflightRestore.isPending}
+                  disabled={!overview.data.runtime_readiness.restore_automation_available || !artifactIsAvailable(restoreArtifact)}
+                  onClick={() => preflightRestore.mutate(restoreArtifact)}
                 >
                   Restore selected backup
                 </Button>
