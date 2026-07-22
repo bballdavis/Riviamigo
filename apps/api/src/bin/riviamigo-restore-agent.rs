@@ -134,6 +134,7 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     terminate_database_sessions(config).await?;
     let _ = run_psql(config, "SELECT timescaledb_pre_restore();").await;
     run_pg_restore(config, &staging.join("database.dump")).await?;
+    restore_migration_ledger(config, &staging.join("manifest.json")).await?;
     let _ = run_psql(config, "SELECT timescaledb_post_restore();").await;
 
     restore_jobs::update(
@@ -186,6 +187,20 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     .await?;
     cleanup_remote_staging(&job.artifact_path).await;
     Ok(())
+}
+
+async fn restore_migration_ledger(config: &Config, manifest_path: &Path) -> anyhow::Result<()> {
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(manifest_path).await?)?;
+    let source_version = manifest
+        .get("source")
+        .and_then(|source| source.get("migration_version"))
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("recovery manifest is missing source.migration_version"))?;
+    riviamigo_api::db::migrations::restore_ledger(
+        &riviamigo_api::db::pool::create_pool(&config.database_url).await?,
+        source_version,
+    )
+    .await
 }
 
 async fn cleanup_remote_staging(path: &str) {

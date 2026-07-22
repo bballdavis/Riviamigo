@@ -34,7 +34,7 @@ Select **Restore selected backup**, review the replacement warning, and type `RE
 1. Creates and verifies a fresh safety recovery package of the target installation. The restore stops if this fails.
 2. Stops the API and ingestion workers while keeping nginx and the restore-progress endpoint available.
 3. Restores PostgreSQL, sanitized backup settings, and vehicle artwork.
-4. Starts a fresh API process, applies pending migrations, and verifies health.
+4. Reconstructs the SQLx migration ledger from the package's recorded source version, then starts a fresh API process so only genuinely newer migrations run.
 5. Reconciles the persistent backup catalog, execution history, and completed restore request into the restored database.
 6. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
 
@@ -77,6 +77,6 @@ Production Compose mounts the host-visible `./data/backups` directory at `/backu
 
 ## Compatibility and verification
 
-Recovery is forward-compatible: an older package may be restored into a newer release, which then runs its pending migrations. Downgrading is not supported.
+Recovery is forward-compatible: an older package may be restored into a newer release. The restore reconstructs migration bookkeeping from the package manifest, then the newer release runs only its pending migrations. Downgrading is not supported.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.

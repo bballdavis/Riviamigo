@@ -5,7 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use riviamigo_api::{
     config::Config,
-    db::pool::create_pool,
+    db::{self, pool::create_pool},
     ingestion, keys,
     middleware::auth::{AppState, JwtKeys},
     routes, services,
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         })
         .connect(&config.database_url)
         .await?;
-    sqlx::migrate!("./migrations").run(&migration_pool).await?;
+    db::migrations::MIGRATOR.run(&migration_pool).await?;
     migration_pool.close().await;
     tracing::info!("database schema is current");
 
