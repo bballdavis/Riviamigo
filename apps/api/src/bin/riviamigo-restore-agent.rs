@@ -44,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/restore-runtime/jobs/{job_id}", get(get_job))
         .route("/internal/jobs/{job_id}/execute", post(execute_job))
         .with_state(state);
-    let address: SocketAddr = "127.0.0.1:3002".parse()?;
+    let port = std::env::var("RESTORE_AGENT_PORT").unwrap_or_else(|_| "3002".into());
+    let address: SocketAddr = format!("127.0.0.1:{port}").parse()?;
     let listener = TcpListener::bind(address).await?;
     axum::serve(listener, app).await?;
     Ok(())
@@ -89,7 +90,7 @@ async fn execute_job(
     tokio::spawn(async move {
         if let Err(error) = perform_restore(&state.config, job_id).await {
             let _ = restore_jobs::fail(&state.config, job_id, &error).await;
-            let _ = fs::remove_file("/tmp/riviamigo-restore-in-progress").await;
+            let _ = fs::remove_file(restore_marker_path()).await;
         }
     });
     Ok((StatusCode::ACCEPTED, Json(json!({ "accepted": true }))))
@@ -98,7 +99,7 @@ async fn execute_job(
 async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let job = restore_jobs::read(config, job_id).await?;
     backups::validate_recovery_package(Path::new(&job.artifact_path)).await?;
-    fs::write("/tmp/riviamigo-restore-in-progress", job_id.to_string()).await?;
+    fs::write(restore_marker_path(), job_id.to_string()).await?;
 
     restore_jobs::update(
         config,
@@ -161,7 +162,7 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
         "Starting Riviamigo with restored data",
     )
     .await?;
-    fs::remove_file("/tmp/riviamigo-restore-in-progress").await?;
+    fs::remove_file(restore_marker_path()).await?;
 
     restore_jobs::update(
         config,
@@ -171,7 +172,7 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
         "Waiting for migrations and application health",
     )
     .await?;
-    wait_for_api_health().await?;
+    wait_for_api_health(config).await?;
     restore_jobs::update(
         config,
         job_id,
@@ -183,8 +184,21 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn api_pid_path() -> PathBuf {
+    std::env::var("RIVIAMIGO_API_PID_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp/riviamigo-api.pid"))
+}
+
+fn restore_marker_path() -> PathBuf {
+    std::env::var("RIVIAMIGO_RESTORE_MARKER_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp/riviamigo-restore-in-progress"))
+}
+
+#[cfg(not(windows))]
 async fn stop_api_process() -> anyhow::Result<()> {
-    let pid = fs::read_to_string("/tmp/riviamigo-api.pid").await?;
+    let pid = fs::read_to_string(api_pid_path()).await?;
     let status = Command::new("kill")
         .arg("-TERM")
         .arg(pid.trim())
@@ -195,6 +209,31 @@ async fn stop_api_process() -> anyhow::Result<()> {
     }
     for _ in 0..300 {
         if !Path::new(&format!("/proc/{}", pid.trim())).exists() {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("Riviamigo API did not stop before restore")
+}
+
+#[cfg(windows)]
+async fn stop_api_process() -> anyhow::Result<()> {
+    let pid = fs::read_to_string(api_pid_path()).await?;
+    let status = Command::new("taskkill")
+        .args(["/PID", pid.trim(), "/T", "/F"])
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("could not stop the Riviamigo API process");
+    }
+    for _ in 0..300 {
+        let still_running = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid.trim()), "/NH"])
+            .output()
+            .await
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains(pid.trim()))
+            .unwrap_or(false);
+        if !still_running {
             return Ok(());
         }
         sleep(Duration::from_millis(100)).await;
@@ -329,14 +368,17 @@ async fn restore_artwork(config: &Config, source: &Path, job_id: Uuid) -> anyhow
         fs::remove_dir_all(&incoming).await?;
     }
     copy_directory(source, &incoming).await?;
-    let ownership = Command::new("chown")
-        .arg("-R")
-        .arg("1001:1001")
-        .arg(&incoming)
-        .status()
-        .await?;
-    if !ownership.success() {
-        anyhow::bail!("could not assign restored artwork to the Riviamigo service user");
+    #[cfg(not(windows))]
+    {
+        let ownership = Command::new("chown")
+            .arg("-R")
+            .arg("1001:1001")
+            .arg(&incoming)
+            .status()
+            .await?;
+        if !ownership.success() {
+            anyhow::bail!("could not assign restored artwork to the Riviamigo service user");
+        }
     }
     let previous = parent.join(format!(".vehicle-images-before-{job_id}"));
     if fs::try_exists(&destination).await.unwrap_or(false) {
@@ -368,11 +410,12 @@ async fn copy_directory(source: &Path, destination: &Path) -> anyhow::Result<()>
     Ok(())
 }
 
-async fn wait_for_api_health() -> anyhow::Result<()> {
+async fn wait_for_api_health(config: &Config) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
+    let health_url = format!("http://127.0.0.1:{}/health", config.port);
     for _ in 0..180 {
         if client
-            .get("http://127.0.0.1:3001/health")
+            .get(&health_url)
             .send()
             .await
             .is_ok_and(|response| response.status().is_success())

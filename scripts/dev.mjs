@@ -1,4 +1,6 @@
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,6 +9,9 @@ const rootDir = resolve(scriptDir, '..');
 const apiDir = resolve(rootDir, 'apps/api');
 const webDir = resolve(rootDir, 'apps/web');
 const composeFile = resolve(rootDir, 'compose/docker-compose.dev.yml');
+const devRestoreAgentKeyFile = resolve(rootDir, 'data/dev-restore-agent-key');
+const devRestoreMarkerFile = resolve(rootDir, 'data/dev-restore-in-progress');
+const devApiPidFile = resolve(rootDir, 'data/dev-api.pid');
 const isWindows = process.platform === 'win32';
 
 function parsePort(value, fallback) {
@@ -26,6 +31,7 @@ const requestedPorts = {
   redis: parsePort(process.env.DEV_REDIS_PORT, 6379),
   garageApi: parsePort(process.env.DEV_GARAGE_PORT, 3900),
   garageAdmin: parsePort(process.env.DEV_GARAGE_ADMIN_PORT, 3903),
+  restoreAgent: parsePort(process.env.DEV_RESTORE_AGENT_PORT, 3002),
 };
 
 let ports = { ...requestedPorts };
@@ -159,16 +165,19 @@ function powerShellLiteral(value) {
 
 async function listRepoOwnedProcesses() {
   const apiBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-api.exe' : 'riviamigo-api');
+  const restoreAgentBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-restore-agent.exe' : 'riviamigo-restore-agent');
 
   if (isWindows) {
     const command = [
       `$apiBin = ${powerShellLiteral(apiBin)}`,
+      `$restoreAgentBin = ${powerShellLiteral(restoreAgentBin)}`,
       `$webDir = ${powerShellLiteral(webDir)}`,
       'Get-CimInstance Win32_Process -ErrorAction Stop |',
       'Where-Object {',
       "  $isApi = $_.ExecutablePath -and $_.ExecutablePath -ieq $apiBin",
+      "  $isRestoreAgent = $_.ExecutablePath -and $_.ExecutablePath -ieq $restoreAgentBin",
       "  $isVite = $_.CommandLine -and $_.CommandLine.IndexOf($webDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '(?i)\\bvite(?:\\.cmd|\\.js)?\\b'",
-      '  $isApi -or $isVite',
+      '  $isApi -or $isRestoreAgent -or $isVite',
       '} |',
       'Select-Object ProcessId, Name, ExecutablePath, CommandLine |',
       'ConvertTo-Json -Compress',
@@ -188,7 +197,11 @@ async function listRepoOwnedProcesses() {
       return parseProcessList(stdout).map((process) => ({
         pid: process.ProcessId,
         name: process.Name,
-        kind: String(process.ExecutablePath ?? '').toLowerCase() === apiBin.toLowerCase() ? 'api' : 'vite',
+        kind: String(process.ExecutablePath ?? '').toLowerCase() === apiBin.toLowerCase()
+          ? 'api'
+          : String(process.ExecutablePath ?? '').toLowerCase() === restoreAgentBin.toLowerCase()
+            ? 'restore-agent'
+            : 'vite',
       }));
     } catch (error) {
       log(`[dev] Could not parse existing Windows process details; leaving occupied ports alone. ${error.message}`);
@@ -207,6 +220,7 @@ async function listRepoOwnedProcesses() {
     if (!match) return [];
     const [, rawPid, command] = match;
     if (command.includes(apiBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-api', kind: 'api' }];
+    if (command.includes(restoreAgentBin)) return [{ pid: Number.parseInt(rawPid, 10), name: 'riviamigo-restore-agent', kind: 'restore-agent' }];
     if (command.includes(webDir) && /\bvite(?:\.js)?\b/i.test(command)) {
       return [{ pid: Number.parseInt(rawPid, 10), name: 'vite', kind: 'vite' }];
     }
@@ -253,16 +267,17 @@ async function findAvailablePort(start, label, maxTries = 50) {
 }
 
 async function allocateRuntimePorts() {
-  const [api, web, postgres, redis, garageApi, garageAdmin] = await Promise.all([
+  const [api, web, postgres, redis, garageApi, garageAdmin, restoreAgent] = await Promise.all([
     findAvailablePort(requestedPorts.api, 'API'),
     findAvailablePort(requestedPorts.web, 'Web'),
     findAvailablePort(requestedPorts.postgres, 'PostgreSQL'),
     findAvailablePort(requestedPorts.redis, 'Redis'),
     findAvailablePort(requestedPorts.garageApi, 'Garage API'),
     findAvailablePort(requestedPorts.garageAdmin, 'Garage admin'),
+    findAvailablePort(requestedPorts.restoreAgent, 'Restore agent'),
   ]);
 
-  ports = { api, web, postgres, redis, garageApi, garageAdmin };
+  ports = { api, web, postgres, redis, garageApi, garageAdmin, restoreAgent };
 
   process.env.DEV_API_PORT = String(api);
   process.env.DEV_WEB_PORT = String(web);
@@ -270,6 +285,7 @@ async function allocateRuntimePorts() {
   process.env.DEV_REDIS_PORT = String(redis);
   process.env.DEV_GARAGE_PORT = String(garageApi);
   process.env.DEV_GARAGE_ADMIN_PORT = String(garageAdmin);
+  process.env.DEV_RESTORE_AGENT_PORT = String(restoreAgent);
   process.env.DEV_WEB_ORIGINS = webOrigins().join(',');
   process.env.COMPOSE_PROJECT_NAME = composeProjectName;
 }
@@ -391,6 +407,22 @@ function parsePids(output) {
   ];
 }
 
+async function ensureDevRestoreAgentKey() {
+  await mkdir(dirname(devRestoreAgentKeyFile), { recursive: true });
+  await rm(devRestoreMarkerFile, { force: true });
+  try {
+    const existing = (await readFile(devRestoreAgentKeyFile, 'utf8')).trim();
+    if (existing) return;
+  } catch {
+    // The development key is generated on first startup.
+  }
+
+  await writeFile(devRestoreAgentKeyFile, `${randomBytes(32).toString('base64')}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+}
+
 function apiEnv() {
   return {
     DATABASE_URL: `postgresql://riviamigo:devpassword@localhost:${ports.postgres}/riviamigo?options=-c%20search_path%3Driviamigo,timeseries,public`,
@@ -404,6 +436,11 @@ function apiEnv() {
     // session continuity and trigger repeated 401/WS reconnect churn.
     COOKIE_INSECURE: '1',
     RIVIAMIGO_ENV: 'development',
+    RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
+    RESTORE_AGENT_KEY_FILE: devRestoreAgentKeyFile,
+    RESTORE_AGENT_PORT: String(ports.restoreAgent),
+    RIVIAMIGO_API_PID_FILE: devApiPidFile,
+    RIVIAMIGO_RESTORE_MARKER_FILE: devRestoreMarkerFile,
   };
 }
 
@@ -475,7 +512,24 @@ async function startApi() {
   log('Building API...');
   await run('cargo', ['build'], { cwd: apiDir, env: apiEnv() });
 
+  await startRestoreAgent();
   return launchApi();
+}
+
+async function startRestoreAgent() {
+  await ensureDevRestoreAgentKey();
+  await assertPortAvailable(ports.restoreAgent, 'Restore agent');
+
+  log('Starting restore supervisor...');
+  const agentBin = resolve(apiDir, 'target/debug', isWindows ? 'riviamigo-restore-agent.exe' : 'riviamigo-restore-agent');
+  const agent = spawnProcess(agentBin, [], {
+    cwd: apiDir,
+    env: apiEnv(),
+  });
+
+  await waitForHttp(`http://127.0.0.1:${ports.restoreAgent}/health`, agent, 'restore supervisor');
+  log(`Restore supervisor is responding at http://127.0.0.1:${ports.restoreAgent}`);
+  return agent;
 }
 
 async function launchApi() {
@@ -487,6 +541,7 @@ async function launchApi() {
     cwd: apiDir,
     env: apiEnv(),
   });
+  await writeFile(devApiPidFile, `${api.pid}\n`, 'utf8');
 
   await waitForHttp(urls.apiHealth, api, 'API');
   log(`API is responding at ${urls.apiHealth}`);
@@ -506,6 +561,16 @@ async function superviseApi(api) {
       }
 
       log(`${error.message}`);
+      while (!shuttingDown) {
+        try {
+          await readFile(devRestoreMarkerFile, 'utf8');
+          log('API stopped for an in-app restore; waiting for the restore supervisor.');
+          await sleep(500);
+        } catch {
+          break;
+        }
+      }
+      if (shuttingDown) return;
       log('Restarting API...');
 
       try {
@@ -528,6 +593,7 @@ async function startWeb() {
       VITE_WS_URL: process.env.VITE_WS_URL ?? `http://localhost:${ports.api}`,
       VITE_API_URL: process.env.VITE_API_URL ?? `http://localhost:${ports.api}`,
       VITE_RIVIAMIGO_API_BASE_URL: process.env.VITE_RIVIAMIGO_API_BASE_URL ?? `http://localhost:${ports.api}`,
+      VITE_RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: isWindows,

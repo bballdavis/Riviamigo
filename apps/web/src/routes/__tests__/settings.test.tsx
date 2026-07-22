@@ -893,14 +893,15 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('Package upload is not configured')).toBeInTheDocument();
       expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: 'Backups' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Recovery packages' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Recovery package location')).toHaveTextContent('Local');
       expect(screen.getByText(/Page 1 of 1/)).toBeInTheDocument();
       expect(screen.getByText('Rows')).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByDisplayValue('America/Chicago'), { target: { value: 'UTC' } });
+    expect(screen.getByRole('option', { name: /America\/Chicago \(UTC[+-]\d{2}:\d{2}\)/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Timezone' }), { target: { value: 'UTC' } });
     fireEvent.click(screen.getByText('Save settings'));
 
     await waitFor(() => {
@@ -926,7 +927,11 @@ describe('Settings page', () => {
       expect(hooks.api.downloadBackupArtifact).toHaveBeenCalledWith('artifact-1');
     });
 
-    fireEvent.click(screen.getByLabelText(/Restore backup/));
+    expect(screen.getByRole('heading', { name: 'Restore from backup' })).toBeInTheDocument();
+    const restorePicker = screen.getByRole('combobox', { name: 'Choose a local backup' });
+    expect(restorePicker).toBeInTheDocument();
+    fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
     await waitFor(() => {
       expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
     });
@@ -940,6 +945,8 @@ describe('Settings page', () => {
         notes: null,
       });
     });
+    expect(screen.getByRole('progressbar', { name: 'Restore activity' })).toBeInTheDocument();
+    expect(screen.queryByText('5%')).not.toBeInTheDocument();
   });
 
   it('shows the Backups section for super users as well', async () => {
@@ -952,8 +959,8 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Backups').length).toBeGreaterThan(0);
-      expect(screen.getByText('Package upload is not configured')).toBeInTheDocument();
       expect(screen.getByText('Recent backup runs')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Recovery packages' })).toBeInTheDocument();
     });
   });
 

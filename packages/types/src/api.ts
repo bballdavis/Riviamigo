@@ -745,6 +745,7 @@ export interface BackupOverview {
     pg_dump_available: boolean;
     run_now_allowed: boolean;
     restore_automation_available: boolean;
+    restore_automation_reason?: string | null;
     reason: string | null;
   };
 }

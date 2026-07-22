@@ -8,7 +8,7 @@ slug: /operations/backup-and-restore/
 
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
 
-Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, backup target secrets, and old backup catalog entries are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore.
+Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's local backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean-install restore only has the history contained on that target host.
 
 ## Create and download a recovery package
 
@@ -25,15 +25,16 @@ The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid
 
 ## Import and restore in the app
 
-On the target installation, sign in as an administrator and open **Settings > Backups**. Choose **Import recovery package**, select the `.rma.tar.gz` file from the other Riviamigo server, and wait for upload and package validation to finish. Uploaded packages have no artificial size limit, but the backup filesystem must have enough space for the package, validation staging, and the required safety backup. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
+On the target installation, sign in as an administrator and open **Settings > Backups**. In **Restore from backup**, choose a package from the local catalog or select **Import recovery package** to upload a `.rma.tar.gz` file from another Riviamigo server. Wait for upload and package validation to finish. Uploaded packages have no artificial size limit, but the backup filesystem must have enough space for the package, validation staging, and the required safety backup. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
 
-Open the imported package, choose Restore, review the replacement warning, and type `RESTORE`. Riviamigo then:
+Select **Restore selected backup**, review the replacement warning, and type `RESTORE`. Riviamigo then:
 
 1. Creates and verifies a fresh safety recovery package of the target installation. The restore stops if this fails.
 2. Stops the API and ingestion workers while keeping nginx and the restore-progress endpoint available.
 3. Restores PostgreSQL, sanitized backup settings, and vehicle artwork.
 4. Starts a fresh API process, applies pending migrations, and verifies health.
-5. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
+5. Reconciles the persistent local backup catalog, execution history, and completed restore request into the restored database.
+6. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
 
 PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package.
 

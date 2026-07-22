@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock3,
   DatabaseBackup,
   Download,
   HardDrive,
@@ -17,7 +16,6 @@ import {
   Play,
   RotateCcw,
   Save,
-  Server,
   Timer,
   Trash2,
   Upload,
@@ -33,6 +31,66 @@ const WEEKDAYS = [
   { value: 5, label: 'Friday' },
   { value: 6, label: 'Saturday' },
 ];
+
+const FALLBACK_TIMEZONES = [
+  'UTC',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/New_York',
+  'America/Phoenix',
+  'America/Toronto',
+  'Asia/Kolkata',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'Europe/Berlin',
+  'Europe/London',
+  'Pacific/Auckland',
+];
+
+function listTimezones(): string[] {
+  const supportedValuesOf = Intl.supportedValuesOf as ((key: string) => string[]) | undefined;
+  const timezones = supportedValuesOf?.('timeZone') ?? FALLBACK_TIMEZONES;
+  return Array.from(new Set(['UTC', ...timezones]));
+}
+
+function formatUtcOffset(timezone: string): string {
+  try {
+    const offset = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'longOffset',
+    }).formatToParts(new Date()).find((part) => part.type === 'timeZoneName')?.value;
+    if (!offset || offset === 'GMT') return 'UTC+00:00';
+    return `UTC${offset.replace(/^GMT/, '')}`;
+  } catch {
+    return 'UTC offset unavailable';
+  }
+}
+
+function buildTimezoneOptions(currentTimezone?: string) {
+  const timezones = listTimezones();
+  if (currentTimezone && !timezones.includes(currentTimezone)) timezones.unshift(currentTimezone);
+  return timezones.map((timezone) => ({
+    value: timezone,
+    label: `${timezone} (${formatUtcOffset(timezone)})`,
+  }));
+}
+
+function formatRestoreDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours} hr` : `${hours} hr ${remainingMinutes} min`;
+}
+
+function estimateRestoreRange(sizeBytes: number | null): string {
+  if (!sizeBytes || sizeBytes <= 0) return 'a few minutes';
+  const sizeMiB = sizeBytes / (1024 * 1024);
+  const minimum = Math.max(2, Math.ceil(2 + sizeMiB / 50));
+  const maximum = Math.max(minimum + 3, Math.ceil(6 + sizeMiB / 15));
+  return `${formatRestoreDuration(minimum)}–${formatRestoreDuration(maximum)}`;
+}
 
 interface BackupDraft {
   enabled: boolean;
@@ -196,20 +254,17 @@ function ToggleRow({
   checked,
   onChange,
   disabled = false,
-  indent = false,
 }: {
   title: string;
   description: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
-  indent?: boolean;
 }) {
   return (
     <div
       className={[
         'flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/30 px-3 py-2.5',
-        indent ? 'ml-4' : '',
       ].join(' ')}
     >
       <div>
@@ -236,10 +291,14 @@ export function BackupSection() {
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
+  const [catalogSource, setCatalogSource] = React.useState<'all' | 'local' | 's3' | null>(null);
+  const [restoreArtifactId, setRestoreArtifactId] = React.useState('');
   const [pendingRestoreArtifact, setPendingRestoreArtifact] = React.useState<BackupOverview['artifacts'][number] | null>(null);
   const [restoreConfirmation, setRestoreConfirmation] = React.useState('');
   const [uploadProgress, setUploadProgress] = React.useState<number | null>(null);
   const [activeRestore, setActiveRestore] = React.useState<{ job: RestoreJob; token: string } | null>(null);
+  const [activeRestoreSizeBytes, setActiveRestoreSizeBytes] = React.useState<number | null>(null);
+  const [restoreStatusUnavailable, setRestoreStatusUnavailable] = React.useState(false);
   const uploadInputRef = React.useRef<HTMLInputElement>(null);
   const detectedTimezone = React.useMemo(() => detectTimezone(), []);
 
@@ -259,6 +318,15 @@ export function BackupSection() {
       }
       return null;
     });
+  }, [overview.data?.artifacts]);
+
+  React.useEffect(() => {
+    if (!overview.data) return;
+    setRestoreArtifactId((current) => (
+      current && overview.data.artifacts.some((artifact) => artifact.id === current)
+        ? current
+        : overview.data.artifacts[0]?.id ?? ''
+    ));
   }, [overview.data?.artifacts]);
 
   const saveSettings = useMutation({
@@ -307,6 +375,7 @@ export function BackupSection() {
     onSuccess: ({ artifact }) => {
       setUploadProgress(null);
       setExpandedArtifactId(artifact.id);
+      setRestoreArtifactId(artifact.id);
       queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
     },
     onError: (error) => {
@@ -328,8 +397,10 @@ export function BackupSection() {
         confirmation_phrase: restoreConfirmation,
         notes: null,
       }),
-    onSuccess: ({ job, capability_token }) => {
+    onSuccess: ({ job, capability_token }, artifact) => {
       setActiveRestore({ job, token: capability_token });
+      setActiveRestoreSizeBytes(artifact.size_bytes);
+      setRestoreStatusUnavailable(false);
       setPendingRestoreArtifact(null);
       setRestoreConfirmation('');
       queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
@@ -346,13 +417,16 @@ export function BackupSection() {
       try {
         const job = await api.getRestoreJob(activeRestore.job.id, activeRestore.token);
         if (stopped) return;
+        setRestoreStatusUnavailable(false);
         setActiveRestore((current) => current ? { ...current, job } : current);
         if (job.phase === 'completed') {
           window.setTimeout(() => window.location.reload(), 1200);
         }
       } catch {
+        setRestoreStatusUnavailable(true);
         // The API process intentionally disappears during restore. The
-        // supervisor endpoint remains available and the next poll reconnects.
+        // restore supervisor or restarted API may remain available while the
+        // application process is being replaced. Keep polling until it returns.
       }
     };
     void poll();
@@ -366,6 +440,9 @@ export function BackupSection() {
   function updateDraft<K extends keyof BackupDraft>(key: K, value: BackupDraft[K]) {
     setDraft((cur) => cur ? { ...cur, [key]: value } : cur);
   }
+
+  const timezoneOptions = React.useMemo(() => buildTimezoneOptions(draft?.timezone), [draft?.timezone]);
+  const activeRestoreEstimate = estimateRestoreRange(activeRestoreSizeBytes);
 
   if (overview.isLoading || !draft || !overview.data) {
     return (
@@ -387,6 +464,34 @@ export function BackupSection() {
   const timezoneIsAutoDetected = !!detectedTimezone && draft.timezone === detectedTimezone && !currentSettings.timezone;
   const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
   const runNowReason = overview.data.runtime_readiness?.reason;
+  const restoreArtifact = overview.data.artifacts.find((artifact) => artifact.id === restoreArtifactId) ?? null;
+  const restoreArtifactOptions = overview.data.artifacts.map((artifact) => ({
+    value: artifact.id,
+    label: new Date(artifact.created_at).toLocaleString(),
+    description: `${artifact.storage_type === 'uploaded' ? 'Imported' : 'Local'} · ${artifact.file_name}`,
+  }));
+  const restoreAutomationReason = overview.data.runtime_readiness?.restore_automation_reason;
+  const hasLocalArtifacts = overview.data.artifacts.some((artifact) => (artifact.storage_type as string) !== 's3');
+  const hasS3Artifacts = overview.data.artifacts.some((artifact) => (artifact.storage_type as string) === 's3');
+  const hasLocalCatalog = hasLocalArtifacts || !hasS3Artifacts;
+  const s3Configured = Boolean(currentSettings.endpoint && currentSettings.bucket);
+  const availableCatalogSources = [
+    ...(hasLocalCatalog && (hasS3Artifacts || s3Configured) ? [{ value: 'all', label: 'All backups' }] : []),
+    ...(hasLocalCatalog ? [{ value: 'local', label: 'Local' }] : []),
+    ...(hasS3Artifacts || s3Configured ? [{ value: 's3', label: 'S3' }] : []),
+  ];
+  const defaultCatalogSource = hasLocalCatalog && hasS3Artifacts
+    ? 'all'
+    : hasS3Artifacts && !hasLocalCatalog
+      ? 's3'
+      : 'local';
+  const selectedCatalogSource = catalogSource && availableCatalogSources.some((source) => source.value === catalogSource)
+    ? catalogSource
+    : defaultCatalogSource;
+  const visibleArtifacts = overview.data.artifacts.filter((artifact) => (
+    selectedCatalogSource === 'all'
+      || (selectedCatalogSource === 's3' ? (artifact.storage_type as string) === 's3' : (artifact.storage_type as string) !== 's3')
+  ));
 
   return (
     <div className="flex flex-col gap-5">
@@ -473,7 +578,6 @@ export function BackupSection() {
                 description="Store a copy of each backup artifact on disk"
                 checked={localEnabled}
                 onChange={setLocalEnabled}
-                indent
               />
             </div>
           )}
@@ -489,11 +593,12 @@ export function BackupSection() {
                   </span>
                 )}
               </span>
-              <input
+              <SelectPicker
+                className="w-full"
                 value={draft.timezone}
-                onChange={(e) => updateDraft('timezone', e.target.value)}
-                className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                placeholder={detectedTimezone || 'America/Chicago'}
+                onChange={(value) => updateDraft('timezone', value)}
+                aria-label="Timezone"
+                options={timezoneOptions}
               />
             </label>
             <label className="grid gap-1">
@@ -559,102 +664,6 @@ export function BackupSection() {
             </label>
           </div>
         </CardContent>
-      </Card>
-
-      {/* ── S3 upload card ── */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Server className="h-4 w-4 text-fg-secondary" />
-            <CardTitle>Off-site storage</CardTitle>
-            <span className="text-xs text-fg-tertiary">Package upload is not configured</span>
-          </div>
-          <Badge variant="default">Not configured</Badge>
-        </CardHeader>
-
-        {s3Enabled ? (
-          <CardContent className="grid gap-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="grid gap-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Endpoint</span>
-                <input
-                  value={draft.endpoint}
-                  onChange={(e) => updateDraft('endpoint', e.target.value)}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  placeholder="https://s3.example.com"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Region</span>
-                <input
-                  value={draft.region}
-                  onChange={(e) => updateDraft('region', e.target.value)}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  placeholder="us-east-1"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Bucket</span>
-                <input
-                  value={draft.bucket}
-                  onChange={(e) => updateDraft('bucket', e.target.value)}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  placeholder="riviamigo-backups"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Prefix</span>
-                <input
-                  value={draft.prefix}
-                  onChange={(e) => updateDraft('prefix', e.target.value)}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  placeholder="prod/riviamigo"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Access key</span>
-                <input
-                  value={draft.access_key}
-                  onChange={(e) => updateDraft('access_key', e.target.value)}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  placeholder="Optional if runtime credentials are injected"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Secret key</span>
-                <input
-                  type="password"
-                  value={secretKey}
-                  onChange={(e) => { setSecretKey(e.target.value); setClearSecretKey(false); }}
-                  className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
-                  placeholder={currentSettings.has_secret_key ? 'Leave blank to keep the stored secret' : 'Enter secret key'}
-                />
-              </label>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elevated/30 p-3 text-sm text-fg-tertiary">
-              <Clock3 className="h-4 w-4 shrink-0" />
-              <span>Secrets are stored encrypted in the application database. Backups create verified local artifacts then upload to the configured S3 target.</span>
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm text-fg">
-                {currentSettings.has_secret_key ? 'Clear the stored secret key on next save' : 'No stored secret key yet'}
-              </span>
-              <Toggle
-                checked={clearSecretKey}
-                onChange={setClearSecretKey}
-                disabled={!currentSettings.has_secret_key}
-              />
-            </div>
-          </CardContent>
-        ) : (
-          <CardContent>
-            <p className="text-sm text-fg-tertiary">
-              Recovery packages are stored on the persistent local backup volume. Download a package and copy it to separate storage; S3 upload is not currently executed by the backup worker.
-            </p>
-          </CardContent>
-        )}
       </Card>
 
       {/* Recent runs */}
@@ -747,49 +756,34 @@ export function BackupSection() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <DatabaseBackup className="h-4 w-4 text-fg-secondary" />
-            <CardTitle>Backups</CardTitle>
+            <div>
+              <CardTitle>Recovery packages</CardTitle>
+              <p className="mt-1 text-xs text-fg-tertiary">
+                {s3Configured
+                  ? 'Browse recovery packages stored locally and in the configured S3 target.'
+                  : 'Packages are stored locally. Off-site S3 copies are not enabled in this build.'}
+              </p>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="default">Local catalog</Badge>
-            <input
-              ref={uploadInputRef}
-              type="file"
-              accept=".rma.tar.gz,application/gzip,application/octet-stream"
-              className="sr-only"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) uploadArtifact.mutate(file);
-                event.target.value = '';
-              }}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              iconLeft={<Upload className="h-3.5 w-3.5" />}
-              loading={uploadArtifact.isPending}
-              onClick={() => uploadInputRef.current?.click()}
-            >
-              Import recovery package
-            </Button>
-          </div>
+          <SelectPicker
+            className="min-w-[9rem]"
+            value={selectedCatalogSource}
+            onChange={(value) => setCatalogSource(value as 'all' | 'local' | 's3')}
+            aria-label="Recovery package location"
+            size="sm"
+            options={availableCatalogSources}
+          />
         </CardHeader>
         <CardContent className="grid gap-3">
-          {uploadArtifact.isPending && (
-            <div aria-label="Backup upload progress" className="rounded-lg border border-border bg-bg-elevated/30 p-3">
-              <div className="flex items-center justify-between gap-3 text-xs text-fg-secondary">
-                <span>{uploadProgress === 100 ? 'Validating recovery package…' : 'Uploading recovery package…'}</span>
-                <span className="tabular-nums">{uploadProgress ?? 0}%</span>
-              </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-elevated">
-                <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${uploadProgress ?? 0}%` }} />
-              </div>
-            </div>
-          )}
-          {overview.data.artifacts.length === 0 ? (
-            <p className="text-sm text-fg-tertiary">No backup artifact has been written yet.</p>
+          {visibleArtifacts.length === 0 ? (
+            <p className="text-sm text-fg-tertiary">
+              {selectedCatalogSource === 's3'
+                ? 'No S3 recovery packages are available yet.'
+                : 'No local recovery package has been written yet.'}
+            </p>
           ) : (
             <div className="space-y-2">
-              {overview.data.artifacts.map((artifact) => {
+              {visibleArtifacts.map((artifact) => {
                 const isExpanded = expandedArtifactId === artifact.id;
                 return (
                   <div
@@ -852,16 +846,6 @@ export function BackupSection() {
                             }}
                           />
                         )}
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          aria-label={`Restore backup ${artifact.id}`}
-                          iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setPendingRestoreArtifact(artifact);
-                          }}
-                        />
                       </div>
                     </div>
 
@@ -1005,12 +989,29 @@ export function BackupSection() {
                 <p className="text-sm font-semibold text-fg">Restoring Riviamigo</p>
                 <p className="mt-1 text-sm text-fg-tertiary">{activeRestore.job.message}</p>
               </div>
-              <span className="text-sm tabular-nums text-fg-secondary">{activeRestore.job.progress_percent}%</span>
+              {activeRestore.job.phase !== 'failed' && (
+                <span className="text-xs text-fg-tertiary">Estimated {activeRestoreEstimate}</span>
+              )}
             </div>
-            <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-bg-elevated">
-              <div className={`h-full rounded-full transition-[width] duration-500 ${activeRestore.job.phase === 'failed' ? 'bg-status-danger' : 'bg-accent'}`} style={{ width: `${activeRestore.job.progress_percent}%` }} />
+            <div
+              role="progressbar"
+              aria-label="Restore activity"
+              aria-valuetext={activeRestore.job.phase === 'failed' ? 'Restore failed' : 'Restore is running'}
+              className="mt-4 h-2.5 overflow-hidden rounded-full bg-bg-elevated"
+            >
+              <div className={`h-full rounded-full ${activeRestore.job.phase === 'failed' ? 'bg-status-danger' : activeRestore.job.phase === 'completed' ? 'bg-status-success' : 'rm-restore-activity'}`} />
             </div>
-            <p className="mt-3 text-xs capitalize text-fg-tertiary">{activeRestore.job.phase.replaceAll('_', ' ')}</p>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-fg-tertiary">
+              <span className="capitalize">{activeRestore.job.phase.replaceAll('_', ' ')}</span>
+              {activeRestore.job.phase !== 'failed' && (
+                <span>Estimate based on package size; safety backup and database load can extend it.</span>
+              )}
+            </div>
+            {restoreStatusUnavailable && activeRestore.job.phase !== 'failed' && (
+              <div className="mt-4 rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning">
+                The application is restarting for the restore. The restore may continue while this page cannot reach the API; we’ll keep checking and reload when the server returns. You may be asked to sign in again.
+              </div>
+            )}
             {activeRestore.job.error_message && (
               <div className="mt-4 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 text-sm text-status-danger">
                 {activeRestore.job.error_message}
@@ -1018,45 +1019,151 @@ export function BackupSection() {
             )}
             {activeRestore.job.phase === 'failed' && (
               <div className="mt-4 flex justify-end">
-                <Button variant="secondary" size="sm" onClick={() => setActiveRestore(null)}>Close</Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setActiveRestore(null);
+                    setActiveRestoreSizeBytes(null);
+                    setRestoreStatusUnavailable(false);
+                  }}
+                >
+                  Close
+                </Button>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Restore requests */}
+      {/* Restore from backup */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <RotateCcw className="h-4 w-4 text-fg-secondary" />
-            <CardTitle>Restore requests</CardTitle>
+            <CardTitle>Restore from backup</CardTitle>
           </div>
           <Badge variant="danger">Admin only</Badge>
         </CardHeader>
-        <CardContent>
-          {overview.data.restore_requests.length === 0 ? (
-            <p className="text-sm text-fg-tertiary">No restore requests have been recorded yet.</p>
-          ) : (
-            <div className="divide-y divide-border">
-              {overview.data.restore_requests.map((request) => (
-                <div key={request.id} className="grid gap-2 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-fg">{capitalizeFirstLetter(request.status)}</p>
-                      <Badge variant="default">{request.artifact_id.slice(0, 8)}</Badge>
-                    </div>
-                    <p className="mt-1 text-xs text-fg-tertiary">
-                      Requested {new Date(request.requested_at).toLocaleString()}
-                    </p>
-                    {request.notes && <p className="mt-1 text-xs text-fg-tertiary">{request.notes}</p>}
-                    {request.error_message && <p className="mt-1 text-xs text-status-danger">{request.error_message}</p>}
-                  </div>
-                  <p className="font-mono text-xs text-fg-tertiary">{request.id}</p>
-                </div>
-              ))}
+        <CardContent className="grid gap-4">
+          <div className="-mx-5 rounded-lg border border-border bg-bg-elevated/20 p-5">
+            <div>
+              <p className="text-sm font-medium text-fg">Choose a recovery package</p>
+              <p className="mt-1 text-xs leading-relaxed text-fg-tertiary">
+                Select a backup already in the local catalog or import a package from another Riviamigo installation. A safety backup is created before any restore begins.
+              </p>
             </div>
-          )}
+
+            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] md:items-end">
+              <label className="grid min-w-0 gap-1">
+                <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Local backup</span>
+                <SelectPicker
+                  value={restoreArtifactId}
+                  onChange={setRestoreArtifactId}
+                  aria-label="Choose a local backup"
+                  placeholder="Choose a backup"
+                  disabled={restoreArtifactOptions.length === 0}
+                  options={restoreArtifactOptions}
+                  className="w-full"
+                />
+              </label>
+
+              <div className="flex w-full items-end">
+                <input
+                  ref={uploadInputRef}
+                  type="file"
+                  accept=".rma.tar.gz,application/gzip,application/octet-stream"
+                  className="sr-only"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) uploadArtifact.mutate(file);
+                    event.target.value = '';
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  size="md"
+                  className="w-full"
+                  iconLeft={<Upload className="h-3.5 w-3.5" />}
+                  loading={uploadArtifact.isPending}
+                  onClick={() => uploadInputRef.current?.click()}
+                >
+                  Import recovery package
+                </Button>
+              </div>
+            </div>
+
+            {uploadArtifact.isPending && (
+              <div aria-label="Backup upload progress" className="mt-3 rounded-lg border border-border bg-bg-elevated/30 p-3">
+                <div className="flex items-center justify-between gap-3 text-xs text-fg-secondary">
+                  <span>{uploadProgress === 100 ? 'Validating recovery package…' : 'Uploading recovery package…'}</span>
+                  <span className="tabular-nums">{uploadProgress ?? 0}%</span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-bg-elevated">
+                  <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${uploadProgress ?? 0}%` }} />
+                </div>
+              </div>
+            )}
+
+            {restoreArtifact ? (
+              <div className="mt-3 flex flex-col gap-3 rounded-lg border border-accent/30 bg-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Selected backup</p>
+                  <p className="mt-1 truncate text-sm font-medium text-fg">{restoreArtifact.file_name}</p>
+                  <p className="mt-0.5 text-xs text-fg-tertiary">
+                    {new Date(restoreArtifact.created_at).toLocaleString()} · {restoreArtifact.storage_type === 'uploaded' ? 'Imported package' : 'Local package'}
+                  </p>
+                </div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={!overview.data.runtime_readiness.restore_automation_available}
+                  onClick={() => setPendingRestoreArtifact(restoreArtifact)}
+                >
+                  Restore selected backup
+                </Button>
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-fg-tertiary">No local recovery packages are available yet.</p>
+            )}
+
+            {!overview.data.runtime_readiness.restore_automation_available && (
+              <p className="mt-3 text-xs text-status-warning">
+                Automated restore is unavailable{restoreAutomationReason ? `: ${restoreAutomationReason}` : ' in this runtime.'}
+              </p>
+            )}
+          </div>
+
+          <div className="border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-fg">Request history</p>
+                <p className="mt-0.5 text-xs text-fg-tertiary">Previous restore attempts and their current status.</p>
+              </div>
+            </div>
+            {overview.data.restore_requests.length === 0 ? (
+              <p className="mt-3 text-sm text-fg-tertiary">No restore requests have been recorded yet.</p>
+            ) : (
+              <div className="mt-2 divide-y divide-border">
+                {overview.data.restore_requests.map((request) => (
+                  <div key={request.id} className="grid gap-2 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-fg">{capitalizeFirstLetter(request.status)}</p>
+                        <Badge variant="default">{request.artifact_id.slice(0, 8)}</Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-fg-tertiary">
+                        Requested {new Date(request.requested_at).toLocaleString()}
+                      </p>
+                      {request.notes && <p className="mt-1 text-xs text-fg-tertiary">{request.notes}</p>}
+                      {request.error_message && <p className="mt-1 text-xs text-status-danger">{request.error_message}</p>}
+                    </div>
+                    <p className="font-mono text-xs text-fg-tertiary">{request.id}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
