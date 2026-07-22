@@ -1,0 +1,23 @@
+[package]
+name = "riviamigo-graph-exploration"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+publish = false
+
+[dependencies]
+age = "0.12"
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+futures = "0.3"
+hex = "0.4"
+riviamigo-api = { path = "../../apps/api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-native-tls", "uuid"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+uuid = { version = "1", features = ["serde"] }
