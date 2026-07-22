@@ -18,6 +18,7 @@ coverage
 **/coverage
 .turbo
 **/.turbo
+data
 
 .env
 .env.*

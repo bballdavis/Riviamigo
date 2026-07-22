@@ -73,7 +73,7 @@ pub struct BackupRunSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupArtifactSnapshot {
     pub id: Uuid,
-    pub run_id: Uuid,
+    pub run_id: Option<Uuid>,
     pub storage_type: String,
     pub file_name: String,
     pub storage_path: String,
@@ -163,7 +163,7 @@ pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, Ap
     .into_iter()
     .map(|row| BackupRunSnapshot { id: row.0, trigger: row.1, status: row.2, artifact_key: row.3, started_at: row.4, completed_at: row.5, error_message: row.6, created_at: row.7, updated_at: row.8 })
     .collect();
-    let artifacts = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i64, String, Value, DateTime<Utc>)>(
+    let artifacts = sqlx::query_as::<_, (Uuid, Option<Uuid>, String, String, String, i64, String, Value, DateTime<Utc>)>(
         "SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at FROM riviamigo.backup_artifacts ORDER BY created_at",
     )
     .fetch_all(pool)

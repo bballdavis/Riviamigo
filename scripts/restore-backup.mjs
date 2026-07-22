@@ -142,17 +142,21 @@ function restoreBackupSettings(postgresUser, staging) {
 
   const jsonLiteral = JSON.stringify(settings).replaceAll("'", "''");
   const sql = `
+    ALTER TABLE riviamigo.backup_settings
+      ADD COLUMN IF NOT EXISTS local_enabled boolean NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS s3_enabled boolean NOT NULL DEFAULT false;
     INSERT INTO riviamigo.backup_settings (
       id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
-      retention_count, target_type, endpoint, region, bucket, prefix, access_key,
+      retention_count, local_enabled, s3_enabled, target_type, endpoint, region, bucket, prefix, access_key,
       secret_key_encrypted, updated_at, updated_by
     )
     SELECT TRUE, enabled, frequency, run_at::time, timezone, day_of_week, day_of_month,
-      retention_count, target_type, endpoint, region, bucket, prefix, access_key,
+      retention_count, COALESCE(local_enabled, TRUE), COALESCE(s3_enabled, FALSE), target_type, endpoint, region, bucket, prefix, access_key,
       NULL, now(), NULL
     FROM jsonb_to_record('${jsonLiteral}'::jsonb) AS x(
       enabled boolean, frequency text, run_at text, timezone text,
       day_of_week smallint, day_of_month smallint, retention_count integer,
+      local_enabled boolean, s3_enabled boolean,
       target_type text, endpoint text, region text, bucket text, prefix text,
       access_key text
     )
@@ -160,7 +164,8 @@ function restoreBackupSettings(postgresUser, staging) {
       enabled = EXCLUDED.enabled, frequency = EXCLUDED.frequency,
       run_at = EXCLUDED.run_at, timezone = EXCLUDED.timezone,
       day_of_week = EXCLUDED.day_of_week, day_of_month = EXCLUDED.day_of_month,
-      retention_count = EXCLUDED.retention_count, target_type = EXCLUDED.target_type,
+      retention_count = EXCLUDED.retention_count, local_enabled = EXCLUDED.local_enabled,
+      s3_enabled = EXCLUDED.s3_enabled, target_type = EXCLUDED.target_type,
       endpoint = EXCLUDED.endpoint, region = EXCLUDED.region, bucket = EXCLUDED.bucket,
       prefix = EXCLUDED.prefix, access_key = EXCLUDED.access_key,
       secret_key_encrypted = NULL, updated_at = now(), updated_by = NULL;

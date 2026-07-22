@@ -322,6 +322,7 @@ async function waitForHttp(url, child, label, timeoutMs = 30000) {
 async function startInfrastructure() {
   log(`Starting infrastructure (TimescaleDB, Redis, Garage) for ${composeProjectName}...`);
   await run('docker', ['compose', '-f', composeFile, 'up', '-d', 'timescaledb', 'redis', 'garage']);
+  await initializeGarage();
 
   const deadline = Date.now() + databaseReadyTimeoutMs;
   let nextProgressLog = Date.now() + 15000;
@@ -371,6 +372,26 @@ async function startInfrastructure() {
   log(`   Redis: redis://localhost:${ports.redis}`);
   log(`   S3 (Garage): http://localhost:${ports.garageApi}`);
   log('');
+}
+
+async function initializeGarage() {
+  const garage = ['compose', '-f', composeFile, 'exec', '-T', 'garage', '/garage', '-c', '/config/garage.toml'];
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const status = await capture('docker', [...garage, 'status']);
+    if (status.code === 0) break;
+    if (attempt === 59) throw new Error(`Garage did not become ready.\n${stripAnsi(status.stderr).trim()}`);
+    await sleep(500);
+  }
+  const keys = await capture('docker', [...garage, 'key', 'list']);
+  if (keys.code === 0) return;
+  const node = await capture('docker', [...garage, 'node', 'id']);
+  if (node.code !== 0 || !node.stdout.trim()) throw new Error(`Could not read the Garage node id.\n${stripAnsi(node.stderr).trim()}`);
+  const nodeId = node.stdout.trim().split(/\s+/)[0];
+  await run('docker', [...garage, 'layout', 'assign', nodeId, '-z', 'dc1', '-c', '1G']);
+  await run('docker', [...garage, 'layout', 'apply', '--version', '1']);
+  await run('docker', [...garage, 'key', 'import', '--yes', '-n', 'dev-key', 'GKdeadbeef0000000000000000000000', 'deadbeef0000000000000000000000000000000000000000000000000000cafe']);
+  await run('docker', [...garage, 'bucket', 'create', 'riviamigo']);
+  await run('docker', [...garage, 'bucket', 'allow', '--read', '--write', '--owner', 'riviamigo', '--key', 'GKdeadbeef0000000000000000000000']);
 }
 
 async function getListeningPids(port) {

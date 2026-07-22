@@ -282,6 +282,8 @@ describe('api client dashboard contracts', () => {
       day_of_week: 0,
       day_of_month: null,
       retention_count: 8,
+      local_enabled: true,
+      s3_enabled: true,
       target_type: 's3',
       endpoint: '',
       region: null,
@@ -297,7 +299,7 @@ describe('api client dashboard contracts', () => {
       new Response(
         JSON.stringify({
           run: { id: 'run-1' },
-          artifact: { id: 'artifact-1' },
+          artifacts: [{ id: 'artifact-1' }],
         }),
         {
           status: 201,

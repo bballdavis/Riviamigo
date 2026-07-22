@@ -8,11 +8,13 @@ slug: /operations/backup-and-restore/
 
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
 
-Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's local backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean-install restore only has the history contained on that target host.
+Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean installation can rebuild its S3 catalog from the configured bucket.
 
 ## Create and download a recovery package
 
-Open **Settings > Backups** and choose **Run now**. A successful run creates a file ending in `.rma.tar.gz`. Download that file and store it outside the host running Riviamigo. The local `./data/backups` directory is useful for operational retention, but it is not an off-host disaster-recovery copy until you download or copy it elsewhere.
+Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma.tar.gz` package under `./data/backups`; S3 uploads the same verified package to the configured bucket and prefix. At least one destination is required. Use **Test S3 connection** after saving S3 settings to prove list, write, read, and delete access before relying on the schedule.
+
+If S3 is an enabled destination and its upload fails, the run is marked failed and Riviamigo retains the valid package locally even when Local retention was disabled. This prevents a remote-storage outage from silently appearing as a protected backup.
 
 Every package contains:
 
@@ -33,7 +35,7 @@ Select **Restore selected backup**, review the replacement warning, and type `RE
 2. Stops the API and ingestion workers while keeping nginx and the restore-progress endpoint available.
 3. Restores PostgreSQL, sanitized backup settings, and vehicle artwork.
 4. Starts a fresh API process, applies pending migrations, and verifies health.
-5. Reconciles the persistent local backup catalog, execution history, and completed restore request into the restored database.
+5. Reconciles the persistent backup catalog, execution history, and completed restore request into the restored database.
 6. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
 
 PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package.
@@ -65,11 +67,13 @@ node scripts/restore-backup.mjs \
   --force
 ```
 
-The in-app flow and host command do not restore Rivian credentials or live sessions. After completion, sign in as an administrator and reconnect the Rivian account and any other external providers. Configure off-site backup storage separately; the current worker writes and verifies local recovery packages but does not upload them to S3.
+The restore picker can browse Local, S3, or both catalogs. Selecting an S3 package downloads it into protected staging, validates its package and component checksums, creates the normal safety backup, and then hands it to the restore supervisor. A clean installation can therefore configure the original bucket, discover its Riviamigo packages, and restore without first copying the archive through a browser.
+
+The in-app flow and host command do not restore Rivian credentials or live sessions. S3 secrets are also redacted from the package. After completion, sign in as an administrator, reconnect external providers, and re-enter the S3 secret unless the deployment supplies environment-backed credentials.
 
 ## Persistent artifact storage
 
-Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. Imported and safety packages are excluded from ordinary scheduled-backup retention and require explicit deletion. For disaster recovery, copy downloaded packages to a different host or storage system.
+Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, remote-staging, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. The retention count applies independently to generated Local and S3 packages. Imported and safety packages are never pruned by scheduled retention.
 
 ## Compatibility and verification
 

@@ -161,6 +161,8 @@ vi.mock('@riviamigo/hooks', () => ({
         day_of_week: 0,
         day_of_month: null,
         retention_count: 8,
+        local_enabled: true,
+        s3_enabled: true,
         target_type: 's3',
         endpoint: 'https://s3.example.com',
         region: 'us-east-1',
@@ -214,9 +216,11 @@ vi.mock('@riviamigo/hooks', () => ({
         restore_automation_available: true,
         reason: null,
       },
+      s3_catalog_error: null,
     }),
     updateBackupSettings: vi.fn().mockResolvedValue({}),
     runBackupNow: vi.fn().mockResolvedValue({}),
+    testBackupS3: vi.fn().mockResolvedValue({ ok: true, message: 'S3 list/write/read/delete checks passed' }),
     requestBackupRestore: vi.fn().mockResolvedValue({}),
     uploadBackupArtifact: vi.fn().mockResolvedValue({}),
     deleteUploadedBackup: vi.fn().mockResolvedValue(undefined),
@@ -318,6 +322,7 @@ vi.mock('lucide-react', () => ({
   Check: () => <svg data-testid="icon-check" />,
   CheckCircle2: () => <svg data-testid="icon-check-circle" />,
   AlertTriangle: () => <svg data-testid="icon-alert-triangle" />,
+  Cloud: () => <svg data-testid="icon-cloud" />,
   CloudUpload: () => <svg data-testid="icon-cloud-upload" />,
   ChevronDown: () => <svg data-testid="icon-chevron-down" />,
   ChevronLeft: () => <svg data-testid="icon-chevron-left" />,
@@ -907,10 +912,18 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(expect.objectContaining({
         timezone: 'UTC',
-        bucket: '',
+        bucket: 'riviamigo-backups',
         retention_count: 8,
+        local_enabled: true,
+        s3_enabled: true,
       }));
     });
+
+    fireEvent.click(screen.getByText('Test S3 connection'));
+    await waitFor(() => expect(hooks.api.testBackupS3).toHaveBeenCalledWith(expect.objectContaining({
+      bucket: 'riviamigo-backups',
+      s3_enabled: true,
+    })));
 
     fireEvent.click(screen.getByText('Run now'));
     await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled());
@@ -928,7 +941,7 @@ describe('Settings page', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Restore from backup' })).toBeInTheDocument();
-    const restorePicker = screen.getByRole('combobox', { name: 'Choose a local backup' });
+    const restorePicker = screen.getByRole('combobox', { name: 'Choose a recovery package' });
     expect(restorePicker).toBeInTheDocument();
     fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));

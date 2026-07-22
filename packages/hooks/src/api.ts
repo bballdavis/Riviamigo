@@ -902,6 +902,10 @@ class ApiClient {
     return this.request('POST', '/v1/admin/backups/run');
   }
 
+  async testBackupS3(body: UpdateBackupSettingsBody): Promise<{ ok: boolean; message: string }> {
+    return this.request('POST', '/v1/admin/backups/s3/test', body);
+  }
+
   async requestBackupRestore(body: CreateBackupRestoreRequestBody): Promise<BackupRestoreRequest> {
     return this.request('POST', '/v1/admin/backups/restore-requests', body);
   }

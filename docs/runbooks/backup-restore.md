@@ -39,7 +39,13 @@ For an in-app restore:
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the destructive window. Public `/health` remains unavailable until the restored API is ready.
 
-The package does not restore Redis live state, browser state, refresh sessions, provider credentials, or installation keys. In-app restores preserve the existing host's local backup catalog and operational history through the restore journal; clean-install command restores do not have a source-host catalog to merge. S3 upload is not currently performed by the backup worker; retain a downloaded package on separate storage.
+The package does not restore Redis live state, browser state, refresh sessions, provider credentials, installation keys, or S3 secrets. In-app restores preserve the existing host's backup catalog and operational history through the restore journal. Remote packages are downloaded beneath `/backups/.remote-staging`, fully validated before the safety backup begins, and removed by the restore supervisor when the job completes or fails.
+
+## S3 recovery drill
+
+Run `pnpm verify:backup-restore-s3 -- --source-build` for the optional destructive-path acceptance test. It creates isolated Compose projects and a disposable Garage object store, publishes one package to Local and S3, removes the local source package, discovers the remote object from a clean installation, and completes an in-app restore. The command is intentionally excluded from routine `pnpm test`; maintainers can also run the manual **S3 backup and restore drill** GitHub Actions workflow.
+
+An S3-enabled run is successful only when the upload and retention operations succeed. A failed upload leaves a local fallback package and a failed run record. Investigate the run error, use **Test S3 connection**, and rerun manually after repairing credentials, endpoint routing, or bucket permissions.
 
 ## PostgreSQL 16 to 18 cutover
 

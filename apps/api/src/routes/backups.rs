@@ -11,13 +11,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
 use tokio::{fs, io::AsyncWriteExt};
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
     errors::AppError,
     ingestion::session_store::encrypt_json,
     middleware::auth::{AppState, AuthUser},
-    services::{backups as backup_service, restore_jobs},
+    services::{backups as backup_service, restore_jobs, s3_backups},
 };
 
 pub fn router() -> Router<AppState> {
@@ -25,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/backups", get(get_backup_overview))
         .route("/admin/backups/settings", put(update_backup_settings))
         .route("/admin/backups/run", post(run_backup_now))
+        .route("/admin/backups/s3/test", post(test_s3_connection))
         .route(
             "/admin/backups/imports/{artifact_id}",
             delete(delete_uploaded_artifact),
@@ -167,6 +169,7 @@ struct BackupOverviewResponse {
     latest_successful_run: Option<BackupRunResponse>,
     next_run_at: Option<DateTime<Utc>>,
     runtime_readiness: BackupRuntimeReadinessResponse,
+    s3_catalog_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +190,8 @@ struct BackupSettingsResponse {
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
     retention_count: i32,
+    local_enabled: bool,
+    s3_enabled: bool,
     target_type: BackupTargetType,
     endpoint: String,
     region: Option<String>,
@@ -213,7 +218,7 @@ struct BackupRunResponse {
 #[derive(Debug, Serialize)]
 struct BackupArtifactResponse {
     id: Uuid,
-    run_id: Uuid,
+    run_id: Option<Uuid>,
     storage_type: String,
     file_name: String,
     storage_path: String,
@@ -239,7 +244,7 @@ struct BackupRestoreRequestResponse {
 #[derive(Debug, Serialize)]
 struct BackupRunExecutionResponse {
     run: BackupRunResponse,
-    artifact: BackupArtifactResponse,
+    artifacts: Vec<BackupArtifactResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +256,8 @@ struct UpdateBackupSettingsBody {
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
     retention_count: i32,
+    local_enabled: bool,
+    s3_enabled: bool,
     target_type: BackupTargetType,
     endpoint: String,
     region: Option<String>,
@@ -288,6 +295,8 @@ struct BackupSettingsRow {
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
     retention_count: i32,
+    local_enabled: bool,
+    s3_enabled: bool,
     target_type: String,
     endpoint: String,
     region: Option<String>,
@@ -314,7 +323,7 @@ struct BackupRunRow {
 #[derive(Debug, FromRow)]
 struct BackupArtifactRow {
     id: Uuid,
-    run_id: Uuid,
+    run_id: Option<Uuid>,
     storage_type: String,
     file_name: String,
     storage_path: String,
@@ -349,6 +358,10 @@ async fn get_backup_overview(
     let recent_runs_per_page = query.per_page.unwrap_or(10).clamp(1, 100);
     let recent_runs_total = count_recent_runs(&state).await?;
     let recent_runs = load_recent_runs(&state, recent_runs_page, recent_runs_per_page).await?;
+    let s3_catalog_error = match reconcile_s3_catalog(&state).await {
+        Ok(()) => None,
+        Err(error) => Some(error.to_string()),
+    };
     let artifacts = load_artifacts(&state).await?;
     let restore_requests = load_restore_requests(&state).await?;
     let latest_successful_run = load_latest_successful_run(&state).await?;
@@ -373,7 +386,43 @@ async fn get_backup_overview(
             restore_automation_reason: restore_readiness.err(),
             reason: readiness.reason,
         },
+        s3_catalog_error,
     }))
+}
+
+async fn reconcile_s3_catalog(state: &AppState) -> Result<(), AppError> {
+    let Some(settings) = backup_service::configured_s3_settings(&state.pool, &state.config).await?
+    else {
+        return Ok(());
+    };
+    let rows = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        s3_backups::list(&settings),
+    )
+    .await
+    .map_err(|_| AppError::DependencyUnavailable("S3 catalog listing timed out".into()))?
+    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+    for row in rows {
+        let storage_path = s3_backups::locator(&settings.bucket, &row.key);
+        let checksum = row.checksum_sha256.unwrap_or_default();
+        let manifest = serde_json::json!({
+            "artifact_kind": "recovery_package",
+            "format": row.metadata.get("riviamigo-format").cloned().unwrap_or_else(|| "riviamigo-recovery-v1".into()),
+            "storage_type": "s3",
+            "object_key": row.key,
+        });
+        sqlx::query(
+            r#"INSERT INTO riviamigo.backup_artifacts
+               (run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at)
+               VALUES (NULL, 's3', $1, $2, $3, $4, $5, $6)
+               ON CONFLICT (storage_path) WHERE storage_type = 's3'
+               DO UPDATE SET file_name = EXCLUDED.file_name, size_bytes = EXCLUDED.size_bytes,
+                             checksum_sha256 = EXCLUDED.checksum_sha256, manifest = EXCLUDED.manifest"#,
+        )
+        .bind(row.file_name).bind(storage_path).bind(row.size_bytes).bind(checksum).bind(manifest).bind(row.created_at)
+        .execute(&state.pool).await?;
+    }
+    Ok(())
 }
 
 async fn upload_backup_artifact(
@@ -528,8 +577,15 @@ async fn start_restore(
                 .into(),
         ));
     }
+    if body.confirmation_phrase.trim() != backup_service::RESTORE_CONFIRMATION_PHRASE {
+        return Err(AppError::Validation(format!(
+            "Type {} to request a restore",
+            backup_service::RESTORE_CONFIRMATION_PHRASE
+        )));
+    }
     let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
-    backup_service::validate_recovery_package(std::path::Path::new(&artifact.storage_path)).await?;
+    let restore_path = materialize_artifact(&state, &artifact).await?;
+    backup_service::validate_recovery_package(std::path::Path::new(&restore_path)).await?;
     let request_id = backup_service::create_restore_request(
         &state.pool,
         body.artifact_id,
@@ -538,19 +594,17 @@ async fn start_restore(
         body.notes,
     )
     .await?;
-    let (job, capability_token) = restore_jobs::create(
-        &state.config,
-        body.artifact_id,
-        artifact.storage_path,
-        request_id,
-    )
-    .await?;
+    let (job, capability_token) =
+        restore_jobs::create(&state.config, body.artifact_id, restore_path, request_id).await?;
     let background_state = state.clone();
     let job_id = job.id;
     tokio::spawn(async move {
         if let Err(error) =
             prepare_and_handoff_restore(background_state.clone(), job_id, auth.user_id).await
         {
+            if let Ok(job) = restore_jobs::read(&background_state.config, job_id).await {
+                cleanup_remote_staging_path(&job.artifact_path).await;
+            }
             let _ = restore_jobs::fail(&background_state.config, job_id, &error).await;
             let _ = sqlx::query(
                 "UPDATE riviamigo.backup_restore_requests SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
@@ -569,6 +623,18 @@ async fn start_restore(
             capability_token,
         }),
     ))
+}
+
+async fn cleanup_remote_staging_path(path: &str) {
+    let path = std::path::Path::new(path);
+    if path
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some(".remote-staging")
+    {
+        let _ = fs::remove_file(path).await;
+    }
 }
 
 async fn prepare_and_handoff_restore(
@@ -591,15 +657,13 @@ async fn prepare_and_handoff_restore(
         backup_service::BackupRunTrigger::PreRestore,
     )
     .await?;
-    let safety_path: String =
-        sqlx::query_scalar("SELECT storage_path FROM riviamigo.backup_artifacts WHERE id = $1")
-            .bind(safety.artifact_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (safety_artifact_id, safety_path): (Uuid, String) = sqlx::query_as(
+        "SELECT id, storage_path FROM riviamigo.backup_artifacts WHERE run_id = $1 AND storage_type = 'safety' ORDER BY created_at DESC LIMIT 1"
+    ).bind(safety.run_id).fetch_one(&state.pool).await?;
     let mut job = restore_jobs::read(&state.config, job_id).await?;
     job.safety_artifact_path = Some(safety_path);
     job.safety_run_id = Some(safety.run_id);
-    job.safety_artifact_id = Some(safety.artifact_id);
+    job.safety_artifact_id = Some(safety_artifact_id);
     job.phase = restore_jobs::RestorePhase::StoppingApplication;
     job.progress_percent = 25;
     job.message = "Safety backup complete; handing off to restore supervisor".into();
@@ -662,15 +726,24 @@ async fn download_backup_artifact(
 ) -> Result<Response<Body>, AppError> {
     require_admin(&state, auth.user_id).await?;
     let artifact = load_artifact_by_id(&state, artifact_id).await?;
-    let bytes = fs::read(&artifact.storage_path)
-        .await
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(anyhow::anyhow!("failed to read backup artifact: {error}")),
-        })?;
+    let body = if artifact.storage_type == "s3" {
+        let (settings, key) = resolve_remote_artifact(&state, &artifact).await?;
+        let stream = s3_backups::download_stream(&settings, &key)
+            .await
+            .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+        Body::from_stream(ReaderStream::new(stream.into_async_read()))
+    } else {
+        let file = fs::File::open(&artifact.storage_path)
+            .await
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => AppError::NotFound,
+                _ => AppError::Internal(anyhow::anyhow!("failed to open backup artifact: {error}")),
+            })?;
+        Body::from_stream(ReaderStream::new(file))
+    };
 
     let safe_name = artifact.file_name.replace('"', "_");
-    let mut response = Response::new(Body::from(bytes));
+    let mut response = Response::new(body);
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -699,7 +772,13 @@ async fn update_backup_settings(
     let run_at = parse_run_time(&body.run_at)?;
     let timezone = parse_timezone(&body.timezone)?;
     validate_schedule(&body.frequency, body.day_of_week, body.day_of_month)?;
-    validate_target(body.target_type, body.enabled, &body.endpoint, &body.bucket)?;
+    validate_target(
+        body.target_type,
+        body.local_enabled,
+        body.s3_enabled,
+        &body.endpoint,
+        &body.bucket,
+    )?;
 
     let normalized_day_of_week = match body.frequency {
         BackupFrequency::Weekly => body.day_of_week,
@@ -732,13 +811,13 @@ async fn update_backup_settings(
         r#"
         INSERT INTO riviamigo.backup_settings (
             id, enabled, frequency, run_at, timezone, day_of_week, day_of_month,
-            retention_count, target_type, endpoint, region, bucket, prefix,
+            retention_count, local_enabled, s3_enabled, target_type, endpoint, region, bucket, prefix,
             access_key, secret_key_encrypted, updated_at, updated_by
         )
         VALUES (
             TRUE, $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10, $11, $12,
-            $13, $14, now(), $15
+            $7, $8, $9, $10, $11, $12, $13, $14,
+            $15, $16, now(), $17
         )
         ON CONFLICT (id) DO UPDATE SET
             enabled = EXCLUDED.enabled,
@@ -748,6 +827,8 @@ async fn update_backup_settings(
             day_of_week = EXCLUDED.day_of_week,
             day_of_month = EXCLUDED.day_of_month,
             retention_count = EXCLUDED.retention_count,
+            local_enabled = EXCLUDED.local_enabled,
+            s3_enabled = EXCLUDED.s3_enabled,
             target_type = EXCLUDED.target_type,
             endpoint = EXCLUDED.endpoint,
             region = EXCLUDED.region,
@@ -755,8 +836,8 @@ async fn update_backup_settings(
             prefix = EXCLUDED.prefix,
             access_key = EXCLUDED.access_key,
             secret_key_encrypted = CASE
-                WHEN $16 THEN NULL
-                WHEN $14 IS NOT NULL THEN $14
+                WHEN $18 THEN NULL
+                WHEN $16 IS NOT NULL THEN $16
                 ELSE riviamigo.backup_settings.secret_key_encrypted
             END,
             updated_at = now(),
@@ -770,6 +851,8 @@ async fn update_backup_settings(
     .bind(normalized_day_of_week)
     .bind(normalized_day_of_month)
     .bind(body.retention_count)
+    .bind(body.local_enabled)
+    .bind(body.s3_enabled)
     .bind(body.target_type.as_str())
     .bind(normalized_endpoint)
     .bind(normalized_region)
@@ -783,6 +866,149 @@ async fn update_backup_settings(
     .await?;
 
     Ok(Json(load_settings(&state).await?))
+}
+
+async fn materialize_artifact(
+    state: &AppState,
+    artifact: &BackupArtifactResponse,
+) -> Result<String, AppError> {
+    if artifact.storage_type != "s3" {
+        return Ok(artifact.storage_path.clone());
+    }
+    let (settings, key) = resolve_remote_artifact(state, artifact).await?;
+    let directory = std::path::Path::new(&state.config.backup_artifact_dir).join(".remote-staging");
+    let path = directory.join(format!("{}.rma.tar.gz", artifact.id));
+    if fs::try_exists(&path).await.unwrap_or(false) {
+        match backup_service::validate_recovery_package(&path).await {
+            Ok(validated)
+                if artifact.checksum_sha256.is_empty()
+                    || artifact.checksum_sha256 == validated.checksum_sha256 =>
+            {
+                return Ok(path.to_string_lossy().into_owned());
+            }
+            _ => {
+                let _ = fs::remove_file(&path).await;
+            }
+        }
+    }
+    s3_backups::download(&settings, &key, &path)
+        .await
+        .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+    let validated = match backup_service::validate_recovery_package(&path).await {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = fs::remove_file(&path).await;
+            return Err(error);
+        }
+    };
+    if !artifact.checksum_sha256.is_empty() && artifact.checksum_sha256 != validated.checksum_sha256
+    {
+        let _ = fs::remove_file(&path).await;
+        return Err(AppError::Validation(
+            "Downloaded S3 package checksum does not match its catalog metadata".into(),
+        ));
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+async fn resolve_remote_artifact(
+    state: &AppState,
+    artifact: &BackupArtifactResponse,
+) -> Result<(s3_backups::S3Settings, String), AppError> {
+    let settings = backup_service::configured_s3_settings(&state.pool, &state.config)
+        .await?
+        .ok_or_else(|| {
+            AppError::Validation(
+                "S3 credentials must be configured before accessing this package".into(),
+            )
+        })?;
+    let key = s3_backups::key_from_locator(&settings.bucket, &artifact.storage_path).ok_or_else(
+        || AppError::Validation("This backup belongs to a different S3 bucket".into()),
+    )?;
+    if !s3_backups::key_belongs_to_prefix(&settings.prefix, key) {
+        return Err(AppError::Validation(
+            "This backup is outside the configured S3 prefix".into(),
+        ));
+    }
+    Ok((settings, key.to_string()))
+}
+
+#[derive(Debug, Serialize)]
+struct TestS3Response {
+    ok: bool,
+    message: String,
+}
+
+async fn test_s3_connection(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<UpdateBackupSettingsBody>,
+) -> Result<Json<TestS3Response>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    validate_target(
+        body.target_type,
+        body.local_enabled,
+        true,
+        &body.endpoint,
+        &body.bucket,
+    )?;
+    let existing = backup_service::configured_s3_settings(&state.pool, &state.config)
+        .await
+        .ok()
+        .flatten();
+    let secret_key = body
+        .secret_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .map(|settings| settings.secret_key.clone())
+        })
+        .ok_or_else(|| {
+            AppError::Validation("Enter or save an S3 secret key before testing".into())
+        })?;
+    let access_key = body
+        .access_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            existing
+                .as_ref()
+                .map(|settings| settings.access_key.clone())
+        })
+        .ok_or_else(|| {
+            AppError::Validation("Enter or save an S3 access key before testing".into())
+        })?;
+    let settings = s3_backups::S3Settings {
+        endpoint: body.endpoint.trim().to_string(),
+        region: body
+            .region
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("us-east-1")
+            .to_string(),
+        bucket: body.bucket.trim().to_string(),
+        prefix: normalize_prefix(&body.prefix),
+        access_key,
+        secret_key,
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        s3_backups::test_connection(&settings),
+    )
+    .await
+    .map_err(|_| AppError::DependencyUnavailable("S3 connection test timed out".into()))?
+    .map_err(|error| AppError::DependencyUnavailable(format!("{error:#}")))?;
+    Ok(Json(TestS3Response {
+        ok: true,
+        message: "S3 list/write/read/delete checks passed".into(),
+    }))
 }
 
 async fn run_backup_now(
@@ -800,11 +1026,14 @@ async fn run_backup_now(
     .await?;
 
     let run = load_run_by_id(&state, result.run_id).await?;
-    let artifact = load_artifact_by_id(&state, result.artifact_id).await?;
+    let mut artifacts = Vec::new();
+    for artifact_id in result.artifact_ids {
+        artifacts.push(load_artifact_by_id(&state, artifact_id).await?);
+    }
 
     Ok((
         StatusCode::CREATED,
-        Json(BackupRunExecutionResponse { run, artifact }),
+        Json(BackupRunExecutionResponse { run, artifacts }),
     ))
 }
 
@@ -839,6 +1068,8 @@ async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppEr
             day_of_week,
             day_of_month,
             retention_count,
+            local_enabled,
+            s3_enabled,
             target_type,
             endpoint,
             region,
@@ -914,7 +1145,7 @@ async fn load_artifacts(state: &AppState) -> Result<Vec<BackupArtifactResponse>,
         SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at
         FROM riviamigo.backup_artifacts
         ORDER BY created_at DESC
-        LIMIT 10
+        LIMIT 200
         "#,
     )
     .fetch_all(&state.pool)
@@ -1009,6 +1240,8 @@ fn map_settings_row(row: BackupSettingsRow) -> Result<BackupSettingsResponse, Ap
         day_of_week: row.day_of_week,
         day_of_month: row.day_of_month,
         retention_count: row.retention_count,
+        local_enabled: row.local_enabled,
+        s3_enabled: row.s3_enabled,
         target_type: BackupTargetType::try_from(row.target_type.as_str())?,
         endpoint: row.endpoint,
         region: row.region,
@@ -1071,6 +1304,8 @@ fn default_settings() -> BackupSettingsResponse {
         day_of_week: Some(0),
         day_of_month: Some(1),
         retention_count: 8,
+        local_enabled: true,
+        s3_enabled: false,
         target_type: BackupTargetType::S3,
         endpoint: String::new(),
         region: None,
@@ -1118,19 +1353,33 @@ fn validate_schedule(
 
 fn validate_target(
     target_type: BackupTargetType,
-    enabled: bool,
+    local_enabled: bool,
+    s3_enabled: bool,
     endpoint: &str,
     bucket: &str,
 ) -> Result<(), AppError> {
     if target_type != BackupTargetType::S3 {
         return Err(AppError::Validation("target_type must be s3".into()));
     }
-    // Bucket is only required when an S3 endpoint is configured; local-only runs
-    // (empty endpoint) do not need one.
-    if enabled && !endpoint.trim().is_empty() && bucket.trim().is_empty() {
+    if !local_enabled && !s3_enabled {
         return Err(AppError::Validation(
-            "bucket is required when an S3 endpoint is configured".into(),
+            "Enable at least one backup destination".into(),
         ));
+    }
+    if s3_enabled && bucket.trim().is_empty() {
+        return Err(AppError::Validation(
+            "bucket is required when S3 backups are enabled".into(),
+        ));
+    }
+    if s3_enabled && !endpoint.trim().is_empty() {
+        let parsed = url::Url::parse(endpoint.trim()).map_err(|_| {
+            AppError::Validation("S3 endpoint must be a valid HTTP or HTTPS URL".into())
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(AppError::Validation(
+                "S3 endpoint must use HTTP or HTTPS".into(),
+            ));
+        }
     }
     Ok(())
 }

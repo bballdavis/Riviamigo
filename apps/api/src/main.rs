@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = Config::from_env()?;
+    let mut config = Config::from_env()?;
     let pool = create_pool(&config.database_url).await?;
 
     let migration_pool = PgPoolOptions::new()
@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(operation = "startup", "secure_session_store.ready");
 
     let age_key = active_keys.age_key;
+    config.age_encryption_key = Some(age_key.clone());
 
     let supervisor =
         ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone())

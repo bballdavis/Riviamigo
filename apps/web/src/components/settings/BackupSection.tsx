@@ -11,6 +11,7 @@ import {
   ChevronRight,
   DatabaseBackup,
   Download,
+  Cloud,
   HardDrive,
   History,
   Play,
@@ -100,6 +101,8 @@ interface BackupDraft {
   day_of_week: number | null;
   day_of_month: number | null;
   retention_count: string;
+  local_enabled: boolean;
+  s3_enabled: boolean;
   target_type: BackupTargetType;
   endpoint: string;
   region: string;
@@ -132,6 +135,8 @@ function buildDraft(overview: BackupOverview): BackupDraft {
     day_of_week: s.day_of_week,
     day_of_month: s.day_of_month,
     retention_count: String(s.retention_count),
+    local_enabled: s.local_enabled ?? true,
+    s3_enabled: s.s3_enabled ?? false,
     target_type: s.target_type,
     endpoint: s.endpoint,
     region: s.region ?? '',
@@ -145,7 +150,6 @@ function buildPayload(
   draft: BackupDraft,
   secretKey: string,
   clearSecretKey: boolean,
-  s3Enabled: boolean,
 ): UpdateBackupSettingsBody | null {
   const retention = Number.parseInt(draft.retention_count, 10);
   if (!Number.isFinite(retention) || retention < 1) return null;
@@ -158,12 +162,14 @@ function buildPayload(
     day_of_week: draft.frequency === 'weekly' ? draft.day_of_week : null,
     day_of_month: draft.frequency === 'monthly' ? draft.day_of_month : null,
     retention_count: retention,
+    local_enabled: draft.local_enabled,
+    s3_enabled: draft.s3_enabled,
     target_type: draft.target_type,
-    endpoint: s3Enabled ? draft.endpoint.trim() : '',
-    region: s3Enabled ? (draft.region.trim() || null) : null,
-    bucket: s3Enabled ? draft.bucket.trim() : '',
-    prefix: s3Enabled ? draft.prefix.trim() : '',
-    access_key: s3Enabled ? (draft.access_key.trim() || null) : null,
+    endpoint: draft.s3_enabled ? draft.endpoint.trim() : '',
+    region: draft.s3_enabled ? (draft.region.trim() || null) : null,
+    bucket: draft.s3_enabled ? draft.bucket.trim() : '',
+    prefix: draft.s3_enabled ? draft.prefix.trim() : '',
+    access_key: draft.s3_enabled ? (draft.access_key.trim() || null) : null,
     ...(secretKey.trim() ? { secret_key: secretKey.trim() } : {}),
     ...(clearSecretKey ? { clear_secret_key: true } : {}),
   };
@@ -184,6 +190,13 @@ function describeSchedule(overview: BackupOverview) {
 function capitalizeFirstLetter(value: string) {
   if (!value) return value;
   return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function storageLabel(storageType: BackupOverview['artifacts'][number]['storage_type'], manifest?: BackupOverview['artifacts'][number]['manifest']) {
+  if (storageType === 's3') return 'S3';
+  if (storageType === 'uploaded') return 'Imported';
+  if (storageType === 'safety') return 'Safety';
+  return manifest?.emergency_fallback ? 'Local fallback' : 'Local';
 }
 
 function Toggle({
@@ -286,8 +299,6 @@ export function BackupSection() {
     placeholderData: keepPreviousData,
   });
   const [draft, setDraft] = React.useState<BackupDraft | null>(null);
-  const [localEnabled, setLocalEnabled] = React.useState(true);
-  const s3Enabled = false;
   const [secretKey, setSecretKey] = React.useState('');
   const [clearSecretKey, setClearSecretKey] = React.useState(false);
   const [expandedArtifactId, setExpandedArtifactId] = React.useState<string | null>(null);
@@ -305,7 +316,6 @@ export function BackupSection() {
   React.useEffect(() => {
     if (!overview.data) return;
     setDraft(buildDraft(overview.data));
-    setLocalEnabled(true);
     setSecretKey('');
     setClearSecretKey(false);
   }, [overview.data?.settings.updated_at]);
@@ -332,7 +342,7 @@ export function BackupSection() {
   const saveSettings = useMutation({
     mutationFn: async () => {
       if (!draft) throw new Error('Backup settings are not ready yet.');
-      const payload = buildPayload(draft, secretKey, clearSecretKey, false);
+      const payload = buildPayload(draft, secretKey, clearSecretKey);
       if (!payload) throw new Error('Retention must be a whole number greater than zero.');
       return api.updateBackupSettings(payload);
     },
@@ -348,6 +358,17 @@ export function BackupSection() {
     onError: (error) => {
       emitToast('Backup run', error instanceof Error ? error.message : 'Backup run could not be started.');
     },
+  });
+
+  const testS3 = useMutation({
+    mutationFn: () => {
+      if (!draft) throw new Error('Backup settings are not ready yet.');
+      const payload = buildPayload(draft, secretKey, clearSecretKey);
+      if (!payload) throw new Error('Backup settings are invalid.');
+      return api.testBackupS3(payload);
+    },
+    onSuccess: ({ message }) => window.dispatchEvent(new CustomEvent('riviamigo:toast', { detail: { title: 'S3 connection', message, variant: 'success' } })),
+    onError: (error) => emitToast('S3 connection', error instanceof Error ? error.message : 'The S3 connection test failed.'),
   });
 
   const downloadArtifact = useMutation({
@@ -454,10 +475,11 @@ export function BackupSection() {
   }
 
   const currentSettings = overview.data.settings;
-  const s3Valid = !s3Enabled || (draft.bucket.trim().length > 0 && draft.endpoint.trim().length > 0);
+  const s3Valid = !draft.s3_enabled || (draft.bucket.trim().length > 0 && draft.access_key.trim().length > 0 && (currentSettings.has_secret_key || secretKey.trim().length > 0));
   const canSave = draft.run_at.trim().length === 5
     && draft.timezone.trim().length > 0
     && Number.parseInt(draft.retention_count, 10) >= 1
+    && (draft.local_enabled || draft.s3_enabled)
     && s3Valid;
   const recentRunsTotal = overview.data.recent_runs_total;
   const recentRunsPageCount = Math.max(1, Math.ceil(recentRunsTotal / recentRunsPerPage));
@@ -468,7 +490,7 @@ export function BackupSection() {
   const restoreArtifactOptions = overview.data.artifacts.map((artifact) => ({
     value: artifact.id,
     label: new Date(artifact.created_at).toLocaleString(),
-    description: `${artifact.storage_type === 'uploaded' ? 'Imported' : 'Local'} · ${artifact.file_name}`,
+    description: `${storageLabel(artifact.storage_type, artifact.manifest)} · ${artifact.file_name}`,
   }));
   const restoreAutomationReason = overview.data.runtime_readiness?.restore_automation_reason;
   const hasLocalArtifacts = overview.data.artifacts.some((artifact) => (artifact.storage_type as string) !== 's3');
@@ -571,14 +593,27 @@ export function BackupSection() {
           />
 
           {/* Sub-toggles — only shown when scheduling is on */}
-          {draft.enabled && (
-            <div className="grid gap-2">
-              <ToggleRow
-                title="Local backup"
-                description="Store a copy of each backup artifact on disk"
-                checked={localEnabled}
-                onChange={setLocalEnabled}
-              />
+          <div className="grid gap-2 md:grid-cols-2">
+            <ToggleRow title="Local backup" description="Retain each recovery package on this host" checked={draft.local_enabled} onChange={(value) => updateDraft('local_enabled', value)} />
+            <ToggleRow title="S3 backup" description="Upload each package to off-site S3-compatible storage" checked={draft.s3_enabled} onChange={(value) => updateDraft('s3_enabled', value)} />
+          </div>
+
+          {draft.s3_enabled && (
+            <div className="grid gap-3 rounded-lg border border-border bg-bg-elevated/30 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div><p className="flex items-center gap-2 text-sm font-medium text-fg"><Cloud className="h-4 w-4 text-accent" />S3-compatible storage</p><p className="mt-0.5 text-xs text-fg-tertiary">Custom endpoints use path-style addressing for Garage, MinIO, and similar providers.</p></div>
+                <Button variant="secondary" size="sm" loading={testS3.isPending} disabled={!s3Valid} onClick={() => testS3.mutate()}>Test S3 connection</Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-1 md:col-span-2"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Endpoint <span className="font-normal normal-case">(leave blank for AWS)</span></span><input value={draft.endpoint} onChange={(event) => updateDraft('endpoint', event.target.value)} placeholder="https://s3.example.com" className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></label>
+                <label className="grid gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Region</span><input value={draft.region} onChange={(event) => updateDraft('region', event.target.value)} placeholder="us-east-1" className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></label>
+                <label className="grid gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Bucket</span><input value={draft.bucket} onChange={(event) => updateDraft('bucket', event.target.value)} className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></label>
+                <label className="grid gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Prefix</span><input value={draft.prefix} onChange={(event) => updateDraft('prefix', event.target.value)} placeholder="riviamigo" className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></label>
+                <label className="grid gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Access key</span><input autoComplete="off" value={draft.access_key} onChange={(event) => updateDraft('access_key', event.target.value)} className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></label>
+                <label className="grid gap-1 md:col-span-2"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Secret key</span><input type="password" autoComplete="new-password" value={secretKey} onChange={(event) => { setSecretKey(event.target.value); setClearSecretKey(false); }} placeholder={currentSettings.has_secret_key ? 'Saved secret is unchanged' : 'Enter secret key'} className="h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent" /></label>
+                {currentSettings.has_secret_key && <label className="flex items-center gap-2 text-xs text-fg-tertiary md:col-span-2"><input type="checkbox" checked={clearSecretKey} onChange={(event) => setClearSecretKey(event.target.checked)} />Clear the saved secret when settings are saved</label>}
+              </div>
+              {overview.data.s3_catalog_error && <p className="text-xs text-status-warning">S3 catalog unavailable: {overview.data.s3_catalog_error}</p>}
             </div>
           )}
 
@@ -761,7 +796,7 @@ export function BackupSection() {
               <p className="mt-1 text-xs text-fg-tertiary">
                 {s3Configured
                   ? 'Browse recovery packages stored locally and in the configured S3 target.'
-                  : 'Packages are stored locally. Off-site S3 copies are not enabled in this build.'}
+                  : 'Browse retained local packages, or enable S3 above for off-site recovery.'}
               </p>
             </div>
           </div>
@@ -1060,7 +1095,7 @@ export function BackupSection() {
                 <SelectPicker
                   value={restoreArtifactId}
                   onChange={setRestoreArtifactId}
-                  aria-label="Choose a local backup"
+                  aria-label="Choose a recovery package"
                   placeholder="Choose a backup"
                   disabled={restoreArtifactOptions.length === 0}
                   options={restoreArtifactOptions}
@@ -1111,7 +1146,7 @@ export function BackupSection() {
                   <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Selected backup</p>
                   <p className="mt-1 truncate text-sm font-medium text-fg">{restoreArtifact.file_name}</p>
                   <p className="mt-0.5 text-xs text-fg-tertiary">
-                    {new Date(restoreArtifact.created_at).toLocaleString()} · {restoreArtifact.storage_type === 'uploaded' ? 'Imported package' : 'Local package'}
+                    {new Date(restoreArtifact.created_at).toLocaleString()} · {storageLabel(restoreArtifact.storage_type, restoreArtifact.manifest)} package
                   </p>
                 </div>
                 <Button
@@ -1124,7 +1159,7 @@ export function BackupSection() {
                 </Button>
               </div>
             ) : (
-              <p className="mt-3 text-xs text-fg-tertiary">No local recovery packages are available yet.</p>
+              <p className="mt-3 text-xs text-fg-tertiary">No recovery packages are available yet.</p>
             )}
 
             {!overview.data.runtime_readiness.restore_automation_available && (
