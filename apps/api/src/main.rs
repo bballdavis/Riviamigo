@@ -44,6 +44,11 @@ async fn main() -> anyhow::Result<()> {
     migration_pool.close().await;
     tracing::info!("database schema is current");
 
+    match services::restore_jobs::reconcile_completed_jobs(&pool, &config).await {
+        Ok(()) => tracing::info!("restore job journal reconciled"),
+        Err(error) => tracing::error!(error = ?error, "restore job journal reconciliation failed"),
+    }
+
     routes::dashboards::seed_defaults(&pool).await?;
     tracing::info!("dashboard defaults seeded");
 
@@ -86,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
         supervisor,
     };
     let _backup_scheduler = services::backups::start_backup_scheduler(pool.clone(), config.clone());
+    let _restore_job_reconciler =
+        services::restore_jobs::start_reconciler(pool.clone(), config.clone());
     let _weather_enrichment_worker =
         services::weather_enrichment::start_worker(pool.clone(), age_key.clone());
     let _trip_enrichment_reconciler =

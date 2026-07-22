@@ -1,8 +1,8 @@
 use axum::{
     body::Body,
-    extract::State,
-    http::{header, HeaderValue, Response, StatusCode},
-    routing::{get, post, put},
+    extract::{DefaultBodyLimit, State},
+    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
@@ -10,14 +10,14 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
-use tokio::fs;
+use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::{
     errors::AppError,
     ingestion::session_store::encrypt_json,
     middleware::auth::{AppState, AuthUser},
-    services::backups as backup_service,
+    services::{backups as backup_service, restore_jobs},
 };
 
 pub fn router() -> Router<AppState> {
@@ -26,6 +26,11 @@ pub fn router() -> Router<AppState> {
         .route("/admin/backups/settings", put(update_backup_settings))
         .route("/admin/backups/run", post(run_backup_now))
         .route(
+            "/admin/backups/imports/{artifact_id}",
+            delete(delete_uploaded_artifact),
+        )
+        .route("/admin/backups/restores", post(start_restore))
+        .route(
             "/admin/backups/artifacts/{artifact_id}/download",
             get(download_backup_artifact),
         )
@@ -33,6 +38,13 @@ pub fn router() -> Router<AppState> {
             "/admin/backups/restore-requests",
             post(create_restore_request),
         )
+}
+
+pub fn upload_router() -> Router<AppState> {
+    Router::new().route(
+        "/admin/backups/imports",
+        post(upload_backup_artifact).layer(DefaultBodyLimit::disable()),
+    )
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -124,6 +136,8 @@ enum BackupRunTrigger {
     Manual,
     Scheduled,
     Restore,
+    Upload,
+    PreRestore,
 }
 
 impl TryFrom<&str> for BackupRunTrigger {
@@ -134,6 +148,8 @@ impl TryFrom<&str> for BackupRunTrigger {
             "manual" => Ok(Self::Manual),
             "scheduled" => Ok(Self::Scheduled),
             "restore" => Ok(Self::Restore),
+            "upload" => Ok(Self::Upload),
+            "pre_restore" => Ok(Self::PreRestore),
             _ => Err(AppError::Validation("backup run trigger is invalid".into())),
         }
     }
@@ -157,6 +173,7 @@ struct BackupOverviewResponse {
 struct BackupRuntimeReadinessResponse {
     pg_dump_available: bool,
     run_now_allowed: bool,
+    restore_automation_available: bool,
     reason: Option<String>,
 }
 
@@ -250,6 +267,17 @@ struct CreateRestoreRequestBody {
     notes: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct UploadBackupResponse {
+    artifact: BackupArtifactResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct StartRestoreResponse {
+    job: restore_jobs::RestoreJobPublic,
+    capability_token: String,
+}
+
 #[derive(Debug, FromRow)]
 struct BackupSettingsRow {
     enabled: bool,
@@ -339,9 +367,282 @@ async fn get_backup_overview(
         runtime_readiness: BackupRuntimeReadinessResponse {
             pg_dump_available: readiness.pg_dump_available,
             run_now_allowed: readiness.run_now_allowed,
+            restore_automation_available: restore_jobs::agent_is_ready(&state.config).await,
             reason: readiness.reason,
         },
     }))
+}
+
+async fn upload_backup_artifact(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+
+    let original_name = headers
+        .get("x-riviamigo-file-name")
+        .and_then(|value| value.to_str().ok())
+        .map(sanitize_upload_name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "external-backup.rma.tar.gz".into());
+    if !original_name.ends_with(".rma.tar.gz") {
+        return Err(AppError::Validation(
+            "Upload a Riviamigo .rma.tar.gz recovery package.".into(),
+        ));
+    }
+
+    let run_id = Uuid::new_v4();
+    let import_dir = std::path::Path::new(&state.config.backup_artifact_dir).join("imports");
+    fs::create_dir_all(&import_dir).await?;
+    let final_name = format!(
+        "import-{}-{}.rma.tar.gz",
+        Utc::now().format("%Y%m%dT%H%M%SZ"),
+        run_id.simple()
+    );
+    let final_path = import_dir.join(&final_name);
+    let temporary_path = import_dir.join(format!(".{run_id}.uploading"));
+
+    sqlx::query(
+        "INSERT INTO riviamigo.backup_runs (id, trigger, status, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', $2, now(), now())",
+    )
+    .bind(run_id)
+    .bind(auth.user_id)
+    .execute(&state.pool)
+    .await?;
+
+    let upload_result = async {
+        let mut output = fs::File::create(&temporary_path).await?;
+        let mut stream = body.into_data_stream();
+        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            let chunk = chunk.map_err(|error| {
+                AppError::Validation(format!("Backup upload was interrupted: {error}"))
+            })?;
+            output.write_all(&chunk).await?;
+        }
+        output.flush().await?;
+        drop(output);
+
+        let validated = backup_service::validate_recovery_package(&temporary_path).await?;
+        fs::rename(&temporary_path, &final_path).await?;
+        let storage_path = final_path.to_string_lossy().into_owned();
+        let manifest = serde_json::json!({
+            "artifact_kind": "recovery_package",
+            "format": "riviamigo-recovery-v1",
+            "original_file_name": original_name,
+            "package": validated.manifest,
+        });
+        let artifact_id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO riviamigo.backup_artifacts (
+                run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest
+            ) VALUES ($1, 'uploaded', $2, $3, $4, $5, $6)
+            RETURNING id
+            "#,
+        )
+        .bind(run_id)
+        .bind(&final_name)
+        .bind(&storage_path)
+        .bind(validated.size_bytes)
+        .bind(&validated.checksum_sha256)
+        .bind(manifest)
+        .fetch_one(&state.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE riviamigo.backup_runs SET status = 'succeeded', artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1",
+        )
+        .bind(run_id)
+        .bind(&storage_path)
+        .execute(&state.pool)
+        .await?;
+        load_artifact_by_id(&state, artifact_id).await
+    }
+    .await;
+
+    match upload_result {
+        Ok(artifact) => Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact }))),
+        Err(error) => {
+            let _ = fs::remove_file(&temporary_path).await;
+            let _ = fs::remove_file(&final_path).await;
+            let _ = sqlx::query(
+                "UPDATE riviamigo.backup_runs SET status = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1",
+            )
+            .bind(run_id)
+            .bind(error.to_string())
+            .execute(&state.pool)
+            .await;
+            Err(error)
+        }
+    }
+}
+
+async fn delete_uploaded_artifact(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(artifact_id): axum::extract::Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let artifact = load_artifact_by_id(&state, artifact_id).await?;
+    if artifact.storage_type != "uploaded" {
+        return Err(AppError::Validation(
+            "Only imported recovery packages can be deleted with this action.".into(),
+        ));
+    }
+    let active: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM riviamigo.backup_restore_requests WHERE artifact_id = $1 AND status IN ('pending', 'approved', 'running') LIMIT 1",
+    )
+    .bind(artifact_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if active.is_some() {
+        return Err(AppError::Conflict(
+            "This package has an active restore job.".into(),
+        ));
+    }
+    fs::remove_file(&artifact.storage_path)
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Io(error),
+        })?;
+    sqlx::query("DELETE FROM riviamigo.backup_runs WHERE id = $1")
+        .bind(artifact.run_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateRestoreRequestBody>,
+) -> Result<(StatusCode, Json<StartRestoreResponse>), AppError> {
+    require_admin(&state, auth.user_id).await?;
+    if !restore_jobs::agent_is_ready(&state.config).await {
+        return Err(AppError::DependencyUnavailable(
+            "Automated restore is unavailable in this runtime; use scripts/restore-backup.mjs."
+                .into(),
+        ));
+    }
+    let artifact = load_artifact_by_id(&state, body.artifact_id).await?;
+    backup_service::validate_recovery_package(std::path::Path::new(&artifact.storage_path)).await?;
+    let request_id = backup_service::create_restore_request(
+        &state.pool,
+        body.artifact_id,
+        auth.user_id,
+        &body.confirmation_phrase,
+        body.notes,
+    )
+    .await?;
+    let (job, capability_token) = restore_jobs::create(
+        &state.config,
+        body.artifact_id,
+        artifact.storage_path,
+        request_id,
+    )
+    .await?;
+    let background_state = state.clone();
+    let job_id = job.id;
+    tokio::spawn(async move {
+        if let Err(error) =
+            prepare_and_handoff_restore(background_state.clone(), job_id, auth.user_id).await
+        {
+            let _ = restore_jobs::fail(&background_state.config, job_id, &error).await;
+            let _ = sqlx::query(
+                "UPDATE riviamigo.backup_restore_requests SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
+            )
+            .bind(request_id)
+            .bind(error.to_string())
+            .execute(&background_state.pool)
+            .await;
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(StartRestoreResponse {
+            job: job.public(),
+            capability_token,
+        }),
+    ))
+}
+
+async fn prepare_and_handoff_restore(
+    state: AppState,
+    job_id: Uuid,
+    requested_by: Uuid,
+) -> Result<(), AppError> {
+    restore_jobs::update(
+        &state.config,
+        job_id,
+        restore_jobs::RestorePhase::SafetyBackup,
+        15,
+        "Creating required safety backup",
+    )
+    .await?;
+    let safety = backup_service::run_backup_now(
+        &state.pool,
+        &state.config,
+        Some(requested_by),
+        backup_service::BackupRunTrigger::PreRestore,
+    )
+    .await?;
+    let safety_path: String =
+        sqlx::query_scalar("SELECT storage_path FROM riviamigo.backup_artifacts WHERE id = $1")
+            .bind(safety.artifact_id)
+            .fetch_one(&state.pool)
+            .await?;
+    let mut job = restore_jobs::read(&state.config, job_id).await?;
+    job.safety_artifact_path = Some(safety_path);
+    job.safety_run_id = Some(safety.run_id);
+    job.safety_artifact_id = Some(safety.artifact_id);
+    job.phase = restore_jobs::RestorePhase::StoppingApplication;
+    job.progress_percent = 25;
+    job.message = "Safety backup complete; handing off to restore supervisor".into();
+    job.updated_at = Utc::now();
+    restore_jobs::write(&state.config, &job).await?;
+
+    sqlx::query(
+        "UPDATE riviamigo.backup_restore_requests SET status = 'running', updated_at = now() WHERE id = $1",
+    )
+    .bind(job.restore_request_id)
+    .execute(&state.pool)
+    .await?;
+
+    let key = fs::read_to_string(restore_jobs::agent_key_path(&state.config)).await?;
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/internal/jobs/{job_id}/execute",
+            state.config.restore_agent_url.trim_end_matches('/')
+        ))
+        .header("x-riviamigo-agent-key", key.trim())
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::DependencyUnavailable(format!("Restore supervisor is unavailable: {error}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::DependencyUnavailable(format!(
+            "Restore supervisor rejected the job with status {}.",
+            response.status()
+        )));
+    }
+    Ok(())
+}
+
+fn sanitize_upload_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(180)
+        .collect()
 }
 
 async fn download_backup_artifact(

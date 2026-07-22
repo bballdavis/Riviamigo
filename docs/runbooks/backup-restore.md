@@ -25,6 +25,20 @@ Confirm that the restored instance contains the expected users, vehicles, dashbo
 6. Wait for the health check and complete provider re-authentication.
 7. Download a fresh recovery package from the restored installation after verifying it.
 
+## In-app restore diagnostics
+
+The unified production image runs nginx, the API, and a local-only restore supervisor. A restore job is journaled under `/backups/.restore-jobs`; nginx proxies its capability-token status endpoint even while the API process is intentionally stopped. The supervisor never receives Docker access and does not restart PostgreSQL or Redis.
+
+For an in-app restore:
+
+1. Confirm the package finishes import validation before starting the restore.
+2. Confirm the required safety package is written under the backup volume before the API stops.
+3. Follow the phase shown in the UI or inspect the matching `.restore-jobs/<job-id>.json` file on the host.
+4. If restoration fails, preserve both the uploaded and safety packages. The supervisor removes the maintenance marker and attempts to relaunch the API so diagnostics remain available.
+5. If the API does not recover, use the safety package with `scripts/restore-backup.mjs --force` after preserving PostgreSQL and artwork storage.
+
+The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the destructive window. Public `/health` remains unavailable until the restored API is ready.
+
 The package does not restore Redis live state, browser state, refresh sessions, provider credentials, installation keys, or old backup artifact history. S3 upload is not currently performed by the backup worker; retain a downloaded package on separate storage.
 
 ## PostgreSQL 16 to 18 cutover

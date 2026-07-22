@@ -23,7 +23,21 @@ Every package contains:
 
 The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid recovery mode and is rejected as manifest-only metadata.
 
-## Restore into a new installation
+## Import and restore in the app
+
+On the target installation, sign in as an administrator and open **Settings > Backups**. Choose **Import recovery package**, select the `.rma.tar.gz` file from the other Riviamigo server, and wait for upload and package validation to finish. Uploaded packages have no artificial size limit, but the backup filesystem must have enough space for the package, validation staging, and the required safety backup. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
+
+Open the imported package, choose Restore, review the replacement warning, and type `RESTORE`. Riviamigo then:
+
+1. Creates and verifies a fresh safety recovery package of the target installation. The restore stops if this fails.
+2. Stops the API and ingestion workers while keeping nginx and the restore-progress endpoint available.
+3. Restores PostgreSQL, sanitized backup settings, and vehicle artwork.
+4. Starts a fresh API process, applies pending migrations, and verifies health.
+5. Reloads the browser into the restored installation. Sign in with an account from the restored backup if prompted.
+
+PostgreSQL and Redis remain running during this workflow. The restored database does not require a PostgreSQL server restart, and Redis live state is not part of the recovery package.
+
+## Restore with the host command
 
 Prepare the new installation and its `.env` file first. Use the same or newer application release, then run the restore before using the new installation:
 
@@ -50,11 +64,11 @@ node scripts/restore-backup.mjs \
   --force
 ```
 
-The restore command does not restore Rivian credentials or live sessions. After it completes, sign in as an administrator and reconnect the Rivian account and any other external providers. Configure off-site backup storage separately; the current worker writes and verifies local recovery packages but does not upload them to S3.
+The in-app flow and host command do not restore Rivian credentials or live sessions. After completion, sign in as an administrator and reconnect the Rivian account and any other external providers. Configure off-site backup storage separately; the current worker writes and verifies local recovery packages but does not upload them to S3.
 
 ## Persistent artifact storage
 
-Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for `BACKUP_ARTIFACT_DIR`. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. For disaster recovery, copy downloaded packages to a different host or storage system.
+Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. Imported and safety packages are excluded from ordinary scheduled-backup retention and require explicit deletion. For disaster recovery, copy downloaded packages to a different host or storage system.
 
 ## Compatibility and verification
 

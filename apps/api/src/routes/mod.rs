@@ -268,17 +268,26 @@ pub fn build_router(state: AppState) -> Router {
     let protected_metadata = Router::new()
         .merge(auth::metadata_router())
         .merge(dashboards::metadata_router())
-        .layer(GovernorLayer::new(auth_metadata_identity_config));
+        .layer(GovernorLayer::new(auth_metadata_identity_config))
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
 
-    let protected_heavy = Router::new().merge(live::router());
+    let protected_heavy = Router::new()
+        .merge(live::router())
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
+
+    let protected_upload = backups::upload_router()
+        .layer(GovernorLayer::new(auth_read_identity_config.clone()))
+        .layer(GovernorLayer::new(auth_write_identity_config.clone()));
 
     let protected = Router::new()
         .merge(protected_metadata)
         .merge(
             protected_common
                 .layer(GovernorLayer::new(auth_read_identity_config))
-                .layer(GovernorLayer::new(auth_write_identity_config)),
+                .layer(GovernorLayer::new(auth_write_identity_config))
+                .layer(RequestBodyLimitLayer::new(64 * 1024)),
         )
+        .merge(protected_upload)
         .merge(protected_heavy.layer(GovernorLayer::new(heavy_read_identity_config)))
         .layer(middleware::from_fn(
             move |mut req: axum::extract::Request, next: axum::middleware::Next| {
@@ -288,11 +297,12 @@ pub fn build_router(state: AppState) -> Router {
                     next.run(req).await
                 }
             },
-        ))
-        .layer(RequestBodyLimitLayer::new(64 * 1024));
+        ));
 
     // Public auth routes with strict rate limiting
-    let auth_public = auth::router().layer(GovernorLayer::new(auth_ip_config));
+    let auth_public = auth::router()
+        .layer(GovernorLayer::new(auth_ip_config))
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
 
     Router::new()
         .route("/health", get(health))

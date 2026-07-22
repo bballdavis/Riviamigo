@@ -87,6 +87,8 @@ impl TestApp {
                 backup_artifact_dir: backup_dir.to_string_lossy().into_owned(),
                 backup_driver: "pg_dump".into(),
                 backup_poll_interval_seconds: 60,
+                restore_agent_url: "http://127.0.0.1:3002".into(),
+                restore_agent_key_file: "/backups/.restore-agent-key".into(),
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
@@ -163,6 +165,49 @@ impl TestApp {
             body,
         }
     }
+
+    async fn request_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        bytes: Vec<u8>,
+        bearer_token: &str,
+        file_name: &str,
+    ) -> TestResponse {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(AUTHORIZATION, format!("Bearer {bearer_token}"))
+            .header(CONTENT_TYPE, "application/gzip")
+            .header("x-riviamigo-file-name", file_name)
+            .body(Body::from(bytes))
+            .expect("raw request");
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            12345,
+        )));
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response bytes");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("json body")
+        };
+        TestResponse {
+            status,
+            headers,
+            body,
+        }
+    }
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
@@ -208,6 +253,7 @@ async fn promote_admin(pool: &PgPool, user_id: Uuid) {
 #[tokio::test]
 async fn backup_overview_requires_admin_role() {
     let app = TestApp::new().await;
+    let _bootstrap_admin = register_and_login(&app, "backup-bootstrap-admin@example.com").await;
     let token = register_and_login(&app, "backup-user@example.com").await;
 
     let response = app
@@ -323,7 +369,7 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
         )
         .await;
 
-    assert_eq!(response.status, StatusCode::CREATED);
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
     assert_eq!(response.body["run"]["status"], "succeeded");
     assert_eq!(response.body["artifact"]["storage_type"], "local");
     assert!(response.body["artifact"]["storage_path"].is_string());
@@ -338,6 +384,47 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
         Some(1)
     );
     assert_eq!(overview.body["artifacts"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn admin_can_import_a_generated_recovery_package() {
+    let app = TestApp::new().await;
+    let email = "backup-import-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let generated = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(generated.status, StatusCode::CREATED, "{}", generated.body);
+    let path = generated.body["artifact"]["storage_path"]
+        .as_str()
+        .expect("artifact path");
+    let bytes = tokio::fs::read(path).await.expect("recovery package bytes");
+
+    let imported = app
+        .request_bytes(
+            Method::POST,
+            "/v1/admin/backups/imports",
+            bytes,
+            &token,
+            "other-server.rma.tar.gz",
+        )
+        .await;
+
+    assert_eq!(imported.status, StatusCode::CREATED);
+    assert_eq!(imported.body["artifact"]["storage_type"], "uploaded");
+    assert_eq!(
+        imported.body["artifact"]["manifest"]["package"]["format"],
+        "riviamigo-recovery-v1"
+    );
 }
 
 #[tokio::test]

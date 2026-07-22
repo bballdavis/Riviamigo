@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Cursor, Read},
     path::{Path, PathBuf},
@@ -8,11 +9,11 @@ use std::{
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
-use flate2::{write::GzEncoder, Compression};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
-use tar::Builder;
+use tar::{Archive, Builder, EntryType};
 use tokio::{fs, process::Command, time::MissedTickBehavior};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -31,6 +32,7 @@ const RECOVERY_PACKAGE_FORMAT: &str = "riviamigo-recovery-v1";
 pub enum BackupRunTrigger {
     Manual,
     Scheduled,
+    PreRestore,
 }
 
 impl BackupRunTrigger {
@@ -38,6 +40,7 @@ impl BackupRunTrigger {
         match self {
             Self::Manual => "manual",
             Self::Scheduled => "scheduled",
+            Self::PreRestore => "pre_restore",
         }
     }
 }
@@ -46,6 +49,13 @@ impl BackupRunTrigger {
 pub struct BackupExecutionResult {
     pub run_id: Uuid,
     pub artifact_id: Uuid,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidatedRecoveryPackage {
+    pub manifest: serde_json::Value,
+    pub checksum_sha256: String,
+    pub size_bytes: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -511,6 +521,181 @@ async fn execute_recovery_package(
     result
 }
 
+pub async fn validate_recovery_package(
+    package_path: &Path,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    let package_path = package_path.to_path_buf();
+    tokio::task::spawn_blocking(move || validate_recovery_package_sync(&package_path))
+        .await
+        .map_err(|error| {
+            AppError::Internal(anyhow::anyhow!("package validation task failed: {error}"))
+        })?
+}
+
+fn validate_recovery_package_sync(
+    package_path: &Path,
+) -> Result<ValidatedRecoveryPackage, AppError> {
+    let metadata = std::fs::metadata(package_path)?;
+    let package_checksum = sha256_file(package_path).map_err(AppError::from)?;
+    let file = File::open(package_path)?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    let mut manifest_bytes = None;
+    let mut file_checksums = HashMap::<String, String>::new();
+
+    for entry in archive
+        .entries()
+        .map_err(|error| AppError::Validation(format!("Invalid recovery archive: {error}")))?
+    {
+        let mut entry = entry.map_err(|error| {
+            AppError::Validation(format!("Invalid recovery archive entry: {error}"))
+        })?;
+        let entry_type = entry.header().entry_type();
+        if !matches!(entry_type, EntryType::Regular | EntryType::Directory) {
+            return Err(AppError::Validation(
+                "Recovery packages may contain only regular files and directories.".into(),
+            ));
+        }
+        let path = entry
+            .path()
+            .map_err(|error| AppError::Validation(format!("Invalid archive path: {error}")))?;
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        if path.is_absolute()
+            || normalized.starts_with('/')
+            || normalized.split('/').any(|segment| segment == "..")
+        {
+            return Err(AppError::Validation(format!(
+                "Unsafe recovery package path: {normalized}"
+            )));
+        }
+        let allowed = matches!(
+            normalized.as_str(),
+            "manifest.json" | "database.dump" | "backup-settings.json"
+        ) || normalized == "vehicle-image-cache"
+            || normalized.starts_with("vehicle-image-cache/");
+        if !allowed {
+            return Err(AppError::Validation(format!(
+                "Unexpected recovery package member: {normalized}"
+            )));
+        }
+        if entry_type == EntryType::Directory {
+            continue;
+        }
+
+        if normalized == "manifest.json" {
+            if entry.size() > 1024 * 1024 {
+                return Err(AppError::Validation(
+                    "Recovery package manifest is unexpectedly large.".into(),
+                ));
+            }
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry.read_to_end(&mut bytes)?;
+            manifest_bytes = Some(bytes);
+            continue;
+        }
+
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = entry.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        file_checksums.insert(normalized, hex::encode(hasher.finalize()));
+    }
+
+    let manifest_bytes = manifest_bytes
+        .ok_or_else(|| AppError::Validation("Recovery package is missing manifest.json.".into()))?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
+        AppError::Validation(format!("Recovery manifest is invalid JSON: {error}"))
+    })?;
+    if manifest.get("format").and_then(|value| value.as_str()) != Some(RECOVERY_PACKAGE_FORMAT) {
+        return Err(AppError::Validation(
+            "Unsupported recovery package format.".into(),
+        ));
+    }
+    if manifest
+        .get("format_version")
+        .and_then(|value| value.as_u64())
+        != Some(1)
+    {
+        return Err(AppError::Validation(
+            "Unsupported recovery package version.".into(),
+        ));
+    }
+
+    verify_manifest_component(&manifest, &file_checksums, "database", "database.dump")?;
+    verify_manifest_component(
+        &manifest,
+        &file_checksums,
+        "backup_settings",
+        "backup-settings.json",
+    )?;
+    if let Some(files) = manifest
+        .pointer("/components/vehicle_image_cache/files")
+        .and_then(|value| value.as_array())
+    {
+        for file in files {
+            let path = file
+                .get("path")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| {
+                    AppError::Validation("Artwork manifest entry is missing its path.".into())
+                })?;
+            let expected = file
+                .get("sha256")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| {
+                    AppError::Validation("Artwork manifest entry is missing its checksum.".into())
+                })?;
+            if file_checksums.get(path).map(String::as_str) != Some(expected) {
+                return Err(AppError::Validation(format!(
+                    "Recovery package checksum mismatch for {path}."
+                )));
+            }
+        }
+    }
+
+    Ok(ValidatedRecoveryPackage {
+        manifest,
+        checksum_sha256: package_checksum,
+        size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+    })
+}
+
+fn verify_manifest_component(
+    manifest: &serde_json::Value,
+    checksums: &HashMap<String, String>,
+    component: &str,
+    expected_path: &str,
+) -> Result<(), AppError> {
+    let component = manifest
+        .pointer(&format!("/components/{component}"))
+        .ok_or_else(|| {
+            AppError::Validation(format!("Recovery manifest is missing {component}."))
+        })?;
+    let path = component
+        .get("path")
+        .and_then(|value| value.as_str())
+        .unwrap_or(expected_path);
+    let expected = component
+        .get("sha256")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "Recovery manifest is missing the checksum for {component}."
+            ))
+        })?;
+    if path != expected_path || checksums.get(path).map(String::as_str) != Some(expected) {
+        return Err(AppError::Validation(format!(
+            "Recovery package checksum mismatch for {expected_path}."
+        )));
+    }
+    Ok(())
+}
+
 async fn execute_pg_dump(config: &Config, dump_path: &Path) -> Result<(), AppError> {
     // Parse connection components from the URL so the password is not exposed
     // on the process command line (visible via `ps`).
@@ -913,6 +1098,7 @@ async fn prune_retained_artifacts(pool: &PgPool, retention_count: i32) -> Result
         r#"
         SELECT a.id, a.run_id, a.storage_path
         FROM riviamigo.backup_artifacts a
+        WHERE a.storage_type = 'local'
         ORDER BY a.created_at DESC
         OFFSET $1
         "#,
@@ -1071,8 +1257,8 @@ fn should_log_scheduler_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_dependency_error_if_unavailable, should_log_scheduler_failure,
-        write_recovery_archive, BackupDriver,
+        runtime_dependency_error_if_unavailable, sha256_file, should_log_scheduler_failure,
+        validate_recovery_package, write_recovery_archive, BackupDriver,
     };
     use crate::errors::AppError;
     use flate2::read::GzDecoder;
@@ -1130,15 +1316,34 @@ mod tests {
         std::fs::write(&dump, b"database").expect("dump");
         std::fs::write(&settings, br#"{"present":false}"#).expect("settings");
 
+        let manifest = serde_json::json!({
+            "format": "riviamigo-recovery-v1",
+            "format_version": 1,
+            "components": {
+                "database": { "path": "database.dump", "sha256": sha256_file(&dump).expect("dump checksum") },
+                "backup_settings": { "path": "backup-settings.json", "sha256": sha256_file(&settings).expect("settings checksum") },
+                "vehicle_image_cache": {
+                    "files": [{
+                        "path": "vehicle-image-cache/vehicle-1/artwork.webp",
+                        "sha256": sha256_file(&cache.join("vehicle-1/artwork.webp")).expect("artwork checksum")
+                    }]
+                }
+            }
+        });
         write_recovery_archive(
             &archive,
             &dump,
             &settings,
             &cache,
-            br#"{"format":"riviamigo-recovery-v1"}"#,
+            &serde_json::to_vec(&manifest).expect("manifest"),
         )
         .await
         .expect("archive");
+
+        let validated = validate_recovery_package(&archive)
+            .await
+            .expect("valid package");
+        assert_eq!(validated.manifest["format"], "riviamigo-recovery-v1");
 
         let file = std::fs::File::open(&archive).expect("open archive");
         let decoder = GzDecoder::new(file);

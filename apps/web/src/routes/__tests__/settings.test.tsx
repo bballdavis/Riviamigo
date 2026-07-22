@@ -211,12 +211,38 @@ vi.mock('@riviamigo/hooks', () => ({
       runtime_readiness: {
         pg_dump_available: true,
         run_now_allowed: true,
+        restore_automation_available: true,
         reason: null,
       },
     }),
     updateBackupSettings: vi.fn().mockResolvedValue({}),
     runBackupNow: vi.fn().mockResolvedValue({}),
     requestBackupRestore: vi.fn().mockResolvedValue({}),
+    uploadBackupArtifact: vi.fn().mockResolvedValue({}),
+    deleteUploadedBackup: vi.fn().mockResolvedValue(undefined),
+    startBackupRestore: vi.fn().mockResolvedValue({
+      job: {
+        id: 'restore-job-1',
+        artifact_id: 'artifact-1',
+        phase: 'queued',
+        progress_percent: 5,
+        message: 'Restore queued',
+        error_message: null,
+        created_at: '2026-05-04T12:02:00Z',
+        updated_at: '2026-05-04T12:02:00Z',
+      },
+      capability_token: 'restore-token',
+    }),
+    getRestoreJob: vi.fn().mockResolvedValue({
+      id: 'restore-job-1',
+      artifact_id: 'artifact-1',
+      phase: 'failed',
+      progress_percent: 5,
+      message: 'Restore failed',
+      error_message: 'test stop',
+      created_at: '2026-05-04T12:02:00Z',
+      updated_at: '2026-05-04T12:02:01Z',
+    }),
     downloadBackupArtifact: vi.fn().mockResolvedValue({
       blob: new Blob(['backup-data'], { type: 'application/octet-stream' }),
       fileName: 'backup-20260504T120000Z.dump',
@@ -287,6 +313,7 @@ vi.mock('lucide-react', () => ({
   Clipboard: () => <svg data-testid="icon-clipboard" />,
   Database: () => <svg data-testid="icon-database" />,
   DatabaseBackup: () => <svg data-testid="icon-database-backup" />,
+  Upload: () => <svg data-testid="icon-upload" />,
   Calendar: () => <svg data-testid="icon-calendar" />,
   Check: () => <svg data-testid="icon-check" />,
   CheckCircle2: () => <svg data-testid="icon-check-circle" />,
@@ -903,10 +930,11 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByText('Record restore request'));
+    fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), { target: { value: 'RESTORE' } });
+    fireEvent.click(screen.getByText('Create safety backup and restore'));
 
     await waitFor(() => {
-      expect(hooks.api.requestBackupRestore).toHaveBeenCalledWith({
+      expect(hooks.api.startBackupRestore).toHaveBeenCalledWith({
         artifact_id: 'artifact-1',
         confirmation_phrase: 'RESTORE',
         notes: null,

@@ -18,7 +18,8 @@ RUN set -eux; \
     fi; \
     rm -rf /var/lib/apt/lists/*
 COPY apps/api/Cargo.toml apps/api/Cargo.lock ./
-RUN mkdir src && printf 'fn main() {}\n' > src/main.rs \
+RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
+    && printf 'fn main() {}\n' > src/bin/riviamigo-restore-agent.rs \
     && printf 'pub fn __riviamigo_dummy() {}\n' > src/lib.rs \
     && target_flag='' \
     && if [ "$TARGETARCH" = "arm64" ]; then \
@@ -35,7 +36,7 @@ RUN mkdir src && printf 'fn main() {}\n' > src/main.rs \
     && cargo build --release $target_flag \
     && rm -rf src
 COPY apps/api/ ./
-RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql \
+RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs migrations/0001_initial_schema.sql \
     && target_flag='' \
     && binary_path=target/release/riviamigo-api \
     && if [ "$TARGETARCH" = "arm64" ]; then \
@@ -51,7 +52,10 @@ RUN touch src/lib.rs src/main.rs migrations/0001_initial_schema.sql \
         binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-api; \
     fi \
     && cargo build --release $target_flag \
-    && cp "$binary_path" /build/apps/api/riviamigo-api
+    && cp "$binary_path" /build/apps/api/riviamigo-api \
+    && restore_binary_path=target/release/riviamigo-restore-agent \
+    && if [ "$TARGETARCH" = "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-restore-agent; fi \
+    && cp "$restore_binary_path" /build/apps/api/riviamigo-restore-agent
 
 FROM --platform=$BUILDPLATFORM node:24.18.0-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS web-builder
 RUN corepack enable
@@ -82,15 +86,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/riviamigo-api ./riviamigo-api
+COPY --chown=1001:1001 --from=api-builder /build/apps/api/riviamigo-restore-agent ./riviamigo-restore-agent
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/migrations ./migrations
 COPY --chown=1001:1001 --from=web-builder /build/apps/web/dist ./dist
 COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf
-COPY --chown=1001:1001 compose/production-init.sh compose/production-services.sh ./
-RUN sed -i 's/\r$//' /app/production-init.sh /app/production-services.sh \
-    && chmod 0755 /app/production-init.sh /app/production-services.sh
+COPY --chown=1001:1001 compose/production-init.sh compose/production-services.sh compose/production-healthcheck.sh ./
+RUN sed -i 's/\r$//' /app/production-init.sh /app/production-services.sh /app/production-healthcheck.sh \
+    && chmod 0755 /app/production-init.sh /app/production-services.sh /app/production-healthcheck.sh
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD /app/production-healthcheck.sh
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/production-init.sh"]
