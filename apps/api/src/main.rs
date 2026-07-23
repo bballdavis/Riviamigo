@@ -20,7 +20,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .with(
             tracing_subscriber::fmt::layer()
-                .json()
+                .compact()
+                .without_time()
+                .with_ansi(false)
                 .with_writer(std::io::stdout),
         )
         .init();

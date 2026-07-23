@@ -42,6 +42,12 @@ credentials or restore data in Git.
 Vite proxies restore-runtime status requests directly to that supervisor so
 the status poll can survive the API process restart.
 
+The launcher builds only the API and restore-supervisor binaries that it runs;
+maintenance binaries remain available through their explicit Cargo commands.
+On Windows it limits that build to four concurrent Cargo jobs to keep the host
+responsive. Set `DEV_CARGO_BUILD_JOBS` to a positive integer when a different
+limit is appropriate for the machine.
+
 ## Architecture
 
 - [Backend data flow](./architecture/backend-data-flow.md) follows Rivian connectivity, ingestion, storage, and API delivery.

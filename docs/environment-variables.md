@@ -39,6 +39,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `RIVIAMIGO_ENV` | `production` | Enables production configuration validation. Use `development` only for local development. |
 | `PORT` | `3001` | Internal API listener port. The unified production nginx expects `3001`. |
 | `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Structured logs are written to stdout. |
+| `TZ` | UTC | Docker/container timezone used by nginx and other runtime processes. This does not control Riviamigo’s user-facing application timezone, which is configured in Settings → Units. |
 | `COOKIE_INSECURE` | Unset | Allows non-Secure cookies for local development. Any value enables it; production rejects it. |
 | `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/data/cache/riviamigo/vehicle-images` in the production image | Persistent local artwork mirror. Standard Compose does not need to set it. |
 | `RIVIAMIGO_DATA_DIR` | `../data` relative to `compose/docker-compose.yml` | Overrides the host directory used for PostgreSQL, Redis, backups, and cache data. Primarily useful for isolated verification stacks. |
@@ -96,6 +97,7 @@ These values do not change the standard production topology.
 | `DEV_WEB_ORIGINS` | Active Vite origin | Development CORS origins. |
 | `DEV_COMPOSE_PROJECT_NAME` | Checkout-derived | Development Compose isolation name. |
 | `DEV_DATABASE_READY_TIMEOUT_SECONDS` | `600` | Maximum wait for TimescaleDB startup or crash recovery before `pnpm dev:stack` fails. Minimum `60`. |
+| `DEV_CARGO_BUILD_JOBS` | `4` on Windows; unused elsewhere | Maximum concurrent Cargo jobs while Windows `pnpm dev:stack` builds the API and restore supervisor. Set a positive integer to override. |
 | `COMPOSE_PROJECT_NAME` | Compose-derived | Optional general Compose project-name override. |
 | `VITE_RIVIAMIGO_API_BASE_URL` | Current browser origin in production | Preferred frontend API base URL override. |
 | `VITE_RIVIAMIGO_DEV_API_KEY` | Unset | Development-only integration key used by supported local tooling. |
