@@ -14,7 +14,7 @@ use tower_http::{
     compression::CompressionLayer,
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
-    request_id::{MakeRequestUuid, SetRequestIdLayer},
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     set_header::SetResponseHeaderLayer,
     trace::{DefaultMakeSpan, DefaultOnFailure, TraceLayer},
 };
@@ -46,6 +46,7 @@ pub mod places;
 mod range_normalization;
 pub mod rivian_stewardship;
 pub mod schedules;
+pub mod settings;
 pub mod state_timeline;
 pub mod trips;
 pub mod users;
@@ -263,6 +264,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(locations::router())
         .merge(grafana::router())
         .merge(auth::protected_router())
+        .merge(settings::router())
         .merge(users::router());
 
     let protected_metadata = Router::new()
@@ -314,6 +316,7 @@ pub fn build_router(state: AppState) -> Router {
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+        .layer(PropagateRequestIdLayer::x_request_id())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().include_headers(false))
@@ -374,6 +377,7 @@ fn classify_rate_limit_class(method: &http::Method, path: &str) -> RateLimitClas
 
     if path.starts_with("/v1/auth/me")
         || path.starts_with("/v1/auth/preferences")
+        || path == "/v1/settings/timezone"
         || path.starts_with("/v1/dashboards/by-slug/")
     {
         return RateLimitClass::AuthMetadata;

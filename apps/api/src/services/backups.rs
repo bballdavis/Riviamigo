@@ -24,6 +24,7 @@ use crate::{
     errors::AppError,
     ingestion::session_store::decrypt_json,
     services::{
+        app_settings,
         restore_compatibility::{self, RECOVERY_FORMAT_V1, RECOVERY_FORMAT_V2, RECOVERY_FORMAT_V3},
         s3_backups::{self, S3Settings},
     },
@@ -79,7 +80,6 @@ struct BackupSettingsRow {
     enabled: bool,
     frequency: String,
     run_at: NaiveTime,
-    timezone: String,
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
     retention_count: i32,
@@ -475,9 +475,10 @@ async fn maybe_run_scheduled_backup(
 }
 
 async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings, AppError> {
+    let app_timezone = app_settings::load_app_timezone(pool).await?;
     let row = sqlx::query_as::<_, BackupSettingsRow>(
         r#"
-        SELECT enabled, frequency, run_at, timezone, day_of_week, day_of_month, retention_count, prefix,
+        SELECT enabled, frequency, run_at, day_of_week, day_of_month, retention_count, prefix,
                local_enabled, s3_enabled, endpoint, region, bucket, access_key, secret_key_encrypted
         FROM riviamigo.backup_settings
         WHERE id = TRUE
@@ -493,9 +494,7 @@ async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings,
                 enabled: row.enabled,
                 frequency: BackupFrequency::try_from(row.frequency.as_str())?,
                 run_at: row.run_at,
-                timezone: row.timezone.parse::<Tz>().map_err(|_| {
-                    AppError::Validation("timezone must be a valid IANA timezone".into())
-                })?,
+                timezone: app_timezone,
                 day_of_week: row.day_of_week,
                 day_of_month: row.day_of_month,
                 retention_count: row.retention_count.max(1),
@@ -509,7 +508,7 @@ async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings,
             enabled: false,
             frequency: BackupFrequency::Weekly,
             run_at: NaiveTime::from_hms_opt(3, 0, 0).expect("valid default time"),
-            timezone: "UTC".parse::<Tz>().expect("valid timezone"),
+            timezone: app_timezone,
             day_of_week: Some(0),
             day_of_month: Some(1),
             retention_count: 8,

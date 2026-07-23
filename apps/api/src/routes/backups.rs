@@ -18,7 +18,9 @@ use crate::{
     errors::AppError,
     ingestion::session_store::encrypt_json,
     middleware::auth::{AppState, AuthUser},
-    services::{backups as backup_service, restore_compatibility, restore_jobs, s3_backups},
+    services::{
+        app_settings, backups as backup_service, restore_compatibility, restore_jobs, s3_backups,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -311,7 +313,6 @@ struct BackupSettingsRow {
     enabled: bool,
     frequency: String,
     run_at: NaiveTime,
-    timezone: String,
     day_of_week: Option<i16>,
     day_of_month: Option<i16>,
     retention_count: i32,
@@ -933,6 +934,8 @@ async fn update_backup_settings(
     .execute(&state.pool)
     .await?;
 
+    app_settings::set_app_timezone(&state.pool, timezone).await?;
+
     Ok(Json(load_settings(&state).await?))
 }
 
@@ -1126,13 +1129,13 @@ async fn create_restore_request(
 }
 
 async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppError> {
+    let app_timezone = app_settings::load_app_timezone_name(&state.pool).await?;
     let row = sqlx::query_as::<_, BackupSettingsRow>(
         r#"
         SELECT
             enabled,
             frequency,
             run_at,
-            timezone,
             day_of_week,
             day_of_month,
             retention_count,
@@ -1154,8 +1157,8 @@ async fn load_settings(state: &AppState) -> Result<BackupSettingsResponse, AppEr
     .await?;
 
     match row {
-        Some(row) => map_settings_row(row),
-        None => Ok(default_settings()),
+        Some(row) => map_settings_row(row, app_timezone),
+        None => Ok(default_settings(app_timezone)),
     }
 }
 
@@ -1299,12 +1302,15 @@ async fn load_latest_successful_run(
     row.map(map_run_row).transpose()
 }
 
-fn map_settings_row(row: BackupSettingsRow) -> Result<BackupSettingsResponse, AppError> {
+fn map_settings_row(
+    row: BackupSettingsRow,
+    app_timezone: String,
+) -> Result<BackupSettingsResponse, AppError> {
     Ok(BackupSettingsResponse {
         enabled: row.enabled,
         frequency: BackupFrequency::try_from(row.frequency.as_str())?,
         run_at: row.run_at.format("%H:%M").to_string(),
-        timezone: row.timezone,
+        timezone: app_timezone,
         day_of_week: row.day_of_week,
         day_of_month: row.day_of_month,
         retention_count: row.retention_count,
@@ -1363,12 +1369,12 @@ fn map_restore_request_row(row: BackupRestoreRequestRow) -> BackupRestoreRequest
     }
 }
 
-fn default_settings() -> BackupSettingsResponse {
+fn default_settings(timezone: String) -> BackupSettingsResponse {
     BackupSettingsResponse {
         enabled: false,
         frequency: BackupFrequency::Weekly,
         run_at: "03:00".into(),
-        timezone: "UTC".into(),
+        timezone,
         day_of_week: Some(0),
         day_of_month: Some(1),
         retention_count: 8,

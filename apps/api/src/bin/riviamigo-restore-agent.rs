@@ -1341,6 +1341,11 @@ async fn restore_backup_settings(config: &Config, path: &Path) -> anyhow::Result
           region = EXCLUDED.region, bucket = EXCLUDED.bucket, prefix = EXCLUDED.prefix,
           access_key = EXCLUDED.access_key, secret_key_encrypted = NULL,
           updated_at = now(), updated_by = NULL;
+        INSERT INTO riviamigo.system_config (key, value)
+        SELECT 'app_timezone', timezone
+        FROM jsonb_to_record('{json_literal}'::jsonb) AS settings(timezone text)
+        WHERE timezone IS NOT NULL AND btrim(timezone) <> ''
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
     "#
     );
     run_psql(config, &sql).await

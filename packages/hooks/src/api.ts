@@ -58,6 +58,7 @@ import type {
   UpdateBackupSettingsBody,
   RunBackupResponse,
   UnitPreferences,
+  AppTimezone,
   CreateBackupRestoreRequestBody,
   BackupRestoreRequest,
   RestoreJob,
@@ -554,6 +555,14 @@ class ApiClient {
 
   async updateUnitPreferences(units: UnitPreferences): Promise<{ units: UnitPreferences }> {
     return this.request('PUT', '/v1/auth/preferences', { units });
+  }
+
+  async getAppTimezone(): Promise<AppTimezone> {
+    return this.request('GET', '/v1/settings/timezone');
+  }
+
+  async updateAppTimezone(timezone: string): Promise<AppTimezone> {
+    return this.request('PUT', '/v1/settings/timezone', { timezone });
   }
 
   // ── Vehicles ──────────────────────────────────────────────────────────────

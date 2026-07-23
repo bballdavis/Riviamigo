@@ -1,3 +1,4 @@
+pub mod app_settings;
 pub mod backups;
 pub mod charge_backfill;
 pub mod charge_sessions;
