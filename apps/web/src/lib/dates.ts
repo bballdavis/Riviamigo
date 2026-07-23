@@ -1,5 +1,12 @@
-import { endOfDay, formatISO, isValid, parse, startOfDay, subDays, subHours, subMonths } from 'date-fns';
+import { formatISO, isValid, parse, subHours } from 'date-fns';
 import type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@riviamigo/types';
+import {
+  appDatePartsToDate,
+  endOfAppDay,
+  formatAppDateTime,
+  shiftAppCalendarDays,
+  startOfAppDay,
+} from '@riviamigo/ui/lib/dateTime';
 
 export type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@riviamigo/types';
 
@@ -28,13 +35,13 @@ export function presetToRange(preset: BoundedPresetKey): DateRange {
     case '24h':
       return { from: subHours(now, 24), to: now };
     case '7d':
-      return { from: startOfDay(subDays(now, 7)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -7)), to: endOfAppDay(now) };
     case '30d':
-      return { from: startOfDay(subDays(now, 30)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -30)), to: endOfAppDay(now) };
     case '90d':
-      return { from: startOfDay(subDays(now, 90)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -90)), to: endOfAppDay(now) };
     case '1y':
-      return { from: startOfDay(subMonths(now, 12)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -365)), to: endOfAppDay(now) };
   }
 }
 
@@ -201,7 +208,16 @@ export function parseTimeframeInput(value: string, fallback: Date): Date | null 
 
   for (const pattern of TIMEFRAME_PARSE_PATTERNS) {
     const parsed = parse(trimmed, pattern, fallback);
-    if (isValid(parsed)) return parsed;
+    if (isValid(parsed)) {
+      return appDatePartsToDate({
+        year: parsed.getFullYear(),
+        month: parsed.getMonth() + 1,
+        day: parsed.getDate(),
+        hour: parsed.getHours(),
+        minute: parsed.getMinutes(),
+        second: 0,
+      });
+    }
   }
 
   const nativeDate = new Date(trimmed);
@@ -228,11 +244,5 @@ function parseStoredCustomRange(fromRaw: string, toRaw: string): DateRange | nul
 }
 
 function formatRangeDisplay(value: Date) {
-  return value.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatAppDateTime(value);
 }

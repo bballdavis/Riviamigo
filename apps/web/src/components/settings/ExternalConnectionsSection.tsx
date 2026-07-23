@@ -8,6 +8,7 @@ import type {
 } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import { ExternalLink, RefreshCw, Save, ShieldOff } from 'lucide-react';
+import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 
 const CONNECTION_QUERY_KEY = ['external-connections'] as const;
 
@@ -213,9 +214,9 @@ function ConnectionCard({
           <Info label="Runs from" value={connection.execution} />
           <Info label="Requests today" value={String(connection.request_count_today)} />
           <Info label="Endpoint" value={connection.endpoint ?? 'Managed elsewhere'} mono />
-          <Info label="Last attempt" value={connection.last_attempt_at ? new Date(connection.last_attempt_at).toLocaleString() : 'No recorded request'} />
-          <Info label="Last success" value={connection.last_success_at ? new Date(connection.last_success_at).toLocaleString() : 'No recorded request'} />
-          <Info label="Last verification" value={connection.last_test_at ? `${connection.last_test_ok ? 'Passed' : 'Failed'} ${new Date(connection.last_test_at).toLocaleString()}` : 'Not verified'} />
+                          <Info label="Last attempt" value={connection.last_attempt_at ? formatAppDateTime(connection.last_attempt_at) : 'No recorded request'} />
+                          <Info label="Last success" value={connection.last_success_at ? formatAppDateTime(connection.last_success_at) : 'No recorded request'} />
+                          <Info label="Last verification" value={connection.last_test_at ? `${connection.last_test_ok ? 'Passed' : 'Failed'} ${formatAppDateTime(connection.last_test_at)}` : 'Not verified'} />
           {connection.id === 'open_meteo' ? <Info label="Sampling / budget" value={`${connection.request_count_today.toLocaleString()} / 8,000 requests today; 15-minute samples`} /> : null}
         </div>
 

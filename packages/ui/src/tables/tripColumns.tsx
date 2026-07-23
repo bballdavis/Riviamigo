@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { createColumnHelper, type ColumnDef } from '@tanstack/react-table';
-import { format, parseISO } from 'date-fns';
 import { FaInfo } from 'react-icons/fa6';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { Badge } from '../primitives/Badge';
@@ -13,6 +12,7 @@ import {
 } from '../lib/utils';
 import { formatDriveMode, getDriveModeBadgeClass } from '../lib/driveMode';
 import { resolveTripLocation } from '../lib/tripPresentation';
+import { formatAppDateTime } from '../lib/dateTime';
 import type { Place } from '@riviamigo/types';
 
 export interface TripRow {
@@ -53,7 +53,7 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
       },
       cell: (info) => (
         <span className="font-medium text-fg whitespace-nowrap">
-          {format(parseISO(info.getValue()), 'MM/dd/yyyy, h:mm a')}
+          {formatAppDateTime(info.getValue())}
         </span>
       ),
     }),

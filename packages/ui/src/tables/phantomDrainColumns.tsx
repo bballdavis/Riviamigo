@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
-import { format, parseISO } from 'date-fns';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { Tooltip } from '../primitives/Tooltip';
 import { formatKwh, formatMiles, formatPercent, formatSmartNumber } from '../lib/utils';
+import { formatAppDateTime } from '../lib/dateTime';
 
 export interface PhantomDrainRow {
   period_start: string | null;
@@ -36,9 +36,7 @@ const col = createColumnHelper<PhantomDrainRow>();
 
 function formatDateTime(value: string | null) {
   if (!value) return '-';
-  const parsed = parseISO(value);
-  if (Number.isNaN(parsed.getTime())) return '-';
-  return format(parsed, 'MMM d, h:mm a');
+  return formatAppDateTime(value);
 }
 
 function formatDurationHours(value: number | null) {
@@ -91,7 +89,7 @@ export const phantomDrainColumns = [
     cell: (info) => {
       const value = info.getValue();
       return (
-        <span className="whitespace-nowrap text-fg" title={value ? format(parseISO(value), 'MMM d, yyyy h:mm a') : undefined}>
+        <span className="whitespace-nowrap text-fg" title={value ? formatAppDateTime(value) : undefined}>
           {formatDateTime(value)}
         </span>
       );
@@ -107,7 +105,7 @@ export const phantomDrainColumns = [
     cell: (info) => {
       const value = info.getValue();
       return (
-        <span className="whitespace-nowrap text-fg" title={value ? format(parseISO(value), 'MMM d, yyyy h:mm a') : undefined}>
+        <span className="whitespace-nowrap text-fg" title={value ? formatAppDateTime(value) : undefined}>
           {formatDateTime(value)}
         </span>
       );

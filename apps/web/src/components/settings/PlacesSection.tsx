@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
+import { getAppTimezone } from '@riviamigo/ui/lib/dateTime';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import { HelpCircle, Home, Loader2, Pencil, Plus, Search, Zap, Trash2 } from 'lucide-react';
 
@@ -28,10 +29,6 @@ interface PlaceDraft {
   schedule: ScheduleDraft[];
 }
 
-const browserTimezone = typeof Intl !== 'undefined'
-  ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  : 'UTC';
-
 const METERS_TO_FEET = 3.28084;
 
 function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
@@ -43,7 +40,7 @@ function emptyDraft(unitSystem: UnitSystem): PlaceDraft {
     planType: 'per_kwh',
     energyRate: '0.13',
     sessionFee: '0',
-    timezone: browserTimezone,
+    timezone: getAppTimezone(),
     schedule: [{ label: 'All day', start: '00:00', end: '24:00', rate: '0.13' }],
   };
 }
@@ -282,7 +279,7 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       planType: place.charging?.billing_type === 'tou' ? 'tou' : 'per_kwh',
       energyRate: String(place.charging?.rate ?? 0.13),
       sessionFee: String(place.charging?.session_fee ?? 0),
-      timezone: place.charging?.timezone ?? browserTimezone,
+      timezone: place.charging?.timezone ?? getAppTimezone(),
       schedule: normalizeScheduleEdges(place.charging?.billing_type === 'tou' && place.charging.tou_periods.length > 0
         ? place.charging.tou_periods.map((period) => ({
             label: period.label,
@@ -738,7 +735,7 @@ function buildChargingPayload(draft: PlaceDraft): PlaceChargingInput | null {
     rate,
     session_fee: sessionFee,
     currency: 'USD',
-    timezone: draft.timezone.trim() || browserTimezone,
+    timezone: draft.timezone.trim() || getAppTimezone(),
     tou_periods: periods,
   };
 }

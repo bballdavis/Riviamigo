@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useQuery } from '@tanstack/react-query';
 import { createRoute } from '@tanstack/react-router';
 import {
@@ -1076,17 +1077,7 @@ function getFreshness(ts: string | null) {
 
 function formatDateTime(value?: string | null) {
   if (!value) return 'Unknown';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Unknown';
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZoneName: 'short',
-  }).format(date);
+  return formatAppDateTime(value, { second: '2-digit', timeZoneName: 'short' });
 }
 
 function asOpenClosed(value: boolean | null) {

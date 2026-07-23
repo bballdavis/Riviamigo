@@ -27,7 +27,8 @@ import {
   getUnitPreferences,
 } from '@riviamigo/ui/lib/utils';
 import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@riviamigo/ui/lib/tripPresentation';
-import { format, parseISO } from 'date-fns';
+import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
+import { parseISO } from 'date-fns';
 import { ArrowLeft } from 'lucide-react';
 
 const TRIP_PRIMARY_CHART_HEIGHT = 360;
@@ -85,7 +86,7 @@ export function TripDetailContent() {
   const mapStyle = isDark ? 'dark' : 'light';
 
   const title = trip
-    ? format(parseISO(trip.started_at), 'MMMM d, yyyy · h:mm a')
+    ? formatAppDateTime(trip.started_at, { month: 'long', day: 'numeric', year: 'numeric' })
     : 'Trip Detail';
 
   const subtitle = React.useMemo(() => {

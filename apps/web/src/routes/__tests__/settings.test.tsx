@@ -1079,18 +1079,12 @@ describe('Settings page', () => {
       expect(screen.getByText('Rows')).toBeInTheDocument();
     });
 
-    expect(
-      screen.getByRole('option', { name: /America\/Chicago \(UTC[+-]\d{2}:\d{2}\)/ })
-    ).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('combobox', { name: 'Timezone' }), {
-      target: { value: 'UTC' },
-    });
     fireEvent.click(screen.getByText('Save settings'));
 
     await waitFor(() => {
       expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(
         expect.objectContaining({
-          timezone: 'UTC',
+          timezone: 'America/Chicago',
           bucket: 'riviamigo-backups',
           retention_count: 8,
           local_enabled: true,

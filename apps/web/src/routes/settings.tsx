@@ -21,6 +21,13 @@ import {
   type UnitMode,
   type UnitSystem,
 } from '@riviamigo/ui/lib/utils';
+import {
+  appTimezoneOptions,
+  formatAppDate,
+  formatAppDateTime,
+  getAppTimezone,
+  setAppTimezone,
+} from '@riviamigo/ui/lib/dateTime';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import {
   PageLayout, Card, CardHeader, CardTitle, CardContent,
@@ -467,6 +474,7 @@ export function SettingsContent() {
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
   const [apiCatalogSearch, setApiCatalogSearch] = React.useState('');
   const [unitPreferences, setUnitPreferencesState] = React.useState<UnitPreferences>(() => getUnitPreferences());
+  const [appTimezone, setAppTimezoneState] = React.useState(() => getAppTimezone());
   const placesUnitSystem: UnitSystem = unitPreferences.place_radius_unit === 'meters' ? 'metric' : 'imperial';
   const [editingBatteryVehicleId, setEditingBatteryVehicleId] = React.useState<string | null>(null);
   const [batteryGen, setBatteryGen] = React.useState<BatteryGen>('gen1');
@@ -564,12 +572,25 @@ export function SettingsContent() {
     enabled: authReady && !!accessToken,
   });
 
+  const appTimezoneQuery = useQuery({
+    queryKey: ['app-timezone'],
+    queryFn: () => api.getAppTimezone(),
+    enabled: authReady && !!accessToken,
+  });
+
   React.useEffect(() => {
     const next = unitPreferencesQuery.data?.units;
     if (!next) return;
     setUnitPreferencesState(next);
     setUnitPreferences(next);
   }, [unitPreferencesQuery.data]);
+
+  React.useEffect(() => {
+    const next = appTimezoneQuery.data?.timezone;
+    if (!next) return;
+    setAppTimezoneState(next);
+    setAppTimezone(next);
+  }, [appTimezoneQuery.data]);
 
   React.useEffect(() => {
     if (!apiKeyVehicleId && vehicles?.[0]?.id) {
@@ -731,6 +752,16 @@ export function SettingsContent() {
       setUnitPreferencesState(result.units);
       setUnitPreferences(result.units);
       queryClient.invalidateQueries({ queryKey: ['unit-preferences'] });
+    },
+  });
+
+  const updateAppTimezone = useMutation({
+    mutationFn: (timezone: string) => api.updateAppTimezone(timezone),
+    onSuccess: (result) => {
+      setAppTimezoneState(result.timezone);
+      setAppTimezone(result.timezone);
+      queryClient.invalidateQueries({ queryKey: ['app-timezone'] });
+      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
     },
   });
 
@@ -1394,7 +1425,7 @@ export function SettingsContent() {
                                             )}
                                           </div>
                                           <p className="mt-1 text-xs text-fg-tertiary">
-                                            Added {new Date(member.created_at).toLocaleDateString()}
+                              Added {formatAppDate(member.created_at)}
                                           </p>
                                         </div>
                                         <SelectPicker
@@ -1437,7 +1468,7 @@ export function SettingsContent() {
                                             {invite.invitee_email} <span className="text-fg-tertiary">({formatMembershipRole(invite.role)})</span>
                                           </p>
                                           <p className="mt-1 text-xs text-fg-tertiary">
-                                            Expires {new Date(invite.expires_at).toLocaleDateString()}
+                                            Expires {formatAppDate(invite.expires_at)}
                                           </p>
                                         </div>
                                         <Button
@@ -1567,8 +1598,8 @@ export function SettingsContent() {
                             </div>
                             <p className="mt-1 font-mono text-xs text-fg-tertiary">{key.id}</p>
                             <p className="mt-1 text-xs text-fg-tertiary">
-                              Created {new Date(key.created_at).toLocaleString()}
-                              {key.last_used_at ? ` / Last used ${new Date(key.last_used_at).toLocaleString()}` : ' / Never used'}
+                              Created {formatAppDateTime(key.created_at)}
+                              {key.last_used_at ? ` / Last used ${formatAppDateTime(key.last_used_at)}` : ' / Never used'}
                             </p>
                           </div>
                           {!key.revoked_at && (
@@ -1722,6 +1753,24 @@ export function SettingsContent() {
                       </div>
                     </div>
                   ) : null}
+                  <div className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:items-end">
+                    <div>
+                      <p className="text-xs uppercase tracking-wider text-fg-tertiary">Time zone</p>
+                      <p className="mt-1 text-sm text-fg">Application time zone</p>
+                      <p className="mt-1 text-xs text-fg-tertiary">
+                        All Riviamigo dates, charts, local-day groupings, and scheduled backups use this time zone.
+                        {!canManageBackups ? ' An administrator manages this shared setting.' : ''}
+                      </p>
+                    </div>
+                    <SelectPicker
+                      className="w-full"
+                      value={appTimezone}
+                      onChange={(value) => updateAppTimezone.mutate(value)}
+                      aria-label="Application time zone"
+                      disabled={!canManageBackups || updateAppTimezone.isPending || appTimezoneQuery.isLoading}
+                      options={appTimezoneOptions(appTimezone)}
+                    />
+                  </div>
                 </CardContent>
               </Card>
             )}

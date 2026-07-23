@@ -37,6 +37,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 
 const WEEKDAYS = [
   { value: 0, label: 'Sunday' },
@@ -47,53 +48,6 @@ const WEEKDAYS = [
   { value: 5, label: 'Friday' },
   { value: 6, label: 'Saturday' },
 ];
-
-const FALLBACK_TIMEZONES = [
-  'UTC',
-  'America/Chicago',
-  'America/Denver',
-  'America/Los_Angeles',
-  'America/New_York',
-  'America/Phoenix',
-  'America/Toronto',
-  'Asia/Kolkata',
-  'Asia/Singapore',
-  'Asia/Tokyo',
-  'Australia/Sydney',
-  'Europe/Berlin',
-  'Europe/London',
-  'Pacific/Auckland',
-];
-
-function listTimezones(): string[] {
-  const supportedValuesOf = Intl.supportedValuesOf as ((key: string) => string[]) | undefined;
-  const timezones = supportedValuesOf?.('timeZone') ?? FALLBACK_TIMEZONES;
-  return Array.from(new Set(['UTC', ...timezones]));
-}
-
-function formatUtcOffset(timezone: string): string {
-  try {
-    const offset = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      timeZoneName: 'longOffset',
-    })
-      .formatToParts(new Date())
-      .find((part) => part.type === 'timeZoneName')?.value;
-    if (!offset || offset === 'GMT') return 'UTC+00:00';
-    return `UTC${offset.replace(/^GMT/, '')}`;
-  } catch {
-    return 'UTC offset unavailable';
-  }
-}
-
-function buildTimezoneOptions(currentTimezone?: string) {
-  const timezones = listTimezones();
-  if (currentTimezone && !timezones.includes(currentTimezone)) timezones.unshift(currentTimezone);
-  return timezones.map((timezone) => ({
-    value: timezone,
-    label: `${timezone} (${formatUtcOffset(timezone)})`,
-  }));
-}
 
 function formatRestoreDuration(minutes: number): string {
   if (minutes < 60) return `${minutes} min`;
@@ -128,14 +82,6 @@ interface BackupDraft {
   access_key: string;
 }
 
-function detectTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone;
-  } catch {
-    return '';
-  }
-}
-
 function emitToast(title: string, message: string) {
   window.dispatchEvent(
     new CustomEvent('riviamigo:toast', {
@@ -150,7 +96,7 @@ function buildDraft(overview: BackupOverview): BackupDraft {
     enabled: s.enabled,
     frequency: s.frequency,
     run_at: s.run_at,
-    timezone: s.timezone || detectTimezone(),
+    timezone: s.timezone || 'UTC',
     day_of_week: s.day_of_week,
     day_of_month: s.day_of_month,
     retention_count: String(s.retention_count),
@@ -406,7 +352,6 @@ export function BackupSection() {
   const [activeRestoreSizeBytes, setActiveRestoreSizeBytes] = React.useState<number | null>(null);
   const [restoreStatusUnavailable, setRestoreStatusUnavailable] = React.useState(false);
   const uploadInputRef = React.useRef<HTMLInputElement>(null);
-  const detectedTimezone = React.useMemo(() => detectTimezone(), []);
 
   React.useEffect(() => {
     if (!overview.data) return;
@@ -613,10 +558,6 @@ export function BackupSection() {
     setDraft((cur) => (cur ? { ...cur, [key]: value } : cur));
   }
 
-  const timezoneOptions = React.useMemo(
-    () => buildTimezoneOptions(draft?.timezone),
-    [draft?.timezone]
-  );
   const activeRestoreEstimate = estimateRestoreRange(activeRestoreSizeBytes);
 
   if (overview.isLoading || !draft || !overview.data) {
@@ -646,15 +587,13 @@ export function BackupSection() {
     s3Valid;
   const recentRunsTotal = overview.data.recent_runs_total;
   const recentRunsPageCount = Math.max(1, Math.ceil(recentRunsTotal / recentRunsPerPage));
-  const timezoneIsAutoDetected =
-    !!detectedTimezone && draft.timezone === detectedTimezone && !currentSettings.timezone;
   const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
   const runNowReason = overview.data.runtime_readiness?.reason;
   const restoreArtifact =
     overview.data.artifacts.find((artifact) => artifact.id === restoreArtifactId) ?? null;
   const restoreArtifactOptions = overview.data.artifacts.map((artifact) => ({
     value: artifact.id,
-    label: new Date(artifact.created_at).toLocaleString(),
+    label: formatAppDateTime(artifact.created_at),
     description: `${storageLabel(artifact.storage_type, artifact.manifest)} - ${artifact.file_name}${artifactIsAvailable(artifact) ? '' : ' - unavailable on this host'}`,
     disabled: !artifactIsAvailable(artifact),
   }));
@@ -735,7 +674,7 @@ export function BackupSection() {
               label="Next run"
               value={
                 overview.data.next_run_at
-                  ? new Date(overview.data.next_run_at).toLocaleString()
+                  ? formatAppDateTime(overview.data.next_run_at)
                   : 'Not scheduled'
               }
               accent={currentSettings.enabled}
@@ -746,7 +685,7 @@ export function BackupSection() {
               label="Latest success"
               value={
                 overview.data.latest_successful_run?.completed_at
-                  ? new Date(overview.data.latest_successful_run.completed_at).toLocaleString()
+                  ? formatAppDateTime(overview.data.latest_successful_run.completed_at)
                   : 'None yet'
               }
             />
@@ -900,23 +839,12 @@ export function BackupSection() {
 
           {/* Schedule fields */}
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem]">
-            <label className="grid gap-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-                Timezone
-                {timezoneIsAutoDetected && (
-                  <span className="ml-1.5 font-normal normal-case tracking-normal text-accent/80">
-                    auto-detected
-                  </span>
-                )}
-              </span>
-              <SelectPicker
-                className="w-full"
-                value={draft.timezone}
-                onChange={(value) => updateDraft('timezone', value)}
-                aria-label="Timezone"
-                options={timezoneOptions}
-              />
-            </label>
+            <div className="grid gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Time zone</span>
+              <div className="flex h-9 items-center rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg-secondary">
+                {draft.timezone} · managed in Units
+              </div>
+            </div>
             <label className="grid gap-1">
               <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">
                 Run time
@@ -1045,7 +973,7 @@ export function BackupSection() {
                     >
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="shrink-0 text-xs text-fg-tertiary tabular-nums">
-                          {new Date(run.created_at).toLocaleString()}
+                          {formatAppDateTime(run.created_at)}
                         </span>
                         <span className="text-xs font-medium capitalize text-fg-secondary">
                           {capitalizeFirstLetter(run.trigger)}
@@ -1182,7 +1110,7 @@ export function BackupSection() {
                       </button>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-fg">
-                          {new Date(artifact.created_at).toLocaleString()}
+                          {formatAppDateTime(artifact.created_at)}
                         </p>
                         <p className="mt-0.5 text-xs text-fg-tertiary capitalize">
                           {artifact.storage_type}
@@ -1280,7 +1208,7 @@ export function BackupSection() {
                               Created
                             </p>
                             <p className="mt-1 font-mono text-xs text-fg">
-                              {new Date(artifact.created_at).toLocaleString()}
+                              {formatAppDateTime(artifact.created_at)}
                             </p>
                           </div>
                         </div>
@@ -1641,7 +1569,7 @@ export function BackupSection() {
                     {restoreArtifact.file_name}
                   </p>
                   <p className="mt-0.5 text-xs text-fg-tertiary">
-                    {new Date(restoreArtifact.created_at).toLocaleString()} ·{' '}
+                    {formatAppDateTime(restoreArtifact.created_at)} ·{' '}
                     {storageLabel(restoreArtifact.storage_type, restoreArtifact.manifest)} package
                   </p>
                 </div>
@@ -1700,7 +1628,7 @@ export function BackupSection() {
                         <Badge variant="default">{request.artifact_id.slice(0, 8)}</Badge>
                       </div>
                       <p className="mt-1 text-xs text-fg-tertiary">
-                        Requested {new Date(request.requested_at).toLocaleString()}
+                        Requested {formatAppDateTime(request.requested_at)}
                       </p>
                       {request.notes && (
                         <p className="mt-1 text-xs text-fg-tertiary">{request.notes}</p>
