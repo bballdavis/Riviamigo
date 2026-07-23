@@ -30,6 +30,7 @@ Weather, geocoding, basemap, and Iconify policies are configured in **Settings >
 - `IMAGE_TAG` selects a published release and defaults to `latest`.
 - `RIVIAMIGO_IMAGE_REGISTRY` defaults to `ghcr.io/bballdavis`.
 - `BACKUP_DRIVER`, `BACKUP_ARTIFACT_DIR`, and `BACKUP_POLL_INTERVAL_SECONDS` tune recovery packages; normal Compose already uses `/backups`.
+- `TZ` sets the Docker/container timezone for nginx and other runtime processes. It is separate from the shared user-facing application timezone configured under **Settings > Units**.
 - Reconnect, telemetry-retention, logging, and rate-limit settings are available in the [complete reference](../environment-variables.md).
 
 The active `.env` and `.env.local` files remain ignored by Git.

@@ -78,7 +78,7 @@ RUN pnpm --filter @riviamigo/web build
 
 FROM postgres:18.4-trixie@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a AS runtime
 LABEL org.opencontainers.image.source="https://github.com/bballdavis/Riviamigo"
-ENV XDG_CACHE_HOME=/data/cache
+ENV TZ=UTC XDG_CACHE_HOME=/data/cache
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl libssl3 nginx tini util-linux \

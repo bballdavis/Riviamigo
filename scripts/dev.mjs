@@ -24,6 +24,11 @@ function parseSeconds(value, fallback) {
   return Number.isInteger(parsed) && parsed >= 60 ? parsed : fallback;
 }
 
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const requestedPorts = {
   api: parsePort(process.env.DEV_API_PORT, 3001),
   web: parsePort(process.env.DEV_WEB_PORT, 5173),
@@ -37,6 +42,9 @@ const requestedPorts = {
 let ports = { ...requestedPorts };
 const composeProjectName = process.env.DEV_COMPOSE_PROJECT_NAME || process.env.COMPOSE_PROJECT_NAME || 'riviamigo';
 const databaseReadyTimeoutMs = parseSeconds(process.env.DEV_DATABASE_READY_TIMEOUT_SECONDS, 600) * 1000;
+// Keep a Windows host responsive during cold Rust builds. Other platforms retain
+// Cargo's normal concurrency.
+const cargoBuildJobs = isWindows ? parsePositiveInteger(process.env.DEV_CARGO_BUILD_JOBS, 4) : null;
 
 const urls = {
   get apiHealth() {
@@ -530,8 +538,13 @@ async function waitForViteUrl(child, timeoutMs = 30000) {
 async function startApi() {
   await assertPortAvailable(ports.api, 'API');
 
-  log('Building API...');
-  await run('cargo', ['build'], { cwd: apiDir, env: apiEnv() });
+  const buildArgs = ['build', '--bin', 'riviamigo-api', '--bin', 'riviamigo-restore-agent'];
+  if (cargoBuildJobs !== null) {
+    buildArgs.push('--jobs', String(cargoBuildJobs));
+  }
+
+  log(`Building API targets: riviamigo-api, riviamigo-restore-agent${cargoBuildJobs !== null ? ` (maximum ${cargoBuildJobs} concurrent Cargo jobs)` : ''}...`);
+  await run('cargo', buildArgs, { cwd: apiDir, env: apiEnv() });
 
   await startRestoreAgent();
   return launchApi();
