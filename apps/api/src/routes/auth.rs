@@ -331,10 +331,10 @@ async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, AppError> {
-    let email = body.email.to_lowercase();
+    let email = body.email.trim().to_lowercase();
     let row =
         sqlx::query("SELECT id, password_hash, is_disabled FROM riviamigo.users WHERE email = $1")
-            .bind(email.trim())
+            .bind(&email)
             .fetch_optional(&state.pool)
             .await?;
 
@@ -342,6 +342,7 @@ async fn login(
     let password_hash = row.as_ref().map(|r| r.get::<String, _>("password_hash"));
     let hash = password_hash.as_deref().unwrap_or(DUMMY_HASH);
     if let Err(e) = verify_password(&body.password, hash) {
+        tracing::warn!(email = %email, reason = "invalid_credentials", "auth.login_failed");
         if row.is_some() {
             audit_log(
                 state.pool.clone(),
@@ -355,6 +356,12 @@ async fn login(
 
     let row = row.ok_or(AppError::Unauthorized)?;
     if row.get::<bool, _>("is_disabled") {
+        tracing::warn!(
+            email = %email,
+            user_id = %row.get::<Uuid, _>("id"),
+            reason = "disabled_account",
+            "auth.login_failed"
+        );
         return Err(AppError::Forbidden);
     }
 
