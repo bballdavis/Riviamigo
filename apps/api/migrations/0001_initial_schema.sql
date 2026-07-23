@@ -221,7 +221,7 @@ CREATE TABLE riviamigo.api_keys (
 
 CREATE TABLE riviamigo.backup_artifacts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    run_id uuid NOT NULL,
+    run_id uuid,
     storage_type text DEFAULT 'local'::text NOT NULL,
     file_name text NOT NULL,
     storage_path text NOT NULL,
@@ -229,7 +229,7 @@ CREATE TABLE riviamigo.backup_artifacts (
     checksum_sha256 text NOT NULL,
     manifest jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT backup_artifacts_storage_type_check CHECK ((storage_type = 'local'::text))
+    CONSTRAINT backup_artifacts_storage_type_check CHECK ((storage_type = ANY (ARRAY['local'::text, 'uploaded'::text, 'safety'::text, 's3'::text])))
 );
 
 --
@@ -265,7 +265,7 @@ CREATE TABLE riviamigo.backup_runs (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT backup_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text]))),
-    CONSTRAINT backup_runs_trigger_check CHECK ((trigger = ANY (ARRAY['manual'::text, 'scheduled'::text, 'restore'::text])))
+    CONSTRAINT backup_runs_trigger_check CHECK ((trigger = ANY (ARRAY['manual'::text, 'scheduled'::text, 'restore'::text, 'upload'::text, 'pre_restore'::text])))
 );
 
 --
@@ -290,6 +290,8 @@ CREATE TABLE riviamigo.backup_settings (
     secret_key_encrypted bytea,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_by uuid,
+    local_enabled boolean DEFAULT true NOT NULL,
+    s3_enabled boolean DEFAULT false NOT NULL,
     CONSTRAINT backup_settings_day_of_month_check CHECK (((day_of_month IS NULL) OR ((day_of_month >= 1) AND (day_of_month <= 31)))),
     CONSTRAINT backup_settings_day_of_week_check CHECK (((day_of_week IS NULL) OR ((day_of_week >= 0) AND (day_of_week <= 6)))),
     CONSTRAINT backup_settings_frequency_check CHECK ((frequency = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text]))),
@@ -461,8 +463,12 @@ CREATE TABLE riviamigo.dashboards (
     is_locked boolean DEFAULT false NOT NULL,
     config jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    baseline_revision integer
 );
+
+COMMENT ON COLUMN riviamigo.dashboards.baseline_revision IS
+  'Bundled system-dashboard revision last applied to this row; NULL for personal dashboards and pre-revision defaults.';
 
 --
 -- Name: departure_schedules; Type: TABLE; Schema: riviamigo; Owner: -
@@ -1396,13 +1402,6 @@ ALTER TABLE ONLY riviamigo.backup_artifacts
     ADD CONSTRAINT backup_artifacts_pkey PRIMARY KEY (id);
 
 --
--- Name: backup_artifacts backup_artifacts_run_id_key; Type: CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.backup_artifacts
-    ADD CONSTRAINT backup_artifacts_run_id_key UNIQUE (run_id);
-
---
 -- Name: backup_restore_requests backup_restore_requests_pkey; Type: CONSTRAINT; Schema: riviamigo; Owner: -
 --
 
@@ -1785,6 +1784,8 @@ CREATE INDEX backup_artifacts_created_idx ON riviamigo.backup_artifacts USING bt
 --
 
 CREATE INDEX backup_artifacts_run_idx ON riviamigo.backup_artifacts USING btree (run_id);
+
+CREATE UNIQUE INDEX backup_artifacts_s3_locator_unique ON riviamigo.backup_artifacts USING btree (storage_path) WHERE (storage_type = 's3'::text);
 
 --
 -- Name: backup_restore_requests_artifact_idx; Type: INDEX; Schema: riviamigo; Owner: -
@@ -2372,358 +2373,24 @@ ALTER TABLE ONLY riviamigo.departure_schedules
     ADD CONSTRAINT departure_schedules_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
 
 --
--- Name: external_connection_activity external_connection_activity_connection_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.external_connection_activity
-    ADD CONSTRAINT external_connection_activity_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES riviamigo.external_connection_settings(id) ON DELETE CASCADE;
-
---
--- Name: external_connection_settings external_connection_settings_updated_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.external_connection_settings
-    ADD CONSTRAINT external_connection_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
---
--- Name: geofences geofences_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.geofences
-    ADD CONSTRAINT geofences_address_id_fkey FOREIGN KEY (address_id) REFERENCES riviamigo.addresses(id);
-
---
--- Name: geofences geofences_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.geofences
-    ADD CONSTRAINT geofences_cost_profile_id_fkey FOREIGN KEY (cost_profile_id) REFERENCES riviamigo.cost_profiles(id);
-
---
--- Name: geofences geofences_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.geofences
-    ADD CONSTRAINT geofences_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: refresh_tokens refresh_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.refresh_tokens
-    ADD CONSTRAINT refresh_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: rivian_charge_curve_points rivian_charge_curve_points_charge_session_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
-    ADD CONSTRAINT rivian_charge_curve_points_charge_session_id_fkey FOREIGN KEY (charge_session_id) REFERENCES riviamigo.charge_sessions(id) ON DELETE CASCADE;
-
---
--- Name: rivian_charge_curve_points rivian_charge_curve_points_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_charge_curve_points
-    ADD CONSTRAINT rivian_charge_curve_points_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: rivian_charge_payloads rivian_charge_payloads_charge_session_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_charge_payloads
-    ADD CONSTRAINT rivian_charge_payloads_charge_session_id_fkey FOREIGN KEY (charge_session_id) REFERENCES riviamigo.charge_sessions(id) ON DELETE SET NULL;
-
---
--- Name: rivian_charge_payloads rivian_charge_payloads_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_charge_payloads
-    ADD CONSTRAINT rivian_charge_payloads_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: rivian_parallax_events rivian_parallax_events_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_parallax_events
-    ADD CONSTRAINT rivian_parallax_events_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: rivian_stewardship_counters rivian_stewardship_counters_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_stewardship_counters
-    ADD CONSTRAINT rivian_stewardship_counters_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: rivian_ws_raw_events rivian_ws_raw_events_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.rivian_ws_raw_events
-    ADD CONSTRAINT rivian_ws_raw_events_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: security_events security_events_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.security_events
-    ADD CONSTRAINT security_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
---
--- Name: service_events service_events_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.service_events
-    ADD CONSTRAINT service_events_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: software_versions software_versions_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.software_versions
-    ADD CONSTRAINT software_versions_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: trip_user_annotations trip_user_annotations_end_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trip_user_annotations
-    ADD CONSTRAINT trip_user_annotations_end_address_id_fkey FOREIGN KEY (end_address_id) REFERENCES riviamigo.addresses(id) ON DELETE SET NULL;
-
---
--- Name: trip_user_annotations trip_user_annotations_end_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trip_user_annotations
-    ADD CONSTRAINT trip_user_annotations_end_geofence_id_fkey FOREIGN KEY (end_geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
-
---
--- Name: trip_user_annotations trip_user_annotations_start_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trip_user_annotations
-    ADD CONSTRAINT trip_user_annotations_start_address_id_fkey FOREIGN KEY (start_address_id) REFERENCES riviamigo.addresses(id) ON DELETE SET NULL;
-
---
--- Name: trip_user_annotations trip_user_annotations_start_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trip_user_annotations
-    ADD CONSTRAINT trip_user_annotations_start_geofence_id_fkey FOREIGN KEY (start_geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
-
---
--- Name: trip_user_annotations trip_user_annotations_trip_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trip_user_annotations
-    ADD CONSTRAINT trip_user_annotations_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES riviamigo.trips(id) ON DELETE CASCADE;
-
---
--- Name: trip_user_annotations trip_user_annotations_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-ALTER TABLE ONLY riviamigo.trip_user_annotations
-    ADD CONSTRAINT trip_user_annotations_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: trip_weather_samples trip_weather_samples_trip_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trip_weather_samples
-    ADD CONSTRAINT trip_weather_samples_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES riviamigo.trips(id) ON DELETE CASCADE;
-
---
--- Name: trips trips_end_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trips
-    ADD CONSTRAINT trips_end_address_id_fkey FOREIGN KEY (end_address_id) REFERENCES riviamigo.addresses(id);
-
---
--- Name: trips trips_end_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trips
-    ADD CONSTRAINT trips_end_geofence_id_fkey FOREIGN KEY (end_geofence_id) REFERENCES riviamigo.geofences(id);
-
---
--- Name: trips trips_start_address_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trips
-    ADD CONSTRAINT trips_start_address_id_fkey FOREIGN KEY (start_address_id) REFERENCES riviamigo.addresses(id);
-
---
--- Name: trips trips_start_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trips
-    ADD CONSTRAINT trips_start_geofence_id_fkey FOREIGN KEY (start_geofence_id) REFERENCES riviamigo.geofences(id);
-
---
--- Name: trips trips_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.trips
-    ADD CONSTRAINT trips_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: user_preferences user_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.user_preferences
-    ADD CONSTRAINT user_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: users users_default_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.users
-    ADD CONSTRAINT users_default_vehicle_id_fkey FOREIGN KEY (default_vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE SET NULL;
-
---
--- Name: vehicle_artwork_cache_state vehicle_artwork_cache_state_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_artwork_cache_state
-    ADD CONSTRAINT vehicle_artwork_cache_state_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_credentials vehicle_credentials_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_credentials
-    ADD CONSTRAINT vehicle_credentials_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_images vehicle_images_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_images
-    ADD CONSTRAINT vehicle_images_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_invites vehicle_invites_accepted_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_invites
-    ADD CONSTRAINT vehicle_invites_accepted_user_id_fkey FOREIGN KEY (accepted_user_id) REFERENCES riviamigo.users(id) ON DELETE SET NULL;
-
---
--- Name: vehicle_invites vehicle_invites_invited_by_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_invites
-    ADD CONSTRAINT vehicle_invites_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_invites vehicle_invites_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_invites
-    ADD CONSTRAINT vehicle_invites_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_latest_status vehicle_latest_status_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_latest_status
-    ADD CONSTRAINT vehicle_latest_status_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_memberships vehicle_memberships_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_memberships
-    ADD CONSTRAINT vehicle_memberships_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_memberships vehicle_memberships_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_memberships
-    ADD CONSTRAINT vehicle_memberships_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_runtime_state vehicle_runtime_state_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_runtime_state
-    ADD CONSTRAINT vehicle_runtime_state_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_state_periods vehicle_state_periods_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_state_periods
-    ADD CONSTRAINT vehicle_state_periods_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_user_settings vehicle_user_settings_default_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_user_settings
-    ADD CONSTRAINT vehicle_user_settings_default_cost_profile_id_fkey FOREIGN KEY (default_cost_profile_id) REFERENCES riviamigo.cost_profiles(id) ON DELETE SET NULL;
-
---
--- Name: vehicle_user_settings vehicle_user_settings_home_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_user_settings
-    ADD CONSTRAINT vehicle_user_settings_home_geofence_id_fkey FOREIGN KEY (home_geofence_id) REFERENCES riviamigo.geofences(id) ON DELETE SET NULL;
-
---
--- Name: vehicle_user_settings vehicle_user_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_user_settings
-    ADD CONSTRAINT vehicle_user_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: vehicle_user_settings vehicle_user_settings_vehicle_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicle_user_settings
-    ADD CONSTRAINT vehicle_user_settings_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE;
-
---
--- Name: vehicles vehicles_cost_profile_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicles
-    ADD CONSTRAINT vehicles_cost_profile_id_fkey FOREIGN KEY (cost_profile_id) REFERENCES riviamigo.cost_profiles(id);
-
---
--- Name: vehicles vehicles_home_geofence_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicles
-    ADD CONSTRAINT vehicles_home_geofence_id_fkey FOREIGN KEY (home_geofence_id) REFERENCES riviamigo.geofences(id);
-
---
--- Name: vehicles vehicles_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.vehicles
-    ADD CONSTRAINT vehicles_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: wallboxes wallboxes_user_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.wallboxes
-    ADD CONSTRAINT wallboxes_user_id_fkey FOREIGN KEY (user_id) REFERENCES riviamigo.users(id) ON DELETE CASCADE;
-
---
--- Name: weather_enrichment_jobs weather_enrichment_jobs_trip_id_fkey; Type: FK CONSTRAINT; Schema: riviamigo; Owner: -
---
-
-ALTER TABLE ONLY riviamigo.weather_enrichment_jobs
-    ADD CONSTRAINT weather_enrichment_jobs_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES riviamigo.trips(id) ON DELETE CASCADE;
---
 -- PostgreSQL database dump complete
 --
 -- Restore TimescaleDB-specific objects that pg_dump represents as views.
 SET search_path = riviamigo, timeseries, public;
+
+SELECT create_hypertable(
+  'riviamigo.rivian_charge_payloads',
+  'captured_at',
+  chunk_time_interval => INTERVAL '7 days',
+  if_not_exists => TRUE
+);
+
+SELECT add_retention_policy(
+  'riviamigo.rivian_charge_payloads',
+  drop_after => INTERVAL '90 days',
+  schedule_interval => INTERVAL '1 day',
+  if_not_exists => TRUE
+);
 
 SELECT create_hypertable(
   'timeseries.telemetry',
@@ -2779,7 +2446,7 @@ SELECT add_continuous_aggregate_policy(
   'timeseries.telemetry_1min',
   start_offset => INTERVAL '7 days',
   end_offset => INTERVAL '5 minutes',
-  schedule_interval => INTERVAL '5 minutes',
+  schedule_interval => INTERVAL '1 hour',
   if_not_exists => true
 );
 

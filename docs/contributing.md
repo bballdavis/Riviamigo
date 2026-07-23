@@ -56,6 +56,28 @@ The API embeds the reviewed profile and owns all demo generation. Do not add par
 
 ## CI Coverage
 
+### Migration and recovery contract
+
+Migration files under `apps/api/migrations/` are an immutable release
+catalog. They must be valid UTF-8 with LF line endings, use unique ordered
+`NNNN_description.sql` names, and be appended rather than edited after merge.
+The `pnpm verify:migration-integrity` check compares the working tree with the
+PR merge base and blocks modifications, deletions, renames, version reuse, and
+out-of-order additions. The current flattening is the one explicit cutover
+from the pre-release five-file catalog to the complete `0001_initial_schema.sql`
+baseline; it is not a reusable compatibility pattern.
+
+Recovery manifest v3 records the `riviamigo-schema-v1` chain identifier, full
+ordered ledger, raw migration checksums, catalog digest, and versioned schema
+contract. Restore accepts only an exact ledger prefix and performs all pending
+migrations in an isolated candidate. A drifted live ledger cannot create a
+backup. Existing databases are moved to the flattened baseline only by the
+explicit, verified adoption command described in the [release database
+cutover runbook](./runbooks/release-database-cutover.md); startup and restore
+must never repair migration bookkeeping automatically. Packages from the old
+five-migration chain are unsupported after cutover and require their matching
+rollback release.
+
 CI is organized into independently visible workflows so contributors can rerun
 the evidence closest to their change:
 

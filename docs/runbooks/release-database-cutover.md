@@ -1,14 +1,18 @@
 # Release database cutover
 
-Riviamigo's first public release starts fresh installs from one SQLx baseline:
-apps/api/migrations/0001_initial_schema.sql. The API applies that baseline on
-an empty database and uses normal, forward-only SQLx migrations for later
-releases.
+Riviamigo's public release starts fresh installs from one SQLx baseline:
+apps/api/migrations/0001_initial_schema.sql. The baseline contains the complete
+current application schema, including backup, dashboard, and TimescaleDB
+objects. The numbered migration history is intentionally not part of the
+public install contract.
 
-The pre-release development database is not empty and must not run the new
-baseline. Adopt it once before starting the release build.
+Existing installations from the earlier five-migration release must be adopted
+once before they run the public release. Adoption replaces only SQLx
+bookkeeping after proving that the populated database has the complete final
+schema; it does not replay schema SQL or remove application data. Packages from
+that former chain are unsupported restore inputs after cutover.
 
-## Adopt the existing development database
+## Adopt an existing installation
 
 1. Stop the API and create a restorable database dump. Keep the dump outside
    the repository.
@@ -17,14 +21,16 @@ baseline. Adopt it once before starting the release build.
    docker exec riviamigo-timescaledb-1 pg_dump -U riviamigo -d riviamigo -Fc > riviamigo-pre-release.dump
    ```
 
-2. Run the rebaseline command without confirmation. It checks for the expected
-   pre-release schema and SQLx ledger but makes no changes.
+2. Run the rebaseline command without confirmation. It creates a disposable
+   scratch baseline from the compiled release, compares the complete canonical
+   schema contract, validates the existing ledger as ordered and successful, and
+   makes no changes.
 
    ```bash
    pnpm db:rebaseline
    ```
 
-3. Provide the dump path and explicitly confirm the ledger replacement.
+3. Provide the dump path and explicitly confirm the bookkeeping replacement.
 
    ```bash
    pnpm db:rebaseline -- --yes --backup /absolute/path/riviamigo-pre-release.dump
@@ -33,17 +39,20 @@ baseline. Adopt it once before starting the release build.
 4. Start the API normally, or run pnpm db:migrate. It must complete without
    checksum warnings or migration replay output.
 
-The command relocates the SQLx bookkeeping table from the historical
-riviamigo schema to public, then replaces its entries with the baseline
-checksum. It does not execute schema SQL, alter application tables, or delete
-application data. It refuses databases that do not have the expected
-pre-release ledger and final release-schema markers. If the database is already
-adopted, it exits with a no-op message and does not require another backup or
-cutover.
+The command acquires an advisory lock, moves a historical bookkeeping table
+into `public` when needed, and replaces its entries with the single baseline
+checksum. It does not execute schema SQL against the populated database, alter
+application tables, or delete application data. It refuses missing recovery
+evidence, active writers, incomplete schemas, failed or non-sequential ledgers,
+and engine mismatches. If the database is already adopted, it exits with a
+no-op message. Run it separately against both development and production
+before starting the flattened release.
 
 ## Baseline maintenance
 
-Do not edit the initial baseline after it has shipped. Add a new numbered SQLx
-migration for every post-release schema change. Keep data repairs and
-one-time backfills as explicit operational commands unless a new installation
-also requires them.
+Keep the baseline and every later migration byte-for-byte immutable after it
+has merged. For a future schema change, append one uniquely numbered LF/UTF-8
+SQL migration with a deliberate forward upgrade path. The migration-integrity
+check rejects edits, deletions, renames, version reuse, out-of-order additions,
+and line-ending changes. Future source packages are accepted only when their
+chain and ledger are exact prefixes of the target catalog.

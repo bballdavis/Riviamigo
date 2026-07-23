@@ -27,6 +27,7 @@ pnpm lint
 pnpm test
 pnpm docs:check
 pnpm docs:build
+pnpm verify:migration-integrity
 ```
 
 The development and production Compose stacks both use PostgreSQL 18 with
@@ -65,3 +66,8 @@ the status poll can survive the API process restart.
 Use [Reference](./reference.md) for API access, metric definitions, and the dashboard data map. Keeping these lookup pages separate prevents architecture and contributor guidance from becoming dense contract inventories.
 
 Every non-trivial change declares documentation impact, updates the owning docs with the implementation, and records focused verification close to the changed seam.
+
+Database migration changes also require the migration-integrity check and the
+restore compatibility contract checks. Add only immutable LF/UTF-8 migrations
+after the public baseline; use the explicit adoption runbook for an intentional
+chain cutover.

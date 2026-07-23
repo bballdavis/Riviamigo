@@ -45,6 +45,14 @@ jobs:
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Verify migration integrity
+        working-directory: .
+        run: node tools/migration-integrity.mjs --base-ref "${GITHUB_BASE_SHA:-}"
+      - name: Verify repository whitespace
+        working-directory: .
+        run: git diff --check "${GITHUB_BASE_SHA:-HEAD^}"...HEAD
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: clippy, rustfmt, llvm-tools-preview
