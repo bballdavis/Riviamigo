@@ -23,19 +23,21 @@ const settingsMocks = vi.hoisted(() => ({
     role: 'user' as 'user' | 'admin' | 'super_user',
     default_vehicle_id: 'v1',
   },
-  vehicles: [{
-    id: 'v1',
-    display_name: 'Adventure Truck',
-    model: 'R1T',
-    year: null,
-    trim: null,
-    vin: null,
-    rivian_vehicle_id: 'rivian-1',
-    battery_capacity_kwh: 135,
-    target_tire_pressure_psi: 48,
-    membership_role: 'owner',
-    is_demo: false,
-  }],
+  vehicles: [
+    {
+      id: 'v1',
+      display_name: 'Adventure Truck',
+      model: 'R1T',
+      year: null,
+      trim: null,
+      vin: null,
+      rivian_vehicle_id: 'rivian-1',
+      battery_capacity_kwh: 135,
+      target_tire_pressure_psi: 48,
+      membership_role: 'owner',
+      is_demo: false,
+    },
+  ],
 }));
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -66,8 +68,18 @@ vi.mock('@riviamigo/hooks', () => ({
     getApiCatalog: vi.fn().mockResolvedValue({
       endpoints: [
         { method: 'GET', path: '/v1/vehicles', vehicle_scoped: false, purpose: 'List vehicles' },
-        { method: 'GET', path: '/v1/vehicles/{id}/raw-data', vehicle_scoped: true, purpose: 'Read raw data' },
-        { method: 'POST', path: '/v1/metrics/batch', vehicle_scoped: false, purpose: 'Read metrics' },
+        {
+          method: 'GET',
+          path: '/v1/vehicles/{id}/raw-data',
+          vehicle_scoped: true,
+          purpose: 'Read raw data',
+        },
+        {
+          method: 'POST',
+          path: '/v1/metrics/batch',
+          vehicle_scoped: false,
+          purpose: 'Read metrics',
+        },
       ],
     }),
     listPlaces: vi.fn().mockResolvedValue([]),
@@ -106,7 +118,12 @@ vi.mock('@riviamigo/hooks', () => ({
     }),
     getTelemetryLanes: vi.fn().mockResolvedValue({
       vehicle_id: 'v1',
-      window: { from: '2026-05-03T12:00:00Z', to: '2026-05-04T12:00:00Z', resolution_seconds: 300, approximate: true },
+      window: {
+        from: '2026-05-03T12:00:00Z',
+        to: '2026-05-04T12:00:00Z',
+        resolution_seconds: 300,
+        approximate: true,
+      },
       spine: [],
       lanes: {},
       truncated: false,
@@ -135,22 +152,24 @@ vi.mock('@riviamigo/hooks', () => ({
         collector_lock_skips: 0,
         raw_events_persisted: 100,
       },
-      vehicles: [{
-        vehicle_id: 'v1',
-        display_name: 'Adventure Truck',
-        worker_health: 'connected',
-        last_seen_at: '2026-05-04T12:00:00Z',
-        last_payload_at: '2026-05-04T12:00:00Z',
-        last_persisted_at: '2026-05-04T12:00:00Z',
-        last_heartbeat_at: '2026-05-04T12:00:00Z',
-        ws_messages_received: 100,
-        ws_heartbeats_received: 80,
-        ws_payload_messages_received: 20,
-        ws_reconnects: 0,
-        telemetry_writes_persisted: 10,
-        telemetry_writes_suppressed: 90,
-        collector_lock_skips: 0,
-      }],
+      vehicles: [
+        {
+          vehicle_id: 'v1',
+          display_name: 'Adventure Truck',
+          worker_health: 'connected',
+          last_seen_at: '2026-05-04T12:00:00Z',
+          last_payload_at: '2026-05-04T12:00:00Z',
+          last_persisted_at: '2026-05-04T12:00:00Z',
+          last_heartbeat_at: '2026-05-04T12:00:00Z',
+          ws_messages_received: 100,
+          ws_heartbeats_received: 80,
+          ws_payload_messages_received: 20,
+          ws_reconnects: 0,
+          telemetry_writes_persisted: 10,
+          telemetry_writes_suppressed: 90,
+          collector_lock_skips: 0,
+        },
+      ],
     }),
     getBackupOverview: vi.fn().mockResolvedValue({
       settings: {
@@ -172,31 +191,35 @@ vi.mock('@riviamigo/hooks', () => ({
         has_secret_key: true,
         updated_at: '2026-05-04T12:00:00Z',
       },
-      recent_runs: [{
-        id: 'run-1',
-        trigger: 'manual',
-        status: 'succeeded',
-        artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
-        started_at: '2026-05-04T12:00:00Z',
-        completed_at: '2026-05-04T12:01:00Z',
-        error_message: null,
-        created_at: '2026-05-04T12:00:00Z',
-        updated_at: '2026-05-04T12:01:00Z',
-      }],
+      recent_runs: [
+        {
+          id: 'run-1',
+          trigger: 'manual',
+          status: 'succeeded',
+          artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
+          started_at: '2026-05-04T12:00:00Z',
+          completed_at: '2026-05-04T12:01:00Z',
+          error_message: null,
+          created_at: '2026-05-04T12:00:00Z',
+          updated_at: '2026-05-04T12:01:00Z',
+        },
+      ],
       recent_runs_total: 1,
       recent_runs_page: 1,
       recent_runs_per_page: 10,
-      artifacts: [{
-        id: 'artifact-1',
-        run_id: 'run-1',
-        storage_type: 'local',
-        file_name: 'backup-20260504T120000Z.dump',
-        storage_path: '/tmp/riviamigo/prod/riviamigo/backup-20260504T120000Z.dump',
-        size_bytes: 2048,
-        checksum_sha256: '0123456789abcdef0123456789abcdef',
-        manifest: {},
-        created_at: '2026-05-04T12:01:00Z',
-      }],
+      artifacts: [
+        {
+          id: 'artifact-1',
+          run_id: 'run-1',
+          storage_type: 'local',
+          file_name: 'backup-20260504T120000Z.dump',
+          storage_path: '/tmp/riviamigo/prod/riviamigo/backup-20260504T120000Z.dump',
+          size_bytes: 2048,
+          checksum_sha256: '0123456789abcdef0123456789abcdef',
+          manifest: {},
+          created_at: '2026-05-04T12:01:00Z',
+        },
+      ],
       restore_requests: [],
       latest_successful_run: {
         id: 'run-1',
@@ -220,20 +243,42 @@ vi.mock('@riviamigo/hooks', () => ({
     }),
     updateBackupSettings: vi.fn().mockResolvedValue({}),
     runBackupNow: vi.fn().mockResolvedValue({}),
-    testBackupS3: vi.fn().mockResolvedValue({ ok: true, message: 'S3 list/write/read/delete checks passed' }),
+    testBackupS3: vi
+      .fn()
+      .mockResolvedValue({ ok: true, message: 'S3 list/write/read/delete checks passed' }),
     requestBackupRestore: vi.fn().mockResolvedValue({}),
     uploadBackupArtifact: vi.fn().mockResolvedValue({}),
     deleteUploadedBackup: vi.fn().mockResolvedValue(undefined),
     preflightBackupRestore: vi.fn().mockResolvedValue({
       plan: {
         plan_id: 'plan-1',
-        engine_version: 2,
+        engine_version: 3,
         package_checksum_sha256: 'abc123',
-        package_format: 'riviamigo-recovery-v2',
+        package_format: 'riviamigo-recovery-v3',
         compatible: true,
-        source: { postgres_major: 17, timescale_version: '2.19.3', migration_version: 3, migration_ledger: [], schema_fingerprint: 'source' },
-        target: { postgres_major: 17, timescale_version: '2.19.3', migration_version: 5, migration_ledger: [], schema_fingerprint: 'target' },
-        pending_migrations: [4, 5],
+        source: {
+          postgres_major: 17,
+          timescale_version: '2.19.3',
+          migration_version: 1,
+          migration_ledger: [],
+          migration_ledger_successful: true,
+          migration_chain_id: 'riviamigo-schema-v1',
+          migration_catalog_digest: 'catalog',
+          schema_contract_version: 'riviamigo-schema-contract-v1',
+          schema_fingerprint: 'source',
+        },
+        target: {
+          postgres_major: 17,
+          timescale_version: '2.19.3',
+          migration_version: 1,
+          migration_ledger: [],
+          migration_ledger_successful: true,
+          migration_chain_id: 'riviamigo-schema-v1',
+          migration_catalog_digest: 'catalog',
+          schema_contract_version: 'riviamigo-schema-contract-v1',
+          schema_fingerprint: 'target',
+        },
+        pending_migrations: [],
         transforms: [],
         validation_checks: [],
         warnings: [],
@@ -270,7 +315,9 @@ vi.mock('@riviamigo/hooks', () => ({
     }),
     createApiKey: vi.fn(),
     revokeApiKey: vi.fn(),
-    createDemoVehicle: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
+    createDemoVehicle: vi
+      .fn()
+      .mockResolvedValue({ ok: true, vehicle_id: 'demo-v1', created: true }),
     refreshDemoVehicle: vi.fn().mockResolvedValue({
       ok: true,
       vehicle_id: 'demo-v1',
@@ -289,16 +336,21 @@ vi.mock('@riviamigo/hooks', () => ({
     updateVehicleName: vi.fn().mockResolvedValue({}),
     refreshVehicleArtwork: vi.fn().mockResolvedValue({ ok: true, vehicle_id: 'v1' }),
   },
-  useAuth:    () => settingsMocks.auth,
+  useAuth: () => settingsMocks.auth,
   useAuthReady: () => true,
-  useMe:      () => ({ data: settingsMocks.me }),
+  useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
   resolveVehicleArtwork: (_images: unknown, model: string) => ({
     light: null,
     dark: null,
     fallback: `/vehicle-images/fallbacks/${model.toLowerCase()}/side.webp`,
   }),
-  AuthenticatedVehicleArtwork: ({ source, fallbackSource, alt, className }: {
+  AuthenticatedVehicleArtwork: ({
+    source,
+    fallbackSource,
+    alt,
+    className,
+  }: {
     source?: string | null;
     fallbackSource?: string | null;
     alt?: string;
@@ -317,18 +369,38 @@ vi.mock('@riviamigo/dashboards', () => ({
   }),
   useDashboards: () => ({ data: dashboardMocks.dashboards, isLoading: false, refetch: vi.fn() }),
   useCreateDashboard: () => ({ mutateAsync: dashboardMocks.createMutateAsync, isPending: false }),
-  useCloneDashboard: () => ({ mutateAsync: dashboardMocks.cloneMutateAsync, isPending: false, variables: undefined }),
-  useDeleteDashboard: () => ({ mutate: dashboardMocks.deleteMutate, isPending: false, variables: undefined }),
-  useSetAdminDashboardLock: () => ({ mutate: dashboardMocks.lockMutate, isPending: false, variables: undefined }),
-  useRestoreAdminDashboardDefault: () => ({ mutate: dashboardMocks.restoreMutate, isPending: false, variables: undefined }),
+  useCloneDashboard: () => ({
+    mutateAsync: dashboardMocks.cloneMutateAsync,
+    isPending: false,
+    variables: undefined,
+  }),
+  useDeleteDashboard: () => ({
+    mutate: dashboardMocks.deleteMutate,
+    isPending: false,
+    variables: undefined,
+  }),
+  useSetAdminDashboardLock: () => ({
+    mutate: dashboardMocks.lockMutate,
+    isPending: false,
+    variables: undefined,
+  }),
+  useRestoreAdminDashboardDefault: () => ({
+    mutate: dashboardMocks.restoreMutate,
+    isPending: false,
+    variables: undefined,
+  }),
 }));
 
-vi.mock('../../components/layout/AppLayout', () => ({ AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock('../../components/layout/AuthGuard', () => ({ AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/AppLayout', () => ({
+  AppLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock('../../components/layout/AuthGuard', () => ({
+  AuthGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 vi.mock('lucide-react', () => ({
   Activity: () => <svg data-testid="icon-activity" />,
   Braces: () => <svg data-testid="icon-braces" />,
-  Car:    () => <svg data-testid="icon-car" />,
+  Car: () => <svg data-testid="icon-car" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
   Circle: () => <svg data-testid="icon-circle" />,
   Clipboard: () => <svg data-testid="icon-clipboard" />,
@@ -359,20 +431,20 @@ vi.mock('lucide-react', () => ({
   Lock: () => <svg data-testid="icon-lock" />,
   LogOut: () => <svg data-testid="icon-logout" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
-  Plus:   () => <svg data-testid="icon-plus" />,
+  Plus: () => <svg data-testid="icon-plus" />,
   Pencil: () => <svg data-testid="icon-pencil" />,
   Play: () => <svg data-testid="icon-play" />,
   RefreshCw: () => <svg data-testid="icon-refresh" />,
   Ruler: () => <svg data-testid="icon-ruler" />,
   RotateCcw: () => <svg data-testid="icon-rotate" />,
-  Save:       () => <svg data-testid="icon-save" />,
+  Save: () => <svg data-testid="icon-save" />,
   Search: () => <svg data-testid="icon-search" />,
   ShieldCheck: () => <svg data-testid="icon-shield" />,
   ShieldOff: () => <svg data-testid="icon-shield-off" />,
   SlidersHorizontal: () => <svg data-testid="icon-sliders" />,
   Star: () => <svg data-testid="icon-star" />,
   Users: () => <svg data-testid="icon-users" />,
-  X:      () => <svg data-testid="icon-x" />,
+  X: () => <svg data-testid="icon-x" />,
   Trash2: () => <svg data-testid="icon-trash" />,
   Unlock: () => <svg data-testid="icon-unlock" />,
 }));
@@ -389,7 +461,7 @@ function renderSettings() {
   return render(
     <QueryClientProvider client={queryClient}>
       <SettingsContent />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -419,19 +491,21 @@ describe('Settings page', () => {
       role: 'user',
       default_vehicle_id: 'v1',
     };
-    settingsMocks.vehicles = [{
-      id: 'v1',
-      display_name: 'Adventure Truck',
-      model: 'R1T',
-      year: null,
-      trim: null,
-      vin: null,
-      rivian_vehicle_id: 'rivian-1',
-      battery_capacity_kwh: 135,
-      target_tire_pressure_psi: 48,
-      membership_role: 'owner',
-      is_demo: false,
-    }];
+    settingsMocks.vehicles = [
+      {
+        id: 'v1',
+        display_name: 'Adventure Truck',
+        model: 'R1T',
+        year: null,
+        trim: null,
+        vin: null,
+        rivian_vehicle_id: 'rivian-1',
+        battery_capacity_kwh: 135,
+        target_tire_pressure_psi: 48,
+        membership_role: 'owner',
+        is_demo: false,
+      },
+    ];
   });
 
   it('renders the Vehicles section heading', () => {
@@ -455,29 +529,62 @@ describe('Settings page', () => {
   });
 
   it('uses compact accessible icon actions on vehicle cards', () => {
-    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
     settingsMocks.vehicles = [
       {
-        id: 'v1', display_name: 'Adventure Truck', model: 'R1T', year: null, trim: null, vin: null,
-        rivian_vehicle_id: 'rivian-1', battery_capacity_kwh: 135, target_tire_pressure_psi: 48,
-        membership_role: 'owner', is_demo: false,
+        id: 'v1',
+        display_name: 'Adventure Truck',
+        model: 'R1T',
+        year: null,
+        trim: null,
+        vin: null,
+        rivian_vehicle_id: 'rivian-1',
+        battery_capacity_kwh: 135,
+        target_tire_pressure_psi: 48,
+        membership_role: 'owner',
+        is_demo: false,
       },
       {
-        id: 'v2', display_name: 'Second Vehicle', model: 'R1S', year: null, trim: null, vin: null,
-        rivian_vehicle_id: 'rivian-2', battery_capacity_kwh: 135, target_tire_pressure_psi: 48,
-        membership_role: 'owner', is_demo: false,
+        id: 'v2',
+        display_name: 'Second Vehicle',
+        model: 'R1S',
+        year: null,
+        trim: null,
+        vin: null,
+        rivian_vehicle_id: 'rivian-2',
+        battery_capacity_kwh: 135,
+        target_tire_pressure_psi: 48,
+        membership_role: 'owner',
+        is_demo: false,
       },
       {
-        id: 'demo-v1', display_name: 'Demo R2S', model: 'R2S', year: null, trim: null, vin: null,
-        rivian_vehicle_id: 'demo-r2s-local', battery_capacity_kwh: 82, target_tire_pressure_psi: 48,
-        membership_role: 'owner', is_demo: true,
+        id: 'demo-v1',
+        display_name: 'Demo R2S',
+        model: 'R2S',
+        year: null,
+        trim: null,
+        vin: null,
+        rivian_vehicle_id: 'demo-r2s-local',
+        battery_capacity_kwh: 82,
+        target_tire_pressure_psi: 48,
+        membership_role: 'owner',
+        is_demo: true,
       },
     ];
 
     renderSettings();
 
-    const setDefault = screen.getByRole('button', { name: 'Set Second Vehicle as default vehicle' });
-    const manageSharing = screen.getByRole('button', { name: 'Manage sharing for Adventure Truck' });
+    const setDefault = screen.getByRole('button', {
+      name: 'Set Second Vehicle as default vehicle',
+    });
+    const manageSharing = screen.getByRole('button', {
+      name: 'Manage sharing for Adventure Truck',
+    });
     const refreshDemo = screen.getByRole('button', { name: 'Refresh demo data for Demo R2S' });
     for (const button of [setDefault, manageSharing, refreshDemo]) {
       expect(button).toHaveClass('h-8', 'w-8', 'px-0');
@@ -488,11 +595,18 @@ describe('Settings page', () => {
 
     fireEvent.click(manageSharing);
     expect(screen.getByText('Vehicle Access')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Hide sharing for Adventure Truck' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Hide sharing for Adventure Truck' })
+    ).toBeInTheDocument();
   });
 
   it('renders dashboard persistence controls and triggers dashboard actions for admins', async () => {
-    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
     dashboardMocks.dashboards = [
       {
         id: 'default-overview',
@@ -545,7 +659,9 @@ describe('Settings page', () => {
     expect(screen.getByText('Overview')).toBeInTheDocument();
     expect(screen.getByText('My Charging')).toBeInTheDocument();
     expect(screen.getByText('2 saved')).toBeInTheDocument();
-    const ownershipDetails = screen.getByText('How dashboard defaults and personal copies work').closest('details');
+    const ownershipDetails = screen
+      .getByText('How dashboard defaults and personal copies work')
+      .closest('details');
     expect(ownershipDetails).not.toHaveAttribute('open');
 
     const openDefaultButton = screen.getByRole('button', { name: 'Open default' });
@@ -568,11 +684,13 @@ describe('Settings page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
     await waitFor(() => {
-      expect(dashboardMocks.createMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
-        id: 'personal-draft',
-        slug: 'overview',
-        isDefault: false,
-      }));
+      expect(dashboardMocks.createMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'personal-draft',
+          slug: 'overview',
+          isDefault: false,
+        })
+      );
     });
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({
@@ -586,7 +704,10 @@ describe('Settings page', () => {
     expect(dashboardMocks.downloadDashboardYaml).toHaveBeenCalledWith(dashboardMocks.dashboards[0]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
-    expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({ id: 'default-overview', locked: false });
+    expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({
+      id: 'default-overview',
+      locked: false,
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
     expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('default-overview');
@@ -594,7 +715,9 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('user-charging');
 
-    const showEditButton = screen.getByRole('switch', { name: 'Show edit button on dashboard pages' });
+    const showEditButton = screen.getByRole('switch', {
+      name: 'Show edit button on dashboard pages',
+    });
     expect(showEditButton).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(showEditButton);
     expect(showEditButton).toHaveAttribute('aria-checked', 'true');
@@ -659,7 +782,12 @@ describe('Settings page', () => {
   it('shows Demo Vehicle for admin users and triggers creation', async () => {
     const hooks = await import('@riviamigo/hooks');
     const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
-    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
     renderSettings();
     await waitFor(() => {
       expect(screen.getByText('Demo Vehicle')).toBeInTheDocument();
@@ -683,32 +811,43 @@ describe('Settings page', () => {
   it('refreshes only demo history after confirmation and hides Rivian repair actions', async () => {
     const hooks = await import('@riviamigo/hooks');
     const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
-    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'demo-v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'demo-v1',
+    };
     settingsMocks.auth.defaultVehicleId = 'demo-v1';
-    settingsMocks.vehicles = [{
-      id: 'demo-v1',
-      display_name: 'Demo R1T',
-      model: 'R1T',
-      year: null,
-      trim: null,
-      vin: null,
-      rivian_vehicle_id: 'demo-r1t-local',
-      battery_capacity_kwh: 135,
-      target_tire_pressure_psi: 48,
-      membership_role: 'owner',
-      is_demo: true,
-    }];
+    settingsMocks.vehicles = [
+      {
+        id: 'demo-v1',
+        display_name: 'Demo R1T',
+        model: 'R1T',
+        year: null,
+        trim: null,
+        vin: null,
+        rivian_vehicle_id: 'demo-r1t-local',
+        battery_capacity_kwh: 135,
+        target_tire_pressure_psi: 48,
+        membership_role: 'owner',
+        is_demo: true,
+      },
+    ];
 
     renderSettings();
 
     expect(screen.getAllByText('Demo data').length).toBeGreaterThan(0);
     expect(screen.queryByLabelText('Refresh Rivian login for Demo R1T')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Clear local artwork cache for Demo R1T')).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Clear local artwork cache for Demo R1T')
+    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Refresh vehicle artwork for Demo R1T')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh demo data for Demo R1T' }));
     expect(screen.getByText('Refresh Demo R1T?')).toBeInTheDocument();
-    expect(screen.getByText(/illustrative telemetry, trips, charging, and weather history/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/illustrative telemetry, trips, charging, and weather history/i)
+    ).toBeInTheDocument();
 
     const confirmationButtons = screen.getAllByRole('button', { name: 'Refresh Demo Data' });
     fireEvent.click(confirmationButtons[confirmationButtons.length - 1]!);
@@ -765,7 +904,9 @@ describe('Settings page', () => {
     expect(screen.getByText('/v1/vehicles/{id}/raw-data')).toBeInTheDocument();
     expect(screen.getByText('/v1/metrics/batch')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Search API endpoints'), { target: { value: 'raw-data' } });
+    fireEvent.change(screen.getByLabelText('Search API endpoints'), {
+      target: { value: 'raw-data' },
+    });
 
     expect(screen.getByText('/v1/vehicles/{id}/raw-data')).toBeInTheDocument();
     expect(screen.queryByText('/v1/vehicles')).not.toBeInTheDocument();
@@ -804,11 +945,15 @@ describe('Settings page', () => {
 
     renderSettings();
     fireEvent.click(screen.getByText('Places'));
-    fireEvent.change(screen.getByLabelText('Address Search'), { target: { value: 'unlikely query xyz' } });
+    fireEvent.change(screen.getByLabelText('Address Search'), {
+      target: { value: 'unlikely query xyz' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() => {
-      expect(screen.getByText('No matching addresses found. Try a broader search.')).toBeInTheDocument();
+      expect(
+        screen.getByText('No matching addresses found. Try a broader search.')
+      ).toBeInTheDocument();
     });
   });
 
@@ -841,8 +986,8 @@ describe('Settings page', () => {
       {
         id: 'p-work',
         name: 'Office Lot',
-        latitude: 39.7500,
-        longitude: -104.9990,
+        latitude: 39.75,
+        longitude: -104.999,
         radius_m: 75,
         is_home: false,
         is_work: true,
@@ -850,8 +995,8 @@ describe('Settings page', () => {
           id: 'a-work',
           display_name: '400 Market St, Boulder, CO',
           osm_id: 456,
-          latitude: 39.7500,
-          longitude: -104.9990,
+          latitude: 39.75,
+          longitude: -104.999,
           road: 'Market St',
           city: 'Boulder',
           state: 'CO',
@@ -882,7 +1027,9 @@ describe('Settings page', () => {
   it('renders the theme chooser', () => {
     renderSettings();
     fireEvent.click(screen.getByText('Appearance'));
-    expect(screen.getByText('Toggle between dark, light, and system appearance')).toBeInTheDocument();
+    expect(
+      screen.getByText('Toggle between dark, light, and system appearance')
+    ).toBeInTheDocument();
     expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
   });
 
@@ -894,7 +1041,12 @@ describe('Settings page', () => {
   });
 
   it('renders the telemetry explorer for admin users', async () => {
-    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
     renderSettings();
     fireEvent.click(screen.getByText('Raw Data'));
 
@@ -907,7 +1059,12 @@ describe('Settings page', () => {
 
   it('renders and operates the admin Backups section', async () => {
     const hooks = await import('@riviamigo/hooks');
-    settingsMocks.me = { user_id: 'u1', email: 'admin@example.com', role: 'admin', default_vehicle_id: 'v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
     renderSettings();
 
     await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
@@ -922,25 +1079,35 @@ describe('Settings page', () => {
       expect(screen.getByText('Rows')).toBeInTheDocument();
     });
 
-    expect(screen.getByRole('option', { name: /America\/Chicago \(UTC[+-]\d{2}:\d{2}\)/ })).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('combobox', { name: 'Timezone' }), { target: { value: 'UTC' } });
+    expect(
+      screen.getByRole('option', { name: /America\/Chicago \(UTC[+-]\d{2}:\d{2}\)/ })
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Timezone' }), {
+      target: { value: 'UTC' },
+    });
     fireEvent.click(screen.getByText('Save settings'));
 
     await waitFor(() => {
-      expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(expect.objectContaining({
-        timezone: 'UTC',
-        bucket: 'riviamigo-backups',
-        retention_count: 8,
-        local_enabled: true,
-        s3_enabled: true,
-      }));
+      expect(hooks.api.updateBackupSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timezone: 'UTC',
+          bucket: 'riviamigo-backups',
+          retention_count: 8,
+          local_enabled: true,
+          s3_enabled: true,
+        })
+      );
     });
 
     fireEvent.click(screen.getByText('Test S3 connection'));
-    await waitFor(() => expect(hooks.api.testBackupS3).toHaveBeenCalledWith(expect.objectContaining({
-      bucket: 'riviamigo-backups',
-      s3_enabled: true,
-    })));
+    await waitFor(() =>
+      expect(hooks.api.testBackupS3).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bucket: 'riviamigo-backups',
+          s3_enabled: true,
+        })
+      )
+    );
 
     fireEvent.click(screen.getByText('Run now'));
     await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled());
@@ -965,7 +1132,9 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(screen.getByText('Restore this backup?')).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), { target: { value: 'RESTORE' } });
+    fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), {
+      target: { value: 'RESTORE' },
+    });
     fireEvent.click(screen.getByText('Validate candidate and restore'));
 
     await waitFor(() => {
@@ -981,9 +1150,121 @@ describe('Settings page', () => {
     expect(screen.queryByText('5%')).not.toBeInTheDocument();
   });
 
+  it.each([
+    {
+      code: 'unsupported_migration_chain',
+      title: 'Unsupported migration chain',
+      message:
+        'This recovery package belongs to a migration chain that this release does not support.',
+    },
+    {
+      code: 'source_ledger_invalid',
+      title: 'Source migration ledger is invalid',
+      message:
+        'The package migration ledger is incomplete, unordered, or otherwise cannot be verified.',
+    },
+    {
+      code: 'target_migration_drift',
+      title: 'Target migration drift detected',
+      message:
+        'This server’s recorded migration ledger does not match the migration catalog in the running release.',
+    },
+    {
+      code: 'migration_checksum_mismatch',
+      title: 'Migration checksum mismatch',
+      message:
+        'The migration version may match, but the migration file bytes do not. Matching schema versions are not sufficient for migration identity.',
+    },
+    {
+      code: 'schema_fingerprint_mismatch',
+      title: 'Schema contract mismatch',
+      message:
+        'The recorded schema fingerprint does not match the schema contract required by this restore.',
+    },
+    {
+      code: 'source_schema_newer',
+      title: 'Source schema is newer',
+      message:
+        'This recovery package was created by a newer schema release and cannot be restored here.',
+    },
+  ])('presents the $code restore preflight failure clearly', async ({ code, title, message }) => {
+    const hooks = await import('@riviamigo/hooks');
+    vi.mocked(hooks.api.preflightBackupRestore).mockResolvedValueOnce({
+      plan: {
+        plan_id: `blocked-${code}`,
+        engine_version: 3,
+        package_checksum_sha256: 'blocked-package',
+        package_format: 'riviamigo-recovery-v3',
+        compatible: false,
+        source: {
+          postgres_major: 17,
+          timescale_version: '2.19.3',
+          migration_version: 1,
+          migration_ledger: [],
+          migration_ledger_successful: true,
+          migration_chain_id: 'riviamigo-schema-v1',
+          migration_catalog_digest: 'catalog',
+          schema_contract_version: 'riviamigo-schema-contract-v1',
+          schema_fingerprint: 'source',
+        },
+        target: {
+          postgres_major: 17,
+          timescale_version: '2.19.3',
+          migration_version: 1,
+          migration_ledger: [],
+          migration_ledger_successful: true,
+          migration_chain_id: 'riviamigo-schema-v1',
+          migration_catalog_digest: 'catalog',
+          schema_contract_version: 'riviamigo-schema-contract-v1',
+          schema_fingerprint: 'target',
+        },
+        pending_migrations: [],
+        transforms: [],
+        validation_checks: [],
+        warnings: [],
+        blocking_errors: [{ code, message: 'Backend compatibility detail.' }],
+        planned_at: '2026-05-04T12:02:00Z',
+      },
+    } as never);
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+    renderSettings();
+
+    await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Backups'));
+    const restorePicker = await screen.findByRole('combobox', {
+      name: 'Choose a recovery package',
+    });
+    fireEvent.change(restorePicker, { target: { value: 'artifact-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore selected backup' }));
+    await waitFor(() => expect(screen.getByText('Restore this backup?')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Type RESTORE to continue'), {
+      target: { value: 'RESTORE' },
+    });
+    fireEvent.click(screen.getByText('Validate candidate and restore'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`restore-blocking-error-${code}`)).toBeInTheDocument();
+    });
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByText(`Code: ${code}`)).toBeInTheDocument();
+    expect(screen.queryByText(/Versioned schema profile/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Validate candidate and restore' })).toBeDisabled();
+  });
+
   it('shows the Backups section for super users as well', async () => {
     const hooks = await import('@riviamigo/hooks');
-    settingsMocks.me = { user_id: 'u1', email: 'super@example.com', role: 'super_user', default_vehicle_id: 'v1' };
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'super@example.com',
+      role: 'super_user',
+      default_vehicle_id: 'v1',
+    };
     renderSettings();
 
     await waitFor(() => expect(screen.getByText('Backups')).toBeInTheDocument());
@@ -1005,7 +1286,7 @@ describe('Settings page', () => {
   it('calls logout and navigates on Sign Out click', async () => {
     const logoutFn = vi.fn().mockResolvedValue(undefined);
     vi.doMock('@riviamigo/hooks', () => ({
-      useAuth:     () => ({ logout: logoutFn }),
+      useAuth: () => ({ logout: logoutFn }),
       useVehicles: () => ({ data: [] }),
     }));
     renderSettings();
@@ -1023,18 +1304,28 @@ describe('Settings page', () => {
     expect(submit).toBeDisabled();
     expect(screen.getByRole('status')).toHaveTextContent('0/12');
 
-    fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'current-password' } });
-    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'replacement-password' } });
-    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'different-password' } });
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'current-password' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), {
+      target: { value: 'replacement-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'different-password' },
+    });
     expect(screen.getByText('Passwords do not match.')).toBeInTheDocument();
     expect(submit).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'replacement-password' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'replacement-password' },
+    });
     fireEvent.click(submit);
-    await waitFor(() => expect(hooksMocks.changePassword).toHaveBeenCalledWith({
-      current_password: 'current-password',
-      new_password: 'replacement-password',
-    }));
+    await waitFor(() =>
+      expect(hooksMocks.changePassword).toHaveBeenCalledWith({
+        current_password: 'current-password',
+        new_password: 'replacement-password',
+      })
+    );
     expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
   });
