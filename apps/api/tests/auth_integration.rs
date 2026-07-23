@@ -1210,7 +1210,7 @@ async fn charging_sessions_surface_home_geofence_location() {
 }
 
 #[tokio::test]
-async fn charging_sessions_include_local_charging_window_day() {
+async fn charging_sessions_use_the_local_start_date() {
     let app = TestApp::new().await;
     let token = register_and_login(&app, "charging-daykey@example.com").await;
     let user_id: uuid::Uuid = sqlx::query_scalar!(
@@ -1238,7 +1238,7 @@ async fn charging_sessions_include_local_charging_window_day() {
     .await
     .expect("update timezone");
 
-    // 2026-05-24 00:30 in America/Chicago => charging-window day key should be 2026-05-23
+    // 2026-05-24 00:30 in America/Chicago => the session date should be 2026-05-24.
     let started_at = chrono::DateTime::parse_from_rfc3339("2026-05-24T05:30:00Z")
         .expect("parse started_at")
         .with_timezone(&chrono::Utc);
@@ -1273,7 +1273,7 @@ async fn charging_sessions_include_local_charging_window_day() {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(
         res.body["data"][0]["session_day_local"],
-        json!("2026-05-23")
+        json!("2026-05-24")
     );
 }
 

@@ -61,7 +61,7 @@ export function getFeedHealthIssue(status?: FeedHealthStatus | null) {
   if (
     status?.worker_health === 'error' ||
     status?.worker_health === 'stale' ||
-    status?.telemetry_stale
+    status?.worker_health === 'degraded'
   ) {
     return {
       key: `unhealthy:${status?.worker_health ?? 'unknown'}:${status?.telemetry_stale_reason ?? 'unknown'}`,

@@ -18,6 +18,12 @@ This document is canonical for the high-level backend flow. Update it when the A
 6. API routes expose typed data to the frontend through `packages/types` and `packages/hooks`.
 7. Completed trips enqueue an idempotent weather-enrichment job. The worker samples the exact route at endpoints and 15-minute intervals, derives rounded provider cells, batches Open-Meteo requests, stores `trip_weather_samples`, and updates the time-weighted `trips.outside_temp_c` summary used by trip and efficiency APIs.
 
+Runtime feed health is separate from telemetry freshness. Authentication errors,
+collector failures, degraded subscriptions, and a silent WebSocket can make the
+feed unhealthy. Older battery, range, or charging timestamps are reported as
+field freshness diagnostics instead; parked vehicles are not expected to emit
+continuous trip or charging telemetry.
+
 Telemetry is written to the `timeseries.telemetry` hypertable. The
 `telemetry_1min` continuous aggregate incrementally materializes the prior
 seven days once an hour, ending five minutes before the present. It remains a

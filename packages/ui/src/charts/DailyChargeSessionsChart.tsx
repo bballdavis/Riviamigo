@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { format, parseISO } from 'date-fns';
 import { RotateCcw } from 'lucide-react';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
@@ -100,9 +101,9 @@ const GROUP_META: Record<ChargerGroupKey, ChargerGroupMeta> = {
   },
 };
 
-function formatDayLabel(dayStart: string, dayLocal: string) {
-  const parsed = Number.isNaN(new Date(dayStart).getTime()) ? new Date(`${dayLocal}T00:00:00Z`) : new Date(dayStart);
-  return parsed.toLocaleString([], { month: 'short', day: 'numeric' });
+function formatDayLabel(dayLocal: string) {
+  const parsed = parseISO(`${dayLocal}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? dayLocal : format(parsed, 'MMM d');
 }
 
 function formatEnergy(value: number) {
@@ -391,7 +392,7 @@ export function DailyChargingBarChart({
             ),
           }}
         >
-          <div className="mb-1 font-medium text-fg">{formatDayLabel(activeDay.day_start, activeDay.day_local)}</div>
+          <div className="mb-1 font-medium text-fg">{formatDayLabel(activeDay.day_local)}</div>
           {variant === 'stacked' ? (
             <>
               <div className="mb-2 text-fg-tertiary">
@@ -515,8 +516,8 @@ export function DailyChargingBarChart({
                     handleDaySelect(day.day_local);
                   }}
                   aria-label={variant === 'stacked'
-                    ? `${formatDayLabel(day.day_start, day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} across ${formatSessionCount(sessionCount)}`
-                    : `${formatDayLabel(day.day_start, day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} energy charged`}
+                    ? `${formatDayLabel(day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} across ${formatSessionCount(sessionCount)}`
+                    : `${formatDayLabel(day.day_local)}: ${formatEnergy(day.totalEnergyKwh)} energy charged`}
                   className={onDayClick ? 'cursor-pointer' : undefined}
                 />
                 <g clipPath={`url(#${clipId})`} opacity={isActive || isSelected ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity}>
@@ -577,7 +578,7 @@ export function DailyChargingBarChart({
                 fontSize={CHART_FONT.fontSize}
                 fontWeight={CHART_FONT.fontWeight}
               >
-                {formatDayLabel(day.day_start, day.day_local)}
+                {formatDayLabel(day.day_local)}
               </text>
             </g>
           );

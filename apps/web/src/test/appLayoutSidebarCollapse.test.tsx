@@ -153,6 +153,43 @@ describe('AppLayout sidebar collapse', () => {
     window.removeEventListener('riviamigo:toast', toast as EventListener);
   });
 
+  it('keeps a connected feed online when only telemetry freshness is stale', () => {
+    currentStatusData = {
+      worker_health: 'connected',
+      telemetry_stale: true,
+      telemetry_stale_reason: 'battery_stale',
+    };
+    const toast = vi.fn();
+    window.addEventListener('riviamigo:toast', toast as EventListener);
+
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(screen.getByLabelText('Vehicle status: Online')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Vehicle status: Feed unhealthy')).not.toBeInTheDocument();
+    expect(toast).not.toHaveBeenCalled();
+
+    window.removeEventListener('riviamigo:toast', toast as EventListener);
+  });
+
+  it('shows a degraded collector as an unhealthy feed', () => {
+    currentStatusData = {
+      worker_health: 'degraded',
+      worker_health_msg: 'Rivian subscription has no active subscriptions',
+    };
+
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(screen.getByLabelText('Vehicle status: Feed unhealthy')).toBeInTheDocument();
+  });
+
   it('shows phantom drain as a battery child item and navigates to it', () => {
     render(
       <AppLayout activeKey="battery.phantom-drain">
