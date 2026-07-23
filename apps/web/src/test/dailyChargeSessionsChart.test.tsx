@@ -159,6 +159,22 @@ describe('DailyChargeSessionsChart', () => {
     expect(tooltip.textContent ?? '').toContain('Energy Charged: 40 kWh');
   });
 
+  it('formats the chart day from the local start-date key', () => {
+    render(
+      <DailyEnergyBarChart
+        daily={[{
+          day_local: '2024-01-01',
+          // The label must not be derived by converting UTC midnight to browser time.
+          day_start: '2024-01-02T00:00:00Z',
+          total_energy_kwh: 40,
+          session_count: 1,
+        }]}
+      />,
+    );
+
+    expect(screen.getByText('Jan 1')).toBeTruthy();
+  });
+
   it('calls day-click callback and toggles when clicked again', () => {
     function TestHarness() {
       const [selectedDay, setSelectedDay] = useState<string | null>(null);

@@ -635,7 +635,7 @@ async fn list_sessions_response(
 
     let rows = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, \
-            TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local, \
+            TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
@@ -662,7 +662,7 @@ async fn list_sessions_response(
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
             LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-              AND ($7 IS NULL OR TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') = $7) \
+              AND ($7 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') = $7) \
             ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5"
     )
         .bind(vehicle_id)
@@ -679,7 +679,7 @@ async fn list_sessions_response(
         "SELECT COUNT(*) FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.user_preferences up ON up.user_id = $4 \
          WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-           AND ($5 IS NULL OR TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') = $5)"
+           AND ($5 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') = $5)"
     )
     .bind(vehicle_id)
     .bind(from)
@@ -715,7 +715,7 @@ async fn get_chart_series_response(
         "SELECT
             cs.id AS session_id,
             cs.started_at,
-            TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local,
+            TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local,
             COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS energy_kwh,
             cs.cost_usd,
             COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name,
@@ -867,7 +867,7 @@ async fn get_session_response(
 
     let session = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, \
-            TO_CHAR(((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC')) - INTERVAL '12 hours')::date, 'YYYY-MM-DD') AS session_day_local, \
+            TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \

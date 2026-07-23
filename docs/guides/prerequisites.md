@@ -27,4 +27,30 @@ The database and Redis remain inside the Compose network. The web origin publish
 
 ## Building from source
 
-Contributors need Node.js 24.18.x, pnpm 11.15.1, and Rust 1.97.1. The repository pins these versions in `package.json`, `rust-toolchain.toml`, and `config/dependency-baselines.json`; use those files rather than a separately remembered toolchain version.
+Contributors need Node.js 24.18.x, pnpm 11.15.1, Rust 1.97.1, Docker
+Engine with Docker Compose v2, and `curl`. The repository pins the Node,
+pnpm, and Rust versions in `package.json`, `rust-toolchain.toml`, and
+`config/dependency-baselines.json`; use those files rather than a separately
+remembered toolchain version.
+
+### Windows Rust builds
+
+The pinned Rust toolchain uses the Windows MSVC target. Windows contributors
+must install Visual Studio 2017 or later, or Visual Studio Build Tools, with
+the **Desktop development with C++** workload. That workload must include the
+MSVC compiler/linker (`cl.exe` and `link.exe`) and a Windows 10 or Windows 11
+SDK. VS Code alone is not sufficient.
+
+Run Cargo from a Visual Studio Developer PowerShell or Developer Command
+Prompt so the MSVC tools are available on `PATH`, then verify the toolchain
+before starting the dev stack:
+
+```powershell
+where.exe cl.exe
+where.exe link.exe
+cd apps/api
+cargo build
+```
+
+The `pnpm run dev:stack` launcher starts the Docker-backed development
+services, builds the host-run Rust API, and uses `curl` for readiness checks.

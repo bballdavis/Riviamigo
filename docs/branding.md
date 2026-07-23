@@ -162,12 +162,12 @@ Common usage:
 ## Runtime Health Indicators
 
 Vehicle connection chrome must distinguish browser/API connectivity from the
-upstream Rivian telemetry feed. A green **Online** state is valid only when the
-local live connection is open and the selected vehicle has no collector,
-authentication, or telemetry-staleness failure. Missing credentials, an
-unhealthy collector, or stale telemetry use the shared danger-tone **Feed
-unhealthy** state and suppress battery details that could be mistaken for live
-data.
+upstream Rivian telemetry feed. A green **Online** state is valid when the local
+live connection is open and the selected vehicle has no collector or
+authentication failure. Missing credentials, an unhealthy collector, or a
+silent WebSocket feed use the shared danger-tone **Feed unhealthy** state.
+Telemetry-age warnings such as an old parked battery or range snapshot remain
+informational freshness details and do not imply that the feed is disconnected.
 
 Runtime feed failures also emit an error toast with a 15-minute per-vehicle,
 per-reason cooldown. Persistent failures may remind the user after the cooldown,
