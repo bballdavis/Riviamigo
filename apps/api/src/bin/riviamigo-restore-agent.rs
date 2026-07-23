@@ -206,6 +206,13 @@ async fn host_restore(config: &Config, package: &Path, force: bool) -> anyhow::R
             "candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}"
         );
     }
+    if prepared.validation_report.target_schema.schema_fingerprint
+        != plan.target.schema_fingerprint.clone().unwrap_or_default()
+    {
+        let _ = drop_database(config, &prepared.candidate_database).await;
+        current_pool.close().await;
+        anyhow::bail!("candidate final schema contract differs from the preflight target contract");
+    }
     let safety_and_merge = async {
         backups::run_backup_now(
             &current_pool,
@@ -663,6 +670,19 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
         anyhow::bail!(
             "candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}"
         );
+    }
+    let expected_target_contract = job
+        .plan
+        .as_ref()
+        .and_then(|plan| plan.target.schema_fingerprint.as_deref())
+        .unwrap_or_default();
+    if prepared.validation_report.target_schema.schema_fingerprint != expected_target_contract {
+        let _ = drop_database(config, &prepared.candidate_database).await;
+        let mut terminal = restore_jobs::read(config, job_id).await?;
+        terminal.retryable = false;
+        terminal.updated_at = Utc::now();
+        restore_jobs::write(config, &terminal).await?;
+        anyhow::bail!("candidate final schema contract differs from the preflight target contract");
     }
     inject_restore_fault("candidate_validated")?;
 

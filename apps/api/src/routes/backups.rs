@@ -513,7 +513,7 @@ async fn upload_backup_artifact(
         let storage_path = final_path.to_string_lossy().into_owned();
         let manifest = serde_json::json!({
             "artifact_kind": "recovery_package",
-            "format": "riviamigo-recovery-v1",
+            "format": validated.manifest.get("format").cloned().unwrap_or(serde_json::Value::Null),
             "original_file_name": original_name,
             "package": validated.manifest,
         });

@@ -755,12 +755,13 @@ export interface CreateBackupRestoreRequestBody {
 
 export type RestoreBlockingCode =
   | 'unsupported_package_format'
-  | 'invalid_source_migration'
+  | 'unsupported_migration_chain'
+  | 'source_ledger_invalid'
+  | 'target_migration_drift'
   | 'newer_source_schema'
   | 'unsupported_postgres_version'
   | 'unsupported_timescale_version'
   | 'migration_checksum_mismatch'
-  | 'unknown_legacy_schema'
   | 'schema_contract_mismatch';
 
 export interface RestoreDatabaseProfile {
@@ -772,6 +773,10 @@ export interface RestoreDatabaseProfile {
     description: string;
     checksum_sha384: string;
   }>;
+  migration_ledger_successful: boolean;
+  migration_chain_id: string | null;
+  migration_catalog_digest: string | null;
+  schema_contract_version: string | null;
   schema_fingerprint: string | null;
 }
 
@@ -839,7 +844,6 @@ export interface RestoreJob {
   validation_report: {
     source_schema: RestoreSchemaContractReport;
     target_schema: RestoreSchemaContractReport;
-    legacy_profile: string | null;
     applied_transforms: RestorePlan['transforms'];
     migrations_applied: number[];
     foreign_keys_validated: boolean;
@@ -849,10 +853,12 @@ export interface RestoreJob {
 }
 
 export interface RestoreSchemaContractReport {
+  contract_version: string;
   schema_fingerprint: string;
   required_relations_present: boolean;
   missing_relations: string[];
   telemetry_hypertable: boolean;
+  foreign_keys_validated: boolean;
 }
 
 export interface UploadBackupResponse {

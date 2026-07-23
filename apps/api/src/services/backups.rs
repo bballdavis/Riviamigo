@@ -20,10 +20,11 @@ use walkdir::WalkDir;
 
 use crate::{
     config::Config,
+    db::migrations,
     errors::AppError,
     ingestion::session_store::decrypt_json,
     services::{
-        restore_compatibility::{self, RECOVERY_FORMAT_V1, RECOVERY_FORMAT_V2},
+        restore_compatibility::{self, RECOVERY_FORMAT_V1, RECOVERY_FORMAT_V2, RECOVERY_FORMAT_V3},
         s3_backups::{self, S3Settings},
     },
 };
@@ -34,7 +35,7 @@ static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
 const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools before creating a full recovery package";
 const BACKUP_DRIVER_UNSUPPORTED_MESSAGE: &str =
     "manifest-only JSON backups are not valid recovery packages; use BACKUP_DRIVER=pg_dump";
-const RECOVERY_PACKAGE_FORMAT: &str = RECOVERY_FORMAT_V2;
+const RECOVERY_PACKAGE_FORMAT: &str = RECOVERY_FORMAT_V3;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -859,14 +860,16 @@ fn validate_recovery_package_sync(
         .and_then(|value| value.as_u64());
     let supported_format = matches!(
         (format, format_version),
-        (RECOVERY_FORMAT_V1, Some(1)) | (RECOVERY_FORMAT_V2, Some(2))
+        (RECOVERY_FORMAT_V1, Some(1))
+            | (RECOVERY_FORMAT_V2, Some(2))
+            | (RECOVERY_FORMAT_V3, Some(3))
     );
     if !supported_format {
         return Err(AppError::Validation(
             "Unsupported recovery package format.".into(),
         ));
     }
-    if format == RECOVERY_FORMAT_V2 {
+    if matches!(format, RECOVERY_FORMAT_V2 | RECOVERY_FORMAT_V3) {
         for pointer in [
             "/source/postgres_major",
             "/source/migration_version",
@@ -876,7 +879,7 @@ fn validate_recovery_package_sync(
         ] {
             if manifest.pointer(pointer).is_none() {
                 return Err(AppError::Validation(format!(
-                    "Recovery v2 manifest is missing {pointer}."
+                    "Recovery manifest is missing {pointer}."
                 )));
             }
         }
@@ -891,7 +894,25 @@ fn validate_recovery_package_sync(
                 "Recovery package requires unsupported restore engine version {engine_version}."
             )));
         }
-        validate_v2_migration_ledger(&manifest)?;
+        validate_migration_ledger_shape(&manifest)?;
+        if format == RECOVERY_FORMAT_V3 {
+            for pointer in [
+                "/source/migration_chain_id",
+                "/source/migration_catalog_digest",
+                "/source/schema_contract_version",
+                "/source/app_version",
+            ] {
+                if manifest
+                    .pointer(pointer)
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(AppError::Validation(format!(
+                        "Recovery v3 manifest is missing {pointer}."
+                    )));
+                }
+            }
+        }
         for component in [
             "database",
             "backup_settings",
@@ -902,7 +923,7 @@ fn validate_recovery_package_sync(
                 .pointer(&format!("/components/{component}"))
                 .ok_or_else(|| {
                     AppError::Validation(format!(
-                        "Recovery v2 manifest is missing component {component}."
+                        "Recovery manifest is missing component {component}."
                     ))
                 })?;
             if value.get("version").and_then(serde_json::Value::as_u64) != Some(1)
@@ -940,7 +961,7 @@ fn validate_recovery_package_sync(
         "backup_settings",
         "backup-settings.json",
     )?;
-    if format == RECOVERY_FORMAT_V2 {
+    if matches!(format, RECOVERY_FORMAT_V2 | RECOVERY_FORMAT_V3) {
         verify_manifest_component(
             &manifest,
             &file_checksums,
@@ -983,7 +1004,7 @@ fn validate_recovery_package_sync(
                 )));
             }
         }
-        if format == RECOVERY_FORMAT_V2 {
+        if matches!(format, RECOVERY_FORMAT_V2 | RECOVERY_FORMAT_V3) {
             validate_v2_artwork_component(&manifest, files)?;
         }
     }
@@ -1040,7 +1061,7 @@ fn verify_manifest_component(
     Ok(())
 }
 
-fn validate_v2_migration_ledger(manifest: &serde_json::Value) -> Result<(), AppError> {
+fn validate_migration_ledger_shape(manifest: &serde_json::Value) -> Result<(), AppError> {
     let migration_version = manifest
         .pointer("/source/migration_version")
         .and_then(serde_json::Value::as_i64)
@@ -1048,10 +1069,10 @@ fn validate_v2_migration_ledger(manifest: &serde_json::Value) -> Result<(), AppE
     let ledger = manifest
         .pointer("/source/migration_ledger")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| AppError::Validation("Recovery v2 migration ledger is invalid.".into()))?;
+        .ok_or_else(|| AppError::Validation("Recovery migration ledger is invalid.".into()))?;
     if migration_version < 1 || ledger.is_empty() {
         return Err(AppError::Validation(
-            "Recovery v2 migration ledger is incomplete.".into(),
+            "Recovery migration ledger is incomplete.".into(),
         ));
     }
     let mut previous_version = None;
@@ -1068,14 +1089,14 @@ fn validate_v2_migration_ledger(manifest: &serde_json::Value) -> Result<(), AppE
                 .is_none_or(str::is_empty)
         {
             return Err(AppError::Validation(format!(
-                "Recovery v2 migration ledger entry {version} is invalid."
+                "Recovery migration ledger entry {version} is invalid."
             )));
         }
         previous_version = Some(version);
     }
     if previous_version != Some(migration_version) {
         return Err(AppError::Validation(
-            "Recovery v2 migration ledger does not end at the declared migration version.".into(),
+            "Recovery migration ledger does not end at the declared migration version.".into(),
         ));
     }
     Ok(())
@@ -1282,6 +1303,17 @@ async fn build_recovery_manifest(
 ) -> Result<serde_json::Value, AppError> {
     let current_database = current_database_name(pool).await?;
     let database_profile = restore_compatibility::runtime_database_profile(pool).await?;
+    if !database_profile.migration_ledger_successful {
+        return Err(AppError::Validation(
+            "Backup creation refused because the live migration ledger contains a failed migration."
+                .into(),
+        ));
+    }
+    migrations::validate_complete_ledger(&database_profile.migration_ledger).map_err(|error| {
+        AppError::Validation(format!(
+            "Backup creation refused because the live migration ledger differs from this release: {error}"
+        ))
+    })?;
     let database_checksum = compute_sha256(dump_path).await?;
     let settings_checksum = compute_sha256(settings_path).await?;
     let history_checksum = compute_sha256(history_path).await?;
@@ -1297,7 +1329,7 @@ async fn build_recovery_manifest(
 
     Ok(json!({
         "format": RECOVERY_PACKAGE_FORMAT,
-        "format_version": 2,
+        "format_version": 3,
         "created_at": created_at,
         "trigger": trigger.as_str(),
         "source": {
@@ -1307,6 +1339,9 @@ async fn build_recovery_manifest(
             "timescale_version": database_profile.timescale_version,
             "migration_version": database_profile.migration_version,
             "migration_ledger": database_profile.migration_ledger,
+            "migration_chain_id": database_profile.migration_chain_id,
+            "migration_catalog_digest": database_profile.migration_catalog_digest,
+            "schema_contract_version": database_profile.schema_contract_version,
             "schema_fingerprint": database_profile.schema_fingerprint,
         },
         "scope": {
@@ -1947,7 +1982,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_v2_archive_enforces_the_versioned_component_contract() {
+    async fn recovery_v3_archive_enforces_the_versioned_component_contract() {
         let root = std::env::temp_dir().join(format!("riviamigo-backup-v2-{}", Uuid::new_v4()));
         let cache = root.join("cache");
         let artwork = cache.join("vehicle-1/artwork.webp");
@@ -1983,13 +2018,17 @@ mod tests {
             })
         };
         let manifest = serde_json::json!({
-            "format": "riviamigo-recovery-v2",
-            "format_version": 2,
+            "format": "riviamigo-recovery-v3",
+            "format_version": 3,
             "source": {
+                "app_version": "test",
                 "postgres_major": 18,
                 "timescale_version": "2.28.3",
                 "migration_version": restore_compatibility::latest_migration_version(),
                 "migration_ledger": restore_compatibility::compiled_migration_ledger(),
+                "migration_chain_id": crate::db::migrations::MIGRATION_CHAIN_ID,
+                "migration_catalog_digest": crate::db::migrations::migration_catalog_digest(),
+                "schema_contract_version": restore_compatibility::SCHEMA_CONTRACT_VERSION,
                 "schema_fingerprint": "test-fingerprint"
             },
             "components": {
@@ -2022,8 +2061,8 @@ mod tests {
 
         let validated = validate_recovery_package(&archive)
             .await
-            .expect("valid v2 package");
-        assert_eq!(validated.manifest["format"], "riviamigo-recovery-v2");
+            .expect("valid v3 package");
+        assert_eq!(validated.manifest["format"], "riviamigo-recovery-v3");
         let _ = std::fs::remove_dir_all(root);
     }
 }

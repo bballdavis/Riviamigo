@@ -16,9 +16,9 @@ Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma
 
 If S3 is an enabled destination and its upload fails, the run is marked failed and Riviamigo retains the valid package locally even when Local retention was disabled. This prevents a remote-storage outage from silently appearing as a protected backup.
 
-New packages use the `riviamigo-recovery-v2` contract and contain:
+The cutover release uses the `riviamigo-recovery-v3` contract and contains:
 
-- `manifest.json` with the source release/build, PostgreSQL and TimescaleDB versions, complete migration ledger and checksums, canonical schema fingerprint, component policies, redactions, sizes, and checksums.
+- `manifest.json` with the source release/build, PostgreSQL and TimescaleDB versions, migration chain identifier, complete ordered migration ledger and raw-byte SHA-384 checksums, compiled catalog digest, versioned canonical schema-contract digest, component policies, redactions, sizes, and checksums.
 - `database.dump`, a custom-format PostgreSQL dump with sensitive and ephemeral data excluded.
 - `backup-settings.json`, containing non-secret backup schedule and target configuration.
 - `operational-history.json`, containing a sanitized, independently versioned snapshot of backup runs, artifact metadata, and restore requests.
@@ -30,10 +30,10 @@ The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid
 
 On the target installation, sign in as an administrator and open **Settings > Backups**. In **Restore from backup**, choose a package from the local catalog or select **Import recovery package** to upload a `.rma.tar.gz` file from another Riviamigo server. Wait for upload and package validation to finish. Uploaded packages have no artificial size limit, but the backup filesystem must have enough space for the package, validation staging, and the required safety backup. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
 
-Select **Restore selected backup**. Riviamigo first performs an authenticated compatibility preflight and shows source and target schema versions, pending migrations, required transforms, warnings, or a stable blocking reason. Starting the restore requires that exact plan ID and package checksum. Review the replacement warning and type `RESTORE`. Riviamigo then:
+Select **Restore selected backup**. Riviamigo first performs an authenticated compatibility preflight and shows the source and target chain identities, schema heads, pending migrations, warnings, or a stable blocking reason. A source is eligible only when its complete ledger is an exact prefix of the target release catalog, including version, description, and checksum. Starting the restore requires that exact plan ID and package checksum. Review the replacement warning and type `RESTORE`. Riviamigo then:
 
 1. Restores PostgreSQL and TimescaleDB into an isolated candidate while the current application remains available.
-2. Verifies the actual source schema, applies only registered idempotent compatibility transforms, reconstructs SQLx bookkeeping inside the candidate, runs pending migrations, and validates required relations, hypertables, checksums, and foreign keys.
+2. Verifies the actual source schema and migration ledger, reconstructs SQLx bookkeeping only inside the isolated candidate, runs pending forward migrations, and validates required relations, constraints, indexes, hypertables, policies, checksums, and foreign keys.
 3. Creates and verifies a fresh safety recovery package only after the candidate is ready. The restore stops if this fails.
 4. Merges source operational history with the target host snapshot; target records win UUID conflicts and the host catalogs determine physical package availability.
 5. Stops the API and ingestion workers, then atomically activates the candidate database and versioned artwork directory.
@@ -79,6 +79,10 @@ Production Compose mounts the host-visible `./data/backups` directory at `/backu
 
 ## Compatibility and verification
 
-Recovery is forward-compatible: a recognized older package may be restored into an equal or newer supported PostgreSQL/TimescaleDB and Riviamigo schema. Downgrades, unknown v1 schema profiles, contradictory manifests, changed migration checksums, unknown fingerprints, incomplete schemas, and newer-source packages are rejected before swap. Legacy `riviamigo-recovery-v1` packages remain readable, but their declared migration and actual restored schema must match a registered profile. Normal migration bookkeeping reconstruction is isolated to the restore candidate. To recover databases activated by older restore releases, startup can add missing compiled bookkeeping entries only when the complete live schema, existing checksums, and a registered schema profile all agree; it refuses unknown or contradictory states.
+Recovery is forward-compatible within the immutable `riviamigo-schema-v1` chain: a recognized older v3 package may be restored into an equal or newer supported release when its ledger is an exact catalog prefix. The target release applies only the migrations after that source head inside the isolated candidate. Downgrades, unknown chains, malformed or gapped ledgers, changed migration checksums, changed descriptions, catalog drift, schema-contract mismatches, incomplete schemas, and newer-source packages are rejected before swap.
+
+The former five-migration pre-release chain is unsupported by the cutover release. Its packages remain rollback artifacts and must be restored with the matching old application image, then explicitly adopted before moving that database to the new baseline. The adoption command is an operator action for a stopped installation: it verifies a recovery dump and complete canonical schema against a scratch baseline, then replaces only SQLx bookkeeping. It never replays baseline SQL and is never run automatically at startup, backup, or restore.
+
+Matching migration numbers or visibly matching tables do not prove migration identity. The raw migration bytes, ordered catalog, chain identifier, and schema contract must all agree.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.
