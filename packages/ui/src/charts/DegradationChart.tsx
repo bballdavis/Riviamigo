@@ -3,11 +3,11 @@ import {
   ResponsiveContainer, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
 } from 'recharts';
-import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { colors } from '../tokens/colors';
+import { formatAppDate } from '../lib/dateTime';
 
 export interface DegradationPoint {
   ts: string;
@@ -53,7 +53,7 @@ export function DegradationChart({
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(v: string) => format(parseISO(v), 'MMM yyyy')}
+          tickFormatter={(v: string) => formatAppDate(v, { month: 'short', year: 'numeric' })}
           minTickGap={60}
         />
         <YAxis
@@ -67,7 +67,7 @@ export function DegradationChart({
 
         <Tooltip
           content={<ChartTooltip
-            labelFormatter={(v: string) => format(parseISO(v), 'MMM d, yyyy')}
+            labelFormatter={(v: string) => formatAppDate(v)}
             formatter={(v, name) => {
               if (name === 'capacity_pct') return [`${(v ?? 0).toFixed(1)}%`, 'Capacity'];
               return [`${(v ?? 0).toFixed(1)} kWh`, 'Usable'];

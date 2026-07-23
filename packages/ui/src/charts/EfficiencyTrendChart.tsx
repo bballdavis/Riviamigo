@@ -3,10 +3,10 @@ import {
   ResponsiveContainer, ComposedChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Brush,
 } from 'recharts';
-import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
+import { formatAppDate, formatAppDateTime } from '../lib/dateTime';
 
 export interface EfficiencyTrendPoint {
   ts: string;
@@ -39,7 +39,7 @@ export function EfficiencyTrendChart({
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(v: string) => format(parseISO(v), 'MMM d')}
+          tickFormatter={(v: string) => formatAppDate(v, { month: 'short', day: 'numeric' })}
           minTickGap={40}
         />
         <YAxis
@@ -53,7 +53,7 @@ export function EfficiencyTrendChart({
 
         <Tooltip
           content={<ChartTooltip
-            labelFormatter={(v: string) => format(parseISO(v), 'MMM d, yyyy p')}
+            labelFormatter={(v: string) => formatAppDateTime(v)}
             formatter={(v, name) => [
               v !== undefined ? `${v.toFixed(0)} Wh/mi` : '—',
               name === 'trip_efficiency_wh_mi' ? 'Trip efficiency' : '24-hour avg',
@@ -95,7 +95,7 @@ export function EfficiencyTrendChart({
             dataKey="ts"
             height={28}
             stroke={CHART_COLORS.muted}
-            tickFormatter={(v: string) => format(parseISO(v), 'MMM d')}
+            tickFormatter={(v: string) => formatAppDate(v, { month: 'short', day: 'numeric' })}
           />
         )}
       </ComposedChart>

@@ -8,6 +8,7 @@ import { Battery, Car, CheckCircle2, CircleAlert, Cpu, Gauge, MapPin, Thermomete
 import { BsLockFill, BsUnlockFill } from 'react-icons/bs';
 import { PiPlugsConnectedFill, PiPlugsFill } from 'react-icons/pi';
 import { DashboardPageShell } from './DashboardPageShell';
+import { formatAppTime } from '@riviamigo/ui/lib/dateTime';
 
 export { canManageSystemDashboards, createDefaultDashboardEditActions } from './DashboardPageShell';
 export type { DashboardEditMutations, DashboardPageShellRenderState } from './DashboardPageShell';
@@ -89,7 +90,7 @@ export function CurrentVehicleStatePanel({
   const freshnessLabel = status?.telemetry_stale
     ? 'Telemetry stale'
     : status?.last_updated
-      ? `Updated ${new Date(status.last_updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      ? `Updated ${formatAppTime(status.last_updated)}`
       : 'Awaiting telemetry';
 
   return (

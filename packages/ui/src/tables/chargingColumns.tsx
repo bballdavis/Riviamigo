@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { createColumnHelper } from '@tanstack/react-table';
-import { format, parseISO } from 'date-fns';
 import { Badge } from '../primitives/Badge';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '../lib/utils';
+import { formatAppCalendarDate, formatAppDate, formatAppTime } from '../lib/dateTime';
 
 export interface ChargeSessionRow {
   id: string;
@@ -70,9 +70,9 @@ function deriveAcDcType(row: ChargeSessionRow): 'ac' | 'dc' | null {
 
 function formatSessionDayLabel(row: ChargeSessionRow): string {
   if (row.session_day_local) {
-    return format(parseISO(`${row.session_day_local}T00:00:00`), 'MMM d, yyyy');
+    return formatAppCalendarDate(row.session_day_local);
   }
-  return format(parseISO(row.started_at), 'MMM d, yyyy');
+  return formatAppDate(row.started_at);
 }
 
 export const chargingColumns = [
@@ -80,7 +80,7 @@ export const chargingColumns = [
     header: 'Date / Time',
     cell: (info) => {
       const row = info.row.original;
-      const start = parseISO(info.getValue());
+      const start = new Date(info.getValue());
       const endDate =
         row.duration_min != null
           ? new Date(start.getTime() + row.duration_min * 60000)
@@ -89,8 +89,8 @@ export const chargingColumns = [
         <div className="flex flex-col gap-px">
           <span className="text-sm font-medium text-fg leading-tight">{formatSessionDayLabel(row)}</span>
           <span className="text-xs text-fg-tertiary leading-tight">
-            {format(start, 'h:mm a')}
-            {endDate ? ` – ${format(endDate, 'h:mm a')}` : null}
+            {formatAppTime(start)}
+            {endDate ? ` – ${formatAppTime(endDate)}` : null}
           </span>
         </div>
       );

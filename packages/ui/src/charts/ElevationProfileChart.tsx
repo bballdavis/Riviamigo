@@ -3,11 +3,11 @@ import {
   ResponsiveContainer, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts';
-import { format, parseISO } from 'date-fns';
 import { ChartTooltip } from './ChartTooltip';
 import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { colors } from '../tokens/colors';
+import { formatAppTime } from '../lib/dateTime';
 
 export interface ElevationPoint {
   ts: string;
@@ -55,7 +55,7 @@ export function ElevationProfileChart({
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
-          tickFormatter={(v: string) => format(parseISO(v), 'h:mm a')}
+          tickFormatter={(v: string) => formatAppTime(v)}
           minTickGap={60}
         />
         <YAxis
@@ -69,7 +69,7 @@ export function ElevationProfileChart({
 
         <Tooltip
           content={<ChartTooltip
-            labelFormatter={(v: string) => format(parseISO(v), 'h:mm:ss a')}
+            labelFormatter={(v: string) => formatAppTime(v, { second: '2-digit' })}
             formatter={(v) => [
               v !== undefined ? `${Math.round(v)} ${unit}` : '—',
               'Elevation',

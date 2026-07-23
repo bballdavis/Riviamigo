@@ -7,6 +7,7 @@ import { cn } from '../lib/utils';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatNumber, formatSmartNumber } from '../lib/utils';
+import { formatAppDate, formatAppDateTime, formatAppTime } from '../lib/dateTime';
 import { filterTimeSeriesValues, type TimeFilterWindow } from './timeFilter';
 import { DEFAULT_CURVE_SMOOTHNESS, normalizeCurveSmoothness, type CurveSmoothness } from './curveSmoothness';
 
@@ -215,16 +216,16 @@ function formatDateForSpan(seconds: number, spanSeconds: number) {
   const d = new Date(seconds * 1000);
   if (spanSeconds <= 24 * 3600) {
     // Sub-24h: time only with minutes — e.g. "9:30 PM"
-    return d.toLocaleString([], { hour: 'numeric', minute: '2-digit' });
+    return formatAppTime(d);
   }
   if (spanSeconds <= 3 * 86400) {
     // Sub-3d: date + time with minutes — e.g. "May 9, 9:30 PM"
-    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return formatAppDateTime(d, { month: 'short', day: 'numeric' });
   }
   if (spanSeconds <= 90 * 86400) {
-    return d.toLocaleString([], { month: 'short', day: 'numeric' });
+    return formatAppDate(d, { month: 'short', day: 'numeric' });
   }
-  return d.toLocaleString([], { month: 'short', year: '2-digit' });
+  return formatAppDate(d, { month: 'short', year: '2-digit' });
 }
 
 export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) {
@@ -259,8 +260,8 @@ export function getAdaptiveDecimalPrecision(values: number[], maxPrecision = 4) 
 export function formatAxisDateForSpan(seconds: number, spanSeconds: number) {
   if (spanSeconds <= 24 * 3600) return formatDateForSpan(seconds, spanSeconds);
   const d = new Date(seconds * 1000);
-  if (spanSeconds <= 90 * 86400) return d.toLocaleString([], { month: 'short', day: 'numeric' });
-  return d.toLocaleString([], { month: 'short', year: '2-digit' });
+  if (spanSeconds <= 90 * 86400) return formatAppDate(d, { month: 'short', day: 'numeric' });
+  return formatAppDate(d, { month: 'short', year: '2-digit' });
 }
 
 /** Avoid repeated date labels from uPlot's hourly automatic splits. */

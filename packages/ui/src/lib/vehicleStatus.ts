@@ -4,6 +4,7 @@ import type {
   VehicleStatusAvailabilityState,
   VehicleStatusFieldAvailability,
 } from '@riviamigo/types';
+import { formatAppDateTime } from './dateTime';
 
 export type StatusTone = 'default' | 'success' | 'warning' | 'danger' | 'info';
 
@@ -428,12 +429,7 @@ function maxIso(values: Array<string | null | undefined>): string | null {
 function formatDateTimeShort(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'an unknown time';
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return formatAppDateTime(date, { month: 'short', day: 'numeric' });
 }
 
 function titleCase(value: string) {

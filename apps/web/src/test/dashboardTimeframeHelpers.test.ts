@@ -9,6 +9,7 @@ import {
   serializeDashboardTimeframe,
   timeframeToQuery,
 } from '../lib/dates';
+import { getAppDateParts } from '@riviamigo/ui/lib/dateTime';
 
 describe('dashboard timeframe helpers', () => {
   beforeEach(() => {
@@ -62,18 +63,10 @@ describe('dashboard timeframe helpers', () => {
     const datedTime = parseTimeframeInput('1/7/2025 6:30 PM', fallback);
 
     expect(shortDate).not.toBeNull();
-    expect(shortDate?.getFullYear()).toBe(2025);
-    expect(shortDate?.getMonth()).toBe(0);
-    expect(shortDate?.getDate()).toBe(7);
-    expect(shortDate?.getHours()).toBe(0);
-    expect(shortDate?.getMinutes()).toBe(0);
+    expect(getAppDateParts(shortDate!)).toMatchObject({ year: 2025, month: 1, day: 7, hour: 0, minute: 0 });
 
     expect(datedTime).not.toBeNull();
-    expect(datedTime?.getFullYear()).toBe(2025);
-    expect(datedTime?.getMonth()).toBe(0);
-    expect(datedTime?.getDate()).toBe(7);
-    expect(datedTime?.getHours()).toBe(18);
-    expect(datedTime?.getMinutes()).toBe(30);
+    expect(getAppDateParts(datedTime!)).toMatchObject({ year: 2025, month: 1, day: 7, hour: 18, minute: 30 });
     expect(parseTimeframeInput('nope', fallback)).toBeNull();
   });
 

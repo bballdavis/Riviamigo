@@ -7,6 +7,7 @@ import { api } from '@riviamigo/hooks';
 import type { RawEventDetail, RawTelemetrySample, Vehicle } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
 import { CHART_COLORS, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 
 type FieldGroup = 'Battery & charging' | 'Drive & location' | 'Climate' | 'Tires' | 'Closures & locks' | 'Software & health';
 
@@ -370,5 +371,5 @@ function timeframeBounds(timeframe: Timeframe) {
 function fieldLabel(key: string) { return FIELD_DEFINITIONS.find((field) => field.key === key)?.label ?? key; }
 function hasValue(value: unknown) { return value !== null && value !== undefined; }
 function formatCount(value: number | undefined) { return typeof value === 'number' ? value.toLocaleString() : '0'; }
-function formatDate(value: string | null | undefined) { return value ? new Date(value).toLocaleString() : 'No data'; }
+function formatDate(value: string | null | undefined) { return value ? formatAppDateTime(value) : 'No data'; }
 function formatValue(value: unknown, unit?: string) { if (value === null || value === undefined) return '—'; if (typeof value === 'boolean') return value ? 'Yes' : 'No'; if (typeof value === 'number') return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`; return String(value); }

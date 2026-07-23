@@ -4,6 +4,7 @@ import { Play, RefreshCw } from 'lucide-react';
 import { api } from '@riviamigo/hooks';
 import type { Vehicle } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@riviamigo/ui/primitives';
+import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 
 interface JobsSectionProps {
   vehicles: Vehicle[];
@@ -118,14 +119,7 @@ function StatusBadge({ status, loading }: { status: string | null; loading: bool
 
 function formatDateTime(value: string | null | undefined) {
   if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return formatAppDateTime(value);
 }
 
 function formatBackfillEvidence(rivianCount: number | null | undefined, localCount: number | null | undefined) {

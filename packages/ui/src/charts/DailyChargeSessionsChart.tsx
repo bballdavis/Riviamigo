@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { format, parseISO } from 'date-fns';
 import { RotateCcw } from 'lucide-react';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatCurrency, formatSmartNumber } from '../lib/utils';
+import { formatAppCalendarDate } from '../lib/dateTime';
 
 export interface DailyChargeSessionsDay {
   day_local: string;
@@ -102,8 +102,8 @@ const GROUP_META: Record<ChargerGroupKey, ChargerGroupMeta> = {
 };
 
 function formatDayLabel(dayLocal: string) {
-  const parsed = parseISO(`${dayLocal}T00:00:00`);
-  return Number.isNaN(parsed.getTime()) ? dayLocal : format(parsed, 'MMM d');
+  const formatted = formatAppCalendarDate(dayLocal);
+  return formatted === 'Invalid date' ? dayLocal : formatted.replace(/, \d{4}$/, '');
 }
 
 function formatEnergy(value: number) {

@@ -3,23 +3,25 @@ import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Clock } from 'lucide-
 import type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@riviamigo/types';
 import {
   addMonths,
-  endOfDay,
   endOfMonth,
   format,
   getYear,
-  isSameDay,
   isSameMonth,
   isValid,
   parse,
-  setHours,
-  setMinutes,
-  startOfDay,
   startOfMonth,
-  subDays,
   subHours,
-  subMonths,
 } from 'date-fns';
 import { cn } from '../lib/utils';
+import {
+  appDatePartsToDate,
+  endOfAppDay,
+  formatAppDate,
+  formatAppDateTime,
+  getAppDateParts,
+  shiftAppCalendarDays,
+  startOfAppDay,
+} from '../lib/dateTime';
 import { SelectPicker } from './SelectPicker';
 
 export type { BoundedPresetKey, DashboardTimeframe, DateRange, PresetKey } from '@riviamigo/types';
@@ -80,13 +82,13 @@ export function presetToRange(preset: BoundedPresetKey): DateRange {
     case '24h':
       return { from: subHours(now, 24), to: now };
     case '7d':
-      return { from: startOfDay(subDays(now, 7)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -7)), to: endOfAppDay(now) };
     case '30d':
-      return { from: startOfDay(subDays(now, 30)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -30)), to: endOfAppDay(now) };
     case '90d':
-      return { from: startOfDay(subDays(now, 90)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -90)), to: endOfAppDay(now) };
     case '1y':
-      return { from: startOfDay(subMonths(now, 12)), to: endOfDay(now) };
+      return { from: startOfAppDay(shiftAppCalendarDays(now, -365)), to: endOfAppDay(now) };
   }
 }
 
@@ -136,17 +138,24 @@ export function DateRangePicker({
     if (timeframe.kind === 'preset') {
       return PRESETS.find((preset) => preset.key === timeframe.preset)?.label ?? 'Custom range';
     }
-    return `${format(timeframe.from, 'MMM d, yyyy h:mm a')} - ${format(timeframe.to, 'MMM d, yyyy h:mm a')}`;
+    return `${formatAppDateTime(timeframe.from)} - ${formatAppDateTime(timeframe.to)}`;
   }, [timeframe]);
 
   const handleDayPick = (picked: Date) => {
+    const base = getAppDateParts(target === 'from' ? customFrom : customTo) ?? {
+      year: picked.getFullYear(), month: picked.getMonth() + 1, day: picked.getDate(), hour: 0, minute: 0, second: 0,
+    };
+    const next = appDatePartsToDate({
+      ...base,
+      year: picked.getFullYear(),
+      month: picked.getMonth() + 1,
+      day: picked.getDate(),
+    });
     if (target === 'from') {
-      const next = setMinutes(setHours(picked, customFrom.getHours()), customFrom.getMinutes());
       setCustomFrom(next);
       setCustomFromInput(formatDateInputValue(next));
       setMonthCursor(startOfMonth(next));
     } else {
-      const next = setMinutes(setHours(picked, customTo.getHours()), customTo.getMinutes());
       setCustomTo(next);
       setCustomToInput(formatDateInputValue(next));
       setMonthCursor(startOfMonth(next));
@@ -259,12 +268,12 @@ export function DateRangePicker({
                     setMonthCursor(startOfMonth(customFrom));
                   }}
                   onHour={(hours) => {
-                    const next = setHours(customFrom, hours);
+                    const next = setAppTime(customFrom, { hour: hours });
                     setCustomFrom(next);
                     setCustomFromInput(formatDateInputValue(next));
                   }}
                   onMinute={(minutes) => {
-                    const next = setMinutes(customFrom, minutes);
+                    const next = setAppTime(customFrom, { minute: minutes });
                     setCustomFrom(next);
                     setCustomFromInput(formatDateInputValue(next));
                   }}
@@ -288,12 +297,12 @@ export function DateRangePicker({
                     setMonthCursor(startOfMonth(customTo));
                   }}
                   onHour={(hours) => {
-                    const next = setHours(customTo, hours);
+                    const next = setAppTime(customTo, { hour: hours });
                     setCustomTo(next);
                     setCustomToInput(formatDateInputValue(next));
                   }}
                   onMinute={(minutes) => {
-                    const next = setMinutes(customTo, minutes);
+                    const next = setAppTime(customTo, { minute: minutes });
                     setCustomTo(next);
                     setCustomToInput(formatDateInputValue(next));
                   }}
@@ -313,7 +322,7 @@ export function DateRangePicker({
                 <p className="text-xs text-status-negative">{inputError}</p>
               ) : (
                 <p className="text-xs text-fg-tertiary">
-                  Applying: {format(customFrom <= customTo ? customFrom : customTo, 'MMM d, yyyy h:mm a')} - {format(customFrom <= customTo ? customTo : customFrom, 'MMM d, yyyy h:mm a')}
+                  Applying: {formatAppDateTime(customFrom <= customTo ? customFrom : customTo)} - {formatAppDateTime(customFrom <= customTo ? customTo : customFrom)}
                 </p>
               )}
 
@@ -351,8 +360,9 @@ function DateTimeRow({
   onHour: (hours: number) => void;
   onMinute: (minutes: number) => void;
 }) {
-  const hours = value.getHours();
-  const minutes = snapMinuteToOption(value.getMinutes());
+  const appParts = getAppDateParts(value);
+  const hours = appParts?.hour ?? value.getHours();
+  const minutes = snapMinuteToOption(appParts?.minute ?? value.getMinutes());
 
   return (
     <div
@@ -366,7 +376,7 @@ function DateTimeRow({
           <div className="text-[11px] uppercase tracking-wide text-fg-tertiary">{label}</div>
           <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-fg-tertiary">mm/dd/yyyy</div>
         </div>
-        <div className="mt-1 text-xs text-fg">{format(value, 'EEE, MMM d yyyy')}</div>
+        <div className="mt-1 text-xs text-fg">{formatAppDate(value, { weekday: 'short' })}</div>
       </button>
       <div className="mt-2 grid gap-2">
         <input
@@ -467,8 +477,11 @@ function ThemedCalendar({
       <div className="mt-1 grid grid-cols-7 gap-1">
         {cells.map((date, index) => {
           if (!date) return <div key={`blank-${index}`} className="h-8" />;
-          const inRange = date >= startOfDay(from) && date <= startOfDay(to);
-          const selectedDay = isSameDay(date, selected);
+          const dateInstant = appDatePartsToDate({ year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate(), hour: 0, minute: 0, second: 0 });
+          const inRange = dateInstant >= startOfAppDay(from) && dateInstant <= startOfAppDay(to);
+          const dateParts = getAppDateParts(dateInstant);
+          const selectedParts = getAppDateParts(selected);
+          const selectedDay = dateParts?.year === selectedParts?.year && dateParts?.month === selectedParts?.month && dateParts?.day === selectedParts?.day;
           return (
             <button
               key={date.toISOString()}
@@ -511,7 +524,16 @@ function parseUserInput(value: string, fallback: Date): Date | null {
 
   for (const pattern of TIMEFRAME_PARSE_PATTERNS) {
     const parsed = parse(trimmed, pattern, fallback);
-    if (isValid(parsed)) return parsed;
+    if (isValid(parsed)) {
+      return appDatePartsToDate({
+        year: parsed.getFullYear(),
+        month: parsed.getMonth() + 1,
+        day: parsed.getDate(),
+        hour: parsed.getHours(),
+        minute: parsed.getMinutes(),
+        second: 0,
+      });
+    }
   }
 
   const nativeDate = new Date(trimmed);
@@ -519,7 +541,13 @@ function parseUserInput(value: string, fallback: Date): Date | null {
 }
 
 function formatDateInputValue(value: Date) {
-  return format(value, 'M/d/yy');
+  return formatAppDate(value, { year: '2-digit', month: 'numeric', day: 'numeric' });
+}
+
+function setAppTime(value: Date, changes: Partial<{ hour: number; minute: number }>) {
+  const parts = getAppDateParts(value);
+  if (!parts) return value;
+  return appDatePartsToDate({ ...parts, ...changes });
 }
 
 function snapMinuteToOption(value: number) {

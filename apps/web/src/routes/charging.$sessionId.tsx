@@ -11,7 +11,8 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { AuthGuard } from '../components/layout/AuthGuard';
 import { NoVehicleState } from '../components/layout/NoVehicleState';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '@riviamigo/ui/lib/utils';
-import { format, parseISO } from 'date-fns';
+import { formatAppDate, formatAppTime } from '@riviamigo/ui/lib/dateTime';
+import { parseISO } from 'date-fns';
 import { ArrowLeft, ChevronDown, Database, MapPin, RadioTower, Receipt, Route, Zap } from 'lucide-react';
 
 export const chargingDetailRoute = createRoute({
@@ -64,9 +65,9 @@ function ChargeSessionContentInner() {
   const title = session
     ? (() => {
       const start = parseISO(session.started_at);
-      const dateStr = format(start, 'MMMM d, yyyy');
-      const startTime = format(start, 'h:mm a');
-      const endTime = session.ended_at ? format(parseISO(session.ended_at), 'h:mm a') : null;
+      const dateStr = formatAppDate(start, { month: 'long', day: 'numeric', year: 'numeric' });
+      const startTime = formatAppTime(start);
+      const endTime = session.ended_at ? formatAppTime(parseISO(session.ended_at)) : null;
       return endTime ? `${dateStr} - ${startTime} - ${endTime}` : `${dateStr} - ${startTime}`;
     })()
     : 'Charge Session';
