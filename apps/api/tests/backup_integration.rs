@@ -364,6 +364,107 @@ async fn admin_can_read_default_backup_settings() {
 }
 
 #[tokio::test]
+async fn authenticated_users_can_read_but_not_update_app_timezone() {
+    let app = TestApp::new().await;
+    let email = "app-timezone-user@example.com";
+    let token = register_and_login(&app, email).await;
+
+    let read = app
+        .request(
+            Method::GET,
+            "/v1/settings/timezone",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.body["timezone"], "UTC");
+
+    let update = app
+        .request(
+            Method::PUT,
+            "/v1/settings/timezone",
+            Some(json!({"timezone": "America/Chicago"})),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(update.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_can_update_app_timezone_and_invalid_zones_are_rejected() {
+    let app = TestApp::new().await;
+    let email = "app-timezone-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    let invalid = app
+        .request(
+            Method::PUT,
+            "/v1/settings/timezone",
+            Some(json!({"timezone": "Not/A_Timezone"})),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+
+    let update = app
+        .request(
+            Method::PUT,
+            "/v1/settings/timezone",
+            Some(json!({"timezone": "America/Chicago"})),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(update.status, StatusCode::OK);
+    assert_eq!(update.body["timezone"], "America/Chicago");
+
+    let backup_timezone: String =
+        sqlx::query_scalar("SELECT timezone FROM riviamigo.backup_settings WHERE id = TRUE")
+            .fetch_one(&app.pool)
+            .await
+            .expect("backup timezone");
+    assert_eq!(backup_timezone, "America/Chicago");
+}
+
+#[tokio::test]
+async fn app_timezone_reads_existing_backup_timezone_when_setting_is_missing() {
+    let app = TestApp::new().await;
+    sqlx::query(
+        "INSERT INTO riviamigo.backup_settings (id, timezone) VALUES (TRUE, $1)
+         ON CONFLICT (id) DO UPDATE SET timezone = EXCLUDED.timezone",
+    )
+    .bind("Europe/Berlin")
+    .execute(&app.pool)
+    .await
+    .expect("seed backup timezone");
+    sqlx::query("DELETE FROM riviamigo.system_config WHERE key = 'app_timezone'")
+        .execute(&app.pool)
+        .await
+        .expect("remove app timezone");
+
+    let email = "app-timezone-migration@example.com";
+    let token = register_and_login(&app, email).await;
+    let read = app
+        .request(
+            Method::GET,
+            "/v1/settings/timezone",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+
+    assert_eq!(read.status, StatusCode::OK);
+    assert_eq!(read.body["timezone"], "Europe/Berlin");
+}
+
+#[tokio::test]
 async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
     let app = TestApp::new().await;
     let email = "backup-settings-admin@example.com";
@@ -411,6 +512,7 @@ async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
     assert_eq!(overview.status, StatusCode::OK);
     assert_eq!(overview.body["settings"]["bucket"], "riviamigo-backups");
     assert_eq!(overview.body["settings"]["prefix"], "prod/riviamigo");
+    assert_eq!(overview.body["settings"]["timezone"], "America/Chicago");
     assert_eq!(overview.body["settings"]["has_secret_key"], true);
     assert!(overview.body["next_run_at"].is_string());
     assert_eq!(overview.body["runtime_readiness"]["run_now_allowed"], true);

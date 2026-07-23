@@ -635,7 +635,7 @@ async fn list_sessions_response(
 
     let rows = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, \
-            TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
+            TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
@@ -660,9 +660,8 @@ async fn list_sessions_response(
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
-            LEFT JOIN riviamigo.user_preferences up ON up.user_id = $6 \
             WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-              AND ($7 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') = $7) \
+              AND ($6 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') = $6) \
             ORDER BY cs.started_at DESC, cs.id DESC LIMIT $4 OFFSET $5"
     )
         .bind(vehicle_id)
@@ -670,21 +669,18 @@ async fn list_sessions_response(
         .bind(to)
         .bind(limit)
         .bind(offset)
-        .bind(user_id)
         .bind(p.session_day_local.clone())
         .fetch_all(&mut *tx)
         .await?;
 
     let total: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM riviamigo.charge_sessions cs \
-         LEFT JOIN riviamigo.user_preferences up ON up.user_id = $4 \
          WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3 \
-           AND ($5 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') = $5)"
+           AND ($4 IS NULL OR TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') = $4)"
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
-    .bind(user_id)
     .bind(p.session_day_local)
     .fetch_one(&mut *tx)
     .await?;
@@ -715,7 +711,7 @@ async fn get_chart_series_response(
         "SELECT
             cs.id AS session_id,
             cs.started_at,
-            TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local,
+            TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local,
             COALESCE(cs.kwh_added, cs.energy_added_wh / 1000.0) AS energy_kwh,
             cs.cost_usd,
             COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name,
@@ -730,14 +726,12 @@ async fn get_chart_series_response(
          FROM riviamigo.charge_sessions cs
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id
-         LEFT JOIN riviamigo.user_preferences up ON up.user_id = $4
          WHERE cs.vehicle_id=$1 AND cs.started_at>=$2 AND cs.started_at<=$3
          ORDER BY cs.started_at ASC, cs.id ASC",
     )
     .bind(vehicle_id)
     .bind(from)
     .bind(to)
-    .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -867,7 +861,7 @@ async fn get_session_response(
 
     let session = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, \
-            TO_CHAR((cs.started_at AT TIME ZONE COALESCE(up.home_timezone, 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
+            TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
@@ -892,7 +886,6 @@ async fn get_session_response(
          FROM riviamigo.charge_sessions cs \
          LEFT JOIN riviamigo.geofences g ON g.id = cs.geofence_id \
          LEFT JOIN riviamigo.addresses a ON a.id = cs.address_id \
-         LEFT JOIN riviamigo.user_preferences up ON up.user_id = $3 \
          LEFT JOIN LATERAL ( \
              SELECT COUNT(*)::int8 AS sample_count \
              FROM timeseries.telemetry t \
@@ -904,7 +897,6 @@ async fn get_session_response(
     )
         .bind(id)
         .bind(vehicle_id)
-        .bind(user_id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;

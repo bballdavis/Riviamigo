@@ -12,7 +12,7 @@ Redis live snapshots, browser storage, refresh sessions, Rivian/provider credent
 
 ## Create and download a recovery package
 
-Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma.tar.gz` package under `./data/backups`; S3 uploads the same verified package to the configured bucket and prefix. At least one destination is required. Use **Test S3 connection** after saving S3 settings to prove list, write, read, and delete access before relying on the schedule.
+Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma.tar.gz` package under `./data/backups`; S3 uploads the same verified package to the configured bucket and prefix. At least one destination is required. Use **Test S3 connection** after saving S3 settings to prove list, write, read, and delete access before relying on the schedule. Backup times use the shared application timezone configured by an administrator under **Settings > Units > Time zone**.
 
 If S3 is an enabled destination and its upload fails, the run is marked failed and Riviamigo retains the valid package locally even when Local retention was disabled. This prevents a remote-storage outage from silently appearing as a protected backup.
 

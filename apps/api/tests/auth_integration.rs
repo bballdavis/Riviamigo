@@ -1229,11 +1229,12 @@ async fn charging_sessions_use_the_local_start_date() {
     )
     .await;
 
-    sqlx::query!(
-        "UPDATE riviamigo.user_preferences SET home_timezone = $1 WHERE user_id = $2",
-        "America/Chicago",
-        user_id,
+    sqlx::query(
+        "INSERT INTO riviamigo.system_config (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
     )
+    .bind("app_timezone")
+    .bind("America/Chicago")
     .execute(&app.pool)
     .await
     .expect("update timezone");

@@ -1002,6 +1002,10 @@ export interface UnitPreferences {
   efficiency_display: EfficiencyDisplay;
 }
 
+export interface AppTimezone {
+  timezone: string;
+}
+
 export type ApiAccessLevel = 'read' | 'view' | 'edit' | 'admin' | (string & {});
 export type ApiAccessLevelState = 'supported' | 'legacy_unmigrated' | 'unknown';
 
