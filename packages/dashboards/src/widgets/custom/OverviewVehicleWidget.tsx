@@ -6,6 +6,7 @@ import { formatDriveMode } from '@riviamigo/ui/lib/driveMode';
 import { formatAltitude, formatMiles, formatMph, formatTemp } from '@riviamigo/ui/lib/utils';
 import { formatTireLabel, getTireHealthLegend, getTireHealthTone, tireHealthBorderClass } from '@riviamigo/ui/lib/vehicleTires';
 import { Tooltip } from '@riviamigo/ui/primitives';
+import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleImages, VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
@@ -435,9 +436,7 @@ function formatTimeToFull(minutes: number | null | undefined) {
 }
 
 function isCharging(status: VehicleStatus | null | undefined) {
-  const chargerState = status?.charger_state?.toLowerCase();
-  if (chargerState === 'charging' || status?.charger_status === 'chrgr_sts_connected_charging') return true;
-  return false;
+  return isVehicleCharging(status);
 }
 
 function renderDriverMode(driveMode: string | null | undefined, gearStatus: string | null | undefined) {

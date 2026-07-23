@@ -1478,6 +1478,13 @@ async fn refresh_vehicle_credentials(
     .await?;
 
     let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
+    // Credential refresh is also the recovery path after a sanitized restore.
+    // Start the worker immediately so an existing vehicle does not remain
+    // authorized in the database but disconnected from Rivian.
+    state
+        .supervisor
+        .send(SupervisorCommand::StartWorker { vehicle_id: vid })
+        .await;
     Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vid })))
 }
 

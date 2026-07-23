@@ -13,7 +13,7 @@ node scripts/restore-backup.mjs \
   --project riviamigo-backup-drill
 ```
 
-Confirm that the restored instance contains the expected users, vehicles, dashboards, historical telemetry, trips, charging history, and vehicle artwork. Confirm that the Rivian account is disconnected and can be reconnected from Settings.
+Confirm that the restored instance contains the expected users, vehicles, dashboards, historical telemetry, trips, charging history, and vehicle artwork. Confirm that the Rivian account is disconnected and can be reconnected from Settings. Redis live state and encrypted `vehicle_credentials` are intentionally excluded, so a restored vehicle will not ingest telemetry or publish live charging data until it is reauthenticated.
 
 For repeatable regression of a private historical package, use the gitignored restore lab:
 
@@ -33,7 +33,8 @@ The lab rechecks the package SHA-256, creates disposable Compose storage and cre
 4. Run `scripts/restore-backup.mjs` without `--force` first. It must refuse a target that already contains users.
 5. Use `--force` only after confirming the target is intentionally being replaced.
 6. Wait for the health and setup-state checks and complete provider re-authentication.
-7. Download a fresh recovery package from the restored installation after verifying it.
+7. Confirm that reauthentication repopulates `vehicle_credentials`, starts the vehicle worker, advances runtime/WS timestamps, and creates `vehicle:{vehicle_id}:live_session` during an active charge. The live-session API should return `200`; before the worker publishes a snapshot it correctly returns `204`.
+8. Download a fresh recovery package from the restored installation after verifying it.
 
 ## In-app restore diagnostics
 

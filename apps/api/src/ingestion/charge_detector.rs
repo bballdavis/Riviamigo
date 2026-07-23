@@ -186,9 +186,8 @@ impl ChargeDetectorState {
         let has_remaining_charge_time = event
             .time_to_end_of_charge_min
             .is_some_and(|minutes| minutes > 0);
-        let actively_charging = matches!(state, Some(ChargerState::Charging))
-            || matches!(status, Some("chrgr_sts_connected_charging"))
-            || (self.is_charging && has_remaining_charge_time);
+        let actively_charging =
+            event.is_actively_charging() || (self.is_charging && has_remaining_charge_time);
         let session_ended = matches!(state, Some(ChargerState::Done | ChargerState::Disconnected))
             || matches!(status, Some("chrgr_sts_not_connected"))
             || (self.is_charging

@@ -69,6 +69,11 @@ routes.
 | Overview | `GET /v1/dashboard/overview/{vehicle_id}` and `GET /v1/vehicles/{id}/live-session` |
 | Grafana compatibility | `GET /v1/grafana`; `POST /v1/grafana/search`, `/query`, `/annotations`, `/tag-keys`, `/tag-values` |
 
+`GET /v1/vehicles/{id}/live-session` returns `200` with the latest ephemeral
+charging snapshot while the vehicle is actively charging. It returns `204` when
+no Redis snapshot exists; live snapshots are refreshed by the ingestion worker
+and expire after 120 seconds without a successful refresh.
+
 Trip detail responses include a `power` metadata object. Its `source` is
 `direct`, `estimated_soc`, or `unavailable`; estimated samples are signed net
 pack power in kW (positive discharge, negative net regeneration) and include

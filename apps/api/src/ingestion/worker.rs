@@ -98,7 +98,24 @@ pub async fn run_vehicle_worker(
             }
         },
         Ok(None) => {
-            tracing::warn!(vehicle_id=%vehicle_id, "no credentials");
+            tracing::error!(
+                vehicle_id=%vehicle_id,
+                worker_health="error",
+                auth_state="needs_reauth",
+                reason_code="credentials_missing",
+                action="reconnect_vehicle",
+                "Rivian telemetry feed unavailable: credentials are missing"
+            );
+            upsert_health(
+                &pool,
+                vehicle_id,
+                false,
+                "error",
+                "Rivian credentials are missing; reconnect the vehicle",
+                Some("needs_reauth"),
+                Some("credentials_missing"),
+            )
+            .await;
             return;
         }
         Err(e) => {
@@ -199,6 +216,7 @@ pub async fn run_vehicle_worker(
     // ── Poll tasks ───────────────────────────────────────────────────────────
     // Channel to push PowerState changes from the main event loop to the poll loop.
     let (power_state_tx, power_state_rx) = watch::channel::<Option<PowerState>>(None);
+    let (charging_tx, charging_rx) = watch::channel(false);
 
     // Fire-and-forget startup enrichment (runs once; errors are non-fatal).
     {
@@ -225,6 +243,7 @@ pub async fn run_vehicle_worker(
                 client2,
                 age_key2,
                 power_state_rx,
+                charging_rx,
                 poll_shutdown,
                 redis2,
             )
@@ -361,9 +380,6 @@ pub async fn run_vehicle_worker(
             _ => charge_det.active_session_id(),
         };
 
-        // getLiveSessionData was removed from Rivian's charging API.
-        // Live charge session enrichment is disabled until getSessionStatus schema is known.
-
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
         let topic = format!("vehicle:{vehicle_id}:status");
@@ -424,6 +440,7 @@ pub async fn run_vehicle_worker(
         // adapt its cadence (e.g. switch to 30-second live-session polling
         // while Charging).
         let _ = power_state_tx.send(event.power_state.clone());
+        let _ = charging_tx.send(event.is_actively_charging());
 
         // ── Software version tracking ────────────────────────────────────────
         if let Some(ver) = &event.ota_current_version {

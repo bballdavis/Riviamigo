@@ -71,7 +71,7 @@ node scripts/restore-backup.mjs \
 
 The restore picker can browse Local, S3, or both catalogs. Selecting an S3 package downloads it into protected staging, validates its package and component checksums, creates the normal safety backup, and then hands it to the restore supervisor. A clean installation can therefore configure the original bucket, discover its Riviamigo packages, and restore without first copying the archive through a browser.
 
-The in-app flow and host command do not restore Rivian credentials or live sessions. S3 secrets are also redacted from the package. After completion, sign in as an administrator, reconnect external providers, and re-enter the S3 secret unless the deployment supplies environment-backed credentials.
+The in-app flow and host command do not restore Rivian credentials or live sessions. S3 secrets are also redacted from the package. After completion, sign in as an administrator, reconnect external providers, and re-enter the S3 secret unless the deployment supplies environment-backed credentials. Restored Rivian vehicles are marked as requiring reauthentication instead of retaining stale connected state. To resume vehicle telemetry, reconnect each Rivian vehicle from Settings; this stores encrypted credentials and restarts its ingestion worker. During an active charge, the worker publishes a short-lived live snapshot for the dashboard, while the live-session endpoint returns `204` when no current snapshot is available.
 
 ## Persistent artifact storage
 

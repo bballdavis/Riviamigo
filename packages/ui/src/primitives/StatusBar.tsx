@@ -1,9 +1,16 @@
 import * as React from 'react';
-import { Wifi, WifiOff, Loader2 } from 'lucide-react';
-import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff } from 'react-icons/tb';
+import { Wifi, WifiOff, Loader2, TriangleAlert } from 'lucide-react';
+import {
+  TbBattery1,
+  TbBattery2,
+  TbBattery3,
+  TbBattery4,
+  TbBatteryCharging,
+  TbBatteryOff,
+} from 'react-icons/tb';
 import { cn, formatMiles } from '../lib/utils';
 
-export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'error';
+export type VehicleOnlineState = 'online' | 'offline' | 'connecting' | 'unhealthy' | 'error';
 
 export interface StatusBarProps {
   vehicleName?: string | undefined;
@@ -32,18 +39,22 @@ export function StatusBar({
   compact = false,
   className,
 }: StatusBarProps) {
-  const batteryIcon = socPercent !== undefined
-    ? isCharging
-      ? { Component: TbBatteryCharging, variant: 'charging' }
-      : getBatteryIcon(socPercent)
-    : undefined;
-  const statusLabel = onlineState === 'online'
-    ? 'Online'
-    : onlineState === 'connecting'
-    ? 'Connecting...'
-    : onlineState === 'error'
-    ? 'Connection failed'
-    : 'Offline';
+  const batteryIcon =
+    socPercent !== undefined
+      ? isCharging
+        ? { Component: TbBatteryCharging, variant: 'charging' }
+        : getBatteryIcon(socPercent)
+      : undefined;
+  const statusLabel =
+    onlineState === 'online'
+      ? 'Online'
+      : onlineState === 'connecting'
+        ? 'Connecting...'
+        : onlineState === 'unhealthy'
+          ? 'Feed unhealthy'
+          : onlineState === 'error'
+            ? 'Connection failed'
+            : 'Offline';
 
   const showBattery = socPercent !== undefined && onlineState === 'online';
   const shouldCenterConnection = compact && !showBattery;
@@ -66,6 +77,8 @@ export function StatusBar({
           <Loader2 className="h-4 w-4 text-accent animate-spin" />
         ) : onlineState === 'online' ? (
           <Wifi className="h-4 w-4 text-status-positive" />
+        ) : onlineState === 'unhealthy' ? (
+          <TriangleAlert className="h-4 w-4 text-status-danger" />
         ) : onlineState === 'error' ? (
           <WifiOff className="h-4 w-4 text-status-danger" />
         ) : (
@@ -78,10 +91,12 @@ export function StatusBar({
               onlineState === 'online'
                 ? 'text-status-positive'
                 : onlineState === 'connecting'
-                ? 'text-accent'
-                : onlineState === 'error'
-                ? 'text-status-danger'
-                : 'text-fg-tertiary'
+                  ? 'text-accent'
+                  : onlineState === 'unhealthy'
+                    ? 'text-status-danger'
+                    : onlineState === 'error'
+                      ? 'text-status-danger'
+                      : 'text-fg-tertiary'
             )}
           >
             {statusLabel}
@@ -106,15 +121,17 @@ export function StatusBar({
                 isCharging
                   ? 'text-accent'
                   : socPercent > 50
-                  ? 'text-status-positive'
-                  : socPercent > 20
-                  ? 'text-status-warning'
-                  : 'text-status-danger'
+                    ? 'text-status-positive'
+                    : socPercent > 20
+                      ? 'text-status-warning'
+                      : 'text-status-danger'
               )}
               data-battery-icon={`tb-battery-${batteryIcon.variant}`}
             />
           )}
-          {!compact && <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>}
+          {!compact && (
+            <span className="text-xs font-mono font-medium text-fg">{Math.round(socPercent)}%</span>
+          )}
           {!compact && rangeEstimateMi !== undefined && (
             <span className="text-xs text-fg-tertiary">- {formatMiles(rangeEstimateMi)}</span>
           )}

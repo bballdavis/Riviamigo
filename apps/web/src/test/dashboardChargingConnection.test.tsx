@@ -18,6 +18,15 @@ const chargingMocks = vi.hoisted(() => ({
     side?: { light?: string | null; dark?: string | null } | null;
   },
   metricRequests: [] as Array<Array<{ metric: string }>>,
+  liveSession: null as null | {
+    soc_pct: number;
+    power_kw: number;
+    energy_kwh: number;
+    range_added_km: number;
+    time_remaining_min: number;
+    charger_type: string;
+    ts: string;
+  },
 }));
 
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
@@ -53,6 +62,7 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
         last_updated: '2026-05-12T12:00:00Z',
       },
     }),
+    useLiveSession: () => ({ data: chargingMocks.liveSession, isLoading: false }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', model: chargingMocks.model, images: chargingMocks.images, is_demo: chargingMocks.isDemo }] }),
     useMetricCatalog: () => ({ data: [] }),
     useMetricBatch: (_vehicleId: string, metrics: Array<{ metric: string }>) => {
@@ -196,6 +206,22 @@ const vehicleImageUrlOnlyChargingFixtures = {
   },
 };
 
+const liveChargingConfig: DashboardConfig = {
+  ...baseConfig,
+  id: 'live-charging-test',
+  slug: 'live-charging-test',
+  widgets: [
+    {
+      id: 'd4000004-0000-0000-0000-000000000014',
+      componentType: 'custom',
+      definitionId: 'overview.live.charging',
+      title: 'Live Charging',
+      options: {},
+      layout: { x: 0, y: 0, w: 8, h: 4 },
+    },
+  ],
+};
+
 const metricPreviewConfig: DashboardConfig = {
   ...baseConfig,
   slug: 'conditional-metrics',
@@ -244,6 +270,50 @@ describe('charging connection custom widget', () => {
     chargingMocks.isDemo = false;
     chargingMocks.images = null;
     chargingMocks.metricRequests = [];
+    chargingMocks.liveSession = null;
+  });
+
+  it('identifies charger-status charging and reports missing live data explicitly', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+
+    render(
+      <DashboardRenderer
+        config={liveChargingConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getAllByText('Live Charging')).not.toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Live charging data unavailable; showing vehicle status where available.',
+    );
+    expect(screen.getByText('64%')).toBeInTheDocument();
+    expect(screen.getByText('1h 35m')).toBeInTheDocument();
+  });
+
+  it('renders live session values when the Redis-backed snapshot is available', () => {
+    chargingMocks.forcePluggedState = 'Charging';
+    chargingMocks.liveSession = {
+      soc_pct: 67.7,
+      power_kw: 9.6,
+      energy_kwh: 12.34,
+      range_added_km: 42,
+      time_remaining_min: 95,
+      charger_type: 'wallbox',
+      ts: '2026-05-12T12:00:00Z',
+    };
+
+    render(
+      <DashboardRenderer
+        config={liveChargingConfig}
+        ctx={{ vehicleId: 'vehicle-1', from: '2026-05-01', to: '2026-05-12' }}
+      />
+    );
+
+    expect(screen.getByText('9.6 kW')).toBeInTheDocument();
+    expect(screen.getByText('12.34 kWh')).toBeInTheDocument();
+    expect(screen.getByText('WALLBOX')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('does not render until the vehicle is plugged in', () => {

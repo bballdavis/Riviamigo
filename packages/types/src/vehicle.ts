@@ -220,3 +220,12 @@ export interface VehicleStatus {
   telemetry_stale_reason?: string | null;
   field_availability?: VehicleStatusFieldAvailabilityMap | null;
 }
+
+/** Shared charging predicate for dashboard and shell surfaces. */
+export function isVehicleCharging(
+  status: Pick<VehicleStatus, 'power_state' | 'charger_state' | 'charger_status'> | null | undefined,
+): boolean {
+  return status?.power_state === 'charging'
+    || status?.charger_state?.toLowerCase() === 'charging'
+    || status?.charger_status === 'chrgr_sts_connected_charging';
+}

@@ -22,9 +22,14 @@ pub async fn start_workers(
     let handle =
         supervisor::WorkerSupervisor::start(pool.clone(), redis, age_key.clone(), config.clone());
 
+    // Start every real vehicle, including restored vehicles whose provider
+    // credentials were intentionally redacted. The worker records an
+    // actionable needs_reauth state when credentials are absent; limiting
+    // startup to credential-bearing rows leaves stale authorized/connected
+    // runtime state behind indefinitely after a restore.
     let enrolled: Vec<uuid::Uuid> = sqlx::query_scalar(
         "SELECT v.id FROM riviamigo.vehicles v \
-         JOIN riviamigo.vehicle_credentials c ON c.vehicle_id = v.id",
+         WHERE v.rivian_vehicle_id NOT LIKE 'demo-%'",
     )
     .fetch_all(&pool)
     .await?;
