@@ -37,7 +37,9 @@ const envFile = join(tempRoot, 'restore.env');
 const localRoot = join(root, 'tools', 'restore-lab', 'local');
 const reportsRoot = join(localRoot, 'reports');
 const reportPath = join(reportsRoot, `${nonce}.json`);
-const fixtureRegistry = JSON.parse(readFileSync(join(root, 'tools', 'restore-lab', 'fixtures.json'), 'utf8'));
+const fixtureRegistry = JSON.parse(
+  readFileSync(join(root, 'tools', 'restore-lab', 'fixtures.json'), 'utf8')
+);
 const postgresPassword = `restore-db-${nonce}`;
 const redisPassword = `restore-redis-${nonce}`;
 const environment = {
@@ -110,7 +112,52 @@ function parseManifest() {
   return JSON.parse(output);
 }
 
-function verifyDatabase() {
+function getPath(valueToInspect, path) {
+  return path.split('.').reduce((current, key) => current?.[key], valueToInspect);
+}
+
+function assertManifestExpectations(manifest, checkpoint) {
+  for (const [path, expected] of Object.entries(checkpoint?.manifest_expectations ?? {})) {
+    const actual = getPath(manifest, path);
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(
+        `Release checkpoint ${checkpoint.id} expected manifest ${path}=${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`
+      );
+    }
+  }
+}
+
+function manifestLedgerVersions(manifest) {
+  const ledger = manifest.source?.migration_ledger;
+  if (!Array.isArray(ledger) || ledger.length === 0) return [];
+  const versions = ledger.map((entry) => entry.version);
+  if (!versions.every((version) => Number.isInteger(version) && version > 0)) {
+    throw new Error('Recovery manifest migration ledger contains an invalid version.');
+  }
+  for (let index = 1; index < versions.length; index += 1) {
+    if (versions[index] !== versions[index - 1] + 1) {
+      throw new Error('Recovery manifest migration ledger is not contiguous.');
+    }
+  }
+  const declaredHead = manifest.source?.migration_version;
+  if (declaredHead !== undefined && declaredHead !== versions.at(-1)) {
+    throw new Error('Recovery manifest migration head does not match its ledger.');
+  }
+  return versions;
+}
+
+function targetLedgerVersions(restoreReport, manifest) {
+  const targetLedger =
+    restoreReport.plan?.target?.migration_ledger ??
+    restoreReport.validation_report?.target_profile?.migration_ledger ??
+    restoreReport.validation_report?.target_migration_ledger;
+  if (Array.isArray(targetLedger) && targetLedger.length) {
+    return targetLedger.map((entry) => entry.version ?? entry);
+  }
+  return manifestLedgerVersions(manifest);
+}
+
+function verifyDatabase(manifest, restoreReport) {
   const requiredRelations = [
     'riviamigo.users',
     'riviamigo.vehicles',
@@ -156,10 +203,20 @@ function verifyDatabase() {
     .split(/\r?\n/)
     .filter(Boolean)
     .map(Number);
-  if (migrationRows.join(',') !== '1,2,3,4,5') {
-    throw new Error(`Expected migrations 1 through 5, received ${migrationRows.join(',')}.`);
+  const expectedMigrationRows = targetLedgerVersions(restoreReport, manifest);
+  if (migrationRows.join(',') !== expectedMigrationRows.join(',')) {
+    throw new Error(
+      `Expected migration ledger ${expectedMigrationRows.join(',') || '(none)'}, received ${migrationRows.join(',') || '(none)'}.`
+    );
   }
-  for (const label of ['users', 'vehicles', 'dashboards', 'telemetry', 'trips', 'charge_sessions']) {
+  for (const label of [
+    'users',
+    'vehicles',
+    'dashboards',
+    'telemetry',
+    'trips',
+    'charge_sessions',
+  ]) {
     if (counts[label] < 1) throw new Error(`Restored ${label} data is empty.`);
   }
   for (const label of ['backup_runs', 'backup_artifacts', 'restore_requests']) {
@@ -175,7 +232,15 @@ function verifyDatabase() {
 
 copyFileSync(packagePath, copiedPackage);
 const originalChecksum = sha256(packagePath);
-const registeredFixture = fixtureRegistry.fixtures.find((fixture) => fixture.sha256 === originalChecksum) ?? null;
+const releaseCheckpoint =
+  fixtureRegistry.release_checkpoints?.find(
+    (checkpoint) => checkpoint.sha256 === originalChecksum
+  ) ?? null;
+if (releaseCheckpoint && releaseCheckpoint.file_name !== basename(packagePath)) {
+  throw new Error(
+    `Release checkpoint ${releaseCheckpoint.id} does not match the supplied package filename.`
+  );
+}
 if (sha256(copiedPackage) !== originalChecksum)
   throw new Error('Local package copy checksum mismatch.');
 writeFileSync(
@@ -200,7 +265,10 @@ writeFileSync(backupSentinel, 'host backup directory must survive restore\n');
 
 let report;
 try {
-  run(process.execPath, [
+  const manifest = parseManifest();
+  assertManifestExpectations(manifest, releaseCheckpoint);
+  const sourceMigrationVersions = manifestLedgerVersions(manifest);
+  const restoreArguments = [
     'scripts/restore-backup.mjs',
     '--package',
     copiedPackage,
@@ -211,81 +279,100 @@ try {
     '--force',
     ...(sourceBuild ? ['--source-build'] : []),
     ...(reuseImage ? ['--skip-build'] : []),
-  ]);
-  const manifest = parseManifest();
-  const setup = await fetchJson('/v1/auth/setup');
-  if (setup.setup_required)
-    throw new Error('Restored application unexpectedly requires owner setup.');
-  run('docker', [
-    ...compose,
-    'exec',
-    '-T',
-    'riviamigo',
-    'curl',
-    '-fsS',
-    'http://127.0.0.1:3002/health',
-  ]);
-  const database = verifyDatabase();
-  if (!existsSync(backupSentinel)) throw new Error('Restore replaced or removed the host backup directory.');
-  const artworkRoot = join(dataRoot, 'cache', 'riviamigo', 'vehicle-images');
-  const artworkFiles = existsSync(artworkRoot)
-    ? readdirSync(artworkRoot, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).length
-    : 0;
-  if (artworkFiles < 1) throw new Error('Restored vehicle artwork is missing.');
-  if (sha256(packagePath) !== originalChecksum)
-    throw new Error('Source recovery package changed during the lab run.');
-  const restoreReportsRoot = join(dataRoot, 'backups', '.restore-reports');
-  const restoreReportFiles = existsSync(restoreReportsRoot)
-    ? readdirSync(restoreReportsRoot).filter((file) => file.endsWith('.json'))
-    : [];
-  if (restoreReportFiles.length !== 1)
-    throw new Error(`Expected one durable host restore report, found ${restoreReportFiles.length}.`);
-  const restoreReport = JSON.parse(
-    readFileSync(join(restoreReportsRoot, restoreReportFiles[0]), 'utf8')
-  );
-  if (restoreReport.status !== 'completed')
-    throw new Error(`Host restore report has unexpected status ${restoreReport.status}.`);
-  if (registeredFixture?.expected_transform) {
-    const applied = restoreReport.validation_report?.applied_transforms?.map((entry) => entry.id) ?? [];
-    if (!applied.includes(registeredFixture.expected_transform)) {
+  ];
+  if (releaseCheckpoint?.expected_outcome === 'unsupported_migration_chain') {
+    const result = spawnSync(process.execPath, restoreArguments, {
+      cwd: root,
+      encoding: 'utf8',
+      env: environment,
+    });
+    const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+    if (result.status === 0) {
       throw new Error(
-        `Expected transform ${registeredFixture.expected_transform}; applied ${applied.join(', ') || 'none'}.`
+        `Release checkpoint ${releaseCheckpoint.id} was restored, but it must be unsupported.`
       );
     }
-  }
-  if (registeredFixture?.expected_profile && restoreReport.validation_report?.legacy_profile !== registeredFixture.expected_profile) {
-    throw new Error(
-      `Expected profile ${registeredFixture.expected_profile}; received ${restoreReport.validation_report?.legacy_profile ?? 'none'}.`
+    if (!/unsupported[_ ]migration[_ ]chain/i.test(output)) {
+      throw new Error(
+        `Release checkpoint ${releaseCheckpoint.id} failed without the expected unsupported_migration_chain reason: ${output.trim()}`
+      );
+    }
+    report = {
+      status: 'passed',
+      created_at: new Date().toISOString(),
+      package: {
+        file_name: basename(packagePath),
+        sha256: originalChecksum,
+        format: manifest.format,
+        format_version: manifest.format_version,
+        source: manifest.source,
+        release_checkpoint_id: releaseCheckpoint.id,
+      },
+      expected_outcome: releaseCheckpoint.expected_outcome,
+      rejection_output: output.trim(),
+      source_migration_versions: sourceMigrationVersions,
+    };
+  } else {
+    run(process.execPath, restoreArguments);
+    const setup = await fetchJson('/v1/auth/setup');
+    if (setup.setup_required)
+      throw new Error('Restored application unexpectedly requires owner setup.');
+    run('docker', [
+      ...compose,
+      'exec',
+      '-T',
+      'riviamigo',
+      'curl',
+      '-fsS',
+      'http://127.0.0.1:3002/health',
+    ]);
+    const restoreReportsRoot = join(dataRoot, 'backups', '.restore-reports');
+    const restoreReportFiles = existsSync(restoreReportsRoot)
+      ? readdirSync(restoreReportsRoot).filter((file) => file.endsWith('.json'))
+      : [];
+    if (restoreReportFiles.length !== 1)
+      throw new Error(
+        `Expected one durable host restore report, found ${restoreReportFiles.length}.`
+      );
+    const restoreReport = JSON.parse(
+      readFileSync(join(restoreReportsRoot, restoreReportFiles[0]), 'utf8')
     );
+    if (restoreReport.status !== 'completed')
+      throw new Error(`Host restore report has unexpected status ${restoreReport.status}.`);
+    const database = verifyDatabase(manifest, restoreReport);
+    if (!existsSync(backupSentinel))
+      throw new Error('Restore replaced or removed the host backup directory.');
+    const artworkRoot = join(dataRoot, 'cache', 'riviamigo', 'vehicle-images');
+    const artworkFiles = existsSync(artworkRoot)
+      ? readdirSync(artworkRoot, { recursive: true, withFileTypes: true }).filter((entry) =>
+          entry.isFile()
+        ).length
+      : 0;
+    if (artworkFiles < 1) throw new Error('Restored vehicle artwork is missing.');
+    if (sha256(packagePath) !== originalChecksum)
+      throw new Error('Source recovery package changed during the lab run.');
+    report = {
+      status: 'passed',
+      created_at: new Date().toISOString(),
+      package: {
+        file_name: basename(packagePath),
+        sha256: originalChecksum,
+        format: manifest.format,
+        format_version: manifest.format_version,
+        source: manifest.source,
+        release_checkpoint_id: releaseCheckpoint?.id ?? null,
+      },
+      target: { source_build: sourceBuild, origin: `http://localhost:${port}` },
+      setup_required: setup.setup_required,
+      restore_supervisor_healthy: true,
+      host_backup_directory_preserved: true,
+      artwork_files: artworkFiles,
+      database,
+      restore_plan: restoreReport.plan,
+      validation_report: restoreReport.validation_report,
+      source_migration_versions: sourceMigrationVersions,
+    };
   }
-  if (registeredFixture?.expected_migrations_applied) {
-    const applied = restoreReport.validation_report?.migrations_applied ?? [];
-    if (applied.join(',') !== registeredFixture.expected_migrations_applied.join(',')) {
-      throw new Error(
-        `Expected migrations ${registeredFixture.expected_migrations_applied.join(',')}; applied ${applied.join(',') || 'none'}.`
-      );
-    }
-  }
-  report = {
-    status: 'passed',
-    created_at: new Date().toISOString(),
-    package: {
-      file_name: basename(packagePath),
-      sha256: originalChecksum,
-      format: manifest.format,
-      format_version: manifest.format_version,
-      source: manifest.source,
-      fixture_id: registeredFixture?.id ?? null,
-    },
-    target: { source_build: sourceBuild, origin: `http://localhost:${port}` },
-    setup_required: setup.setup_required,
-    restore_supervisor_healthy: true,
-    host_backup_directory_preserved: true,
-    artwork_files: artworkFiles,
-    database,
-    restore_plan: restoreReport.plan,
-    validation_report: restoreReport.validation_report,
-  };
 } catch (error) {
   report = {
     status: 'failed',

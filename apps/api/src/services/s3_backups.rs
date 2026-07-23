@@ -172,7 +172,7 @@ pub async fn upload(
     let metadata = HashMap::from([
         (
             "riviamigo-format".to_string(),
-            "riviamigo-recovery-v1".to_string(),
+            "riviamigo-recovery-v3".to_string(),
         ),
         ("riviamigo-sha256".to_string(), checksum_sha256.to_string()),
         ("riviamigo-run-id".to_string(), run_id.to_string()),

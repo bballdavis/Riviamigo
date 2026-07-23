@@ -24,7 +24,16 @@ against the existing `riviamigo:local` image without recompiling it.
 The lab uses generated local-only database and Redis passwords. It does not
 read Rivian credentials or provider tokens.
 
-`fixtures.json` records approved private fixtures by checksum and expected
-schema profile. The lab data itself remains under the ignored `local/` tree;
-the checksum is the regression contract and the package must never be added to
-Git.
+`fixtures.json` records release checkpoints by package checksum and manifest
+expectations. The runner reads the source migration ledger from
+`manifest.json`, derives the expected target ledger from the restore plan, and
+never names a particular historical migration number or applies a fixture-only
+transform. A checkpoint can also declare that a pre-cutover chain must be
+rejected with `unsupported_migration_chain`.
+
+The current public release uses recovery manifest v3 and the
+`riviamigo-schema-v1` migration chain. Packages from the former five-migration
+chain are retained only as rollback evidence and must be represented as
+rejected checkpoints, not successful compatibility fixtures. The lab data
+itself remains under the ignored `local/` tree; the checksum is the regression
+contract and the package must never be added to Git.

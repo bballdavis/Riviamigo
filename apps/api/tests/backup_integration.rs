@@ -21,7 +21,6 @@ use uuid::Uuid;
 
 use riviamigo_api::{
     config::Config,
-    db::migrations::MIGRATOR,
     ingestion::supervisor::SupervisorHandle,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
@@ -238,11 +237,13 @@ fn test_recovery_package() -> Vec<u8> {
         "components": {
             "database": {
                 "path": "database.dump",
-                "sha256": hex::encode(Sha256::digest(&database))
+                "sha256": hex::encode(Sha256::digest(&database)),
+                "size_bytes": database.len()
             },
             "backup_settings": {
                 "path": "backup-settings.json",
-                "sha256": hex::encode(Sha256::digest(settings))
+                "sha256": hex::encode(Sha256::digest(settings)),
+                "size_bytes": settings.len()
             },
             "vehicle_image_cache": { "files": [] }
         }
@@ -319,8 +320,14 @@ async fn promote_admin(pool: &PgPool, user_id: Uuid) {
 #[tokio::test]
 async fn backup_overview_requires_admin_role() {
     let app = TestApp::new().await;
-    let _bootstrap_admin = register_and_login(&app, "backup-bootstrap-admin@example.com").await;
-    let token = register_and_login(&app, "backup-user@example.com").await;
+    let email = "backup-user@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    sqlx::query("UPDATE riviamigo.users SET role = 'user' WHERE id = $1")
+        .bind(user_id)
+        .execute(&app.pool)
+        .await
+        .expect("demote test user");
 
     let response = app
         .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
@@ -370,6 +377,8 @@ async fn admin_can_update_backup_settings_and_store_encrypted_secret() {
             "/v1/admin/backups/settings",
             Some(json!({
                 "enabled": true,
+                "local_enabled": true,
+                "s3_enabled": true,
                 "frequency": "monthly",
                 "run_at": "02:30",
                 "timezone": "America/Chicago",
@@ -437,8 +446,8 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
 
     assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
     assert_eq!(response.body["run"]["status"], "succeeded");
-    assert_eq!(response.body["artifact"]["storage_type"], "local");
-    assert!(response.body["artifact"]["storage_path"].is_string());
+    assert_eq!(response.body["artifacts"][0]["storage_type"], "local");
+    assert!(response.body["artifacts"][0]["storage_path"].is_string());
 
     let overview = app
         .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
@@ -482,6 +491,22 @@ async fn admin_can_import_external_recovery_package() {
         imported.body["artifact"]["manifest"]["package"]["format"],
         "riviamigo-recovery-v1"
     );
+
+    let plan = restore_compatibility::plan_restore(
+        &json!({
+            "format": "riviamigo-recovery-v1",
+            "format_version": 1
+        }),
+        "legacy-package-checksum",
+        &app.pool,
+        None,
+    )
+    .await
+    .expect("legacy package plan");
+    assert!(!plan.compatible);
+    assert!(plan.blocking_errors.iter().any(|error| {
+        error.code == restore_compatibility::RestoreBlockingCode::UnsupportedMigrationChain
+    }));
 }
 
 #[tokio::test]
@@ -501,7 +526,9 @@ async fn admin_can_create_restore_request_for_artifact() {
             None,
         )
         .await;
-    let artifact_id = run.body["artifact"]["id"].as_str().expect("artifact id");
+    let artifact_id = run.body["artifacts"][0]["id"]
+        .as_str()
+        .expect("artifact id");
 
     let restore = app
         .request(
@@ -549,7 +576,10 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
         )
         .await;
     assert_eq!(run.status, StatusCode::CREATED, "{}", run.body);
-    let artifact_id = run.body["artifact"]["id"].as_str().expect("artifact id");
+    assert_eq!(run.body["run"]["status"], "succeeded", "{}", run.body);
+    let artifact_id = run.body["artifacts"][0]["id"]
+        .as_str()
+        .expect("artifact id");
 
     let preflight = app
         .request(
@@ -565,111 +595,46 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
     assert_eq!(preflight.body["plan"]["compatible"], true);
     assert_eq!(
         preflight.body["plan"]["package_format"],
-        "riviamigo-recovery-v2"
+        "riviamigo-recovery-v3"
     );
-    assert_eq!(preflight.body["plan"]["source"]["migration_version"], 5);
-    assert_eq!(preflight.body["plan"]["target"]["migration_version"], 5);
+    assert_eq!(preflight.body["plan"]["source"]["migration_version"], 1);
+    assert_eq!(preflight.body["plan"]["target"]["migration_version"], 1);
     assert!(preflight.body["plan"]["plan_id"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
 }
 
 #[tokio::test]
-async fn startup_repairs_verified_partial_migration_five_drift() {
+async fn backup_creation_refuses_a_drifted_live_migration_ledger() {
     let app = TestApp::new().await;
-    sqlx::raw_sql(
-        r#"
-        DELETE FROM public._sqlx_migrations WHERE version = 5;
-        DROP INDEX IF EXISTS riviamigo.backup_artifacts_s3_locator_unique;
-        ALTER TABLE riviamigo.backup_artifacts ALTER COLUMN run_id SET NOT NULL;
-        ALTER TABLE riviamigo.backup_artifacts DROP CONSTRAINT IF EXISTS backup_artifacts_storage_type_check;
-        ALTER TABLE riviamigo.backup_artifacts ADD CONSTRAINT backup_artifacts_storage_type_check
-          CHECK (storage_type = ANY (ARRAY['local'::text, 'uploaded'::text, 'safety'::text]));
-        "#,
+    let email = "backup-ledger-drift-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    sqlx::query(
+        "UPDATE public._sqlx_migrations
+         SET checksum = decode(repeat('00', 48), 'hex')
+         WHERE version = 1",
     )
     .execute(&app.pool)
     .await
-    .expect("create partial migration-five fixture");
+    .expect("introduce migration checksum drift");
 
-    let report = restore_compatibility::reconcile_verified_live_migration_drift(&app.pool)
-        .await
-        .expect("repair verified live migration drift")
-        .expect("repair report");
-    assert_eq!(report.ledger_version_before, 4);
-    assert_eq!(report.schema_version, 5);
-    assert_eq!(report.ledger_versions_added, vec![5]);
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
     assert_eq!(
-        report.applied_transform.as_deref(),
-        Some("complete-partial-s3-v5")
+        response.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        response.body
     );
-
-    let run_id_nullable: String = sqlx::query_scalar(
-        "SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'riviamigo' AND table_name = 'backup_artifacts' AND column_name = 'run_id'",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("run_id nullability");
-    assert_eq!(run_id_nullable, "YES");
-    let locator_index: bool = sqlx::query_scalar(
-        "SELECT to_regclass('riviamigo.backup_artifacts_s3_locator_unique') IS NOT NULL",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("s3 locator index");
-    assert!(locator_index);
-
-    let mut migration_connection = app.pool.acquire().await.expect("migration connection");
-    sqlx::query("SET search_path = public")
-        .execute(&mut *migration_connection)
-        .await
-        .expect("public migration search path");
-    MIGRATOR
-        .run_direct(None, &mut *migration_connection, false)
-        .await
-        .expect("normal startup migrations after repair");
-    let versions: Vec<i64> = sqlx::query_scalar(
-        "SELECT version FROM public._sqlx_migrations WHERE success = TRUE ORDER BY version",
-    )
-    .fetch_all(&app.pool)
-    .await
-    .expect("migration ledger");
-    assert_eq!(versions, vec![1, 2, 3, 4, 5]);
-    assert!(
-        restore_compatibility::reconcile_verified_live_migration_drift(&app.pool)
-            .await
-            .expect("repeat repair check")
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn startup_repairs_complete_schema_with_a_lagging_ledger() {
-    let app = TestApp::new().await;
-    sqlx::query("DELETE FROM public._sqlx_migrations WHERE version = 5")
-        .execute(&app.pool)
-        .await
-        .expect("create exact v5 schema with v4 ledger");
-
-    let report = restore_compatibility::reconcile_verified_live_migration_drift(&app.pool)
-        .await
-        .expect("repair exact-schema ledger drift")
-        .expect("repair report");
-    assert_eq!(report.ledger_version_before, 4);
-    assert_eq!(report.schema_version, 5);
-    assert_eq!(report.ledger_versions_added, vec![5]);
-    assert_eq!(report.applied_transform, None);
-
-    let recorded: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM public._sqlx_migrations WHERE version = 5 AND success = TRUE)",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("migration five ledger entry");
-    assert!(recorded);
-    assert!(
-        restore_compatibility::reconcile_verified_live_migration_drift(&app.pool)
-            .await
-            .expect("repeat repair check")
-            .is_none()
-    );
+    assert!(response.body.to_string().contains("migration ledger"));
 }

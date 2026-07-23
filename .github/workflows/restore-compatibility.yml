@@ -24,6 +24,10 @@ jobs:
       CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify migration integrity
+        run: node tools/migration-integrity.mjs --base-ref "${GITHUB_BASE_SHA:-}"
       - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
         with:
@@ -36,10 +40,11 @@ jobs:
           cargo test --manifest-path apps/api/Cargo.toml backups::tests --lib
       - name: Verify host orchestration and lab syntax
         run: |
+          node --check tools/migration-integrity.mjs
           node --check scripts/restore-backup.mjs
           node --check tools/restore-lab/run.mjs
 
-  historical-fixture:
+  release-checkpoint:
     if: github.event_name == 'workflow_dispatch'
     runs-on: self-hosted
     timeout-minutes: 45
@@ -51,6 +56,6 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Restore registered private fixture
+      - name: Restore registered release checkpoint
         shell: pwsh
         run: pnpm verify:restore-compatibility -- --package $env:RIVIAMIGO_RESTORE_FIXTURE --source-build

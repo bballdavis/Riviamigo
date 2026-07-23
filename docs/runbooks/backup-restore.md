@@ -15,7 +15,7 @@ node scripts/restore-backup.mjs \
 
 Confirm that the restored instance contains the expected users, vehicles, dashboards, historical telemetry, trips, charging history, and vehicle artwork. Confirm that the Rivian account is disconnected and can be reconnected from Settings. Redis live state and encrypted `vehicle_credentials` are intentionally excluded, so a restored vehicle will not ingest telemetry or publish live charging data until it is reauthenticated.
 
-For repeatable regression of a private historical package, use the gitignored restore lab:
+For repeatable regression of a private release checkpoint, use the gitignored restore lab:
 
 ```powershell
 pnpm verify:restore-compatibility -- `
@@ -23,7 +23,7 @@ pnpm verify:restore-compatibility -- `
   --source-build
 ```
 
-The lab rechecks the package SHA-256, creates disposable Compose storage and credentials, verifies the API and restore supervisor, records a data-free report under `tools/restore-lab/local/reports/`, and removes the stack unless `--keep` is supplied. Never commit packages or lab credentials.
+The lab rechecks the package SHA-256, reads the expected source head and chain information from `manifest.json`, creates disposable Compose storage and credentials, verifies the API and restore supervisor, records a data-free report under `tools/restore-lab/local/reports/`, and removes the stack unless `--keep` is supplied. Never commit packages or lab credentials. Checkpoints from the former five-migration chain are expected rejection cases, not successful migration fixtures.
 
 ## Incident restore
 
@@ -42,11 +42,11 @@ The unified production image runs nginx, the API, and a local-only restore super
 
 For an in-app restore:
 
-1. Confirm the package finishes import validation and preflight records the expected package checksum and source/target profiles.
+1. Confirm the package finishes import validation and preflight records the expected package checksum, chain/catalog identities, and source/target heads.
 2. Confirm the isolated candidate reaches validation before the safety package is written and before the API stops.
 3. Follow the phase shown in the UI or inspect `.restore-jobs/<job-id>.json` for the plan, candidate validation report, retryability, and rollback state.
 4. If verification fails, confirm rollback state becomes `succeeded` and the previous API becomes healthy. Preserve the uploaded package, safety package, failed candidate, and journal if rollback fails.
-5. Do not edit `_sqlx_migrations` manually. Normal ledger reconstruction occurs only in an isolated candidate after its complete source schema contract passes. At startup, Riviamigo has one narrowly scoped compatibility bridge for databases left behind by older restore releases: it may add missing compiled ledger entries only after the complete live schema, every existing migration checksum, and a registered schema profile agree. The registered partial migration-5 profile is completed with its idempotent transform first. Unknown, incomplete, or contradictory states fail closed.
+5. Do not edit `_sqlx_migrations` manually. Normal ledger reconstruction occurs only in an isolated candidate after its exact-prefix ledger and complete source schema contract pass. Packages from the former five-migration chain are unsupported by the cutover release; use the explicit database-adoption runbook with a verified dump and matching old image instead. Partial or contradictory historical schemas fail closed.
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the short swap window. Public `/health` remains available during candidate preparation and unavailable only while the API is intentionally stopped for swap or rollback.
 
