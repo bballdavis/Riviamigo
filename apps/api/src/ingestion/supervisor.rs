@@ -8,6 +8,19 @@ use uuid::Uuid;
 
 use crate::{config::Config, ingestion::worker::run_vehicle_worker};
 
+type WorkerEntry = (JoinHandle<()>, broadcast::Sender<()>);
+
+fn prepare_worker_start(workers: &mut HashMap<Uuid, WorkerEntry>, vehicle_id: Uuid) -> bool {
+    match workers.get(&vehicle_id) {
+        Some((handle, _)) if !handle.is_finished() => false,
+        Some(_) => {
+            workers.remove(&vehicle_id);
+            true
+        }
+        None => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +185,27 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn finished_worker_slot_can_be_started_again() {
+        let vehicle_id = Uuid::new_v4();
+        let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
+        let completed = tokio::spawn(async {});
+        timeout(Duration::from_secs(2), async {
+            while !completed.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("test worker should finish");
+        assert!(completed.is_finished());
+
+        let mut workers = HashMap::new();
+        workers.insert(vehicle_id, (completed, shutdown_tx));
+
+        assert!(prepare_worker_start(&mut workers, vehicle_id));
+        assert!(!workers.contains_key(&vehicle_id));
+    }
+
     // ── Shutdown drains all workers ───────────────────────────────────────────
 
     #[tokio::test]
@@ -241,7 +275,7 @@ pub struct WorkerSupervisor {
     redis: redis::Client,
     age_key: String,
     config: Config,
-    workers: HashMap<Uuid, (JoinHandle<()>, broadcast::Sender<()>)>,
+    workers: HashMap<Uuid, WorkerEntry>,
     cmd_rx: mpsc::Receiver<SupervisorCommand>,
 }
 
@@ -272,7 +306,7 @@ impl WorkerSupervisor {
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
                 SupervisorCommand::StartWorker { vehicle_id } => {
-                    if self.workers.contains_key(&vehicle_id) {
+                    if !prepare_worker_start(&mut self.workers, vehicle_id) {
                         continue;
                     }
                     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);

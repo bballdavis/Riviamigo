@@ -59,6 +59,16 @@ The GraphQL WebSocket uses the `graphql-transport-ws` subprotocol and sends
    `riviamigo.vehicle_credentials` and sets `users.default_vehicle_id` if it is
    currently empty.
 
+Refreshing credentials for an existing vehicle uses the same encrypted storage
+path and immediately sends a worker-start command. This matters after a restore:
+provider credentials are intentionally redacted from recovery packages, so the
+vehicle can exist in PostgreSQL without a credential row. Startup still runs the
+vehicle worker long enough to replace stale `authorized`/`connected` state with
+an actionable `needs_reauth` status. After the user reconnects the Rivian
+account, the supervisor replaces that completed worker and starts ingestion
+immediately. A successful refresh should therefore be followed by worker health
+and telemetry-timestamp checks, not only by an `authorized` database state.
+
 ## Local Riviamigo Auth Gotcha
 
 `/v1/vehicles/connect` is protected by Riviamigo's own JWT. A browser-side

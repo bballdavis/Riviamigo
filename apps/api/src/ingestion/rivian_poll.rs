@@ -1378,6 +1378,12 @@ pub struct LiveSessionData {
     pub ts: DateTime<Utc>,
 }
 
+pub(crate) const LIVE_SESSION_TTL_SECONDS: u64 = 120;
+
+pub(crate) fn live_session_redis_key(vehicle_id: Uuid) -> String {
+    format!("vehicle:{vehicle_id}:live_session")
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LiveSessionApiData {
@@ -1393,6 +1399,18 @@ struct LiveSessionApiPayload {
     range_added_this_session: Option<LiveValue<f64>>,
     time_remaining: Option<LiveValue<f64>>,
     vehicle_charger_state: Option<LiveValue<String>>,
+}
+
+fn normalize_live_session(payload: LiveSessionApiPayload, ts: DateTime<Utc>) -> LiveSessionData {
+    LiveSessionData {
+        soc_pct: payload.soc.and_then(|v| v.value),
+        power_kw: payload.power.and_then(|v| v.value),
+        energy_kwh: payload.total_charged_energy.and_then(|v| v.value),
+        range_added_km: payload.range_added_this_session.and_then(|v| v.value),
+        time_remaining_min: payload.time_remaining.and_then(|v| v.value),
+        charger_type: payload.vehicle_charger_state.and_then(|v| v.value),
+        ts,
+    }
 }
 
 /// Fetch live charging session data from Rivian's charging endpoint.
@@ -1431,15 +1449,7 @@ pub async fn fetch_live_session(
         None => return Ok(None),
     };
 
-    Ok(Some(LiveSessionData {
-        soc_pct: payload.soc.and_then(|v| v.value),
-        power_kw: payload.power.and_then(|v| v.value),
-        energy_kwh: payload.total_charged_energy.and_then(|v| v.value),
-        range_added_km: payload.range_added_this_session.and_then(|v| v.value),
-        time_remaining_min: payload.time_remaining.and_then(|v| v.value),
-        charger_type: payload.vehicle_charger_state.and_then(|v| v.value),
-        ts: Utc::now(),
-    }))
+    Ok(Some(normalize_live_session(payload, Utc::now())))
 }
 
 pub async fn fetch_live_session_for_vehicle(
@@ -2275,23 +2285,35 @@ pub async fn run_poll_loop(
     client: reqwest::Client,
     age_key: String,
     mut power_state_rx: tokio::sync::watch::Receiver<Option<crate::models::telemetry::PowerState>>,
+    mut charging_rx: tokio::sync::watch::Receiver<bool>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
-    _redis: redis::Client,
+    redis: redis::Client,
 ) {
     use crate::ingestion::poller::poll_interval;
+    use redis::AsyncCommands;
+
+    let live_key = live_session_redis_key(vehicle_id);
 
     tracing::info!(vehicle_id=%vehicle_id, "poll loop started");
     let mut last_charge_history_sync = tokio::time::Instant::now();
 
     loop {
         let current_power = power_state_rx.borrow().clone();
-        let sleep_dur = poll_interval(current_power.as_ref());
+        let actively_charging = *charging_rx.borrow();
+        let sleep_dur = if actively_charging {
+            std::time::Duration::from_secs(30)
+        } else {
+            poll_interval(current_power.as_ref())
+        };
 
         // Adaptive sleep — bail early on shutdown or power state change.
         tokio::select! {
             _ = tokio::time::sleep(sleep_dur) => {},
             _ = power_state_rx.changed() => {
                 // Power state changed; re-evaluate immediately.
+            },
+            _ = charging_rx.changed() => {
+                // Charger status changed; re-evaluate immediately.
             },
             _ = shutdown.recv() => {
                 tracing::info!(vehicle_id=%vehicle_id, "poll loop shutdown");
@@ -2300,11 +2322,48 @@ pub async fn run_poll_loop(
         }
 
         let current_power = power_state_rx.borrow().clone();
+        let actively_charging = *charging_rx.borrow();
 
-        if matches!(
-            current_power,
-            Some(crate::models::telemetry::PowerState::Charging)
-        ) {
+        if actively_charging {
+            match fetch_live_session_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
+                Ok(Some(live)) => match serde_json::to_string(&live) {
+                    Ok(json) => match redis.get_multiplexed_async_connection().await {
+                        Ok(mut conn) => {
+                            if let Err(error) = conn
+                                .set_ex::<_, _, ()>(&live_key, json, LIVE_SESSION_TTL_SECONDS)
+                                .await
+                            {
+                                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis write failed");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis connection failed");
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session serialization failed");
+                    }
+                },
+                Ok(None) => {
+                    if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+                        let _: Result<(), _> = conn.del(&live_key).await;
+                    }
+                }
+                Err(error) if is_auth_error(&error) => {
+                    if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+                        let _: Result<(), _> = conn.del(&live_key).await;
+                    }
+                    tracing::info!(vehicle_id=%vehicle_id, err=%error, "live session polling stopped: authentication required");
+                }
+                Err(error) => {
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session polling failed; retaining existing Redis value until TTL");
+                }
+            }
+        } else if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.del(&live_key).await;
+        }
+
+        if actively_charging {
             if let Err(error) =
                 fetch_live_session_history_for_vehicle(vehicle_id, None, &pool, &client, &age_key)
                     .await
@@ -2345,7 +2404,52 @@ pub async fn run_poll_loop(
 
 #[cfg(test)]
 mod tests {
+    use super::{live_session_redis_key, LiveSessionApiData, LIVE_SESSION_TTL_SECONDS};
     use crate::services::charge_sessions::{infer_is_rivian_network, normalize_api_charger_type};
+    use chrono::Utc;
+
+    #[test]
+    fn live_session_redis_contract_uses_expected_key_and_ttl() {
+        let vehicle_id = uuid::Uuid::parse_str("76d88de5-f6fa-41cb-b560-126defb7885b").unwrap();
+        assert_eq!(
+            live_session_redis_key(vehicle_id),
+            "vehicle:76d88de5-f6fa-41cb-b560-126defb7885b:live_session"
+        );
+        assert_eq!(LIVE_SESSION_TTL_SECONDS, 120);
+    }
+
+    #[test]
+    fn live_session_fixture_normalizes_to_dashboard_contract() {
+        let data: LiveSessionApiData = serde_json::from_str(
+            r#"{
+              "getLiveSessionData": {
+                "soc": {"value": 67.7},
+                "power": {"value": 9.6},
+                "totalChargedEnergy": {"value": 12.34},
+                "rangeAddedThisSession": {"value": 42.0},
+                "timeRemaining": {"value": 95.0},
+                "vehicleChargerState": {"value": "wallbox"}
+              }
+            }"#,
+        )
+        .expect("live-session fixture should match the GraphQL response contract");
+
+        let payload = data.get_live_session_data.expect("active payload");
+        let normalized = super::normalize_live_session(payload, Utc::now());
+        assert_eq!(normalized.soc_pct, Some(67.7));
+        assert_eq!(normalized.power_kw, Some(9.6));
+        assert_eq!(normalized.energy_kwh, Some(12.34));
+        assert_eq!(normalized.range_added_km, Some(42.0));
+        assert_eq!(normalized.time_remaining_min, Some(95.0));
+        assert_eq!(normalized.charger_type.as_deref(), Some("wallbox"));
+    }
+
+    #[test]
+    fn live_session_fixture_without_payload_is_inactive() {
+        let data: LiveSessionApiData = serde_json::from_str(r#"{"getLiveSessionData":null}"#)
+            .expect("inactive fixture should match the GraphQL response contract");
+        assert!(data.get_live_session_data.is_none());
+    }
 
     #[test]
     fn normalizes_documented_charger_types() {

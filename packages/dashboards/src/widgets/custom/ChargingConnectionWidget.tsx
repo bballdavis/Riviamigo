@@ -2,6 +2,7 @@ import React from 'react';
 import { Zap } from 'lucide-react';
 import { AuthenticatedVehicleArtwork, getVehicleArtworkFallback, useAuth, useChargingSummary, useCurrentVehicleStatus, useVehicles } from '@riviamigo/hooks';
 import { formatKwh, formatNumber, formatPercent as formatDashboardPercent } from '@riviamigo/ui/lib/utils';
+import { isVehicleCharging } from '@riviamigo/types';
 import type { VehicleStatus } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
@@ -337,8 +338,7 @@ function formatMaybePercent(value: number | null | undefined, digits: number) {
 }
 
 function isActivelyCharging(status: VehicleStatus | null | undefined) {
-  const state = status?.charger_state?.toLowerCase();
-  return state === 'charging' || status?.charger_status === 'chrgr_sts_connected_charging';
+  return isVehicleCharging(status);
 }
 
 registerWidget({

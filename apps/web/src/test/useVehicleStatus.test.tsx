@@ -35,7 +35,13 @@ class MockWebSocket {
   send() {}
 }
 
-function Probe({ vehicleId, accessToken }: { vehicleId: string | null; accessToken: string | null }) {
+function Probe({
+  vehicleId,
+  accessToken,
+}: {
+  vehicleId: string | null;
+  accessToken: string | null;
+}) {
   const { connected, connectionState } = useVehicleStatus(vehicleId, accessToken);
 
   return (
@@ -108,6 +114,14 @@ describe('StatusBar', () => {
     const batteryIcon = container.querySelector('[data-battery-icon="tb-battery-three"]');
     expect(batteryIcon).toBeInTheDocument();
     expect(batteryIcon).toHaveClass('h-[1.44375rem]', 'w-[1.44375rem]');
+  });
+
+  it('renders an unhealthy upstream feed separately from a local connection failure', () => {
+    render(<StatusBar onlineState="unhealthy" socPercent={68} />);
+
+    expect(screen.getByLabelText('Vehicle status: Feed unhealthy')).toBeInTheDocument();
+    expect(screen.getByText('Feed unhealthy')).toHaveClass('text-status-danger');
+    expect(screen.queryByLabelText('Battery status: 68%')).not.toBeInTheDocument();
   });
 
   it('uses the quarter battery icon for low charge', () => {

@@ -92,22 +92,26 @@ async fn live_session_handler(
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
 
+    Ok(live_session_response(raw))
+}
+
+fn live_session_response(raw: Option<String>) -> axum::response::Response {
     match raw {
         Some(json) => {
             let value: serde_json::Value =
                 serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
-            Ok(axum::response::Response::builder()
+            axum::response::Response::builder()
                 .status(200)
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(
                     serde_json::to_string(&value).unwrap_or_default(),
                 ))
-                .unwrap())
+                .unwrap()
         }
-        None => Ok(axum::response::Response::builder()
+        None => axum::response::Response::builder()
             .status(204)
             .body(axum::body::Body::empty())
-            .unwrap()),
+            .unwrap(),
     }
 }
 
@@ -253,5 +257,24 @@ mod tests {
         let claims = extract_jwt_from_headers(&headers_with_proto(&proto), &keys)
             .expect("should find bearer. among multiple protocols");
         assert_eq!(claims.sub, user_id);
+    }
+
+    #[test]
+    fn live_session_response_returns_200_for_a_snapshot() {
+        let response = live_session_response(Some(r#"{"power_kw":9.6}"#.to_string()));
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+    }
+
+    #[test]
+    fn live_session_response_returns_204_without_a_snapshot() {
+        let response = live_session_response(None);
+        assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
     }
 }

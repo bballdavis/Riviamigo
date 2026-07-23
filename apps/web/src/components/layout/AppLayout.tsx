@@ -1,16 +1,106 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Sidebar, StatusBar, AmbientOrbs, ThemeToggle, DEFAULT_NAV_ITEMS, type NavItem } from '@riviamigo/ui/primitives';
+import {
+  Sidebar,
+  StatusBar,
+  AmbientOrbs,
+  ThemeToggle,
+  DEFAULT_NAV_ITEMS,
+  type NavItem,
+  type VehicleOnlineState,
+} from '@riviamigo/ui/primitives';
 import { getUnitSystem } from '@riviamigo/ui/lib/utils';
-import { useAuth, useCurrentVehicleStatus, useMe, useResolvedVehicleSelection, useVehicleStatus } from '@riviamigo/hooks';
-import { Loader2, LogOut, Settings, UserCog, Wifi, WifiOff } from 'lucide-react';
+import {
+  useAuth,
+  useCurrentVehicleStatus,
+  useMe,
+  useResolvedVehicleSelection,
+  useVehicleStatus,
+} from '@riviamigo/hooks';
+import { isVehicleCharging } from '@riviamigo/types';
+import { Loader2, LogOut, Settings, TriangleAlert, UserCog, Wifi, WifiOff } from 'lucide-react';
 import { GiRestingVampire } from 'react-icons/gi';
-import { TbBattery1, TbBattery2, TbBattery3, TbBattery4, TbBatteryCharging, TbBatteryOff, TbCarSuv } from 'react-icons/tb';
+import {
+  TbBattery1,
+  TbBattery2,
+  TbBattery3,
+  TbBattery4,
+  TbBatteryCharging,
+  TbBatteryOff,
+  TbCarSuv,
+} from 'react-icons/tb';
 import { FaTruckPickup } from 'react-icons/fa6';
+import { emitToast } from '../feedback/toast';
 
 interface AppLayoutProps {
   children: React.ReactNode;
   activeKey: string;
+}
+
+interface FeedHealthStatus {
+  auth_state?: string | null;
+  auth_reason_code?: string | null;
+  worker_health?: string | null;
+  worker_health_msg?: string | null;
+  telemetry_stale?: boolean;
+  telemetry_stale_reason?: string | null;
+}
+
+const FEED_HEALTH_TOAST_COOLDOWN_MS = 15 * 60 * 1000;
+
+export function getFeedHealthIssue(status?: FeedHealthStatus | null) {
+  if (status?.auth_state === 'needs_reauth') {
+    return {
+      key: `needs_reauth:${status.auth_reason_code ?? 'unknown'}`,
+      title: 'Rivian feed disconnected',
+      message:
+        status.worker_health_msg ??
+        'Rivian credentials are missing or expired. Reconnect the vehicle from Settings → Vehicles.',
+    };
+  }
+  if (
+    status?.worker_health === 'error' ||
+    status?.worker_health === 'stale' ||
+    status?.telemetry_stale
+  ) {
+    return {
+      key: `unhealthy:${status?.worker_health ?? 'unknown'}:${status?.telemetry_stale_reason ?? 'unknown'}`,
+      title: 'Vehicle feed unhealthy',
+      message:
+        status?.worker_health_msg ??
+        'Riviamigo is not receiving fresh vehicle telemetry. Open Health for collector details.',
+    };
+  }
+  return null;
+}
+
+export function shouldEmitFeedHealthToast(storage: Storage, key: string, now = Date.now()) {
+  const lastEmittedAt = Number(storage.getItem(key));
+  if (Number.isFinite(lastEmittedAt) && now - lastEmittedAt < FEED_HEALTH_TOAST_COOLDOWN_MS) {
+    return false;
+  }
+  storage.setItem(key, String(now));
+  return true;
+}
+
+export function resolveVehicleOnlineState({
+  liveVehicleId,
+  vehicleSelectionReady,
+  connectionState,
+  connected,
+  feedHealthIssue,
+}: {
+  liveVehicleId: string | null;
+  vehicleSelectionReady: boolean;
+  connectionState: string;
+  connected: boolean;
+  feedHealthIssue: ReturnType<typeof getFeedHealthIssue>;
+}): VehicleOnlineState {
+  if (!liveVehicleId) return 'offline';
+  if (!vehicleSelectionReady) return 'connecting';
+  if (feedHealthIssue) return 'unhealthy';
+  if (connectionState === 'failed') return 'error';
+  return connected ? 'online' : 'connecting';
 }
 
 function getCompactBatteryIcon(socPercent: number) {
@@ -30,7 +120,11 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   const canAccessUsers = me.data?.role === 'admin' || me.data?.role === 'super_user';
   const liveVehicleId = vehicleSelectionReady ? effectiveVehicleId : null;
   const liveAccessToken = vehicleSelectionReady ? accessToken : null;
-  const { status: liveStatus, connected, connectionState } = useVehicleStatus(liveVehicleId, liveAccessToken);
+  const {
+    status: liveStatus,
+    connected,
+    connectionState,
+  } = useVehicleStatus(liveVehicleId, liveAccessToken);
   const { data: currentStatus } = useCurrentVehicleStatus(liveVehicleId);
   const status = currentStatus ?? liveStatus;
   const [unitSystem, setUnitSystem] = React.useState(() => getUnitSystem());
@@ -50,29 +144,24 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     setUnitSystem(getUnitSystem());
   }, []);
 
-  // Fire a single reauth warning toast when the vehicle worker signals it needs
-  // re-authentication.  The ref prevents the same toast firing more than once
-  // per page session even if the status keeps polling.
-  const reauthToastFired = React.useRef(false);
+  const feedHealthIssue = getFeedHealthIssue(currentStatus);
   React.useEffect(() => {
-    if (currentStatus?.auth_state === 'needs_reauth' && !reauthToastFired.current) {
-      reauthToastFired.current = true;
-      window.dispatchEvent(
-        new CustomEvent('riviamigo:toast', {
-          detail: {
-            title: 'Rivian re-authentication required',
-            message:
-              'Your Rivian session has expired. Go to Settings → Vehicle to reconnect.',
-            variant: 'warning',
-          },
-        })
-      );
-    }
-    // Reset so the toast can refire if the vehicle recovers and expires again.
-    if (currentStatus?.auth_state !== 'needs_reauth') {
-      reauthToastFired.current = false;
-    }
-  }, [currentStatus?.auth_state]);
+    if (!liveVehicleId || !feedHealthIssue) return;
+
+    const storageKey = `rm-feed-health-toast:${liveVehicleId}:${feedHealthIssue.key}`;
+    const emitIfDue = () => {
+      if (!shouldEmitFeedHealthToast(localStorage, storageKey)) return;
+      emitToast({
+        title: feedHealthIssue.title,
+        message: feedHealthIssue.message,
+        variant: 'error',
+      });
+    };
+
+    emitIfDue();
+    const interval = window.setInterval(emitIfDue, 60_000);
+    return () => window.clearInterval(interval);
+  }, [feedHealthIssue?.key, feedHealthIssue?.message, feedHealthIssue?.title, liveVehicleId]);
 
   React.useEffect(() => {
     window.addEventListener('rm-units-change', handleUnitsChange as EventListener);
@@ -83,33 +172,35 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     };
   }, [handleUnitsChange]);
 
-  const onlineState = !liveVehicleId
-    ? 'offline' as const
-    : !vehicleSelectionReady
-    ? 'connecting' as const
-    : connectionState === 'failed'
-    ? 'error' as const
-    : connected
-    ? 'online' as const
-    : 'connecting' as const;
-  const compactBatteryLevel = typeof status?.battery_level === 'number' ? status.battery_level : undefined;
-  const compactIsCharging = status?.charger_state?.toLowerCase().includes('charging') ?? false;
+  const onlineState = resolveVehicleOnlineState({
+    liveVehicleId,
+    vehicleSelectionReady,
+    connectionState,
+    connected,
+    feedHealthIssue,
+  });
+  const compactBatteryLevel =
+    typeof status?.battery_level === 'number' ? status.battery_level : undefined;
+  const compactIsCharging = isVehicleCharging(status);
   const showCompactBattery = compactBatteryLevel !== undefined && onlineState === 'online';
   const compactBatteryIcon = showCompactBattery
     ? compactIsCharging
       ? { Component: TbBatteryCharging, variant: 'charging' }
       : getCompactBatteryIcon(compactBatteryLevel)
     : undefined;
-  const collapsedFooterRow = '-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[24px_24px] items-center justify-between';
+  const collapsedFooterRow =
+    '-mx-1 grid w-[calc(100%+0.5rem)] grid-cols-[24px_24px] items-center justify-between';
   const collapsedStatusRow = compactBatteryIcon
     ? collapsedFooterRow
     : 'flex w-full items-center justify-center';
   const collapsedFooterCell = 'flex h-8 w-6 items-center justify-center';
   const sidebarItems = React.useMemo<NavItem[]>(() => {
     const firstVehicleModel = vehicles[0]?.model?.toUpperCase() ?? '';
-    const overviewIcon = firstVehicleModel.includes('R1T')
-      ? <FaTruckPickup className="h-[1.125rem] w-[1.125rem]" />
-      : <TbCarSuv className="h-[1.125rem] w-[1.125rem]" />;
+    const overviewIcon = firstVehicleModel.includes('R1T') ? (
+      <FaTruckPickup className="h-[1.125rem] w-[1.125rem]" />
+    ) : (
+      <TbCarSuv className="h-[1.125rem] w-[1.125rem]" />
+    );
     const inBatterySection = activeKey === 'battery' || activeKey.startsWith('battery.');
     return DEFAULT_NAV_ITEMS.map((item) => {
       if (item.key === 'dashboard') {
@@ -130,13 +221,19 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
           },
         ],
       };
-    }).concat(canAccessUsers ? [{
-      key: 'users',
-      label: 'Users',
-      href: '/users',
-      icon: <UserCog className="h-[1.125rem] w-[1.125rem]" />,
-      pinToBottom: true,
-    }] : []);
+    }).concat(
+      canAccessUsers
+        ? [
+            {
+              key: 'users',
+              label: 'Users',
+              href: '/users',
+              icon: <UserCog className="h-[1.125rem] w-[1.125rem]" />,
+              pinToBottom: true,
+            },
+          ]
+        : []
+    );
   }, [activeKey, vehicles, canAccessUsers]);
 
   async function handleLogout() {
@@ -161,7 +258,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
               <StatusBar
                 onlineState={onlineState}
                 socPercent={status?.battery_level ?? undefined}
-                isCharging={status?.charger_state?.toLowerCase().includes('charging') ?? false}
+                isCharging={isVehicleCharging(status)}
                 rangeEstimateMi={status?.range_miles ?? undefined}
                 className="h-12 px-4"
               />
@@ -201,10 +298,12 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                     onlineState === 'online'
                       ? 'Online'
                       : onlineState === 'connecting'
-                      ? 'Connecting...'
-                      : onlineState === 'error'
-                      ? 'Connection failed'
-                      : 'Offline'
+                        ? 'Connecting...'
+                        : onlineState === 'unhealthy'
+                          ? 'Feed unhealthy'
+                          : onlineState === 'error'
+                            ? 'Connection failed'
+                            : 'Offline'
                   }`}
                   aria-label="Vehicle status"
                 >
@@ -212,6 +311,8 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                     <Loader2 className="h-4 w-4 animate-spin text-accent" />
                   ) : onlineState === 'online' ? (
                     <Wifi className="h-4 w-4 text-status-positive" />
+                  ) : onlineState === 'unhealthy' ? (
+                    <TriangleAlert className="h-4 w-4 text-status-danger" />
                   ) : onlineState === 'error' ? (
                     <WifiOff className="h-4 w-4 text-status-danger" />
                   ) : (
@@ -220,7 +321,11 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 </div>
                 <div
                   className={collapsedFooterCell}
-                  title={showCompactBattery ? `Battery status: ${Math.round(compactBatteryLevel)}%` : 'Battery status unavailable'}
+                  title={
+                    showCompactBattery
+                      ? `Battery status: ${Math.round(compactBatteryLevel)}%`
+                      : 'Battery status unavailable'
+                  }
                   aria-label="Battery status"
                 >
                   {compactBatteryIcon && (
@@ -229,10 +334,10 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                         compactBatteryIcon.variant === 'charging'
                           ? 'text-accent'
                           : (compactBatteryLevel ?? 0) > 50
-                          ? 'text-status-positive'
-                          : (compactBatteryLevel ?? 0) > 20
-                          ? 'text-status-warning'
-                          : 'text-status-danger'
+                            ? 'text-status-positive'
+                            : (compactBatteryLevel ?? 0) > 20
+                              ? 'text-status-warning'
+                              : 'text-status-danger'
                       }`}
                       data-battery-icon={`tb-battery-${compactBatteryIcon.variant}`}
                     />
@@ -251,20 +356,16 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
               </button>
 
               <div className={collapsedFooterRow}>
-              <button
-                type="button"
-                onClick={handleLogout}
-                title="Sign out"
-                aria-label="Sign out"
-                className="flex h-8 w-6 items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
-              >
-                <LogOut className="h-4 w-4 shrink-0" />
-              </button>
-              <ThemeToggle
-                variant="ghost"
-                className="h-8 w-6"
-                ariaLabel="Theme options"
-              />
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  title="Sign out"
+                  aria-label="Sign out"
+                  className="flex h-8 w-6 items-center justify-center rounded-lg text-fg-tertiary transition-colors hover:bg-bg-elevated hover:text-fg"
+                >
+                  <LogOut className="h-4 w-4 shrink-0" />
+                </button>
+                <ThemeToggle variant="ghost" className="h-8 w-6" ariaLabel="Theme options" />
               </div>
             </div>
           ) : (
@@ -272,7 +373,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
               <StatusBar
                 onlineState={onlineState}
                 socPercent={status?.battery_level ?? undefined}
-                isCharging={status?.charger_state?.toLowerCase().includes('charging') ?? false}
+                isCharging={isVehicleCharging(status)}
                 rangeEstimateMi={status?.range_miles ?? undefined}
                 compact={collapsed}
               />
@@ -300,11 +401,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                   <span className="text-xs font-medium">Sign out</span>
                 </button>
 
-                <ThemeToggle
-                  variant="ghost"
-                  className="h-8 w-8"
-                  ariaLabel="Theme options"
-                />
+                <ThemeToggle variant="ghost" className="h-8 w-8" ariaLabel="Theme options" />
               </div>
             </div>
           )
@@ -312,7 +409,9 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
       />
 
       {/* Main content: offset by sidebar width on lg+ */}
-      <main className={`rm-app-main transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-64'}`}>
+      <main
+        className={`rm-app-main transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-64'}`}
+      >
         <div className="rm-app-content p-4 pt-14 sm:p-6 sm:pt-14 lg:p-6 max-w-7xl mx-auto">
           {children}
         </div>

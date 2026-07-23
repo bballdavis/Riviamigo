@@ -159,3 +159,17 @@ Common usage:
 - add raw colors
 - create one-off visual systems for single pages that should match the rest of the app
 - treat “close enough” styling as acceptable when the app already has a documented pattern
+## Runtime Health Indicators
+
+Vehicle connection chrome must distinguish browser/API connectivity from the
+upstream Rivian telemetry feed. A green **Online** state is valid only when the
+local live connection is open and the selected vehicle has no collector,
+authentication, or telemetry-staleness failure. Missing credentials, an
+unhealthy collector, or stale telemetry use the shared danger-tone **Feed
+unhealthy** state and suppress battery details that could be mistaken for live
+data.
+
+Runtime feed failures also emit an error toast with a 15-minute per-vehicle,
+per-reason cooldown. Persistent failures may remind the user after the cooldown,
+but status polling and page reloads must not create toast storms. Reauthentication
+messages direct the user to **Settings → Vehicles**.

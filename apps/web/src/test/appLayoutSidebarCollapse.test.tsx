@@ -4,13 +4,20 @@ import { AppLayout } from '../components/layout/AppLayout';
 
 const navigate = vi.fn();
 const logout = vi.fn();
+let currentStatusData: Record<string, unknown> | null = null;
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
-  useAuth: (selector?: (state: { accessToken: string; defaultVehicleId: string; logout: typeof logout }) => unknown) => {
+  useAuth: (
+    selector?: (state: {
+      accessToken: string;
+      defaultVehicleId: string;
+      logout: typeof logout;
+    }) => unknown
+  ) => {
     const state = {
       accessToken: 'token',
       defaultVehicleId: 'vehicle-1',
@@ -26,7 +33,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useMe: () => ({
     data: { role: 'user' },
   }),
-  useCurrentVehicleStatus: () => ({ data: null }),
+  useCurrentVehicleStatus: () => ({ data: currentStatusData }),
   useVehicleStatus: () => ({
     status: null,
     connected: true,
@@ -39,13 +46,14 @@ describe('AppLayout sidebar collapse', () => {
     localStorage.clear();
     navigate.mockClear();
     logout.mockClear();
+    currentStatusData = null;
   });
 
   it('keeps the main content centered inside the current sidebar width', () => {
     render(
       <AppLayout activeKey="dashboard">
         <div>Dashboard content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     const main = document.querySelector('main.rm-app-main');
@@ -68,7 +76,7 @@ describe('AppLayout sidebar collapse', () => {
     render(
       <AppLayout activeKey="dashboard">
         <div>Dashboard content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     const main = document.querySelector('main.rm-app-main');
@@ -87,7 +95,7 @@ describe('AppLayout sidebar collapse', () => {
     render(
       <AppLayout activeKey="dashboard">
         <div>Dashboard content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     const batteryButton = screen.getByRole('button', { name: 'Battery' });
@@ -99,7 +107,7 @@ describe('AppLayout sidebar collapse', () => {
     render(
       <AppLayout activeKey="dashboard">
         <div>Dashboard content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     fireEvent.click(screen.getByLabelText('Collapse sidebar'));
@@ -110,11 +118,46 @@ describe('AppLayout sidebar collapse', () => {
     expect(statusRow).not.toHaveClass('grid-cols-[24px_24px]');
   });
 
+  it('shows an unhealthy feed and rate-limits repeated failure toasts', () => {
+    currentStatusData = {
+      auth_state: 'needs_reauth',
+      auth_reason_code: 'credentials_missing',
+      worker_health: 'error',
+      worker_health_msg: 'Rivian credentials are missing; reconnect the vehicle',
+      telemetry_stale: true,
+    };
+    const toast = vi.fn();
+    window.addEventListener('riviamigo:toast', toast as EventListener);
+
+    const first = render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(screen.getByLabelText('Vehicle status: Feed unhealthy')).toBeInTheDocument();
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect((toast.mock.calls[0]?.[0] as CustomEvent).detail).toMatchObject({
+      title: 'Rivian feed disconnected',
+      variant: 'error',
+    });
+
+    first.unmount();
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(toast).toHaveBeenCalledTimes(1);
+    window.removeEventListener('riviamigo:toast', toast as EventListener);
+  });
+
   it('shows phantom drain as a battery child item and navigates to it', () => {
     render(
       <AppLayout activeKey="battery.phantom-drain">
         <div>Battery content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     expect(screen.getByText('Phantom Drain')).toBeInTheDocument();
@@ -128,7 +171,7 @@ describe('AppLayout sidebar collapse', () => {
     render(
       <AppLayout activeKey="dashboard">
         <div>Dashboard content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     expect(screen.queryByText('Phantom Drain')).not.toBeInTheDocument();
@@ -138,7 +181,7 @@ describe('AppLayout sidebar collapse', () => {
     render(
       <AppLayout activeKey="dashboard">
         <div>Dashboard content</div>
-      </AppLayout>,
+      </AppLayout>
     );
 
     const trigger = screen.getByRole('button', { name: 'Toggle navigation' });
@@ -158,7 +201,9 @@ describe('AppLayout sidebar collapse', () => {
     expect(overview).toHaveAttribute('aria-current', 'page');
     expect(overview).toHaveClass('min-h-14');
     expect(battery).toHaveClass('min-h-14');
-    expect(sheetControls.getByLabelText('Vehicle status: Online').parentElement).toHaveClass('h-12');
+    expect(sheetControls.getByLabelText('Vehicle status: Online').parentElement).toHaveClass(
+      'h-12'
+    );
     expect(settings).toHaveClass('h-12');
     expect(signOut).toHaveClass('h-12');
 
@@ -168,7 +213,11 @@ describe('AppLayout sidebar collapse', () => {
     expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Toggle navigation' }));
-    fireEvent.click(within(screen.getByRole('dialog', { name: 'Navigation' })).getByRole('button', { name: 'Open settings' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Navigation' })).getByRole('button', {
+        name: 'Open settings',
+      })
+    );
     expect(navigate).toHaveBeenCalledWith({ to: '/settings' });
     expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
 
@@ -176,7 +225,9 @@ describe('AppLayout sidebar collapse', () => {
     expect(screen.getByRole('dialog', { name: 'Navigation' })).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Toggle navigation' })).toHaveFocus());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Toggle navigation' })).toHaveFocus()
+    );
     expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
   });
 });

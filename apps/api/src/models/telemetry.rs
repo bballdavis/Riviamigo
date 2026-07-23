@@ -118,6 +118,14 @@ pub struct TelemetryEvent {
 }
 
 impl TelemetryEvent {
+    /// Returns true when any charging telemetry signal identifies an active
+    /// session. Rivian can report charger status before power_state changes.
+    pub fn is_actively_charging(&self) -> bool {
+        matches!(self.power_state, Some(PowerState::Charging))
+            || matches!(self.charger_state, Some(ChargerState::Charging))
+            || self.charger_status.as_deref() == Some("chrgr_sts_connected_charging")
+    }
+
     pub fn empty(vehicle_id: Uuid, ts: DateTime<Utc>) -> Self {
         Self {
             vehicle_id,
@@ -268,6 +276,39 @@ impl std::str::FromStr for ChargerState {
             "charging_done" | "done" => ChargerState::Done,
             _ => ChargerState::Unknown,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChargerState, PowerState, TelemetryEvent};
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn charging_predicate_accepts_each_live_signal() {
+        let vehicle_id = Uuid::new_v4();
+        let ts = Utc::now();
+
+        let mut event = TelemetryEvent::empty(vehicle_id, ts);
+        event.power_state = Some(PowerState::Charging);
+        assert!(event.is_actively_charging());
+
+        let mut event = TelemetryEvent::empty(vehicle_id, ts);
+        event.charger_state = Some(ChargerState::Charging);
+        assert!(event.is_actively_charging());
+
+        let mut event = TelemetryEvent::empty(vehicle_id, ts);
+        event.charger_status = Some("chrgr_sts_connected_charging".to_string());
+        assert!(event.is_actively_charging());
+    }
+
+    #[test]
+    fn charging_predicate_rejects_disconnected_status() {
+        let mut event = TelemetryEvent::empty(Uuid::new_v4(), Utc::now());
+        event.charger_status = Some("chrgr_sts_not_connected".to_string());
+        event.charger_state = Some(ChargerState::Disconnected);
+        assert!(!event.is_actively_charging());
     }
 }
 

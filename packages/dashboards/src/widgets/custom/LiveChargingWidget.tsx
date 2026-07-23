@@ -1,6 +1,7 @@
 import React from 'react';
 import { Zap, Clock, Battery, Plug, RouteIcon, TrendingUp } from 'lucide-react';
 import { useCurrentVehicleStatus, useLiveSession } from '@riviamigo/hooks';
+import { isVehicleCharging } from '@riviamigo/types';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 
@@ -88,11 +89,9 @@ function LiveChargingWidget({
   const vehicleId = ctx.vehicleId ?? null;
   const { data: status } = useCurrentVehicleStatus(vehicleId);
 
-  const isCharging =
-    status?.power_state === 'charging' ||
-    (status?.charger_state?.toLowerCase() === 'charging');
+  const isCharging = isVehicleCharging(status);
 
-  const { data: session } = useLiveSession(vehicleId, isCharging);
+  const { data: session, isLoading: isLiveSessionLoading } = useLiveSession(vehicleId, isCharging);
 
   const headerText = isCharging ? 'Live Charging' : 'Charging Status';
 
@@ -108,6 +107,14 @@ function LiveChargingWidget({
           </span>
         )}
       </div>
+
+      {isCharging && !session && (
+        <div className="text-xs text-fg-tertiary" role="status" aria-live="polite">
+          {isLiveSessionLoading
+            ? 'Waiting for live charging data…'
+            : 'Live charging data unavailable; showing vehicle status where available.'}
+        </div>
+      )}
 
       {/* Content */}
       {isCharging ? (
