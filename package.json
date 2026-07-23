@@ -25,6 +25,7 @@
     "verify:fresh-install": "node ./scripts/verify-fresh-install.mjs",
     "verify:backup-restore-s3": "node ./scripts/verify-backup-restore-s3.mjs",
     "verify:restore-compatibility": "node ./tools/restore-lab/run.mjs",
+    "verify:migration-integrity": "node ./tools/migration-integrity.mjs",
     "verify:release-image": "node ./scripts/verify-release-image.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
     "storybook": "turbo storybook",

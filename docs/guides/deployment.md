@@ -52,7 +52,12 @@ docker compose --env-file .env -f compose/docker-compose.yml pull
 docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```
 
-The app applies database migrations on startup. Pin `IMAGE_TAG` to an exact Calendar Version for repeatable deployments.
+The app applies immutable, forward-only database migrations on startup. Pin
+`IMAGE_TAG` to an exact Calendar Version for repeatable deployments. Existing
+pre-release installations must complete the one-time explicit baseline
+adoption in the [release database cutover runbook](../runbooks/release-database-cutover.md)
+before starting the flattened public release; startup never edits migration
+bookkeeping automatically.
 
 The PostgreSQL 18 image cannot reuse a PostgreSQL 16 data directory. Before upgrading an existing PostgreSQL 16 installation, create and verify a recovery package plus a raw `pg_dump`, stop the old stack, move its data directory aside, and restore into a newly initialized PostgreSQL 18 volume. Never point PostgreSQL 18 at the former PG16 directory. Follow the [backup and restore runbook](../runbooks/backup-restore.md) for the validation sequence.
 

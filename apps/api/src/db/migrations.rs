@@ -1,49 +1,167 @@
 use anyhow::{bail, Context};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{migrate::Migrator, PgPool};
 
-/// The compiled migration set used by both normal startup and restore-ledger
-/// reconstruction. A recovery package contains the schema at its source
-/// migration version, but older packages may not contain SQLx bookkeeping.
+pub const MIGRATION_CHAIN_ID: &str = "riviamigo-schema-v1";
+
+/// The one migration catalog used by startup, backup creation, restore
+/// planning, candidate preparation, and explicit chain adoption.
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-/// Rebuild SQLx's bookkeeping after restoring a package whose dump did not
-/// carry a usable `_sqlx_migrations` table. The schema itself is not changed:
-/// the package's source migration version determines which migrations are
-/// already represented, and normal startup applies only later migrations.
-/// Refuse to reconstruct the ledger when the restore left the baseline schema
-/// incomplete; marking migrations as applied in that state would hide a
-/// partial restore and make later migrations fail with misleading errors.
-pub async fn restore_ledger(pool: &PgPool, source_version: i64) -> anyhow::Result<()> {
-    if source_version < 1 {
-        bail!("recovery package has an invalid source migration version: {source_version}");
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MigrationIdentity {
+    pub version: i64,
+    pub description: String,
+    pub checksum_sha384: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerValidationKind {
+    Empty,
+    TooLong,
+    Version,
+    Description,
+    Checksum,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerValidationError {
+    pub kind: LedgerValidationKind,
+    pub message: String,
+}
+
+impl std::fmt::Display for LedgerValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
     }
-    let migrations = MIGRATOR.migrations.iter().collect::<Vec<_>>();
-    let latest = migrations
+}
+
+impl std::error::Error for LedgerValidationError {}
+
+pub fn compiled_migration_ledger() -> Vec<MigrationIdentity> {
+    MIGRATOR
+        .migrations
+        .iter()
+        .map(|migration| MigrationIdentity {
+            version: migration.version,
+            description: migration.description.to_string(),
+            checksum_sha384: hex::encode(migration.checksum.as_ref()),
+        })
+        .collect()
+}
+
+pub fn migration_catalog_digest() -> String {
+    migration_ledger_digest(&compiled_migration_ledger())
+}
+
+pub fn migration_ledger_digest(ledger: &[MigrationIdentity]) -> String {
+    let bytes = serde_json::to_vec(ledger).expect("migration ledger serializes");
+    hex::encode(Sha256::digest(bytes))
+}
+
+pub fn latest_migration_version() -> i64 {
+    MIGRATOR
+        .migrations
+        .last()
+        .map(|migration| migration.version)
+        .unwrap_or(0)
+}
+
+pub fn validate_ledger_prefix(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
+    if ledger.is_empty() {
+        return Err(LedgerValidationError {
+            kind: LedgerValidationKind::Empty,
+            message: "migration ledger is empty".into(),
+        });
+    }
+    let compiled = compiled_migration_ledger();
+    if ledger.len() > compiled.len() {
+        return Err(LedgerValidationError {
+            kind: LedgerValidationKind::TooLong,
+            message: format!(
+                "migration ledger has {} entries, but this release knows only {}",
+                ledger.len(),
+                compiled.len()
+            ),
+        });
+    }
+    for (position, (actual, expected)) in ledger.iter().zip(&compiled).enumerate() {
+        if actual.version != expected.version {
+            return Err(LedgerValidationError {
+                kind: LedgerValidationKind::Version,
+                message: format!(
+                    "migration ledger entry {} has version {}; expected {}",
+                    position + 1,
+                    actual.version,
+                    expected.version
+                ),
+            });
+        }
+        if actual.description != expected.description {
+            return Err(LedgerValidationError {
+                kind: LedgerValidationKind::Description,
+                message: format!(
+                    "migration {} description is {:?}; expected {:?}",
+                    actual.version, actual.description, expected.description
+                ),
+            });
+        }
+        if !actual
+            .checksum_sha384
+            .eq_ignore_ascii_case(&expected.checksum_sha384)
+        {
+            return Err(LedgerValidationError {
+                kind: LedgerValidationKind::Checksum,
+                message: format!(
+                    "migration {} checksum differs from this release",
+                    actual.version
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_complete_ledger(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
+    validate_ledger_prefix(ledger)?;
+    let expected = compiled_migration_ledger();
+    if ledger.len() != expected.len() {
+        return Err(LedgerValidationError {
+            kind: LedgerValidationKind::Version,
+            message: format!(
+                "migration ledger stops at version {}; this release requires version {}",
+                ledger.last().map(|item| item.version).unwrap_or(0),
+                expected.last().map(|item| item.version).unwrap_or(0)
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Rebuild SQLx bookkeeping for an isolated restore candidate. The caller must
+/// first validate the restored schema contract. Migration identity is copied
+/// from the manifest only after it is proven to be an exact compiled prefix.
+pub async fn restore_ledger(
+    pool: &PgPool,
+    source_ledger: &[MigrationIdentity],
+) -> anyhow::Result<()> {
+    validate_ledger_prefix(source_ledger)?;
+    let latest = MIGRATOR
+        .migrations
         .last()
         .context("no compiled migrations available")?;
-    if source_version > latest.version {
-        bail!(
-            "recovery package requires migration version {source_version}, but this release only knows through {}",
-            latest.version
-        );
-    }
-
-    let schema_ready: bool = sqlx::query_scalar(
-        "SELECT to_regclass('timeseries.telemetry') IS NOT NULL AND to_regclass('riviamigo.backup_runs') IS NOT NULL AND to_regclass('riviamigo.users') IS NOT NULL AND to_regclass('riviamigo.vehicles') IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await?;
-    if !schema_ready {
-        bail!(
-            "cannot reconstruct the migration ledger because the restored application schema is incomplete"
-        );
+    if source_ledger
+        .last()
+        .is_some_and(|entry| entry.version > latest.version)
+    {
+        bail!("recovery package migration ledger is newer than this release");
     }
 
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('riviamigo-restore-migration-ledger'))")
         .execute(&mut *transaction)
         .await?;
-
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
@@ -58,10 +176,6 @@ pub async fn restore_ledger(pool: &PgPool, source_version: i64) -> anyhow::Resul
     )
     .execute(&mut *transaction)
     .await?;
-
-    // A pre-release database used the schema-qualified ledger. It is only
-    // bookkeeping, and the restored package is the authoritative state, so
-    // remove the obsolete copy after the public ledger is guaranteed to exist.
     sqlx::query("DROP TABLE IF EXISTS riviamigo._sqlx_migrations")
         .execute(&mut *transaction)
         .await?;
@@ -69,10 +183,9 @@ pub async fn restore_ledger(pool: &PgPool, source_version: i64) -> anyhow::Resul
         .execute(&mut *transaction)
         .await?;
 
-    for migration in migrations
-        .into_iter()
-        .filter(|migration| migration.version <= source_version)
-    {
+    for migration in source_ledger {
+        let checksum = hex::decode(&migration.checksum_sha384)
+            .context("decode validated migration checksum")?;
         sqlx::query(
             r#"
             INSERT INTO public._sqlx_migrations
@@ -81,12 +194,70 @@ pub async fn restore_ledger(pool: &PgPool, source_version: i64) -> anyhow::Resul
             "#,
         )
         .bind(migration.version)
-        .bind(migration.description.as_ref())
-        .bind(migration.checksum.as_ref())
+        .bind(&migration.description)
+        .bind(checksum)
         .execute(&mut *transaction)
         .await?;
     }
-
     transaction.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compiled_catalog_is_ordered_and_stable() {
+        let catalog = compiled_migration_ledger();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].version, 1);
+        assert_eq!(catalog[0].checksum_sha384.len(), 96);
+        assert_eq!(migration_catalog_digest().len(), 64);
+        validate_complete_ledger(&catalog).expect("compiled catalog validates");
+    }
+
+    #[test]
+    fn exact_prefix_validation_rejects_checksum_and_order_drift() {
+        let catalog = compiled_migration_ledger();
+        validate_ledger_prefix(&catalog).expect("catalog is its own prefix");
+
+        let mut checksum_drift = catalog.clone();
+        checksum_drift[0].checksum_sha384.replace_range(0..2, "00");
+        assert_eq!(
+            validate_ledger_prefix(&checksum_drift)
+                .expect_err("checksum drift must fail")
+                .kind,
+            LedgerValidationKind::Checksum
+        );
+
+        let mut version_drift = catalog;
+        version_drift[0].version = 2;
+        assert_eq!(
+            validate_ledger_prefix(&version_drift)
+                .expect_err("version drift must fail")
+                .kind,
+            LedgerValidationKind::Version
+        );
+
+        assert_eq!(
+            validate_ledger_prefix(&[])
+                .expect_err("empty ledger must fail")
+                .kind,
+            LedgerValidationKind::Empty
+        );
+
+        let mut newer = compiled_migration_ledger();
+        newer.push(MigrationIdentity {
+            version: 2,
+            description: "future migration".into(),
+            checksum_sha384: "00".repeat(48),
+        });
+        assert_eq!(
+            validate_ledger_prefix(&newer)
+                .expect_err("newer ledger must fail")
+                .kind,
+            LedgerValidationKind::TooLong
+        );
+    }
 }
