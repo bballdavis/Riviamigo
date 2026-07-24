@@ -56,6 +56,12 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 ## Verification recorded
 
+The security-hardening branch additionally requires:
+
+- `pnpm security:routes`
+- constant-time restore-token comparison tests
+- bounded dynamic telemetry and metric selector tests
+
 - `cargo test config::tests --lib`
 - `cargo test routes::dashboards::tests --lib`
 - `pnpm -C apps/web exec vitest run src/test/dashboardComponentRegistry.test.ts src/test/dashboardApi.test.tsx`

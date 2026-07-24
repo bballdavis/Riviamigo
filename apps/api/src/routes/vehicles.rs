@@ -4513,6 +4513,11 @@ async fn telemetry_lanes(
 
 fn parse_telemetry_lanes(value: Option<&str>) -> Result<Vec<&'static str>, AppError> {
     let requested = value.unwrap_or("battery,drive");
+    if requested.len() > 256 || requested.chars().any(char::is_control) {
+        return Err(AppError::Validation(
+            "telemetry lane selector is invalid".into(),
+        ));
+    }
     let mut lanes = Vec::new();
     for lane in requested
         .split(',')
@@ -4849,6 +4854,11 @@ fn parse_raw_fields(fields: Option<&str>) -> Result<Vec<&'static str>, AppError>
     let Some(fields) = fields.map(str::trim).filter(|fields| !fields.is_empty()) else {
         return Ok(Vec::new());
     };
+    if fields.len() > 2048 || fields.chars().any(char::is_control) {
+        return Err(AppError::Validation(
+            "telemetry field selector is invalid".into(),
+        ));
+    }
     let mut selected = Vec::new();
     for field in fields
         .split(',')
@@ -5221,6 +5231,12 @@ mod tests {
     #[test]
     fn raw_telemetry_rejects_unknown_field_filters() {
         assert!(parse_raw_fields(Some("battery_level,not_a_telemetry_field")).is_err());
+    }
+
+    #[test]
+    fn raw_selectors_reject_control_and_oversized_input() {
+        assert!(parse_raw_fields(Some("battery_level\n".repeat(300).as_str())).is_err());
+        assert!(parse_telemetry_lanes(Some("battery\u{0000},drive")).is_err());
     }
 
     #[test]

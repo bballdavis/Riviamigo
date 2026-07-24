@@ -20,6 +20,7 @@
     "docs:build": "pnpm --filter @riviamigo/docs build",
     "docs:serve": "pnpm --filter @riviamigo/docs serve",
     "docs:check": "node ./scripts/check-docs.mjs",
+    "security:routes": "node ./scripts/check-api-route-security.mjs",
     "deps:check": "node ./scripts/check-dependency-policy.mjs && knip --dependencies",
     "deps:catalogs": "node ./scripts/check-dependency-policy.mjs --catalogs-only",
     "verify:fresh-install": "node ./scripts/verify-fresh-install.mjs",
