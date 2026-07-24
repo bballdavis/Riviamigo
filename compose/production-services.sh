@@ -6,9 +6,30 @@ agent_pid=
 nginx_pid=
 
 start_api() {
-  /usr/bin/setpriv --reuid=1001 --regid=1001 --clear-groups /app/riviamigo-api &
+  /usr/bin/setpriv --reuid=1001 --regid=1001 --clear-groups /app/riviamigo-api \
+    2> >(normalize_child_errors api) &
   api_pid=$!
   printf '%s\n' "$api_pid" > /tmp/riviamigo-api.pid
+}
+
+normalize_child_errors() {
+  source=$1
+  while IFS= read -r line; do
+    level=ERROR
+    if [ "$source" = nginx ]; then
+      case "$line" in
+        *"[warn]"*) level=WARN ;;
+        *"[notice]"*|*"[info]"*|*"[debug]"*) level=INFO ;;
+      esac
+
+      if [[ "$line" =~ ^[^\[]+\[[^]]+\][^:]*:[[:space:]]?(.*)$ ]]; then
+        line="${BASH_REMATCH[1]}"
+      fi
+    fi
+    line=${line//\\/\\\\}
+    line=${line//\"/\\\"}
+    printf '[riviamigo][%s] source=%s message="%s"\n' "$level" "$source" "$line" >&2
+  done
 }
 
 shutdown() {
@@ -21,9 +42,9 @@ shutdown() {
 
 trap 'shutdown; exit 0' TERM INT
 
-/app/riviamigo-restore-agent &
+/app/riviamigo-restore-agent 2> >(normalize_child_errors restore-agent) &
 agent_pid=$!
-nginx -g 'daemon off;' &
+nginx -g 'daemon off;' 2> >(normalize_child_errors nginx) &
 nginx_pid=$!
 start_api
 

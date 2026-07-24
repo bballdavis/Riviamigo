@@ -38,7 +38,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `AGE_ENCRYPTION_KEY` | Generated and stored in PostgreSQL | age X25519 identity used to encrypt provider credentials. Supply only as part of the complete three-key override. |
 | `RIVIAMIGO_ENV` | `production` | Enables production configuration validation. Use `development` only for local development. |
 | `PORT` | `3001` | Internal API listener port. The unified production nginx expects `3001`. |
-| `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Structured logs are written to stdout. |
+| `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Structured `[riviamigo][LEVEL]` key-value logs are written to stdout. |
 | `TZ` | UTC | Docker/container timezone used by nginx and other runtime processes. This does not control Riviamigo’s user-facing application timezone, which is configured in Settings → Units. |
 | `COOKIE_INSECURE` | Unset | Allows non-Secure cookies for local development. Any value enables it; production rejects it. |
 | `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/data/cache/riviamigo/vehicle-images` in the production image | Persistent local artwork mirror. Standard Compose does not need to set it. |

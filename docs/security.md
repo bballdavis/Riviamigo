@@ -67,7 +67,7 @@ precise vehicle locations in public issues.
 ## Audit Logging
 
 - Security events (login success/failure, key operations) logged to `riviamigo.security_events`
-- Structured JSON logs via tracing-subscriber
+- Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape.
 
 ## Dependencies
 

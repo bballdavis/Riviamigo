@@ -1,31 +1,18 @@
 use sqlx::postgres::PgPoolOptions;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use riviamigo_api::{
     config::Config,
     db::{self, pool::create_pool},
-    ingestion, keys,
+    ingestion, keys, logging,
     middleware::auth::{AppState, JwtKeys},
     routes, services,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "riviamigo_api=debug,tower_http=info".into()),
-        )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .compact()
-                .without_time()
-                .with_ansi(false)
-                .with_writer(std::io::stdout),
-        )
-        .init();
+    logging::init();
 
     let mut config = Config::from_env()?;
     let pool = create_pool(&config.database_url).await?;
