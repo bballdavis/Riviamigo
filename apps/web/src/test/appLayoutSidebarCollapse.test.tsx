@@ -5,6 +5,8 @@ import { AppLayout } from '../components/layout/AppLayout';
 const navigate = vi.fn();
 const logout = vi.fn();
 let currentStatusData: Record<string, unknown> | null = null;
+let liveConnected = true;
+let liveConnectionState = 'online';
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
@@ -36,8 +38,8 @@ vi.mock('@riviamigo/hooks', () => ({
   useCurrentVehicleStatus: () => ({ data: currentStatusData }),
   useVehicleStatus: () => ({
     status: null,
-    connected: true,
-    connectionState: 'online',
+    connected: liveConnected,
+    connectionState: liveConnectionState,
   }),
 }));
 
@@ -47,6 +49,8 @@ describe('AppLayout sidebar collapse', () => {
     navigate.mockClear();
     logout.mockClear();
     currentStatusData = null;
+    liveConnected = true;
+    liveConnectionState = 'online';
   });
 
   it('keeps the main content centered inside the current sidebar width', () => {
@@ -151,6 +155,24 @@ describe('AppLayout sidebar collapse', () => {
 
     expect(toast).toHaveBeenCalledTimes(1);
     window.removeEventListener('riviamigo:toast', toast as EventListener);
+  });
+
+  it('shows browser reconnecting before an old upstream feed error', () => {
+    currentStatusData = {
+      worker_health: 'error',
+      worker_health_msg: 'Old upstream failure',
+    };
+    liveConnected = false;
+    liveConnectionState = 'connecting';
+
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(screen.getByLabelText('Vehicle status: Reconnecting...')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Vehicle status: Feed unhealthy')).not.toBeInTheDocument();
   });
 
   it('keeps a connected feed online when only telemetry freshness is stale', () => {

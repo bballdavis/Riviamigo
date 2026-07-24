@@ -31,6 +31,22 @@ struct LiveParams {
     vehicle_id: Option<Uuid>,
 }
 
+const LIVE_KEEPALIVE_MESSAGE: &str = r#"{"type":"keepalive"}"#;
+
+#[derive(Deserialize)]
+struct LiveClientControlMessage {
+    #[serde(rename = "type")]
+    message_type: Option<String>,
+}
+
+fn is_live_probe(message: &str) -> bool {
+    serde_json::from_str::<LiveClientControlMessage>(message)
+        .ok()
+        .and_then(|control| control.message_type)
+        .as_deref()
+        == Some("probe")
+}
+
 /// Extract and validate a JWT from the `Sec-WebSocket-Protocol: bearer.<token>` header.
 /// Returns the decoded claims on success.
 pub(crate) fn extract_jwt_from_headers(
@@ -131,7 +147,7 @@ async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client
         return;
     }
 
-    let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+    let mut keepalive_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
     let mut msg_stream = pubsub.into_on_message();
 
     loop {
@@ -148,11 +164,15 @@ async fn handle_socket(socket: WebSocket, vehicle_id: Uuid, redis: redis::Client
                     None => break,
                 }
             }
-            _ = ping_interval.tick() => {
+            _ = keepalive_interval.tick() => {
+                if sink.send(Message::Text(LIVE_KEEPALIVE_MESSAGE.into())).await.is_err() { break; }
                 if sink.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
             }
             msg = stream.next() => {
                 match msg {
+                    Some(Ok(Message::Text(text))) if is_live_probe(text.as_str()) => {
+                        if sink.send(Message::Text(LIVE_KEEPALIVE_MESSAGE.into())).await.is_err() { break; }
+                    }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) | None => break,
                     _ => {}
@@ -257,6 +277,20 @@ mod tests {
         let claims = extract_jwt_from_headers(&headers_with_proto(&proto), &keys)
             .expect("should find bearer. among multiple protocols");
         assert_eq!(claims.sub, user_id);
+    }
+
+    #[test]
+    fn recognizes_only_probe_control_messages() {
+        assert!(is_live_probe(r#"{"type":"probe"}"#));
+        assert!(is_live_probe(r#"{"type":"probe","request_id":"ignored"}"#));
+        assert!(!is_live_probe(r#"{"type":"keepalive"}"#));
+        assert!(!is_live_probe(r#"{"vehicle_id":"not-a-probe"}"#));
+        assert!(!is_live_probe("not-json"));
+    }
+
+    #[test]
+    fn keepalive_message_contains_no_vehicle_data() {
+        assert_eq!(LIVE_KEEPALIVE_MESSAGE, r#"{"type":"keepalive"}"#);
     }
 
     #[test]
