@@ -27,6 +27,8 @@ use riviamigo_api::{
     },
 };
 
+const MAX_AUTH_HEADER_BYTES: usize = 512;
+
 #[derive(Clone)]
 struct AgentState {
     config: Config,
@@ -553,6 +555,9 @@ async fn get_job(
         .get("x-riviamigo-restore-token")
         .and_then(|value| value.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
+    if token.is_empty() || token.len() > MAX_AUTH_HEADER_BYTES {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     let job = restore_jobs::read(&state.config, job_id)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
@@ -571,7 +576,10 @@ async fn execute_job(
         .get("x-riviamigo-agent-key")
         .and_then(|value| value.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if supplied != state.agent_key {
+    if supplied.is_empty()
+        || supplied.len() > MAX_AUTH_HEADER_BYTES
+        || !restore_jobs::constant_time_equal(supplied.as_bytes(), state.agent_key.as_bytes())
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let job = restore_jobs::read(&state.config, job_id)
