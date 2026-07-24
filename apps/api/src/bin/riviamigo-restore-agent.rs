@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use riviamigo_api::{
     config::Config,
+    logging,
     services::{
         backups, restore_compatibility,
         restore_jobs::{self, RestorePhase},
@@ -34,6 +35,7 @@ struct AgentState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    logging::init();
     let config = Config::from_env()?;
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if let Some(command) = arguments.first().map(String::as_str) {
@@ -1103,8 +1105,12 @@ async fn prepare_restore_database(
         run_pg_restore(&restore_config, dump, &toc_path).await?;
         inject_restore_fault("dump_restored")?;
         let pool = riviamigo_api::db::pool::create_pool(&restore_config.database_url).await?;
-        let validation_report =
-            restore_compatibility::prepare_candidate_schema(&pool, manifest).await?;
+        let validation_report = restore_compatibility::prepare_candidate_schema(
+            &pool,
+            &restore_config.database_url,
+            manifest,
+        )
+        .await?;
         if let Some(history) = history {
             if fs::try_exists(history).await.unwrap_or(false) {
                 let mut source_history: restore_jobs::BackupCatalogSnapshot =

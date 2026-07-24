@@ -69,7 +69,9 @@ baseline; it is not a reusable compatibility pattern.
 
 Recovery manifest v3 records the `riviamigo-schema-v1` chain identifier, full
 ordered ledger, raw migration checksums, catalog digest, and versioned schema
-contract. Restore accepts only an exact ledger prefix and performs all pending
+contract. Restore upgrades an exact ledger prefix normally; historical v3
+bookkeeping requires a candidate schema match to the immutable baseline before
+it can be normalized, and then performs all pending
 migrations in an isolated candidate. A drifted live ledger cannot create a
 backup. Existing databases are moved to the flattened baseline only by the
 explicit, verified adoption command described in the [release database
