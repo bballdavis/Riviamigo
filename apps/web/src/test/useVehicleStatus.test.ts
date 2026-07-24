@@ -11,10 +11,15 @@ import { useVehicleStatus, useCurrentVehicleStatus, useLiveStatusStore } from '@
 
 class MockWS {
   static instances: MockWS[] = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
 
   url: string;
   protocols: string[];
   readyState: number = 0; // CONNECTING
+  sentMessages: string[] = [];
 
   onopen: ((ev: Event) => unknown) | null = null;
   onmessage: ((ev: MessageEvent) => unknown) | null = null;
@@ -23,11 +28,7 @@ class MockWS {
 
   constructor(url: string, protocols?: string | string[]) {
     this.url = url;
-    this.protocols = Array.isArray(protocols)
-      ? protocols
-      : protocols
-      ? [protocols]
-      : [];
+    this.protocols = Array.isArray(protocols) ? protocols : protocols ? [protocols] : [];
     MockWS.instances.push(this);
   }
 
@@ -43,6 +44,10 @@ class MockWS {
   _open() {
     this.readyState = 1; // OPEN
     this.onopen?.({} as Event);
+  }
+
+  send(data: string) {
+    this.sentMessages.push(data);
   }
 
   _message(data: string) {
@@ -117,9 +122,28 @@ describe('useVehicleStatus', () => {
     expect(ws.protocols).toContain('bearer.my-jwt');
   });
 
-  it('sets connectionState to "online" and connected=true on open', () => {
+  it('waits for a server frame before reporting the transport online', () => {
+    const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+    });
+    expect(result.current.connectionState).toBe('connecting');
+    expect(result.current.connected).toBe(false);
+
+    act(() => wsAt(0)._message(JSON.stringify({ type: 'keepalive' })));
+    expect(result.current.connectionState).toBe('online');
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('sends a probe on open and accepts a keepalive response', () => {
     const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
     act(() => wsAt(0)._open());
+
+    expect(wsAt(0).sentMessages).toContain(JSON.stringify({ type: 'probe' }));
+    expect(result.current.connected).toBe(false);
+
+    act(() => wsAt(0)._message(JSON.stringify({ type: 'keepalive' })));
+
     expect(result.current.connectionState).toBe('online');
     expect(result.current.connected).toBe(true);
   });
@@ -165,12 +189,20 @@ describe('useVehicleStatus', () => {
       wsAt(0)._open();
       // First message establishes battery_level and tire pressure.
       wsAt(0)._message(
-        JSON.stringify({ type: 'telemetry', ts: '2026-01-01T00:00:00Z', data: { battery_level: 80, tire_fl_psi: 36.5 } })
+        JSON.stringify({
+          type: 'telemetry',
+          ts: '2026-01-01T00:00:00Z',
+          data: { battery_level: 80, tire_fl_psi: 36.5 },
+        })
       );
       // Second message is from a different field group; it sends null for battery_level
       // because it doesn't know the value — should NOT overwrite the 80 we just stored.
       wsAt(0)._message(
-        JSON.stringify({ type: 'telemetry', ts: '2026-01-01T00:00:01Z', data: { cabin_temp_c: 22.0, battery_level: null, tire_fl_psi: null } })
+        JSON.stringify({
+          type: 'telemetry',
+          ts: '2026-01-01T00:00:01Z',
+          data: { cabin_temp_c: 22.0, battery_level: null, tire_fl_psi: null },
+        })
       );
     });
     const status = useLiveStatusStore.getState().status['vid-1'];
@@ -183,9 +215,16 @@ describe('useVehicleStatus', () => {
     renderHook(() => useVehicleStatus('vid-1', 'tok'));
     act(() => {
       wsAt(0)._open();
-      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 75, range_miles: 200 } }));
+      wsAt(0)._message(
+        JSON.stringify({
+          ts: '2026-01-01T00:00:00Z',
+          data: { battery_level: 75, range_miles: 200 },
+        })
+      );
       wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:01Z', data: { speed_mph: 60 } }));
-      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:02Z', data: { cabin_temp_c: 21.5 } }));
+      wsAt(0)._message(
+        JSON.stringify({ ts: '2026-01-01T00:00:02Z', data: { cabin_temp_c: 21.5 } })
+      );
     });
     const status = useLiveStatusStore.getState().status['vid-1'];
     expect(status?.battery_level).toBe(75);
@@ -201,9 +240,22 @@ describe('useVehicleStatus', () => {
     act(() => {
       wsAt(0)._open();
       // Seed with good data from a partial update.
-      wsAt(0)._message(JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 80, cabin_temp_c: 22.0 } }));
+      wsAt(0)._message(
+        JSON.stringify({
+          ts: '2026-01-01T00:00:00Z',
+          data: { battery_level: 80, cabin_temp_c: 22.0 },
+        })
+      );
       // Full snapshot with null cabin_temp_c — should overwrite.
-      wsAt(0)._message(JSON.stringify({ vehicle_id: 'vid-1', is_online: true, battery_level: 79, cabin_temp_c: null, last_updated: '2026-01-01T00:00:01Z' }));
+      wsAt(0)._message(
+        JSON.stringify({
+          vehicle_id: 'vid-1',
+          is_online: true,
+          battery_level: 79,
+          cabin_temp_c: null,
+          last_updated: '2026-01-01T00:00:01Z',
+        })
+      );
     });
     const status = useLiveStatusStore.getState().status['vid-1'];
     expect(status?.battery_level).toBe(79);
@@ -224,12 +276,73 @@ describe('useVehicleStatus', () => {
     expect(status?.battery_level).toBe(80);
   });
 
+  it('replaces an open socket after 90 seconds without a server frame', async () => {
+    const { result } = renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      wsAt(0)._message(JSON.stringify({ type: 'keepalive' }));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(90_000);
+    });
+
+    expect(result.current.connectionState).toBe('connecting');
+    expect(result.current.connected).toBe(false);
+    expect(MockWS.instances).toHaveLength(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(MockWS.instances).toHaveLength(2);
+  });
+
+  it('probes a healthy socket when the page regains focus', () => {
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      wsAt(0)._message(JSON.stringify({ type: 'keepalive' }));
+    });
+
+    const probesBeforeFocus = wsAt(0).sentMessages.filter(
+      (message) => message === JSON.stringify({ type: 'probe' })
+    ).length;
+    act(() => window.dispatchEvent(new Event('focus')));
+    const probesAfterFocus = wsAt(0).sentMessages.filter(
+      (message) => message === JSON.stringify({ type: 'probe' })
+    ).length;
+
+    expect(probesAfterFocus).toBe(probesBeforeFocus + 1);
+  });
+
+  it('pauses reconnect attempts while offline and reconnects on the online event', () => {
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => {
+      wsAt(0)._open();
+      wsAt(0)._message(JSON.stringify({ type: 'keepalive' }));
+    });
+
+    Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: false });
+    act(() => window.dispatchEvent(new Event('offline')));
+
+    expect(useLiveStatusStore.getState().connected['vid-1']).toBe(false);
+    expect(MockWS.instances).toHaveLength(1);
+
+    Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: true });
+    act(() => window.dispatchEvent(new Event('online')));
+
+    expect(MockWS.instances).toHaveLength(2);
+  });
+
   it('resolves range_miles from distance_to_empty_mi alias in partial updates', () => {
     renderHook(() => useVehicleStatus('vid-1', 'tok'));
     act(() => {
       wsAt(0)._open();
       wsAt(0)._message(
-        JSON.stringify({ ts: '2026-01-01T00:00:00Z', data: { battery_level: 78, distance_to_empty_mi: 205 } })
+        JSON.stringify({
+          ts: '2026-01-01T00:00:00Z',
+          data: { battery_level: 78, distance_to_empty_mi: 205 },
+        })
       );
     });
     const status = useLiveStatusStore.getState().status['vid-1'];
@@ -245,10 +358,14 @@ describe('useVehicleStatus', () => {
     act(() => wsAt(0)._close());
     expect(MockWS.instances).toHaveLength(1); // no immediate reconnect
 
-    await act(async () => { vi.advanceTimersByTime(999); });
+    await act(async () => {
+      vi.advanceTimersByTime(999);
+    });
     expect(MockWS.instances).toHaveLength(1); // still waiting
 
-    await act(async () => { vi.advanceTimersByTime(1); });
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
     expect(MockWS.instances).toHaveLength(2); // reconnected
   });
 
@@ -258,15 +375,21 @@ describe('useVehicleStatus', () => {
 
     // Attempt 1 → fires after 1000 ms, next delay will be 2000 ms
     act(() => wsAt(0)._close());
-    await act(async () => { vi.advanceTimersByTime(1000); });
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(MockWS.instances).toHaveLength(2);
 
     // Attempt 2 → fires after 2000 ms
     act(() => wsAt(1)._close());
-    await act(async () => { vi.advanceTimersByTime(1999); });
+    await act(async () => {
+      vi.advanceTimersByTime(1999);
+    });
     expect(MockWS.instances).toHaveLength(2); // still waiting
 
-    await act(async () => { vi.advanceTimersByTime(1); });
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
     expect(MockWS.instances).toHaveLength(3);
   });
 
@@ -277,10 +400,14 @@ describe('useVehicleStatus', () => {
     for (let i = 0; i < 5; i++) {
       act(() => wsAt(i)._close());
       // Advance to just before the next reconnect fires to confirm it hasn't happened yet
-      await act(async () => { vi.advanceTimersByTime(delays[i]! - 1); });
+      await act(async () => {
+        vi.advanceTimersByTime(delays[i]! - 1);
+      });
       expect(MockWS.instances).toHaveLength(i + 1);
       // Now fire it
-      await act(async () => { vi.advanceTimersByTime(1); });
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
       expect(MockWS.instances).toHaveLength(i + 2);
     }
   });
@@ -291,12 +418,16 @@ describe('useVehicleStatus', () => {
     for (let i = 0; i <= 5; i++) {
       act(() => wsAt(i)._close());
       if (i < 5) {
-        await act(async () => { vi.advanceTimersByTime(60_000); });
+        await act(async () => {
+          vi.advanceTimersByTime(60_000);
+        });
       }
     }
     expect(result.current.connectionState).toBe('failed');
 
-    await act(async () => { vi.advanceTimersByTime(60_000); });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
     expect(MockWS.instances).toHaveLength(7);
   });
 
@@ -306,30 +437,38 @@ describe('useVehicleStatus', () => {
     // Burn 3 attempts
     for (let i = 0; i < 3; i++) {
       act(() => wsAt(i)._close());
-      await act(async () => { vi.advanceTimersByTime(60_000); });
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
     }
 
     // Fourth WS opens cleanly → resets counter
-    act(() => wsAt(3)._open());
+    act(() => {
+      wsAt(3)._open();
+      wsAt(3)._message(JSON.stringify({ type: 'keepalive' }));
+    });
     expect(result.current.connectionState).toBe('online');
 
     // Close again — should restart from attempt 1, not hit "failed" immediately
     act(() => wsAt(3)._close());
-    await act(async () => { vi.advanceTimersByTime(60_000); });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
     expect(result.current.connectionState).toBe('connecting');
     expect(MockWS.instances).toHaveLength(5);
   });
 
   it('resets reconnect counter when the access token changes after failure', async () => {
-    const { result, rerender } = renderHook(
-      ({ token }) => useVehicleStatus('vid-1', token),
-      { initialProps: { token: 'expired-token' } },
-    );
+    const { result, rerender } = renderHook(({ token }) => useVehicleStatus('vid-1', token), {
+      initialProps: { token: 'expired-token' },
+    });
 
     for (let i = 0; i <= 5; i++) {
       act(() => wsAt(i)._close());
       if (i < 5) {
-        await act(async () => { vi.advanceTimersByTime(60_000); });
+        await act(async () => {
+          vi.advanceTimersByTime(60_000);
+        });
       }
     }
     expect(result.current.connectionState).toBe('failed');
@@ -338,7 +477,9 @@ describe('useVehicleStatus', () => {
     expect(latestWs().protocols).toContain('bearer.fresh-token');
 
     act(() => latestWs()._close());
-    await act(async () => { vi.advanceTimersByTime(1000); });
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
 
     expect(result.current.connectionState).toBe('connecting');
     expect(latestWs().protocols).toContain('bearer.fresh-token');
@@ -367,7 +508,9 @@ describe('useVehicleStatus', () => {
     act(() => wsAt(0)._close());
     // Reconnect is scheduled but not fired yet
     unmount();
-    await act(async () => { vi.runAllTimers(); });
+    await act(async () => {
+      vi.runAllTimers();
+    });
     expect(MockWS.instances).toHaveLength(1); // no reconnect happened
   });
 });
@@ -392,7 +535,9 @@ describe('useCurrentVehicleStatus', () => {
   });
 
   it('merges REST status with liveStatus and lets liveStatus win per field', () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
     queryClient.setQueryData(['vehicles', 'status', 'vid-1'], {
       vehicle_id: 'vid-1',
       is_online: true,
@@ -404,8 +549,15 @@ describe('useCurrentVehicleStatus', () => {
     const queryWrapper = ({ children }: { children: React.ReactNode }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
 
-    seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 88, last_updated: '2026-01-01T00:00:00Z' });
-    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: queryWrapper });
+    seedStore('vid-1', {
+      vehicle_id: 'vid-1',
+      is_online: true,
+      battery_level: 88,
+      last_updated: '2026-01-01T00:00:00Z',
+    });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), {
+      wrapper: queryWrapper,
+    });
 
     expect(result.current.data?.battery_level).toBe(88);
     expect(result.current.data?.battery_capacity_kwh).toBe(135);
@@ -413,7 +565,9 @@ describe('useCurrentVehicleStatus', () => {
   });
 
   it('lets fresher stored status win over older live status without blanking good fields', () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
     queryClient.setQueryData(['vehicles', 'status', 'vid-1'], {
       vehicle_id: 'vid-1',
       is_online: true,
@@ -433,7 +587,9 @@ describe('useCurrentVehicleStatus', () => {
       battery_capacity_kwh: 135,
       last_updated: '2026-01-01T00:00:00Z',
     });
-    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: queryWrapper });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), {
+      wrapper: queryWrapper,
+    });
 
     expect(result.current.data?.battery_level).toBe(72);
     expect(result.current.data?.range_miles).toBe(221);
@@ -445,9 +601,17 @@ describe('useCurrentVehicleStatus', () => {
     // Previously a useEffect called setStatus(vehicleId, apiData) on every
     // React Query refetch, merging REST-snapshot nulls over live WS values.
     // That effect is removed; the store should never be touched by REST.
-    seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 95, tire_fl_psi: 36.5, last_updated: '2026-01-01T00:00:00Z' });
+    seedStore('vid-1', {
+      vehicle_id: 'vid-1',
+      is_online: true,
+      battery_level: 95,
+      tire_fl_psi: 36.5,
+      last_updated: '2026-01-01T00:00:00Z',
+    });
 
-    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), {
+      wrapper: makeWrapper(),
+    });
     await act(async () => {});
 
     const storeAfter = useLiveStatusStore.getState().status['vid-1'];
@@ -457,8 +621,15 @@ describe('useCurrentVehicleStatus', () => {
   });
 
   it('returns liveStatus alone when REST status has not loaded yet', () => {
-    seedStore('vid-1', { vehicle_id: 'vid-1', is_online: true, battery_level: 77, last_updated: '2026-01-01T00:00:00Z' });
-    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), { wrapper: makeWrapper() });
+    seedStore('vid-1', {
+      vehicle_id: 'vid-1',
+      is_online: true,
+      battery_level: 77,
+      last_updated: '2026-01-01T00:00:00Z',
+    });
+    const { result } = renderHook(() => useCurrentVehicleStatus('vid-1'), {
+      wrapper: makeWrapper(),
+    });
     expect(result.current.data?.battery_level).toBe(77);
   });
 

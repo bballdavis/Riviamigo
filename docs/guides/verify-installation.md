@@ -63,7 +63,10 @@ After local verification, configure the authenticated HTTPS gateway described in
 - HTTPS is valid.
 - Authentication is required before Riviamigo is reachable.
 - Normal API requests succeed after sign-in.
-- Live vehicle updates do not show WebSocket connection failures.
+- Live vehicle updates do not show WebSocket connection failures. Leave the
+  dashboard open beyond the gateway's idle window, background and refocus the
+  tab, and confirm a temporary `Reconnecting...` state recovers to `Online`
+  without a hard refresh.
 - Host firewall rules and the authenticated gateway protect port 8080 from direct public access.
 
 ## Establish a recovery baseline

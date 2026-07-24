@@ -30,6 +30,10 @@ export const useLiveStatusStore = create<LiveStatusStore>((set) => ({
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MAX_RECONNECT_DELAY_MS = 60_000;
+const CLIENT_LIVENESS_TIMEOUT_MS = 90_000;
+const CLIENT_LIVENESS_CHECK_INTERVAL_MS = 30_000;
+const PROBE_RESPONSE_TIMEOUT_MS = 10_000;
+const LIVE_PROBE_MESSAGE = JSON.stringify({ type: 'probe' });
 
 // ---------------------------------------------------------------------------
 // WS debug logger — enable in the browser console:
@@ -96,18 +100,32 @@ function stripNullsFromPatch(
 export function useVehicleStatus(vehicleId: string | null, accessToken: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const livenessIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const probeTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const backoffRef = useRef(1000);
   const reconnectAttemptsRef = useRef(0);
   const connectionKeyRef = useRef<string | null>(null);
   const shouldReconnectRef = useRef(true);
+  const socketCreatedAtRef = useRef<number | null>(null);
+  const socketOpenedAtRef = useRef<number | null>(null);
+  const lastMessageAtRef = useRef<number | null>(null);
   const setStatus = useLiveStatusStore((s) => s.setStatus);
   const setConnected = useLiveStatusStore((s) => s.setConnected);
   const [connectionState, setConnectionState] = useState<VehicleConnectionState>('idle');
+
+  const clearProbeTimeout = useCallback(() => {
+    clearTimeout(probeTimeoutRef.current);
+    probeTimeoutRef.current = undefined;
+  }, []);
 
   const cleanupSocket = useCallback(() => {
     shouldReconnectRef.current = false;
     clearTimeout(reconnectRef.current);
     reconnectRef.current = undefined;
+    clearProbeTimeout();
+    socketCreatedAtRef.current = null;
+    socketOpenedAtRef.current = null;
+    lastMessageAtRef.current = null;
     if (wsRef.current) {
       const ws = wsRef.current;
       // Null out handlers before close so stale async onclose events can't
@@ -119,7 +137,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       wsRef.current = null;
       ws.close();
     }
-  }, []);
+  }, [clearProbeTimeout]);
 
   const connect = useCallback(() => {
     if (!vehicleId || !accessToken) {
@@ -143,16 +161,37 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       ['bearer', `bearer.${accessToken}`]
     );
     wsRef.current = ws;
+    socketCreatedAtRef.current = Date.now();
+    socketOpenedAtRef.current = null;
+    lastMessageAtRef.current = null;
     setConnectionState('connecting');
 
     ws.onopen = () => {
       backoffRef.current = 1000;
       reconnectAttemptsRef.current = 0;
-      setConnected(vehicleId, true);
-      setConnectionState('online');
+      socketOpenedAtRef.current = Date.now();
+      lastMessageAtRef.current = null;
+      setConnected(vehicleId, false);
+      setConnectionState('connecting');
+      clearProbeTimeout();
+      try {
+        ws.send(LIVE_PROBE_MESSAGE);
+        probeTimeoutRef.current = setTimeout(() => {
+          if (wsRef.current !== ws) return;
+          setConnected(vehicleId, false);
+          setConnectionState('connecting');
+          ws.close();
+        }, PROBE_RESPONSE_TIMEOUT_MS);
+      } catch {
+        ws.close();
+      }
     };
 
     ws.onmessage = (evt) => {
+      lastMessageAtRef.current = Date.now();
+      clearProbeTimeout();
+      setConnected(vehicleId, true);
+      setConnectionState('online');
       try {
         const message = JSON.parse(evt.data as string) as
           | VehicleStatus
@@ -187,10 +226,20 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       wsRef.current = null;
+      clearProbeTimeout();
+      socketCreatedAtRef.current = null;
+      socketOpenedAtRef.current = null;
+      lastMessageAtRef.current = null;
       setConnected(vehicleId, false);
       if (!shouldReconnectRef.current) {
         setConnectionState('idle');
+        return;
+      }
+
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setConnectionState('connecting');
         return;
       }
 
@@ -211,7 +260,48 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     };
 
     ws.onerror = () => ws.close();
-  }, [vehicleId, accessToken, setStatus, setConnected]);
+  }, [
+    accessToken,
+    clearProbeTimeout,
+    setConnected,
+    setStatus,
+    vehicleId,
+  ]);
+
+  const forceReconnect = useCallback(() => {
+    shouldReconnectRef.current = true;
+    clearProbeTimeout();
+    const ws = wsRef.current;
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      wsRef.current = null;
+      connect();
+      return;
+    }
+    if (ws.readyState === WebSocket.CLOSING) return;
+    if (vehicleId) setConnected(vehicleId, false);
+    setConnectionState('connecting');
+    ws.close();
+  }, [clearProbeTimeout, connect, setConnected, vehicleId]);
+
+  const sendProbe = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+
+    clearProbeTimeout();
+    try {
+      ws.send(LIVE_PROBE_MESSAGE);
+      probeTimeoutRef.current = setTimeout(() => {
+        if (wsRef.current !== ws) return;
+        if (vehicleId) setConnected(vehicleId, false);
+        setConnectionState('connecting');
+        ws.close();
+      }, PROBE_RESPONSE_TIMEOUT_MS);
+      return true;
+    } catch {
+      forceReconnect();
+      return false;
+    }
+  }, [clearProbeTimeout, forceReconnect, setConnected, vehicleId]);
 
   useEffect(() => {
     const connectionKey = vehicleId && accessToken ? `${vehicleId}:${accessToken}` : null;
@@ -224,27 +314,96 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     connect();
 
     const handleWake = () => {
-      if (!shouldReconnectRef.current || !vehicleId || !accessToken || wsRef.current) return;
+      if (
+        !shouldReconnectRef.current ||
+        !vehicleId ||
+        !accessToken ||
+        (typeof navigator !== 'undefined' && navigator.onLine === false)
+      ) return;
+
       backoffRef.current = 1000;
       reconnectAttemptsRef.current = 0;
-      connect();
+      const ws = wsRef.current;
+      if (!ws) {
+        connect();
+        return;
+      }
+
+      if (ws.readyState === WebSocket.OPEN) {
+        const lastMessageAt = lastMessageAtRef.current;
+        if (
+          lastMessageAt === null ||
+          Date.now() - lastMessageAt >= CLIENT_LIVENESS_TIMEOUT_MS
+        ) {
+          forceReconnect();
+          return;
+        }
+        sendProbe();
+        return;
+      }
+
+      if (
+        ws.readyState === WebSocket.CONNECTING &&
+        socketCreatedAtRef.current !== null &&
+        Date.now() - socketCreatedAtRef.current >= PROBE_RESPONSE_TIMEOUT_MS
+      ) {
+        forceReconnect();
+      }
+    };
+
+    const handleOffline = () => {
+      clearTimeout(reconnectRef.current);
+      reconnectRef.current = undefined;
+      if (vehicleId) setConnected(vehicleId, false);
+      setConnectionState('connecting');
+      const ws = wsRef.current;
+      if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') handleWake();
     };
 
+    const checkLiveness = () => {
+      if (document.visibilityState !== 'visible') return;
+      const ws = wsRef.current;
+      if (!ws) {
+        if (!reconnectRef.current) connect();
+        return;
+      }
+
+      const referenceTime = lastMessageAtRef.current ?? socketOpenedAtRef.current;
+      if (referenceTime !== null && Date.now() - referenceTime >= CLIENT_LIVENESS_TIMEOUT_MS) {
+        forceReconnect();
+      }
+    };
+
     window.addEventListener('online', handleWake);
+    window.addEventListener('offline', handleOffline);
     window.addEventListener('focus', handleWake);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    livenessIntervalRef.current = setInterval(checkLiveness, CLIENT_LIVENESS_CHECK_INTERVAL_MS);
 
     return () => {
       window.removeEventListener('online', handleWake);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('focus', handleWake);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(livenessIntervalRef.current);
+      livenessIntervalRef.current = undefined;
       cleanupSocket();
     };
-  }, [vehicleId, accessToken, connect, cleanupSocket]);
+  }, [
+    accessToken,
+    cleanupSocket,
+    connect,
+    forceReconnect,
+    sendProbe,
+    setConnected,
+    vehicleId,
+  ]);
 
   const status = useLiveStatusStore((s) => (vehicleId ? s.status[vehicleId] : null));
   const connected = useLiveStatusStore((s) => (vehicleId ? s.connected[vehicleId] ?? false : false));
@@ -261,8 +420,9 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
     queryFn: () => api.vehicleStatus(vehicleId!),
     enabled: authReady && !!vehicleId,
     staleTime: 30 * 1000,
-    refetchInterval: 60 * 1000,
-    refetchOnWindowFocus: false,
+    refetchInterval: 30 * 1000,
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: 'always',
     placeholderData: (previous) => previous,
   });
 

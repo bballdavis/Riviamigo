@@ -98,9 +98,12 @@ export function resolveVehicleOnlineState({
 }): VehicleOnlineState {
   if (!liveVehicleId) return 'offline';
   if (!vehicleSelectionReady) return 'connecting';
+  // Browser-to-Riviamigo transport is the first boundary. A stale or failed
+  // browser socket must not surface an old server-side feed error as if it
+  // were the current connection state.
+  if (!connected || connectionState === 'failed') return 'connecting';
   if (feedHealthIssue) return 'unhealthy';
-  if (connectionState === 'failed') return 'error';
-  return connected ? 'online' : 'connecting';
+  return 'online';
 }
 
 function getCompactBatteryIcon(socPercent: number) {
@@ -146,7 +149,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
 
   const feedHealthIssue = getFeedHealthIssue(currentStatus);
   React.useEffect(() => {
-    if (!liveVehicleId || !feedHealthIssue) return;
+    if (!liveVehicleId || !feedHealthIssue || !connected) return;
 
     const storageKey = `rm-feed-health-toast:${liveVehicleId}:${feedHealthIssue.key}`;
     const emitIfDue = () => {
@@ -161,7 +164,13 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
     emitIfDue();
     const interval = window.setInterval(emitIfDue, 60_000);
     return () => window.clearInterval(interval);
-  }, [feedHealthIssue?.key, feedHealthIssue?.message, feedHealthIssue?.title, liveVehicleId]);
+  }, [
+    connected,
+    feedHealthIssue?.key,
+    feedHealthIssue?.message,
+    feedHealthIssue?.title,
+    liveVehicleId,
+  ]);
 
   React.useEffect(() => {
     window.addEventListener('rm-units-change', handleUnitsChange as EventListener);
@@ -298,7 +307,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                     onlineState === 'online'
                       ? 'Online'
                       : onlineState === 'connecting'
-                        ? 'Connecting...'
+                        ? 'Reconnecting...'
                         : onlineState === 'unhealthy'
                           ? 'Feed unhealthy'
                           : onlineState === 'error'

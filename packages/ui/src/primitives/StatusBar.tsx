@@ -49,7 +49,7 @@ export function StatusBar({
     onlineState === 'online'
       ? 'Online'
       : onlineState === 'connecting'
-        ? 'Connecting...'
+        ? 'Reconnecting...'
         : onlineState === 'unhealthy'
           ? 'Feed unhealthy'
           : onlineState === 'error'

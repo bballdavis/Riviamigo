@@ -32,6 +32,10 @@ the gateway itself is operated and patched by the self-hoster.
   WebSocket upgrades.
 - Preserve `Host` and WebSocket upgrade headers. Do not log `Authorization` or
   `Sec-WebSocket-Protocol` headers.
+- Preserve live-status control frames and configure the gateway's websocket
+  idle/read timeout above 90 seconds. Riviamigo sends a keepalive every 30
+  seconds and the browser reconnects when it misses the 90-second liveness
+  window.
 - Own public TLS, certificate renewal, Internet-facing rate limits, and any
   trusted-client-IP policy. The internal Riviamigo origin intentionally does
   not trust arbitrary forwarded client IP headers.
@@ -48,6 +52,9 @@ the gateway itself is operated and patched by the self-hoster.
    mapping for the internal API listener, TimescaleDB, or Redis.
 5. Run `pnpm docs:check` and the security test suite before upgrading a shared
    instance.
+6. From the public address, leave a signed-in dashboard open beyond the
+   gateway idle window, background and refocus the tab, and confirm the status
+   transitions through `Reconnecting...` to `Online` without a page reload.
 
 ## Limits of this guidance
 
