@@ -9,6 +9,12 @@ pub const MIGRATION_CHAIN_ID: &str = "riviamigo-schema-v1";
 /// planning, candidate preparation, and explicit chain adoption.
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
+/// The public baseline is a schema snapshot. Later migrations are deliberately
+/// not included here: callers use this to prove or reconstruct the baseline,
+/// then run `MIGRATOR` for forward-only changes.
+pub const BASELINE_MIGRATION_VERSION: i64 = 1;
+const BASELINE_SCHEMA_SQL: &str = include_str!("../../migrations/0001_initial_schema.sql");
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MigrationIdentity {
     pub version: i64,
@@ -66,6 +72,25 @@ pub fn latest_migration_version() -> i64 {
         .last()
         .map(|migration| migration.version)
         .unwrap_or(0)
+}
+
+pub fn baseline_migration() -> anyhow::Result<MigrationIdentity> {
+    compiled_migration_ledger()
+        .into_iter()
+        .find(|migration| migration.version == BASELINE_MIGRATION_VERSION)
+        .context("compiled migration catalog is missing the public baseline")
+}
+
+/// Apply exactly the immutable public baseline to an empty disposable
+/// database. This must not be replaced with `MIGRATOR.run`, because that would
+/// include migrations created after the baseline and make future adoption
+/// checks compare against the wrong schema.
+pub async fn apply_baseline_schema(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(BASELINE_SCHEMA_SQL)
+        .execute(pool)
+        .await
+        .context("apply immutable schema baseline")?;
+    Ok(())
 }
 
 pub fn validate_ledger_prefix(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
@@ -203,6 +228,14 @@ pub async fn restore_ledger(
     Ok(())
 }
 
+/// Normalize an already-proven baseline-compatible candidate to the public
+/// ledger. This is intentionally separate from `restore_ledger`, which only
+/// accepts an exact prefix supplied by a package manifest.
+pub async fn restore_baseline_ledger(pool: &PgPool) -> anyhow::Result<()> {
+    let baseline = baseline_migration()?;
+    restore_ledger(pool, &[baseline]).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,8 +243,8 @@ mod tests {
     #[test]
     fn compiled_catalog_is_ordered_and_stable() {
         let catalog = compiled_migration_ledger();
-        assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog[0].version, 1);
+        assert!(!catalog.is_empty());
+        assert_eq!(catalog[0].version, BASELINE_MIGRATION_VERSION);
         assert_eq!(catalog[0].checksum_sha384.len(), 96);
         assert_eq!(migration_catalog_digest().len(), 64);
         validate_complete_ledger(&catalog).expect("compiled catalog validates");

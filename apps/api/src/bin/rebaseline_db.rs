@@ -78,12 +78,6 @@ async fn adopt(
     let baseline = compiled
         .first()
         .context("compiled migration catalog is empty")?;
-    if compiled.len() != 1 {
-        bail!(
-            "baseline adoption is only valid at a chain epoch containing one compiled migration; found {}",
-            compiled.len()
-        );
-    }
     let checksum = hex::decode(&baseline.checksum_sha384)?;
     let mut transaction = pool.begin().await?;
     let public_ledger_exists: bool =
@@ -119,6 +113,15 @@ async fn adopt(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
+
+    // The flattened baseline represents the complete pre-release schema, but
+    // later migrations may add data or schema changes after that baseline.
+    // Re-run the compiled catalog from the adopted baseline so those changes
+    // are applied and recorded normally instead of silently skipping them.
+    MIGRATOR
+        .run(pool)
+        .await
+        .context("apply migrations added after the flattened baseline")?;
 
     let adopted = read_public_ledger(pool).await?;
     migrations::validate_complete_ledger(&adopted).context("validate adopted migration ledger")?;
@@ -319,10 +322,9 @@ async fn scratch_baseline_contract(
             .connect(scratch_url.as_str())
             .await
             .context("connect to disposable baseline database")?;
-        MIGRATOR
-            .run(&scratch_pool)
+        migrations::apply_baseline_schema(&scratch_pool)
             .await
-            .context("apply compiled baseline to disposable database")?;
+            .context("apply immutable baseline to disposable database")?;
         let contract = restore_compatibility::schema_contract_description(&scratch_pool)
             .await
             .context("describe disposable baseline")?;

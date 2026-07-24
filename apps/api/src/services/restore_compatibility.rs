@@ -3,13 +3,14 @@ use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{postgres::PgPoolOptions, AssertSqlSafe, PgPool};
 use std::{
     fs::File,
     path::{Path, PathBuf},
 };
 use tar::Archive;
 use tokio::{fs, process::Command};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -489,6 +490,7 @@ pub async fn validate_schema_contract(pool: &PgPool) -> Result<SchemaContractRep
 /// targets the live database.
 pub async fn prepare_candidate_schema(
     pool: &PgPool,
+    candidate_database_url: &str,
     manifest: &Value,
 ) -> anyhow::Result<CandidatePreparationReport> {
     let format = manifest
@@ -499,7 +501,7 @@ pub async fn prepare_candidate_schema(
         anyhow::bail!("recovery package belongs to an unsupported migration chain");
     }
     let source = source_profile_from_manifest(manifest)?;
-    validate_source_identity(&source).map_err(|error| anyhow::anyhow!(error.message))?;
+    validate_source_schema_metadata(&source).map_err(|error| anyhow::anyhow!(error.message))?;
 
     let source_schema = validate_schema_contract(pool).await?;
     if !source_schema.required_relations_present
@@ -527,10 +529,30 @@ pub async fn prepare_candidate_schema(
         );
     }
 
-    migrations::restore_ledger(pool, &source.migration_ledger).await?;
+    let exact_prefix = migrations::validate_ledger_prefix(&source.migration_ledger).is_ok();
+    if exact_prefix {
+        migrations::restore_ledger(pool, &source.migration_ledger).await?;
+    } else {
+        // The candidate's declared v3 contract was just verified against the
+        // restored schema. Accept a legacy SQLx ledger only when the physical
+        // schema is exactly the immutable public baseline; otherwise fail
+        // closed rather than guessing how to transform historical data.
+        let baseline = baseline_schema_fingerprint(candidate_database_url).await?;
+        if source_schema.schema_fingerprint != baseline {
+            anyhow::bail!(
+                "recovery package uses an unrecognized migration ledger and its restored schema is not the public baseline"
+            );
+        }
+        migrations::restore_baseline_ledger(pool).await?;
+    }
+    let adopted_ledger_len = if exact_prefix {
+        source.migration_ledger.len()
+    } else {
+        1
+    };
     let migrations_applied = compiled_migration_ledger()
         .into_iter()
-        .skip(source.migration_ledger.len())
+        .skip(adopted_ledger_len)
         .map(|migration| migration.version)
         .collect::<Vec<_>>();
 
@@ -567,6 +589,47 @@ pub async fn prepare_candidate_schema(
     })
 }
 
+/// Create an empty sibling database and fingerprint only the immutable
+/// baseline. This gives legacy-ledger restores a concrete structural proof
+/// without ever applying or probing against the live target database.
+async fn baseline_schema_fingerprint(candidate_database_url: &str) -> anyhow::Result<String> {
+    let mut admin_url = Url::parse(candidate_database_url)?;
+    admin_url.set_path("/postgres");
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(admin_url.as_str())
+        .await?;
+    let database_name = format!("riviamigo_restore_baseline_{}", Uuid::new_v4().simple());
+    sqlx::query(AssertSqlSafe(format!(
+        "CREATE DATABASE \"{database_name}\" TEMPLATE template0"
+    )))
+    .execute(&admin_pool)
+    .await?;
+
+    let mut scratch_url = Url::parse(candidate_database_url)?;
+    scratch_url.set_path(&format!("/{database_name}"));
+    let result = async {
+        let scratch_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(scratch_url.as_str())
+            .await?;
+        migrations::apply_baseline_schema(&scratch_pool).await?;
+        let fingerprint = schema_fingerprint(&scratch_pool).await?;
+        scratch_pool.close().await;
+        Ok::<_, anyhow::Error>(fingerprint)
+    }
+    .await;
+
+    let cleanup = sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
+    )))
+    .execute(&admin_pool)
+    .await;
+    admin_pool.close().await;
+    cleanup?;
+    result
+}
+
 fn inject_candidate_fault(phase: &str) -> anyhow::Result<()> {
     if std::env::var("RIVIAMIGO_RESTORE_FAULT_PHASE").as_deref() == Ok(phase) {
         anyhow::bail!("restore fault injection triggered at {phase}");
@@ -595,16 +658,21 @@ fn blocking_from_ledger_error(
     }
 }
 
-fn validate_source_identity(source: &DatabaseProfile) -> Result<(), RestoreBlockingError> {
-    if source.migration_chain_id.as_deref() != Some(MIGRATION_CHAIN_ID) {
+fn validate_source_schema_metadata(source: &DatabaseProfile) -> Result<(), RestoreBlockingError> {
+    if source.schema_contract_version.as_deref() != Some(SCHEMA_CONTRACT_VERSION)
+        || source.schema_fingerprint.is_none()
+    {
         return Err(RestoreBlockingError {
-            code: RestoreBlockingCode::UnsupportedMigrationChain,
-            message: format!(
-                "The recovery package belongs to migration chain {:?}; this release requires {MIGRATION_CHAIN_ID}.",
-                source.migration_chain_id
-            ),
+            code: RestoreBlockingCode::SchemaContractMismatch,
+            message: "The package is missing the supported versioned schema contract.".into(),
         });
     }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_source_identity(source: &DatabaseProfile) -> Result<(), RestoreBlockingError> {
+    validate_source_schema_metadata(source)?;
     migrations::validate_ledger_prefix(&source.migration_ledger)
         .map_err(|error| blocking_from_ledger_error(false, error))?;
     let declared_head = source.migration_version;
@@ -666,7 +734,7 @@ pub async fn plan_restore(
                 format!("Unsupported recovery package format: {package_format}")
             },
         });
-    } else if let Err(error) = validate_source_identity(&source) {
+    } else if let Err(error) = validate_source_schema_metadata(&source) {
         blocking_errors.push(error);
     }
 
@@ -689,7 +757,9 @@ pub async fn plan_restore(
         blocking_errors.push(blocking_from_ledger_error(true, error));
     }
 
-    if source.migration_version > latest_migration_version() {
+    let source_ledger_is_prefix =
+        migrations::validate_ledger_prefix(&source.migration_ledger).is_ok();
+    if source_ledger_is_prefix && source.migration_version > latest_migration_version() {
         blocking_errors.push(RestoreBlockingError {
             code: RestoreBlockingCode::NewerSourceSchema,
             message: format!(
@@ -732,15 +802,21 @@ pub async fn plan_restore(
         });
     }
 
+    let adopted_ledger_len = if source_ledger_is_prefix {
+        source.migration_ledger.len()
+    } else {
+        1
+    };
     let pending_migrations = compiled_migration_ledger()
         .into_iter()
-        .skip(source.migration_ledger.len())
+        .skip(adopted_ledger_len)
         .map(|migration| migration.version)
         .collect::<Vec<_>>();
     let transforms = Vec::new();
     let validation_checks = vec![
-        "migration_chain".into(),
-        "migration_ledger_exact_prefix".into(),
+        "v3_schema_contract".into(),
+        "candidate_schema_matches_declared_fingerprint".into(),
+        "legacy_ledger_requires_public_baseline_contract".into(),
         "schema_contract".into(),
         "timescale_objects".into(),
         "foreign_key_integrity".into(),
@@ -887,7 +963,10 @@ mod tests {
             profile.migration_chain_id.as_deref(),
             Some(MIGRATION_CHAIN_ID)
         );
-        assert_eq!(profile.migration_ledger.len(), 1);
+        assert_eq!(
+            profile.migration_ledger.len(),
+            compiled_migration_ledger().len()
+        );
         assert_eq!(
             profile.schema_contract_version.as_deref(),
             Some(SCHEMA_CONTRACT_VERSION)
@@ -896,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn source_identity_rejects_checksum_drift_and_unknown_chain() {
+    fn source_identity_rejects_checksum_drift_but_not_historical_chain_name() {
         let mut profile = source_profile_from_manifest(&v3_manifest()).expect("source profile");
         profile.migration_ledger[0]
             .checksum_sha384
@@ -910,11 +989,22 @@ mod tests {
 
         let mut profile = source_profile_from_manifest(&v3_manifest()).expect("source profile");
         profile.migration_chain_id = Some("unknown-chain".into());
-        assert_eq!(
-            validate_source_identity(&profile)
-                .expect_err("unknown chain")
-                .code,
-            RestoreBlockingCode::UnsupportedMigrationChain
-        );
+        validate_source_identity(&profile)
+            .expect("chain name is verified by candidate schema proof");
+    }
+
+    #[test]
+    fn v3_schema_metadata_allows_legacy_ledger_for_candidate_verification() {
+        let mut profile = source_profile_from_manifest(&v3_manifest()).expect("source profile");
+        profile.migration_chain_id = Some("pre-release-chain".into());
+        profile.migration_ledger = vec![MigrationIdentity {
+            version: 3,
+            description: "historical state periods".into(),
+            checksum_sha384: "00".repeat(48),
+        }];
+        profile.migration_version = 3;
+
+        validate_source_schema_metadata(&profile).expect("schema metadata remains valid");
+        assert!(validate_source_identity(&profile).is_err());
     }
 }
