@@ -34,7 +34,12 @@ applies after the gateway.
 - Do not publish API port 3001, PostgreSQL port 5432, Redis port 6379, or the
   origin port 8080 to the Internet.
 - The gateway must support WebSocket upgrades and forward to
-  `http://localhost:8080`.
+  `http://localhost:8080`. Riviamigo's live-status socket sends a lightweight
+  application keepalive every 30 seconds; the gateway must pass those control
+  frames and use an idle/read timeout comfortably above 90 seconds.
+- Preserve `Host` and `Sec-WebSocket-Protocol` for the live-status socket. The
+  latter carries the authenticated websocket subprotocol and must not be
+  logged.
 - Keep the gateway patched and apply its own Internet-facing rate limits.
 
 For the maintainer verification checklist, see the repository's
