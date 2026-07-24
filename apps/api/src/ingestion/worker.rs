@@ -1,6 +1,6 @@
 //! Per-vehicle ingestion worker: WS + poll + trip/charge detection + DB writes.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use redis::AsyncCommands;
 use sqlx::{pool::PoolConnection, PgPool, Postgres};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -36,6 +36,9 @@ const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 const WS_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 const CHARGE_DETECTOR_REHYDRATE_LOOKBACK_HOURS: i32 = 12;
 const CHARGE_DETECTOR_REHYDRATE_STALENESS_MINUTES: i32 = 120;
+const STATE_PERIOD_RECONCILE_LOOKBACK_HOURS: i64 = 24;
+const STATE_PERIOD_RECONCILE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(15 * 60);
 
 #[derive(Debug, sqlx::FromRow)]
 struct ActiveChargeDetectorRow {
@@ -51,6 +54,30 @@ struct ActiveChargeDetectorRow {
     battery_capacity_wh: Option<f64>,
     energy_used_wh: Option<f64>,
     peak_charge_kw: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveStatePeriod {
+    id: i64,
+    state: VehicleState,
+    started_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ActiveStatePeriodRow {
+    id: i64,
+    state: String,
+    started_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct StateTailRow {
+    ts: DateTime<Utc>,
+    power_state: Option<String>,
+    charger_state: Option<String>,
+    ota_status: Option<String>,
+    ota_current_status: Option<String>,
+    is_online: Option<bool>,
 }
 
 pub async fn run_vehicle_worker(
@@ -274,9 +301,22 @@ pub async fn run_vehicle_worker(
         }
     };
 
-    // State period tracking
-    let mut last_vehicle_state: Option<VehicleState> = None;
-    let mut state_period_start: Option<chrono::DateTime<Utc>> = None;
+    // State periods are durable state, not a best-effort in-memory overlay.
+    // Rehydrate before processing any new payload so a worker restart can close
+    // the existing period instead of colliding with the partial unique index.
+    let mut active_state_period = match reconcile_state_period_tail(&pool, vehicle_id, None).await {
+        Ok(period) => period,
+        Err(error) => {
+            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "state-period startup reconciliation failed; will retry during ingestion");
+            match load_open_state_period(&pool, vehicle_id).await {
+                Ok(period) => period,
+                Err(error) => {
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "state-period startup rehydration failed");
+                    None
+                }
+            }
+        }
+    };
     // Software version tracking
     let mut last_software_version: Option<String> = None;
     let mut sw_version_start: Option<chrono::DateTime<Utc>> = None;
@@ -291,10 +331,21 @@ pub async fn run_vehicle_worker(
     // Track the most recent inbound WS/control event so we can restart a
     // connection that stays silently wedged while still holding the worker lock.
     let mut last_ws_inbound_at = tokio::time::Instant::now();
+    let mut state_reconcile_interval = tokio::time::interval(STATE_PERIOD_RECONCILE_INTERVAL);
+    state_reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Startup reconciliation above already covered the current tail.
+    state_reconcile_interval.tick().await;
     loop {
         let inbound = tokio::select! {
             _ = worker_shutdown.recv() => {
                 break;
+            }
+            _ = state_reconcile_interval.tick() => {
+                match reconcile_state_period_tail(&pool, vehicle_id, active_state_period.clone()).await {
+                    Ok(period) => active_state_period = period,
+                    Err(error) => tracing::warn!(vehicle_id=%vehicle_id, err=%error, "state-period tail reconciliation failed"),
+                }
+                continue;
             }
             _ = tokio::time::sleep_until(last_ws_inbound_at + WS_WATCHDOG_TIMEOUT) => {
                 tracing::warn!(
@@ -423,17 +474,19 @@ pub async fn run_vehicle_worker(
 
         // ── State period tracking ────────────────────────────────────────────
         let current_state = infer_vehicle_state(&event);
-        if Some(&current_state) != last_vehicle_state.as_ref() {
-            // Close previous period
-            if let (Some(prev_state), Some(started)) =
-                (last_vehicle_state.take(), state_period_start.take())
-            {
-                let _ = close_state_period(&pool, vehicle_id, &prev_state, started, event.ts).await;
+        match transition_state_period(
+            &pool,
+            vehicle_id,
+            active_state_period.clone(),
+            current_state,
+            event.ts,
+        )
+        .await
+        {
+            Ok(period) => active_state_period = period,
+            Err(error) => {
+                tracing::warn!(vehicle_id=%vehicle_id, event_ts=%event.ts, err=%error, "state-period transition failed; durable state will be retried")
             }
-            // Open new period
-            let _ = open_state_period(&pool, vehicle_id, &current_state, event.ts).await;
-            state_period_start = Some(event.ts);
-            last_vehicle_state = Some(current_state);
         }
 
         // Keep the poll loop informed of the latest power state so it can
@@ -2682,28 +2735,41 @@ async fn reverse_geocode_and_store(pool: &PgPool, lat: f64, lon: f64) -> Option<
 
 /// Infer a coarse VehicleState from the latest telemetry event.
 fn infer_vehicle_state(e: &TelemetryEvent) -> VehicleState {
-    use crate::models::telemetry::{ChargerState, PowerState};
-    if let Some(ChargerState::Charging) = &e.charger_state {
+    infer_vehicle_state_values(
+        e.power_state.as_ref(),
+        e.charger_state.as_ref(),
+        e.ota_status.as_deref(),
+        e.ota_current_status.as_deref(),
+        e.is_online,
+    )
+}
+
+fn infer_vehicle_state_values(
+    power_state: Option<&PowerState>,
+    charger_state: Option<&ChargerState>,
+    ota_status: Option<&str>,
+    ota_current_status: Option<&str>,
+    is_online: Option<bool>,
+) -> VehicleState {
+    if matches!(charger_state, Some(ChargerState::Charging)) {
         return VehicleState::Charging;
     }
-    if e.ota_status.as_deref() == Some("installing")
-        || e.ota_current_status.as_deref() == Some("installing")
-    {
+    if ota_status == Some("installing") || ota_current_status == Some("installing") {
         return VehicleState::Updating;
     }
-    match &e.power_state {
+    match power_state {
         Some(PowerState::Drive | PowerState::Go) => VehicleState::Drive,
         Some(PowerState::Sleep) => VehicleState::Sleep,
         Some(PowerState::Charging) => VehicleState::Charging,
         Some(PowerState::Ready) => {
-            if e.is_online == Some(false) {
+            if is_online == Some(false) {
                 VehicleState::Offline
             } else {
                 VehicleState::Ready
             }
         }
         _ => {
-            if e.is_online == Some(false) {
+            if is_online == Some(false) {
                 VehicleState::Offline
             } else {
                 VehicleState::Unknown
@@ -2712,41 +2778,151 @@ fn infer_vehicle_state(e: &TelemetryEvent) -> VehicleState {
     }
 }
 
-async fn open_state_period(
+async fn load_open_state_period(
     pool: &PgPool,
     vehicle_id: Uuid,
-    state: &VehicleState,
-    started_at: chrono::DateTime<Utc>,
-) {
-    let _ = sqlx::query(
-        r#"INSERT INTO riviamigo.vehicle_state_periods (vehicle_id, state, started_at)
-           VALUES ($1, $2, $3)"#,
+) -> anyhow::Result<Option<ActiveStatePeriod>> {
+    let row = sqlx::query_as::<_, ActiveStatePeriodRow>(
+        r#"SELECT id, state, started_at
+           FROM riviamigo.vehicle_state_periods
+           WHERE vehicle_id = $1 AND ended_at IS NULL
+           ORDER BY started_at DESC
+           LIMIT 1"#,
     )
     .bind(vehicle_id)
-    .bind(state.to_string())
-    .bind(started_at)
-    .execute(pool)
-    .await;
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| {
+        Ok(ActiveStatePeriod {
+            id: row.id,
+            state: row.state.parse().map_err(anyhow::Error::msg)?,
+            started_at: row.started_at,
+        })
+    })
+    .transpose()
 }
 
-async fn close_state_period(
+async fn transition_state_period(
     pool: &PgPool,
     vehicle_id: Uuid,
-    state: &VehicleState,
-    started_at: chrono::DateTime<Utc>,
-    ended_at: chrono::DateTime<Utc>,
-) {
-    let _ = sqlx::query(
-        r#"UPDATE riviamigo.vehicle_state_periods
-           SET ended_at = $1
-           WHERE vehicle_id = $2 AND state = $3 AND started_at = $4 AND ended_at IS NULL"#,
+    cached: Option<ActiveStatePeriod>,
+    next_state: VehicleState,
+    observed_at: DateTime<Utc>,
+) -> anyhow::Result<Option<ActiveStatePeriod>> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
+        .bind("riviamigo-state-period")
+        .bind(vehicle_id.to_string())
+        .execute(&mut *transaction)
+        .await?;
+
+    let current = sqlx::query_as::<_, ActiveStatePeriodRow>(
+        r#"SELECT id, state, started_at
+           FROM riviamigo.vehicle_state_periods
+           WHERE vehicle_id = $1 AND ended_at IS NULL
+           ORDER BY started_at DESC
+           LIMIT 1"#,
     )
-    .bind(ended_at)
     .bind(vehicle_id)
-    .bind(state.to_string())
-    .bind(started_at)
-    .execute(pool)
-    .await;
+    .fetch_optional(&mut *transaction)
+    .await?
+    .map(|row| -> anyhow::Result<_> {
+        Ok(ActiveStatePeriod {
+            id: row.id,
+            state: row.state.parse().map_err(anyhow::Error::msg)?,
+            started_at: row.started_at,
+        })
+    })
+    .transpose()?;
+
+    if current
+        .as_ref()
+        .is_some_and(|period| period.state == next_state)
+    {
+        transaction.commit().await?;
+        return Ok(current);
+    }
+    if current
+        .as_ref()
+        .is_some_and(|period| observed_at < period.started_at)
+    {
+        tracing::debug!(vehicle_id=%vehicle_id, observed_at=%observed_at, active_started_at=%current.as_ref().expect("checked").started_at, "ignoring out-of-order state-period event");
+        transaction.commit().await?;
+        return Ok(current.or(cached));
+    }
+
+    if let Some(period) = current {
+        sqlx::query(
+            "UPDATE riviamigo.vehicle_state_periods SET ended_at = $1 WHERE id = $2 AND ended_at IS NULL",
+        )
+        .bind(observed_at)
+        .bind(period.id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    let inserted = sqlx::query_as::<_, ActiveStatePeriodRow>(
+        r#"INSERT INTO riviamigo.vehicle_state_periods (vehicle_id, state, started_at)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (vehicle_id) WHERE ended_at IS NULL DO NOTHING
+           RETURNING id, state, started_at"#,
+    )
+    .bind(vehicle_id)
+    .bind(next_state.to_string())
+    .bind(observed_at)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+
+    if let Some(row) = inserted {
+        return Ok(Some(ActiveStatePeriod {
+            id: row.id,
+            state: row.state.parse().map_err(anyhow::Error::msg)?,
+            started_at: row.started_at,
+        }));
+    }
+
+    tracing::warn!(vehicle_id=%vehicle_id, "state-period insert conflicted; reloading durable open period");
+    load_open_state_period(pool, vehicle_id).await
+}
+
+async fn reconcile_state_period_tail(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    cached: Option<ActiveStatePeriod>,
+) -> anyhow::Result<Option<ActiveStatePeriod>> {
+    let since = Utc::now() - Duration::hours(STATE_PERIOD_RECONCILE_LOOKBACK_HOURS);
+    let latest = sqlx::query_as::<_, StateTailRow>(
+        r#"SELECT ts, power_state, charger_state, ota_status, ota_current_status, is_online
+           FROM timeseries.telemetry
+           WHERE vehicle_id = $1 AND ts >= $2
+           ORDER BY ts DESC
+           LIMIT 1"#,
+    )
+    .bind(vehicle_id)
+    .bind(since)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(latest) = latest else {
+        return load_open_state_period(pool, vehicle_id).await;
+    };
+    let power_state = latest
+        .power_state
+        .as_deref()
+        .and_then(|value| value.parse().ok());
+    let charger_state = latest
+        .charger_state
+        .as_deref()
+        .and_then(|value| value.parse().ok());
+    let state = infer_vehicle_state_values(
+        power_state.as_ref(),
+        charger_state.as_ref(),
+        latest.ota_status.as_deref(),
+        latest.ota_current_status.as_deref(),
+        latest.is_online,
+    );
+    transition_state_period(pool, vehicle_id, cached, state, latest.ts).await
 }
 
 async fn open_software_version(
@@ -3026,6 +3202,24 @@ mod stewardship_tests {
         assert_eq!(
             update.auth_reason_code,
             Some("rivian_ws_no_active_subscriptions")
+        );
+    }
+
+    #[test]
+    fn state_inference_keeps_charging_and_offline_precedence_stable() {
+        assert_eq!(
+            infer_vehicle_state_values(
+                Some(&PowerState::Sleep),
+                Some(&ChargerState::Charging),
+                None,
+                None,
+                Some(true),
+            ),
+            VehicleState::Charging
+        );
+        assert_eq!(
+            infer_vehicle_state_values(Some(&PowerState::Ready), None, None, None, Some(false)),
+            VehicleState::Offline
         );
     }
 }

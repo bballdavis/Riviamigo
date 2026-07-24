@@ -45,6 +45,23 @@ impl std::fmt::Display for VehicleState {
     }
 }
 
+impl std::str::FromStr for VehicleState {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "drive" => Ok(Self::Drive),
+            "charging" => Ok(Self::Charging),
+            "ready" => Ok(Self::Ready),
+            "sleep" => Ok(Self::Sleep),
+            "offline" => Ok(Self::Offline),
+            "updating" => Ok(Self::Updating),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(format!("unknown vehicle state {value:?}")),
+        }
+    }
+}
+
 /// Firmware version history record.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SoftwareVersion {
