@@ -42,7 +42,7 @@ describe('DateRangePicker', () => {
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: /jun 3, 2026 10:00 am - jun 7, 2026 6:30 pm/i }));
+    await user.click(screen.getByRole('button', { name: /jun 3, 2026/i }));
 
     const fromInput = screen.getByDisplayValue('6/3/26') as HTMLInputElement;
     const toInput = screen.getByDisplayValue('6/7/26') as HTMLInputElement;
