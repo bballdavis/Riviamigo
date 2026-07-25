@@ -289,6 +289,7 @@ function DashboardPageShellContent({
     () => ({
       vehicleId: effectiveVehicleId,
       dashboardSlug: slug,
+      dashboardConfigId: activeConfig?.id ?? savedConfig?.id,
       timeframe,
       from,
       to,
@@ -300,6 +301,8 @@ function DashboardPageShellContent({
       effectiveVehicleId,
       slug,
       timeframe,
+      activeConfig?.id,
+      savedConfig?.id,
       from,
       to,
       chargeSessionDayLocal,

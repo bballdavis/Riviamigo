@@ -9,6 +9,7 @@ export type { WidgetInstance };
 export interface WidgetCtx {
   vehicleId: string | null;
   dashboardSlug?: string;
+  dashboardConfigId?: string;
   timeframe?: DashboardTimeframe;
   from: string | null;
   to: string | null;
