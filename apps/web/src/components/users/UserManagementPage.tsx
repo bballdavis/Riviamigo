@@ -34,6 +34,10 @@ type Confirmation =
   | { kind: 'revoke-vehicle-invitation'; userId: string; invitationId: string; vehicleName: string };
 
 const CONTROL_CLASS = 'h-9 rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none transition-colors hover:border-border-strong focus:border-accent focus:ring-1 focus:ring-accent';
+const MODAL_OVERLAY_CLASS =
+  'fixed inset-0 z-50 flex items-center justify-center overflow-y-auto overflow-x-hidden bg-bg-page/80 p-2 backdrop-blur-sm sm:p-3';
+const MODAL_PANEL_CLASS =
+  'w-full max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-xl border border-border bg-bg-surface p-5 shadow-lg';
 
 function emitToast(title: string, message: string, variant: 'error' | 'success' | 'info' = 'info') {
   window.dispatchEvent(new CustomEvent('riviamigo:toast', { detail: { title, message, variant } }));
@@ -108,8 +112,13 @@ function ConfirmationDialog({
       };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-bg-page/80 p-2 backdrop-blur-sm sm:items-center sm:justify-center">
-      <div role="dialog" aria-modal="true" aria-label={copy.title} className="w-full rounded-xl border border-border bg-bg-surface p-5 shadow-lg sm:max-w-sm">
+    <div className={MODAL_OVERLAY_CLASS}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={copy.title}
+        className={`${MODAL_PANEL_CLASS} sm:max-w-sm`}
+      >
         <h2 className="text-base font-semibold text-fg">{copy.title}</h2>
         <p className="mt-2 text-sm text-fg-tertiary">{copy.description}</p>
         <div className="mt-5 flex justify-end gap-2">
@@ -148,8 +157,13 @@ function InviteUserDialog({
   const [step, setStep] = React.useState<'email' | 'vehicle'>('email');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-bg-page/80 p-2 backdrop-blur-sm sm:items-center sm:justify-center">
-      <div role="dialog" aria-modal="true" aria-label="Invite user" className="w-full rounded-xl border border-border bg-bg-surface p-5 shadow-lg sm:max-w-md">
+    <div className={MODAL_OVERLAY_CLASS}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Invite user"
+        className={`${MODAL_PANEL_CLASS} sm:max-w-md`}
+      >
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-fg">Invite user</h2>
