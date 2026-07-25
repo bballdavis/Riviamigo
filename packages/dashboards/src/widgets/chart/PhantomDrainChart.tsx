@@ -110,15 +110,6 @@ function withDailyHeadroom(maximum: number) {
   const magnitude = 10 ** Math.floor(Math.log10(padded));
   return Math.ceil(padded / magnitude) * magnitude;
 }
-
-function formatSessionDetail(session: { startedAt: string; parkedHours: number; drainRate: number }) {
-  const startedAt = new Date(session.startedAt);
-  const started = Number.isFinite(startedAt.getTime())
-    ? startedAt.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : 'Unknown start';
-  return `${started} · ${session.parkedHours.toFixed(1)} h · ${formatPercent(session.drainRate, 2)} / h`;
-}
-
 export function PhantomDrainChart({
   periods,
   loading = false,
@@ -182,3 +173,4 @@ export function PhantomDrainChart({
     />
   );
 }
+
