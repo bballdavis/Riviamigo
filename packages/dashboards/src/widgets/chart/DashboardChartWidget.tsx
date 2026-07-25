@@ -119,10 +119,17 @@ function normalizeChartId(chartId: string) {
 }
 
 function chartDefaultStorageKey(ctx: WidgetCtx, instance: WidgetInstance) {
-  return `${ctx.dashboardSlug ?? 'dashboard'}:${instance.id}`;
+  const slug = ctx.dashboardSlug ?? 'dashboard';
+  const dashboardId = ctx.dashboardConfigId;
+  return dashboardId ? `${slug}:${dashboardId}:${instance.id}` : `${slug}:${instance.id}`;
 }
 
-function readStoredChartDefault(storageKey: string, validIds: readonly string[], fallback: string) {
+function readStoredChartDefault(
+  storageKey: string,
+  validIds: readonly string[],
+  fallback: string,
+  legacyStorageKey?: string,
+) {
   if (typeof window === 'undefined') return fallback;
 
   try {
@@ -130,8 +137,16 @@ function readStoredChartDefault(storageKey: string, validIds: readonly string[],
     if (!raw) return fallback;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return fallback;
-    const value = (parsed as Record<string, unknown>)[storageKey];
-    return typeof value === 'string' && validIds.includes(value) ? value : fallback;
+    const keys = legacyStorageKey
+      ? [storageKey, legacyStorageKey]
+      : [storageKey];
+    for (const key of keys) {
+      const value = (parsed as Record<string, unknown>)[key];
+      if (typeof value === 'string' && validIds.includes(value)) {
+        return value;
+      }
+    }
+    return fallback;
   } catch {
     return fallback;
   }
@@ -197,12 +212,13 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const options = readOptions(instance);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
+  const legacyStorageKey = `${ctx.dashboardSlug ?? 'dashboard'}:${instance.id}`;
   const chartIdsSignature = options.chartIds.join('|');
   const [chartId, setChartId] = React.useState(() => (
-    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId)
+    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId, legacyStorageKey)
   ));
   const [defaultChartId, setDefaultChartId] = React.useState(() => (
-    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId)
+    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId, legacyStorageKey)
   ));
   const previousDefaultStorageKeyRef = React.useRef(defaultStorageKey);
   const [search, setSearch] = React.useState('');
@@ -216,7 +232,12 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
-    const storedDefault = readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId);
+    const storedDefault = readStoredChartDefault(
+      defaultStorageKey,
+      options.chartIds,
+      options.chartId,
+      legacyStorageKey,
+    );
     setDefaultChartId(storedDefault);
     setChartId((current) => {
       if (previousDefaultStorageKeyRef.current !== defaultStorageKey) return storedDefault;
