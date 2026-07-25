@@ -9,12 +9,7 @@ describe('DateRangePicker', () => {
   it('toggles the custom editor from the preset list', async () => {
     const user = userEvent.setup();
 
-    render(
-      <DateRangePicker
-        timeframe={{ kind: 'preset', preset: '30d' }}
-        onChange={vi.fn()}
-      />,
-    );
+    render(<DateRangePicker timeframe={{ kind: 'preset', preset: '30d' }} onChange={vi.fn()} />);
 
     expect(screen.queryByText('Custom range')).not.toBeInTheDocument();
 
@@ -39,7 +34,7 @@ describe('DateRangePicker', () => {
           to: new Date(2026, 5, 7, 18, 30),
         }}
         onChange={onChange}
-      />,
+      />
     );
 
     await user.click(screen.getByRole('button', { name: /jun 3, 2026/i }));
@@ -56,18 +51,27 @@ describe('DateRangePicker', () => {
     ];
     expect(minutePickers).toHaveLength(2);
     await user.click(minutePickers[0]!);
-    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['00', '15', '30', '45']);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      '00',
+      '15',
+      '30',
+      '45',
+    ]);
     await user.click(screen.getByRole('option', { name: '00' }));
 
     await user.clear(fromInput);
     await user.type(fromInput, '7/5/26');
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July')
+    );
     expect(fromInput).toHaveValue('7/5/26');
 
     await user.clear(toInput);
     await user.type(toInput, '7/8/26');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Month' })).toHaveTextContent('July')
+    );
     expect(toInput).toHaveValue('7/8/26');
 
     await user.click(screen.getByRole('button', { name: /apply custom range/i }));
@@ -77,7 +81,7 @@ describe('DateRangePicker', () => {
         kind: 'custom',
         from: expect.any(Date),
         to: expect.any(Date),
-      }),
+      })
     );
   });
 
@@ -85,12 +89,7 @@ describe('DateRangePicker', () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
 
-    render(
-      <DateRangePicker
-        timeframe={{ kind: 'preset', preset: '30d' }}
-        onChange={onChange}
-      />,
-    );
+    render(<DateRangePicker timeframe={{ kind: 'preset', preset: '30d' }} onChange={onChange} />);
 
     await user.click(screen.getByRole('button', { name: /last 30 days/i }));
     await user.click(screen.getByRole('button', { name: 'Lifetime' }));
