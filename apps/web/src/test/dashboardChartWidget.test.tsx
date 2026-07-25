@@ -97,6 +97,27 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
   });
 
+  it('isolates chart defaults across dashboard config IDs', () => {
+    const instance = {
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    };
+
+    const firstRender = renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-a' });
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' }));
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+
+    firstRender.unmount();
+    renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-b' });
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+  });
+
   it('shows the display-filter slider without a chart picker', () => {
     const instance = {
       ...makeInstance('soc-history', false),
