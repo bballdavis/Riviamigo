@@ -438,6 +438,31 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/login');
   });
 
+  it('omits the stale access token when logging in', async () => {
+    api.setToken('old-access-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: 'new-access-token',
+          expires_in: 900,
+          default_vehicle_id: 'vehicle-1',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      ) as Response
+    );
+
+    await api.login('driver@example.com', 'correct-password');
+
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers;
+    expect(headers).toBeTruthy();
+    const authorization =
+      headers instanceof Headers ? headers.get('Authorization') : (headers as Record<string, string>).Authorization;
+    expect(authorization).toBeUndefined();
+  });
+
   it('quietly treats bootstrap without a resumable session as no auth state', async () => {
     const authExpired = vi.fn();
     const toast = vi.fn();
