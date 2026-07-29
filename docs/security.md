@@ -69,6 +69,16 @@ precise vehicle locations in public issues.
 - Security events (login success/failure, key operations) logged to `riviamigo.security_events`
 - Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape.
 
+## Security regression controls
+
+- `pnpm security:routes` verifies that every API route module is mounted through
+  the intended protected router composition. The authentication module must
+  have separate public, metadata, and protected mounts.
+- Restore capability tokens and agent keys are compared without early-exit
+  string equality and reject oversized or malformed authentication headers.
+- Dynamic telemetry and metric selectors reject control characters and bounded
+  oversized input before their allowlists are used to build SQL identifiers.
+
 ## Dependencies
 
 - Weekly automated dependency audits via Dependabot
