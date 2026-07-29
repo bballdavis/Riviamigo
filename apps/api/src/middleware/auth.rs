@@ -227,6 +227,7 @@ fn is_scoped_vehicle_read_path(path: &str) -> bool {
             | ["telemetry", "lanes"]
             | ["health"]
             | ["idle-drain"]
+            | ["parked-energy"]
             | ["state-timeline"]
             | ["locations"]
             | ["live-session"]
@@ -293,6 +294,10 @@ mod tests {
         assert!(is_integration_read_request(
             &Method::GET,
             "/v1/vehicles/id/status"
+        ));
+        assert!(is_integration_read_request(
+            &Method::GET,
+            "/v1/vehicles/id/parked-energy"
         ));
         assert!(is_integration_read_request(
             &Method::GET,

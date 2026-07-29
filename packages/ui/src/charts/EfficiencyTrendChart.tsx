@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Brush,
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { formatAppDate, formatAppDateTime } from '../lib/dateTime';
 
@@ -36,11 +36,11 @@ export function EfficiencyTrendChart({
 
         <XAxis
           dataKey="ts"
+          {...CHART_X_AXIS_DEFAULTS}
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
           tickFormatter={(v: string) => formatAppDate(v, { month: 'short', day: 'numeric' })}
-          minTickGap={40}
         />
         <YAxis
           tick={TICK_STYLE}

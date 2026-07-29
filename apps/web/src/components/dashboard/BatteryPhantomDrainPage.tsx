@@ -7,6 +7,7 @@ import { formatPercent } from '@riviamigo/ui/lib/utils';
 import { DashboardPageShell, type DashboardPageShellRenderState } from './DashboardPageShell';
 import type { DashboardPageProps } from './DashboardPage';
 import { buildPhantomDrainSummaryCards, summarizePhantomDrainPeriods } from './phantomDrainSummary';
+import { ParkedEnergyPanel } from './ParkedEnergyPanel';
 
 const PHANTOM_DRAIN_CHART_INSTANCE: WidgetInstance = {
   id: 'd2000002-0000-0000-0000-000000000010',
@@ -81,6 +82,17 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
   const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
   return (
     <div className="grid gap-4 min-w-0">
+      <ParkedEnergyPanel vehicleId={vehicleId} from={ctx.from} to={ctx.to} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold text-fg">Riviamigo battery-change estimate</h2>
+          <p className="text-xs text-fg-tertiary">
+            Derived from validated parked sessions and retained when Rivian&apos;s breakdown is unavailable.
+          </p>
+        </div>
+      </div>
+
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {summaryCards.map((card) => (
           <SensorChipSummary

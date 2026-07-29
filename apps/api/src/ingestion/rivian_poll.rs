@@ -2279,16 +2279,26 @@ pub async fn run_startup_polls(
 /// - Watches `power_state_rx` so it can adapt cadence with [`poll_interval`].
 /// - Responds to `PollEvent` signals: charge session ended → re-sync history;
 ///   OTA version changed → fetch release notes.
-pub async fn run_poll_loop(
+pub(crate) struct PollLoopSignals {
+    pub power_state_rx: tokio::sync::watch::Receiver<Option<crate::models::telemetry::PowerState>>,
+    pub charging_rx: tokio::sync::watch::Receiver<bool>,
+    pub shutdown: tokio::sync::broadcast::Receiver<()>,
+}
+
+pub(crate) async fn run_poll_loop(
     vehicle_id: Uuid,
     pool: PgPool,
     client: reqwest::Client,
     age_key: String,
-    mut power_state_rx: tokio::sync::watch::Receiver<Option<crate::models::telemetry::PowerState>>,
-    mut charging_rx: tokio::sync::watch::Receiver<bool>,
-    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+    signals: PollLoopSignals,
     redis: redis::Client,
 ) {
+    let PollLoopSignals {
+        mut power_state_rx,
+        mut charging_rx,
+        mut shutdown,
+    } = signals;
+
     use crate::ingestion::poller::poll_interval;
     use redis::AsyncCommands;
 

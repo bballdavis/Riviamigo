@@ -3,6 +3,20 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { DailyChargeSessionsChart, DailyEnergyBarChart } from '../../../../packages/ui/src/charts/DailyChargeSessionsChart';
 
+function makeDays(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const day = new Date('2024-01-01T00:00:00Z');
+    day.setUTCDate(day.getUTCDate() + index);
+    const dayLocal = day.toISOString().slice(0, 10);
+    return {
+      day_local: dayLocal,
+      day_start: `${dayLocal}T00:00:00Z`,
+      total_energy_kwh: index === count - 1 ? 999 : 10 + (index % 70),
+      session_count: 1,
+    };
+  });
+}
+
 describe('DailyChargeSessionsChart', () => {
   it('groups sessions into stable legend categories and rounds the outer stack shape', () => {
     const { container } = render(
@@ -247,5 +261,66 @@ describe('DailyChargeSessionsChart', () => {
     expect(reset.querySelector('svg')).toBeTruthy();
     fireEvent.click(reset);
     expect(screen.queryByRole('button', { name: 'Return to full chart view' })).toBeNull();
+  });
+
+  it('keeps every sparse label and adaptively bounds dense labels without removing bars or details', () => {
+    const { rerender, container } = render(<DailyEnergyBarChart daily={makeDays(7)} />);
+    expect(screen.getAllByTestId('daily-charge-axis-label')).toHaveLength(7);
+    expect(screen.getAllByTestId('daily-charge-value-label')).toHaveLength(7);
+
+    const denseDays = makeDays(120);
+    rerender(<DailyEnergyBarChart daily={denseDays} />);
+    const axisLabels = screen.getAllByTestId('daily-charge-axis-label');
+    const valueLabels = screen.getAllByTestId('daily-charge-value-label');
+    expect(axisLabels.length).toBeLessThan(denseDays.length);
+    expect(valueLabels.length).toBeLessThan(denseDays.length);
+    expect(valueLabels.some((label) => label.textContent === '999')).toBe(true);
+    expect(container.querySelectorAll('[data-testid="daily-energy-bar"]')).toHaveLength(120);
+    expect(screen.getAllByRole('button')).toHaveLength(120);
+    expect(screen.getByRole('button', { name: /999 kWh energy charged/i })).toHaveAttribute('tabindex', '0');
+  });
+
+  it('recalculates dense labels after drag zoom and restores them with the full domain', () => {
+    render(<DailyEnergyBarChart daily={makeDays(120)} />);
+    const chart = screen.getByTestId('daily-energy-chart');
+    Object.defineProperty(chart, 'getBoundingClientRect', {
+      value: () => ({ left: 0, width: 960 }),
+    });
+    const fullLabelCount = screen.getAllByTestId('daily-charge-axis-label').length;
+    const pointerEvent = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX });
+      Object.defineProperty(event, 'pointerId', { value: 2 });
+      fireEvent(chart, event);
+    };
+
+    pointerEvent('pointerdown', 75);
+    pointerEvent('pointermove', 145);
+    pointerEvent('pointerup', 145);
+    expect(screen.getAllByTestId('daily-charge-axis-label')).toHaveLength(
+      screen.getAllByTestId('daily-energy-bar').length,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Return to full chart view' }));
+    expect(screen.getAllByTestId('daily-charge-axis-label')).toHaveLength(fullLabelCount);
+  });
+
+  it('uses the same adaptive policy for stacked session totals', () => {
+    const daily = makeDays(105);
+    const dailySessions = daily.map((day, index) => ({
+      session_id: `session-${index}`,
+      day_local: day.day_local,
+      day_start: day.day_start,
+      started_at: `${day.day_local}T12:00:00Z`,
+      energy_added_kwh: day.total_energy_kwh,
+      cost_usd: null,
+      charger_type: 'ac',
+      location_name: 'Home',
+    }));
+    const { container } = render(<DailyChargeSessionsChart daily={daily} dailySessions={dailySessions} />);
+
+    expect(screen.getAllByTestId('daily-charge-axis-label').length).toBeLessThan(daily.length);
+    expect(screen.getAllByTestId('daily-charge-value-label').length).toBeLessThan(daily.length);
+    expect(container.querySelectorAll('[data-testid="daily-charge-stack"]')).toHaveLength(daily.length);
+    expect(screen.getByRole('button', { name: /999 kWh across 1 session/i })).toHaveAttribute('tabindex', '0');
   });
 });

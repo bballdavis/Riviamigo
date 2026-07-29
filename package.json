@@ -11,6 +11,8 @@
   "scripts": {
     "dev": "turbo dev",
     "dev:stack": "node ./scripts/dev.mjs",
+    "dev:stack:parallax": "node ./scripts/dev.mjs --parallax",
+    "dev:parallax": "cargo run --manifest-path apps/api/Cargo.toml --bin riviamigo-parallax-collector",
     "build": "turbo build",
     "test": "turbo test",
     "test:e2e": "turbo test:e2e",

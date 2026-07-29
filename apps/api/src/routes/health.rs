@@ -33,6 +33,59 @@ struct HealthResponse {
     ota_release_notes_url: Option<String>,
     software_history: Vec<SoftwareEntry>,
     thermal_events_30d: i64,
+    extended_telemetry: ExtendedTelemetry,
+}
+
+#[derive(Serialize)]
+struct ExtendedTelemetry {
+    collector: Option<CollectorHealth>,
+    network: Option<NetworkHealth>,
+    efficiency: Option<EfficiencyHealth>,
+    mass: Option<MassHealth>,
+    cold_weather: Option<ColdWeatherHealth>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct CollectorHealth {
+    status: String,
+    connected_at: Option<DateTime<Utc>>,
+    last_event_at: Option<DateTime<Utc>>,
+    last_error: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct NetworkHealth {
+    source_at: DateTime<Utc>,
+    wifi_connected: Option<bool>,
+    wifi_rssi_dbm: Option<i32>,
+    wifi_link_speed_mbps: Option<i32>,
+    wifi_frequency_mhz: Option<i32>,
+    wifi_channel_width_mhz: Option<i32>,
+    cellular_access_technology: Option<String>,
+    cellular_signal_dbm: Option<i32>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct EfficiencyHealth {
+    source_at: DateTime<Utc>,
+    reference_wh_per_km: Option<i32>,
+    learned_wh_per_km: Option<i32>,
+    mode_ranges_km: serde_json::Value,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct MassHealth {
+    source_at: DateTime<Utc>,
+    estimated_mass_kg: i32,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ColdWeatherHealth {
+    source_at: DateTime<Utc>,
+    available_soc_pct: Option<i32>,
+    cold_limited_soc_pct: Option<i32>,
+    cold_range_impact_km: Option<f64>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -107,7 +160,7 @@ async fn health(
     require_vehicle_access(&auth, vehicle_id)?;
     require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
 
-    let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count) = tokio::try_join!(
+    let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count, extended) = tokio::try_join!(
         fetch_vehicle(&state.pool, vehicle_id),
         fetch_runtime(&state.pool, vehicle_id),
         fetch_latest(&state.pool, vehicle_id),
@@ -115,6 +168,7 @@ async fn health(
         fetch_closures(&state.pool, vehicle_id),
         fetch_sw_history(&state.pool, vehicle_id),
         fetch_thermal_count(&state.pool, vehicle_id),
+        fetch_extended_telemetry(&state.pool, vehicle_id),
     )?;
 
     let ota_release_notes_url = vehicle.ota_release_notes_url.clone();
@@ -137,7 +191,61 @@ async fn health(
         ota_release_notes_url,
         software_history: sw_history,
         thermal_events_30d: thermal_count,
+        extended_telemetry: extended,
     }))
+}
+
+async fn fetch_extended_telemetry(
+    pool: &sqlx::PgPool,
+    vid: Uuid,
+) -> Result<ExtendedTelemetry, AppError> {
+    let (collector, network, efficiency, mass, cold_weather) = tokio::try_join!(
+        sqlx::query_as::<_, CollectorHealth>(
+            r#"SELECT status, connected_at, last_event_at, last_error, updated_at
+               FROM riviamigo.parallax_collector_state WHERE vehicle_id = $1"#,
+        )
+        .bind(vid)
+        .fetch_optional(pool),
+        sqlx::query_as::<_, NetworkHealth>(
+            r#"SELECT source_at, wifi_connected, wifi_rssi_dbm, wifi_link_speed_mbps,
+                      wifi_frequency_mhz, wifi_channel_width_mhz,
+                      cellular_access_technology, cellular_signal_dbm
+               FROM timeseries.parallax_network_samples
+               WHERE vehicle_id = $1 ORDER BY source_at DESC LIMIT 1"#,
+        )
+        .bind(vid)
+        .fetch_optional(pool),
+        sqlx::query_as::<_, EfficiencyHealth>(
+            r#"SELECT source_at, reference_wh_per_km, learned_wh_per_km, mode_ranges_km
+               FROM timeseries.parallax_efficiency_samples
+               WHERE vehicle_id = $1 ORDER BY source_at DESC LIMIT 1"#,
+        )
+        .bind(vid)
+        .fetch_optional(pool),
+        sqlx::query_as::<_, MassHealth>(
+            r#"SELECT source_at, estimated_mass_kg
+               FROM timeseries.parallax_mass_samples
+               WHERE vehicle_id = $1 ORDER BY source_at DESC LIMIT 1"#,
+        )
+        .bind(vid)
+        .fetch_optional(pool),
+        sqlx::query_as::<_, ColdWeatherHealth>(
+            r#"SELECT source_at, available_soc_pct, cold_limited_soc_pct, cold_range_impact_km
+               FROM timeseries.parallax_cold_weather_samples
+               WHERE vehicle_id = $1
+                 AND (cold_limited_soc_pct IS NOT NULL OR cold_range_impact_km IS NOT NULL)
+               ORDER BY source_at DESC LIMIT 1"#,
+        )
+        .bind(vid)
+        .fetch_optional(pool),
+    )?;
+    Ok(ExtendedTelemetry {
+        collector,
+        network,
+        efficiency,
+        mass,
+        cold_weather,
+    })
 }
 
 async fn fetch_vehicle(pool: &sqlx::PgPool, vid: Uuid) -> Result<HealthVehicle, AppError> {

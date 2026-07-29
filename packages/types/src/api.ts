@@ -118,6 +118,33 @@ export interface IdleDrainResponse {
   periods: PhantomDrainPeriod[];
 }
 
+export type ParkedEnergyWindow = 'since_parked' | '8h' | '24h';
+
+export interface ParkedEnergySample {
+  window: ParkedEnergyWindow;
+  source_at: string;
+  received_at: string;
+  parked_started_at: string | null;
+  duration_minutes: number | null;
+  total_kwh: number | null;
+  vehicle_systems_kwh: number | null;
+  outlets_kwh: number | null;
+  climate_kwh: number | null;
+  gear_guard_kwh: number | null;
+  total_range_impact_km: number | null;
+  vehicle_systems_range_impact_km: number | null;
+  outlets_range_impact_km: number | null;
+  climate_range_impact_km: number | null;
+  gear_guard_range_impact_km: number | null;
+}
+
+export interface ParkedEnergyResponse {
+  vehicle_id: string;
+  generated_at: string;
+  source: 'rivian_reported';
+  samples: ParkedEnergySample[];
+}
+
 export interface Trip {
   id: string;
   vehicle_id: string;
@@ -563,6 +590,41 @@ export interface VehicleHealth {
   ota_release_notes_url: string | null;
   software_history: VehicleHealthSoftwareEntry[];
   thermal_events_30d: number;
+  extended_telemetry: {
+    collector: {
+      status: 'starting' | 'connected' | 'disconnected' | 'error';
+      connected_at: string | null;
+      last_event_at: string | null;
+      last_error: string | null;
+      updated_at: string;
+    } | null;
+    network: {
+      source_at: string;
+      wifi_connected: boolean | null;
+      wifi_rssi_dbm: number | null;
+      wifi_link_speed_mbps: number | null;
+      wifi_frequency_mhz: number | null;
+      wifi_channel_width_mhz: number | null;
+      cellular_access_technology: string | null;
+      cellular_signal_dbm: number | null;
+    } | null;
+    efficiency: {
+      source_at: string;
+      reference_wh_per_km: number | null;
+      learned_wh_per_km: number | null;
+      mode_ranges_km: Record<string, number>;
+    } | null;
+    mass: {
+      source_at: string;
+      estimated_mass_kg: number;
+    } | null;
+    cold_weather: {
+      source_at: string;
+      available_soc_pct: number | null;
+      cold_limited_soc_pct: number | null;
+      cold_range_impact_km: number | null;
+    } | null;
+  };
 }
 
 export interface TouPeriod {

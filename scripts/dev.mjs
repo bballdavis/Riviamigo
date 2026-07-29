@@ -56,6 +56,7 @@ const urls = {
 };
 
 const runOnce = process.argv.includes('--once');
+const withParallax = process.argv.includes('--parallax');
 const children = new Set();
 let shuttingDown = false;
 
@@ -539,15 +540,37 @@ async function startApi() {
   await assertPortAvailable(ports.api, 'API');
 
   const buildArgs = ['build', '--bin', 'riviamigo-api', '--bin', 'riviamigo-restore-agent'];
+  if (withParallax) {
+    buildArgs.push('--bin', 'riviamigo-parallax-collector');
+  }
   if (cargoBuildJobs !== null) {
     buildArgs.push('--jobs', String(cargoBuildJobs));
   }
 
-  log(`Building API targets: riviamigo-api, riviamigo-restore-agent${cargoBuildJobs !== null ? ` (maximum ${cargoBuildJobs} concurrent Cargo jobs)` : ''}...`);
+  log(`Building API targets${withParallax ? ' plus the independent Parallax collector' : ''}${cargoBuildJobs !== null ? ` (maximum ${cargoBuildJobs} concurrent Cargo jobs)` : ''}...`);
   await run('cargo', buildArgs, { cwd: apiDir, env: apiEnv() });
 
   await startRestoreAgent();
   return launchApi();
+}
+
+async function startParallaxCollector() {
+  log('Starting independent Parallax collector...');
+  const collectorBin = resolve(
+    apiDir,
+    'target/debug',
+    isWindows ? 'riviamigo-parallax-collector.exe' : 'riviamigo-parallax-collector',
+  );
+  const collector = spawnProcess(collectorBin, [], {
+    cwd: apiDir,
+    env: apiEnv(),
+  });
+  await sleep(500);
+  if (collector.exitCode !== null) {
+    throw new Error(`Parallax collector exited during startup (exit code ${collector.exitCode}).`);
+  }
+  log('Independent Parallax collector is running.');
+  return collector;
 }
 
 async function startRestoreAgent() {
@@ -673,6 +696,7 @@ log('Starting local dev servers...');
 
   const api = await startApi();
   const apiSupervisor = superviseApi(api);
+  const parallax = withParallax ? await startParallaxCollector() : null;
   log('To view infra logs in another terminal, run:');
   log(`   docker compose -f "${composeFile}" logs -f`);
   log('');
@@ -687,6 +711,7 @@ log('Starting local dev servers...');
   await Promise.race([
     apiSupervisor,
     onceExit(web.child, 'Web dev server'),
+    ...(parallax ? [onceExit(parallax, 'Parallax collector')] : []),
   ]);
 }
 

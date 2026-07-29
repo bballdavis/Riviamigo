@@ -2,6 +2,7 @@ import * as React from 'react';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { formatSmartNumber } from '../lib/utils';
+import { measureChartText, selectAdaptiveAxisLabelIndices, selectValueLabelIndices } from './chartLabelLayout';
 
 export interface ChargeSessionDistributionBand {
   label: string;
@@ -68,6 +69,20 @@ export function ChargeSessionDistributionChart({
     .join(' ');
 
   const tickFractions = [0, 0.25, 0.5, 0.75, 1];
+  const labelPositions = bands.map((_, index) => margin.left + bandWidth * index + bandWidth / 2);
+  const axisLabelIndices = new Set(selectAdaptiveAxisLabelIndices(
+    bands.map((band) => band.label),
+    labelPositions,
+  ));
+  const valueLabelIndices = new Set(selectValueLabelIndices(
+    bands.map((band, index) => ({
+      index,
+      value: band.count,
+      x: labelPositions[index] ?? margin.left,
+      y: countY(band.count) - 8,
+      width: measureChartText(formatCount(band.count)),
+    })),
+  ));
 
   return (
     <div className="rounded-lg border border-border bg-surface-1 p-3">
@@ -110,15 +125,19 @@ export function ChargeSessionDistributionChart({
                 fill={CHART_COLORS.accent}
                 opacity={CHART_BAR_STYLE.fillOpacity}
               />
-              <text x={centerX} y={barTop - 8} textAnchor="middle" fill={CHART_COLORS.accent} fontFamily={CHART_FONT.fontFamily} fontSize={CHART_FONT.fontSize} fontWeight={CHART_FONT.fontWeight}>
-                {band.count > 0 ? band.count : ''}
-              </text>
+              {band.count > 0 && valueLabelIndices.has(index) ? (
+                <text data-testid="charge-distribution-value-label" x={centerX} y={barTop - 8} textAnchor="middle" fill={CHART_COLORS.accent} fontFamily={CHART_FONT.fontFamily} fontSize={CHART_FONT.fontSize} fontWeight={CHART_FONT.fontWeight}>
+                  {band.count}
+                </text>
+              ) : null}
               {ratePointY != null && (
                 <circle cx={centerX} cy={ratePointY} r={5} fill={CHART_COLORS.sky} stroke={CHART_COLORS.sky} />
               )}
-              <text x={centerX} y={chartHeight - 24} textAnchor="middle" fill={CHART_COLORS.muted} fontFamily={CHART_FONT.fontFamily} fontSize={CHART_FONT.fontSize} fontWeight={CHART_FONT.fontWeight}>
-                {band.label}
-              </text>
+              {axisLabelIndices.has(index) ? (
+                <text data-testid="charge-distribution-axis-label" x={centerX} y={chartHeight - 24} textAnchor="middle" fill={CHART_COLORS.muted} fontFamily={CHART_FONT.fontFamily} fontSize={CHART_FONT.fontSize} fontWeight={CHART_FONT.fontWeight}>
+                  {band.label}
+                </text>
+              ) : null}
             </g>
           );
         })}

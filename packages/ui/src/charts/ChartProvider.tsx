@@ -56,6 +56,11 @@ export const CHART_BAR_STYLE = {
   activeOpacity: 1,
 } as const;
 
+export const CHART_X_AXIS_DEFAULTS = {
+  interval: 'preserveStartEnd',
+  minTickGap: 40,
+} as const;
+
 export const TICK_STYLE = {
   ...CHART_FONT,
   fill: colors.slate[400],

@@ -4,7 +4,7 @@ export { useAuth } from './useAuth';
 export { useAuthReady, useResolvedVehicleSelection } from './useAuthState';
 export { useMe } from './useMe';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
-export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
+export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useParkedEnergy, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';
 export {
 	useTrips,
 	useTripMapRoutes,

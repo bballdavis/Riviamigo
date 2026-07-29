@@ -1058,6 +1058,17 @@ class ApiClient {
     });
   }
 
+  async getParkedEnergy(
+    vehicleId: string,
+    from: string | null,
+    to: string | null
+  ): Promise<import('@riviamigo/types').ParkedEnergyResponse> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/parked-energy`, undefined, {
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+    });
+  }
+
   async getDegradation(
     vehicleId: string,
     from?: string | null,

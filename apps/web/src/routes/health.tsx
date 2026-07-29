@@ -105,6 +105,7 @@ function VehicleHealthContent() {
   });
 
   const diagnostics = summarizeDiagnostics(status);
+  const extended = data?.extended_telemetry;
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
   const displayModel = [data?.vehicle?.model, data?.vehicle?.trim].filter(Boolean).join(' ');
   const freshness = getFreshness(data?.runtime?.last_event_at ?? data?.latest?.ts ?? null);
@@ -328,6 +329,91 @@ function VehicleHealthContent() {
                     />
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card data-testid="extended-vehicle-telemetry">
+              <CardHeader>
+                <div>
+                  <CardTitle>Extended Vehicle Telemetry</CardTitle>
+                  <p className="mt-1 text-xs text-fg-tertiary">
+                    Privacy-filtered readings from the independent Parallax collector.
+                  </p>
+                </div>
+                <Badge
+                  variant={extended?.collector?.status === 'connected' ? 'success' : 'default'}
+                  dot
+                >
+                  {extended?.collector?.status === 'connected'
+                    ? 'Collector connected'
+                    : 'Collector optional'}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                {isLoading ? (
+                  <HealthGridSkeleton />
+                ) : !extended?.network && !extended?.efficiency && !extended?.mass ? (
+                  <EmptyPanel text="Start the optional Parallax collector to populate connectivity, Rivian efficiency, and mass estimates." />
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <ExtendedReading
+                      icon={<Radio className="h-4 w-4" />}
+                      label="Connectivity"
+                      value={
+                        extended.network?.wifi_connected
+                          ? `Wi-Fi ${formatSignal(extended.network.wifi_rssi_dbm)}`
+                          : extended.network?.cellular_access_technology ?? 'Disconnected'
+                      }
+                      detail={[
+                        extended.network?.wifi_link_speed_mbps == null
+                          ? null
+                          : `${extended.network.wifi_link_speed_mbps} Mbps`,
+                        extended.network?.wifi_frequency_mhz == null
+                          ? null
+                          : `${extended.network.wifi_frequency_mhz} MHz`,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    />
+                    <ExtendedReading
+                      icon={<Gauge className="h-4 w-4" />}
+                      label="Rivian learned estimate"
+                      value={formatEfficiency(extended.efficiency?.learned_wh_per_km)}
+                      detail={
+                        extended.efficiency?.reference_wh_per_km == null
+                          ? ''
+                          : `${formatEfficiency(extended.efficiency.reference_wh_per_km)} reference`
+                      }
+                    />
+                    <ExtendedReading
+                      icon={<Activity className="h-4 w-4" />}
+                      label="Estimated vehicle mass"
+                      value={
+                        extended.mass
+                          ? `${Math.round(extended.mass.estimated_mass_kg * 2.20462).toLocaleString()} lb`
+                          : '—'
+                      }
+                      detail={extended.mass ? `${extended.mass.estimated_mass_kg.toLocaleString()} kg · Rivian estimate` : ''}
+                    />
+                    {extended.cold_weather ? (
+                      <ExtendedReading
+                        icon={<Snowflake className="h-4 w-4" />}
+                        label="Cold-weather impact"
+                        value={
+                          extended.cold_weather.cold_range_impact_km == null
+                            ? 'Observed'
+                            : `${(extended.cold_weather.cold_range_impact_km * 0.621371).toFixed(1)} mi`
+                        }
+                        detail="Shown only when the vehicle reports a cold-limited value."
+                      />
+                    ) : null}
+                  </div>
+                )}
+                {extended?.collector?.last_event_at ? (
+                  <p className="mt-3 text-xs text-fg-tertiary">
+                    Collector last received data {formatAppDateTime(extended.collector.last_event_at)}
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
 
@@ -825,6 +911,37 @@ function EmptyPanel({ text }: { text: string }) {
       {text}
     </div>
   );
+}
+
+function ExtendedReading({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-border bg-bg-elevated/35 p-3">
+      <div className="flex items-center gap-2 text-fg-secondary">
+        {icon}
+        <span className="text-xs font-medium">{label}</span>
+      </div>
+      <p className="mt-2 truncate text-lg font-semibold text-fg">{value}</p>
+      {detail ? <p className="mt-1 text-xs text-fg-tertiary">{detail}</p> : null}
+    </div>
+  );
+}
+
+function formatSignal(value: number | null | undefined) {
+  return value == null ? '' : `(${value} dBm)`;
+}
+
+function formatEfficiency(value: number | null | undefined) {
+  return value == null ? '—' : `${Math.round(value * 1.60934)} Wh/mi`;
 }
 
 function summarizeTires(

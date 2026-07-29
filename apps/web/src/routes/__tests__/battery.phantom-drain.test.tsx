@@ -52,6 +52,31 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }] }),
     useMe: () => ({ data: { role: 'user' } }),
     usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'vehicle-1', periods: [period] }, isLoading: false }),
+    useParkedEnergy: () => ({
+      data: {
+        vehicle_id: 'vehicle-1',
+        generated_at: '2026-05-01T20:00:00Z',
+        source: 'rivian_reported',
+        samples: [{
+          window: 'since_parked',
+          source_at: '2026-05-01T20:00:00Z',
+          received_at: new Date().toISOString(),
+          parked_started_at: '2026-05-01T08:00:00Z',
+          duration_minutes: 720,
+          total_kwh: 2.4,
+          vehicle_systems_kwh: 1.2,
+          outlets_kwh: 0,
+          climate_kwh: 0.8,
+          gear_guard_kwh: 0.4,
+          total_range_impact_km: 8,
+          vehicle_systems_range_impact_km: 4,
+          outlets_range_impact_km: 0,
+          climate_range_impact_km: 3,
+          gear_guard_range_impact_km: 1,
+        }],
+      },
+      isLoading: false,
+    }),
   };
 });
 
@@ -158,6 +183,10 @@ describe('BatteryPhantomDrainPage', () => {
     expect(chart).toHaveAttribute('data-show-picker', 'true');
     expect(chart.compareDocumentPosition(tableSearch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId('phantom-drain-periods-table')).not.toHaveClass('bg-bg-elevated');
+    expect(screen.getByText('Parked Energy')).toBeInTheDocument();
+    expect(screen.getByText('Rivian reported')).toBeInTheDocument();
+    expect(screen.getByText('Riviamigo battery-change estimate')).toBeInTheDocument();
+    expect(screen.getByTestId('parked-energy-metrics')).toHaveClass('grid', 'sm:grid-cols-3');
 
     expect(screen.getByPlaceholderText('Search periods')).toBeInTheDocument();
     expect(screen.getByText('Rows')).toBeInTheDocument();

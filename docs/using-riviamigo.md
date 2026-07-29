@@ -18,6 +18,7 @@ Use this section after the installation is healthy and receiving vehicle data. I
 | Understand built-in dashboards and personal copies | [Dashboard customization](./guides/dashboard-customization.md) |
 | Edit layouts, widgets, and conditional previews | [Dashboard customization](./guides/dashboard-customization.md) |
 | Review weather, map, geocoding, or proxy access | [External connections](./guides/external-connections.md) |
+| Enable Rivian-reported parked energy and extended readings | [Extended Vehicle Telemetry](./guides/extended-vehicle-telemetry.md) |
 | Minimize optional external requests | [External connections](./guides/external-connections.md) and [Privacy](./privacy.md) |
 
 ## Where to go next

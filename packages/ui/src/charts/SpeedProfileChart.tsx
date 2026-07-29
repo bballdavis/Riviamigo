@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { formatMph } from '../lib/utils';
 
@@ -44,11 +44,11 @@ export function SpeedProfileChart({
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
         <XAxis
           dataKey="elapsed_s"
+          {...CHART_X_AXIS_DEFAULTS}
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}
           tickFormatter={formatElapsed}
-          minTickGap={40}
         />
         <YAxis
           tick={TICK_STYLE}

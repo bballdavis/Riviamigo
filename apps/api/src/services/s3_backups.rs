@@ -385,7 +385,7 @@ pub async fn list(settings: &S3Settings) -> Result<Vec<RemoteObject>> {
         }
         continuation = response.next_continuation_token().map(str::to_string);
     }
-    rows.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.created_at));
     Ok(rows)
 }
 

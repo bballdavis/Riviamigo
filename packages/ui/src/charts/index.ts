@@ -46,6 +46,15 @@ export type {
   ChargeSessionDistributionChartProps,
 } from './ChargeSessionDistributionChart';
 export { DailyChargeSessionsChart, DailyChargingBarChart, DailyEnergyBarChart } from './DailyChargeSessionsChart';
+export {
+  measureChartText,
+  measureChartLabels,
+  selectAdaptiveAxisLabelIndices,
+  selectAxisLabelIndices,
+  selectValueLabelIndices,
+  selectNonOverlappingValueLabels,
+} from './chartLabelLayout';
+export type { ChartLabelMeasure, ValueLabelCandidate, AxisLabelLayoutOptions } from './chartLabelLayout';
 export type {
   DailyChargeSessionsChartProps,
   DailyChargingBarChartProps,

@@ -4,6 +4,7 @@ import { ChartSkeleton } from '../primitives/Skeleton';
 import { CHART_BAR_STYLE, CHART_COLORS, CHART_FONT } from './ChartProvider';
 import { formatCurrency, formatSmartNumber } from '../lib/utils';
 import { formatAppCalendarDate } from '../lib/dateTime';
+import { measureChartText, selectAdaptiveAxisLabelIndices, selectValueLabelIndices } from './chartLabelLayout';
 
 export interface DailyChargeSessionsDay {
   day_local: string;
@@ -316,6 +317,26 @@ export function DailyChargingBarChart({
     : null;
   const selectionX = selectionBounds ? margin.left + selectionBounds[0] * slotWidth : 0;
   const selectionWidth = selectionBounds ? (selectionBounds[1] - selectionBounds[0] + 1) * slotWidth : 0;
+  const labelPositions = visibleDays.map((_, dayIndex) => margin.left + slotWidth * dayIndex + slotWidth / 2);
+  const axisLabelIndices = selectAdaptiveAxisLabelIndices(
+    visibleDays.map((day) => formatDayLabel(day.day_local)),
+    labelPositions,
+  );
+  const valueLabelIndices = selectValueLabelIndices(
+    visibleDays.map((day, dayIndex) => {
+      const valueText = formatSmartNumber(day.totalEnergyKwh, day.totalEnergyKwh >= 100 ? 0 : 1);
+      const barHeight = (day.totalEnergyKwh / axisSpan) * renderHeight;
+      return {
+        index: dayIndex,
+        value: day.totalEnergyKwh,
+        x: labelPositions[dayIndex] ?? 0,
+        y: Math.max(margin.top + 10, margin.top + innerHeight - barHeight - 8),
+        width: measureChartText(valueText),
+      };
+    }),
+  );
+  const valueLabelIndexSet = new Set(valueLabelIndices);
+  const axisLabelIndexSet = new Set(axisLabelIndices);
 
   const onChartPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     if (visibleDays.length < 2) return;
@@ -558,28 +579,34 @@ export function DailyChargingBarChart({
                 )}
                 </g>
               </g>
-              <text
-                x={x + barWidth / 2}
-                y={Math.max(margin.top + 10, totalLabelY)}
-                textAnchor="middle"
-                fill={CHART_COLORS.muted}
-                fontFamily={CHART_FONT.fontFamily}
-                fontSize={CHART_FONT.fontSize}
-                fontWeight={700}
-              >
-                {formatSmartNumber(day.totalEnergyKwh, day.totalEnergyKwh >= 100 ? 0 : 1)}
-              </text>
-              <text
-                x={x + barWidth / 2}
-                y={chartHeight - 28}
-                textAnchor="middle"
-                fill={CHART_COLORS.muted}
-                fontFamily={CHART_FONT.fontFamily}
-                fontSize={CHART_FONT.fontSize}
-                fontWeight={CHART_FONT.fontWeight}
-              >
-                {formatDayLabel(day.day_local)}
-              </text>
+              {valueLabelIndexSet.has(dayIndex) ? (
+                <text
+                  data-testid="daily-charge-value-label"
+                  x={x + barWidth / 2}
+                  y={Math.max(margin.top + 10, totalLabelY)}
+                  textAnchor="middle"
+                  fill={CHART_COLORS.muted}
+                  fontFamily={CHART_FONT.fontFamily}
+                  fontSize={CHART_FONT.fontSize}
+                  fontWeight={700}
+                >
+                  {formatSmartNumber(day.totalEnergyKwh, day.totalEnergyKwh >= 100 ? 0 : 1)}
+                </text>
+              ) : null}
+              {axisLabelIndexSet.has(dayIndex) ? (
+                <text
+                  data-testid="daily-charge-axis-label"
+                  x={x + barWidth / 2}
+                  y={chartHeight - 28}
+                  textAnchor="middle"
+                  fill={CHART_COLORS.muted}
+                  fontFamily={CHART_FONT.fontFamily}
+                  fontSize={CHART_FONT.fontSize}
+                  fontWeight={CHART_FONT.fontWeight}
+                >
+                  {formatDayLabel(day.day_local)}
+                </text>
+              ) : null}
             </g>
           );
         })}
