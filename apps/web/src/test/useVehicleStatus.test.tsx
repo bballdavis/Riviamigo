@@ -6,6 +6,10 @@ import { StatusBar } from '@riviamigo/ui/primitives';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
 
   url: string;
   protocols: string[];
@@ -74,6 +78,9 @@ describe('useVehicleStatus', () => {
 
     await act(async () => {
       MockWebSocket.instances[0]?.open();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({ type: 'keepalive' }),
+      } as MessageEvent);
     });
 
     expect(screen.getByTestId('state')).toHaveTextContent('online');
@@ -99,6 +106,13 @@ describe('useVehicleStatus', () => {
 });
 
 describe('StatusBar', () => {
+  it('renders a reconnecting browser transport state', () => {
+    render(<StatusBar onlineState="connecting" />);
+
+    expect(screen.getByLabelText('Vehicle status: Reconnecting...')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting...')).toHaveClass('text-accent');
+  });
+
   it('renders a failed connection state', () => {
     render(<StatusBar onlineState="error" />);
 
