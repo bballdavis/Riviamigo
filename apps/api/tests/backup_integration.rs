@@ -14,7 +14,7 @@ use axum::{
 use flate2::{write::GzEncoder, Compression};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{Executor, PgPool};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use tar::{Builder, Header};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -48,7 +48,9 @@ impl TestApp {
         let admin_db_url = replace_database_name(&base_db_url, "postgres");
         let db_name = format!("riviamigo_backup_test_{}", Uuid::new_v4().simple());
 
-        let admin = PgPool::connect(&admin_db_url)
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&admin_db_url)
             .await
             .expect("admin db connect");
         admin
@@ -59,7 +61,11 @@ impl TestApp {
             .expect("create test database");
 
         let db_url = replace_database_name(&base_db_url, &db_name);
-        let pool = PgPool::connect(&db_url).await.expect("db connect");
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&db_url)
+            .await
+            .expect("db connect");
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
@@ -368,6 +374,12 @@ async fn authenticated_users_can_read_but_not_update_app_timezone() {
     let app = TestApp::new().await;
     let email = "app-timezone-user@example.com";
     let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    sqlx::query("UPDATE riviamigo.users SET role = 'user' WHERE id = $1")
+        .bind(user_id)
+        .execute(&app.pool)
+        .await
+        .expect("demote test user");
 
     let read = app
         .request(
@@ -410,7 +422,7 @@ async fn admin_can_update_app_timezone_and_invalid_zones_are_rejected() {
             None,
         )
         .await;
-    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let update = app
         .request(
@@ -425,7 +437,7 @@ async fn admin_can_update_app_timezone_and_invalid_zones_are_rejected() {
     assert_eq!(update.body["timezone"], "America/Chicago");
 
     let backup_timezone: String =
-        sqlx::query_scalar("SELECT timezone FROM riviamigo.backup_settings WHERE id = TRUE")
+        sqlx::query_scalar("SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'")
             .fetch_one(&app.pool)
             .await
             .expect("backup timezone");
@@ -699,8 +711,8 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
         preflight.body["plan"]["package_format"],
         "riviamigo-recovery-v3"
     );
-    assert_eq!(preflight.body["plan"]["source"]["migration_version"], 1);
-    assert_eq!(preflight.body["plan"]["target"]["migration_version"], 1);
+    assert_eq!(preflight.body["plan"]["source"]["migration_version"], 3);
+    assert_eq!(preflight.body["plan"]["target"]["migration_version"], 3);
     assert!(preflight.body["plan"]["plan_id"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));

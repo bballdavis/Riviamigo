@@ -285,11 +285,12 @@ function DashboardPageShellContent({
     setChargeSessionDayLocal(null);
   }, [effectiveVehicleId, timeframe]);
 
+  const dashboardConfigId = activeConfig?.id ?? savedConfig?.id;
   const ctx = useMemo<WidgetCtx>(
     () => ({
       vehicleId: effectiveVehicleId,
       dashboardSlug: slug,
-      dashboardConfigId: activeConfig?.id ?? savedConfig?.id,
+      ...(dashboardConfigId === undefined ? {} : { dashboardConfigId }),
       timeframe,
       from,
       to,
@@ -300,6 +301,7 @@ function DashboardPageShellContent({
     [
       effectiveVehicleId,
       slug,
+      dashboardConfigId,
       timeframe,
       activeConfig?.id,
       savedConfig?.id,
