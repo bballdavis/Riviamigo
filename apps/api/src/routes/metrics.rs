@@ -634,6 +634,9 @@ fn cap_metric_points(points: Vec<MetricSeriesPoint>, max_points: usize) -> Vec<M
 }
 
 fn find_metric(id: &str) -> Result<&'static MetricDef, AppError> {
+    if id.len() > 128 || id.chars().any(char::is_control) {
+        return Err(AppError::Validation("metric identifier is invalid".into()));
+    }
     METRICS
         .iter()
         .find(|metric| metric.id == id)
@@ -1125,6 +1128,12 @@ mod tests {
         for m in METRICS {
             assert!(seen.insert(m.id), "duplicate metric id: {}", m.id);
         }
+    }
+
+    #[test]
+    fn metric_lookup_rejects_control_and_oversized_identifiers() {
+        assert!(find_metric("total_trips\n").is_err());
+        assert!(find_metric(&"x".repeat(129)).is_err());
     }
 
     #[test]

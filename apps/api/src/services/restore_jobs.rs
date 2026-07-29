@@ -291,7 +291,24 @@ pub async fn fail(config: &Config, id: Uuid, error: impl ToString) -> Result<(),
 }
 
 pub fn token_matches(job: &RestoreJob, token: &str) -> bool {
-    job.capability_sha256 == token_hash(token)
+    constant_time_equal(
+        job.capability_sha256.as_bytes(),
+        token_hash(token).as_bytes(),
+    )
+}
+
+/// Compare authentication material without allowing an early mismatch to
+/// reveal how many leading bytes were correct. Length is folded into the
+/// accumulator so malformed tokens do not get a shorter comparison path.
+pub fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = u8::from(left.len() != right.len());
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        difference |= left_byte ^ right_byte;
+    }
+    difference == 0
 }
 
 pub fn agent_key_path(config: &Config) -> PathBuf {
@@ -567,4 +584,20 @@ fn job_path(config: &Config, id: Uuid) -> PathBuf {
 
 fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_equal;
+
+    #[test]
+    fn constant_time_equal_requires_matching_bytes_and_length() {
+        assert!(constant_time_equal(b"restore-token", b"restore-token"));
+        assert!(!constant_time_equal(b"restore-token", b"restore-tokeN"));
+        assert!(!constant_time_equal(
+            b"restore-token",
+            b"restore-token-extra"
+        ));
+        assert!(!constant_time_equal(b"", b"x"));
+    }
 }
