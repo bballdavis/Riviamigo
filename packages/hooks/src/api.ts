@@ -290,9 +290,11 @@ class ApiClient {
     return this.refreshPromise;
   }
 
-  private headers(): HeadersInit {
+  private headers(path: string): HeadersInit {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.accessToken) h['Authorization'] = `Bearer ${this.accessToken}`;
+    if (this.accessToken && !isPublicAuthPath(path)) {
+      h['Authorization'] = `Bearer ${this.accessToken}`;
+    }
     return h;
   }
 
@@ -415,9 +417,11 @@ class ApiClient {
       url += `?${q}`;
     }
 
+    const shouldRetryOnUnauthorized = retryOnUnauthorized && !isPublicAuthPath(path);
+
     const res = await fetch(url, {
       method,
-      headers: this.headers(),
+      headers: this.headers(path),
       credentials: 'include',
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
@@ -427,7 +431,7 @@ class ApiClient {
 
       if (
         res.status === 401 &&
-        retryOnUnauthorized &&
+        shouldRetryOnUnauthorized &&
         this.accessToken &&
         !AUTH_REFRESH_EXCLUDED_PATHS.has(path)
       ) {

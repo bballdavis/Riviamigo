@@ -44,7 +44,9 @@ function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-export function buildPhantomDrainDailySeries(periods: PhantomDrainPeriod[]): PhantomDrainDailyPoint[] {
+export function buildPhantomDrainDailySeries(
+  periods: PhantomDrainPeriod[]
+): PhantomDrainDailyPoint[] {
   const byDay = new Map<string, PhantomDrainDailyPoint>();
 
   for (const period of periods) {
@@ -52,7 +54,14 @@ export function buildPhantomDrainDailySeries(periods: PhantomDrainPeriod[]): Pha
     const start = period.period_start ? new Date(period.period_start) : null;
     const end = period.period_end ? new Date(period.period_end) : null;
     const socLost = period.soc_lost_pct;
-    if (!start || !end || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || !isFiniteNumber(socLost) || end <= start) {
+    if (
+      !start ||
+      !end ||
+      !Number.isFinite(start.getTime()) ||
+      !Number.isFinite(end.getTime()) ||
+      !isFiniteNumber(socLost) ||
+      end <= start
+    ) {
       continue;
     }
 
@@ -110,15 +119,6 @@ function withDailyHeadroom(maximum: number) {
   const magnitude = 10 ** Math.floor(Math.log10(padded));
   return Math.ceil(padded / magnitude) * magnitude;
 }
-
-function formatSessionDetail(session: { startedAt: string; parkedHours: number; drainRate: number }) {
-  const startedAt = new Date(session.startedAt);
-  const started = Number.isFinite(startedAt.getTime())
-    ? startedAt.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : 'Unknown start';
-  return `${started} · ${session.parkedHours.toFixed(1)} h · ${formatPercent(session.drainRate, 2)} / h`;
-}
-
 export function PhantomDrainChart({
   periods,
   loading = false,
@@ -134,7 +134,10 @@ export function PhantomDrainChart({
     const maximum = Math.max(0, ...data.map((point) => point.socLost));
     return maximum > 0 ? [0, withDailyHeadroom(maximum)] : undefined;
   }, [data, yRange]);
-  const sessionCount = React.useMemo(() => Math.max(0, ...data.map((point) => point.sessions.length)), [data]);
+  const sessionCount = React.useMemo(
+    () => Math.max(0, ...data.map((point) => point.sessions.length)),
+    [data]
+  );
   const sessionSeries = Array.from({ length: sessionCount }, (_, sessionIndex) => ({
     key: `phantom-drain-session-${sessionIndex}`,
     label: `Drain session ${sessionIndex + 1}`,
@@ -143,7 +146,8 @@ export function PhantomDrainChart({
     mode: 'bar' as const,
     stackId: 'phantom-drain-day',
     showInLegend: false,
-    tooltipFormatter: (value: number | null | undefined) => value == null ? '-' : formatPercent(value, 2),
+    tooltipFormatter: (value: number | null | undefined) =>
+      value == null ? '-' : formatPercent(value, 2),
   }));
   return (
     <RichTimeSeriesChart
@@ -155,21 +159,21 @@ export function PhantomDrainChart({
           label: 'Daily average rate',
           values: data.map((point) => point.drainRate),
           tooltipOnly: true,
-          tooltipFormatter: (value) => value == null ? '-' : `${formatPercent(value, 2)} / h`,
+          tooltipFormatter: (value) => (value == null ? '-' : `${formatPercent(value, 2)} / h`),
         },
         {
           key: 'phantom-drain-hours',
           label: 'Parked',
           values: data.map((point) => point.parkedHours),
           tooltipOnly: true,
-          tooltipFormatter: (value) => value == null ? '-' : `${value.toFixed(1)} h`,
+          tooltipFormatter: (value) => (value == null ? '-' : `${value.toFixed(1)} h`),
         },
         {
           key: 'phantom-drain-periods',
           label: 'Drain sessions',
           values: data.map((point) => point.periodCount),
           tooltipOnly: true,
-          tooltipFormatter: (value) => value == null ? '-' : String(Math.round(value)),
+          tooltipFormatter: (value) => (value == null ? '-' : String(Math.round(value))),
         },
       ]}
       loading={loading}
