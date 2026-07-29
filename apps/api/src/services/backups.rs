@@ -336,7 +336,21 @@ async fn run_backup_inner(
         let mut artifact_ids = Vec::new();
         if retain_local {
             let storage_type = if matches!(trigger, BackupRunTrigger::PreRestore) { "safety" } else { "local" };
-            artifact_ids.push(insert_artifact(pool, Some(run_id), storage_type, &file_name, &storage_path, size_bytes, &checksum_sha256, with_storage(&base_manifest, storage_type, false)).await?);
+            artifact_ids.push(
+                insert_artifact(
+                    pool,
+                    InsertArtifactParams {
+                        run_id: Some(run_id),
+                        storage_type,
+                        file_name: &file_name,
+                        storage_path: &storage_path,
+                        size_bytes,
+                        checksum_sha256: &checksum_sha256,
+                        manifest: with_storage(&base_manifest, storage_type, false),
+                    },
+                )
+                .await?,
+            );
         }
 
         let mut published_key = retain_local.then_some(storage_path.clone());
@@ -345,12 +359,40 @@ async fn run_backup_inner(
             let key = s3_backups::object_key(&settings.prefix, created_at, run_id);
             if let Err(error) = s3_backups::upload(s3, &key, &artifact_path, &checksum_sha256, run_id, created_at).await {
                 if !retain_local {
-                    artifact_ids.push(insert_artifact(pool, Some(run_id), "local", &file_name, &storage_path, size_bytes, &checksum_sha256, with_storage(&base_manifest, "local", true)).await?);
+                    artifact_ids.push(
+                        insert_artifact(
+                            pool,
+                            InsertArtifactParams {
+                                run_id: Some(run_id),
+                                storage_type: "local",
+                                file_name: &file_name,
+                                storage_path: &storage_path,
+                                size_bytes,
+                                checksum_sha256: &checksum_sha256,
+                                manifest: with_storage(&base_manifest, "local", true),
+                            },
+                        )
+                        .await?,
+                    );
                 }
                 return Err(AppError::DependencyUnavailable(format!("S3 upload failed; the recovery package was retained locally at {storage_path}: {error}")));
             }
             let remote_locator = s3_backups::locator(&s3.bucket, &key);
-            artifact_ids.push(insert_artifact(pool, Some(run_id), "s3", &file_name, &remote_locator, size_bytes, &checksum_sha256, with_storage(&base_manifest, "s3", false)).await?);
+            artifact_ids.push(
+                insert_artifact(
+                    pool,
+                    InsertArtifactParams {
+                        run_id: Some(run_id),
+                        storage_type: "s3",
+                        file_name: &file_name,
+                        storage_path: &remote_locator,
+                        size_bytes,
+                        checksum_sha256: &checksum_sha256,
+                        manifest: with_storage(&base_manifest, "s3", false),
+                    },
+                )
+                .await?,
+            );
             published_key = Some(remote_locator);
         }
 
@@ -370,7 +412,21 @@ async fn run_backup_inner(
         if let Some(s3) = settings.s3.as_ref().filter(|_| settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore)) {
             if let Err(error) = prune_remote_artifacts(pool, s3, settings.retention_count).await {
                 if !retain_local {
-                    artifact_ids.push(insert_artifact(pool, Some(run_id), "local", &file_name, &storage_path, size_bytes, &checksum_sha256, with_storage(&base_manifest, "local", true)).await?);
+                    artifact_ids.push(
+                        insert_artifact(
+                            pool,
+                            InsertArtifactParams {
+                                run_id: Some(run_id),
+                                storage_type: "local",
+                                file_name: &file_name,
+                                storage_path: &storage_path,
+                                size_bytes,
+                                checksum_sha256: &checksum_sha256,
+                                manifest: with_storage(&base_manifest, "local", true),
+                            },
+                        )
+                        .await?,
+                    );
                 }
                 return Err(AppError::DependencyUnavailable(format!(
                     "S3 retention failed; the recovery package was retained locally at {storage_path}: {error}"
@@ -1642,15 +1698,19 @@ fn with_storage(
     value
 }
 
+struct InsertArtifactParams<'a> {
+    run_id: Option<Uuid>,
+    storage_type: &'a str,
+    file_name: &'a str,
+    storage_path: &'a str,
+    size_bytes: i64,
+    checksum_sha256: &'a str,
+    manifest: serde_json::Value,
+}
+
 async fn insert_artifact(
     pool: &PgPool,
-    run_id: Option<Uuid>,
-    storage_type: &str,
-    file_name: &str,
-    storage_path: &str,
-    size_bytes: i64,
-    checksum_sha256: &str,
-    manifest: serde_json::Value,
+    artifact: InsertArtifactParams<'_>,
 ) -> Result<Uuid, AppError> {
     Ok(sqlx::query_scalar(
         r#"INSERT INTO riviamigo.backup_artifacts
@@ -1661,13 +1721,13 @@ async fn insert_artifact(
                          checksum_sha256 = EXCLUDED.checksum_sha256, manifest = EXCLUDED.manifest
            RETURNING id"#,
     )
-    .bind(run_id)
-    .bind(storage_type)
-    .bind(file_name)
-    .bind(storage_path)
-    .bind(size_bytes)
-    .bind(checksum_sha256)
-    .bind(manifest)
+    .bind(artifact.run_id)
+    .bind(artifact.storage_type)
+    .bind(artifact.file_name)
+    .bind(artifact.storage_path)
+    .bind(artifact.size_bytes)
+    .bind(artifact.checksum_sha256)
+    .bind(artifact.manifest)
     .fetch_one(pool)
     .await?)
 }

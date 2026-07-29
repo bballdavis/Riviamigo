@@ -43,7 +43,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Integrations',
       collapsed: false,
-      items: ['guides/external-connections'],
+      items: ['guides/external-connections', 'guides/extended-vehicle-telemetry'],
     },
   ],
   operationsSidebar: [

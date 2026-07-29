@@ -56,6 +56,21 @@ export function usePhantomDrainPeriods(
   });
 }
 
+export function useParkedEnergy(
+  vehicleId: string | null,
+  from: string | null,
+  to: string | null,
+) {
+  const authReady = useAuthReady();
+  return useQuery({
+    queryKey: ['battery', 'parked-energy', vehicleId, from, to],
+    queryFn: () => api.getParkedEnergy(vehicleId!, from, to),
+    enabled: authReady && !!vehicleId,
+    staleTime: 60 * 1000,
+    refetchInterval: 2 * 60 * 1000,
+  });
+}
+
 export function useDegradation(vehicleId: string | null, from: string | null = null, to: string | null = null) {
   const authReady = useAuthReady();
   const lifetime = !from && !to;

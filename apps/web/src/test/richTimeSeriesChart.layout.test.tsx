@@ -65,4 +65,14 @@ describe('RichTimeSeriesChart multi-day time axes', () => {
     expect(splits).toBeDefined();
     expect(new Set(splits).size).toBe(splits?.length);
   });
+
+  it('keeps long-range calendar splits bounded and collision-safe', () => {
+    const start = Date.parse('2024-01-01T00:00:00Z') / 1000;
+    const end = Date.parse('2024-12-31T23:59:59Z') / 1000;
+    const splits = getCalendarDateSplits(start, end);
+
+    expect(splits).toBeDefined();
+    expect(splits?.length).toBeLessThanOrEqual(7);
+    expect(splits?.every((split, index) => index === 0 || split > splits[index - 1]!)).toBe(true);
+  });
 });

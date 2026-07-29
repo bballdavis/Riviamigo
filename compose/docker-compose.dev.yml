@@ -95,6 +95,25 @@ services:
           cpus: '1.0'
           memory: 512M
 
+  parallax:
+    profiles: ['parallax']
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    entrypoint: ['./riviamigo-parallax-collector']
+    environment:
+      DATABASE_URL: postgresql://riviamigo:devpassword@timescaledb:5432/riviamigo
+      RUST_LOG: riviamigo_api=info
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
 volumes:
   timescaledb_data_pg18:
   redis_data:

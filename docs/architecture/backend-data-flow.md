@@ -35,11 +35,15 @@ tail. `odometer_daily` has a separate hourly, materialized-only policy.
 
 Optional outbound services are governed by `external_connection_settings`, not environment variables. Weather and Nominatim execute on the server. Basemap and Iconify browser requests terminate at authenticated same-origin proxy routes. Custom endpoints are validated before storage, secrets are age-encrypted and write-only, and disabling a provider is enforced at the shared service seam.
 
-Experimental Parallax protobuf discovery is intentionally kept out of the
-production ingestion worker. The local `graph-exploration` harness owns that
-read-only subscription and stores captures outside the application database;
-only verified fields should later be promoted through the normal typed
-telemetry path.
+Parallax collection remains intentionally separate from the production
+vehicle-state ingestion worker. The optional `riviamigo-parallax-collector`
+binary opens its own allowlisted GraphQL WebSocket and writes only normalized,
+typed readings to the `timeseries.parallax_*` tables. It never writes raw
+payloads, network identifiers, credentials, or canonical
+`vehicle_runtime_state`. This separation means collector failure cannot stall
+the main telemetry worker. The API reads the normalized tables for the Health
+page and Rivian-reported Parked Energy panel; the existing Phantom Drain
+battery-change estimate remains an independent derived data source.
 
 ## Major Backend Areas
 

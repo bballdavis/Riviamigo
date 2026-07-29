@@ -576,4 +576,51 @@ describe('/health page cleanup', () => {
     expect(screen.getAllByText(/Last updated/).length).toBeGreaterThan(0);
     expect(screen.getByText('Full history (1 entries)')).toBeInTheDocument();
   });
+
+  it('renders privacy-filtered extended telemetry with Rivian estimate labels', () => {
+    mockUseVehicleHealth.mockReturnValueOnce({
+      data: {
+        ...healthDataBase,
+        extended_telemetry: {
+          collector: {
+            status: 'connected',
+            connected_at: '2026-05-30T00:00:00Z',
+            last_event_at: '2026-05-30T01:00:00Z',
+            last_error: null,
+            updated_at: '2026-05-30T01:00:00Z',
+          },
+          network: {
+            source_at: '2026-05-30T01:00:00Z',
+            wifi_connected: true,
+            wifi_rssi_dbm: -56,
+            wifi_link_speed_mbps: 117,
+            wifi_frequency_mhz: 2437,
+            wifi_channel_width_mhz: 20,
+            cellular_access_technology: 'LTE',
+            cellular_signal_dbm: null,
+          },
+          efficiency: {
+            source_at: '2026-05-30T01:00:00Z',
+            reference_wh_per_km: 207,
+            learned_wh_per_km: 248,
+            mode_ranges_km: { '1': 531 },
+          },
+          mass: {
+            source_at: '2026-05-30T01:00:00Z',
+            estimated_mass_kg: 3160,
+          },
+          cold_weather: null,
+        },
+      },
+      isLoading: false,
+    });
+
+    render(<HealthContent />);
+
+    expect(screen.getByText('Extended Vehicle Telemetry')).toBeInTheDocument();
+    expect(screen.getByText('Collector connected')).toBeInTheDocument();
+    expect(screen.getByText('Rivian learned estimate')).toBeInTheDocument();
+    expect(screen.getByText('Estimated vehicle mass')).toBeInTheDocument();
+    expect(screen.queryByText('Cold-weather impact')).not.toBeInTheDocument();
+  });
 });

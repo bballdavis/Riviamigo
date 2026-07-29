@@ -12,7 +12,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { formatTemp } from '../lib/utils';
 import { getActiveElapsedSFromChartState, type TripChartMouseState } from './TripChartSync';
 import { createSampleDotRenderer, getTripTemperatureDomain, getVisibleSampleElapsedSet } from './TripChartRendering';
@@ -117,6 +117,7 @@ export function TripTemperatureChart({
         <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.grid} vertical={false} />
         <XAxis
           dataKey="elapsed_s"
+          {...CHART_X_AXIS_DEFAULTS}
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}

@@ -31,7 +31,7 @@ This directory is canonical for operational and process runbooks. Update it when
 - [`dependency-maintenance.md`](./dependency-maintenance.md)
   Catalog ownership, upgrade grouping, runtime baselines, audits, and release qualification.
 - [`parallax-capture.md`](./parallax-capture.md)
-  Retirement note for the former production Parallax protobuf sidecar; new exploration is local-only.
+  Operate and troubleshoot the optional, independent normalized Parallax telemetry collector.
 
 ## When To Add A Runbook
 

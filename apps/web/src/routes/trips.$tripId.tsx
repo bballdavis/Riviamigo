@@ -298,7 +298,7 @@ export function TripDetailContent() {
                     yValueFormatter={(value, unit) => value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)} ${unit ?? ''}`}
                     cursorSyncKey={`trip-${tripId}`}
                     onCursorIndexChange={setActiveIndexThrottled}
-                    connectGaps={!drivePowerIsEstimated}
+                    connectGaps
                     emptyTitle="No drive profile data for this trip."
                   />
                   {drivePowerIsEstimated ? (

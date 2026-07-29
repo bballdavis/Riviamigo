@@ -279,6 +279,12 @@ fn catalog() -> ApiCatalogResponse {
         ),
         endpoint(
             "GET",
+            "/v1/vehicles/{id}/parked-energy",
+            true,
+            "Read the latest Rivian-reported parked-energy breakdown.",
+        ),
+        endpoint(
+            "GET",
             "/v1/vehicles/{id}/state-timeline",
             true,
             "Read derived vehicle state periods.",

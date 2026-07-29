@@ -121,6 +121,8 @@ The shared chart widget owns reusable chart display controls.
 
 Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx` as `CHART_BAR_STYLE`. Use the filled mark treatment for ordinary quantitative bars and preserve renderer-specific semantics for stacked, histogram, efficiency, and segmented pill views. Interactive bars must provide date/category and value details on hover; stacked views additionally require a legend and a full-bar hit target.
 
+Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/chartLabelLayout.ts`. Dense custom SVG categorical charts must keep every data mark and interaction target, then select only a collision-safe subset of axis and value labels using the shared chart font. Axis labels remain evenly distributed with first/last retention when space permits and 12 px minimum spacing; value labels prioritize larger values and use 6 px bounding-box padding. Recalculate from the currently visible domain so labels return after zoom. Recharts categorical/time axes use the centralized `preserveStartEnd` and 40 px minimum-gap defaults, with explicit exceptions only for specialized layouts such as the rotated Speed Histogram. uPlot time axes keep their bounded calendar-date split policy.
+
 #### Mobile chart viewer
 
 - `DashboardChartWidget` owns the mobile-only expand trigger and the portal-based fullscreen viewer for catalog-rendered dashboard charts. The viewer can switch only among that widget's configured `chartIds`; selection and exploration remain local view state and must not mutate the dashboard or URL.

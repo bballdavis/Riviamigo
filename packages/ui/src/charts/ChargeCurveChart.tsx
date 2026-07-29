@@ -4,7 +4,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts';
 import { ChartTooltip } from './ChartTooltip';
-import { CHART_COLORS, CHART_MARGINS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
+import { CHART_COLORS, CHART_MARGINS, CHART_X_AXIS_DEFAULTS, TICK_STYLE, TOOLTIP_CURSOR_STYLE } from './ChartProvider';
 import { ChartSkeleton } from '../primitives/Skeleton';
 import { formatPercent, formatKwh, formatSmartNumber } from '../lib/utils';
 
@@ -34,6 +34,7 @@ export function ChargeCurveChart({
           dataKey="soc"
           type="number"
           domain={[0, 100]}
+          {...CHART_X_AXIS_DEFAULTS}
           tick={TICK_STYLE}
           tickLine={false}
           axisLine={false}

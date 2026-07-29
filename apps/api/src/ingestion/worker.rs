@@ -269,9 +269,11 @@ pub async fn run_vehicle_worker(
                 pool2,
                 client2,
                 age_key2,
-                power_state_rx,
-                charging_rx,
-                poll_shutdown,
+                rivian_poll::PollLoopSignals {
+                    power_state_rx,
+                    charging_rx,
+                    shutdown: poll_shutdown,
+                },
                 redis2,
             )
             .await;

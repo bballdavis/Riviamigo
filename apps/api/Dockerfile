@@ -9,7 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY Cargo.toml Cargo.lock ./
 # Cache dependency compilation
-RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+RUN mkdir -p src/bin && echo 'fn main() {}' > src/main.rs \
+    && echo 'fn main() {}' > src/bin/riviamigo-restore-agent.rs \
+    && echo 'fn main() {}' > src/bin/riviamigo-parallax-collector.rs \
     && echo 'pub fn __riviamigo_dummy() {}' > src/lib.rs \
     && cargo build --release \
     && rm -rf src
@@ -32,6 +34,7 @@ USER 1001
 
 WORKDIR /app
 COPY --from=builder /app/target/release/riviamigo-api ./riviamigo-api
+COPY --from=builder /app/target/release/riviamigo-parallax-collector ./riviamigo-parallax-collector
 COPY --from=builder /app/migrations ./migrations
 
 EXPOSE 3001
