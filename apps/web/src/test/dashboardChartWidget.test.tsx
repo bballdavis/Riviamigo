@@ -111,9 +111,17 @@ describe('DashboardChartWidget - smoothing controls', () => {
     const firstRender = renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-a' });
     fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
     fireEvent.click(screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' }));
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
 
     firstRender.unmount();
+    const dashboardARender = renderWidget(instance, {
+      ...CTX,
+      dashboardSlug: 'dashboard',
+      dashboardConfigId: 'dashboard-a',
+    });
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+
+    dashboardARender.unmount();
     renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-b' });
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
   });

@@ -22,7 +22,7 @@ use riviamigo_api::{
     },
 };
 use serde_json::{json, Value};
-use sqlx::{Executor, PgPool};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -45,7 +45,9 @@ impl TestApp {
         let admin_db_url = replace_database_name(&base_db_url, "postgres");
         let db_name = format!("riviamigo_test_{}", Uuid::new_v4().simple());
 
-        let admin = PgPool::connect(&admin_db_url)
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&admin_db_url)
             .await
             .expect("admin db connect");
         admin
@@ -56,13 +58,15 @@ impl TestApp {
             .expect("create test database");
 
         let db_url = replace_database_name(&base_db_url, &db_name);
-        let pool = PgPool::connect(&db_url).await.expect("db connect");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("db connect");
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
             .expect("migrate schema");
-
-        seed_super_user(&pool).await.expect("seed super user");
 
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
@@ -166,20 +170,6 @@ impl TestApp {
             body,
         }
     }
-}
-
-async fn seed_super_user(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO riviamigo.users (email, password_hash, role)
-         VALUES ($1, $2, 'super_user')
-         ON CONFLICT (email) DO NOTHING",
-    )
-    .bind("seed-super-user@riviamigo.test")
-    .bind("$argon2id$v=19$m=19456,t=2,p=1$cm9vdHJvb3Ryb290cm9v$6/Ds/Z5DKq/r+z5xFo0O3sDmN5RBUQ2A6yb7z1WB1Wg")
-    .execute(pool)
-    .await?;
-
-    Ok(())
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {

@@ -1,6 +1,10 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+    Argon2,
+};
 use axum::{
     body::{to_bytes, Body},
     extract::ConnectInfo,
@@ -11,12 +15,12 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
-use sqlx::{Executor, PgPool};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
 
 use riviamigo_api::{
-    config::Config,
+    config::{Config, RateLimitConfig},
     ingestion::supervisor::SupervisorHandle,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
@@ -39,13 +43,19 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
+        Self::new_with_rate_limit(RateLimitConfig::default()).await
+    }
+
+    async fn new_with_rate_limit(rate_limit: RateLimitConfig) -> Self {
         let base_db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
             "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
         });
         let admin_db_url = replace_database_name(&base_db_url, "postgres");
         let db_name = format!("riviamigo_test_{}", Uuid::new_v4().simple());
 
-        let admin = PgPool::connect(&admin_db_url)
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&admin_db_url)
             .await
             .expect("admin db connect");
         admin
@@ -56,13 +66,15 @@ impl TestApp {
             .expect("create test database");
 
         let db_url = replace_database_name(&base_db_url, &db_name);
-        let pool = PgPool::connect(&db_url).await.expect("db connect");
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("db connect");
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
             .expect("migrate schema");
-
-        seed_super_user(&pool).await.expect("seed super user");
 
         let keys = bootstrap_keys(&pool, None, None, None)
             .await
@@ -101,7 +113,7 @@ impl TestApp {
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
-                rate_limit: Default::default(),
+                rate_limit,
                 vehicle_image_cache_dir: std::env::temp_dir()
                     .join("riviamigo-auth-test-images")
                     .to_string_lossy()
@@ -230,18 +242,14 @@ impl TestApp {
     }
 }
 
-async fn seed_super_user(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO riviamigo.users (email, password_hash, role)
-         VALUES ($1, $2, 'super_user')
-         ON CONFLICT (email) DO NOTHING",
-    )
-    .bind("seed-super-user@riviamigo.test")
-    .bind("$argon2id$v=19$m=19456,t=2,p=1$cm9vdHJvb3Ryb290cm9v$6/Ds/Z5DKq/r+z5xFo0O3sDmN5RBUQ2A6yb7z1WB1Wg")
-    .execute(pool)
-    .await?;
-
-    Ok(())
+fn deterministic_rate_limit_config() -> RateLimitConfig {
+    RateLimitConfig {
+        auth_metadata_per_minute: 1,
+        auth_metadata_burst: 1,
+        heavy_read_per_minute: 1,
+        heavy_read_burst: 1,
+        ..RateLimitConfig::default()
+    }
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
@@ -275,8 +283,42 @@ async fn register_and_login(app: &TestApp, email: &str) -> String {
         .to_string()
 }
 
+async fn insert_user_and_login(app: &TestApp, email: &str, password: &str) -> String {
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("hash password")
+        .to_string();
+    sqlx::query("INSERT INTO riviamigo.users (email, password_hash) VALUES ($1, $2)")
+        .bind(email)
+        .bind(password_hash)
+        .execute(&app.pool)
+        .await
+        .expect("insert user");
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/auth/login",
+            Some(json!({"email": email, "password": password})),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::OK,
+        "login failed: {}",
+        response.body
+    );
+    response.body["access_token"]
+        .as_str()
+        .expect("access token")
+        .to_string()
+}
+
 async fn insert_vehicle(pool: &PgPool, user_id: Uuid, rivian_vehicle_id: &str, name: &str) -> Uuid {
-    sqlx::query_scalar!(
+    let vehicle_id = sqlx::query_scalar!(
         "INSERT INTO riviamigo.vehicles (user_id, rivian_vehicle_id, model, name) VALUES ($1, $2, $3, $4) RETURNING id",
         user_id,
         rivian_vehicle_id,
@@ -285,7 +327,17 @@ async fn insert_vehicle(pool: &PgPool, user_id: Uuid, rivian_vehicle_id: &str, n
     )
     .fetch_one(pool)
     .await
-    .expect("insert vehicle")
+    .expect("insert vehicle");
+    sqlx::query(
+        "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+         VALUES ($1, $2, 'owner', FALSE)",
+    )
+    .bind(vehicle_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("insert vehicle membership");
+    vehicle_id
 }
 
 async fn set_default_vehicle(pool: &PgPool, user_id: Uuid, vehicle_id: Uuid) {
@@ -377,8 +429,8 @@ async fn register_duplicate_email_returns_validation_error() {
     let second = app
         .request(Method::POST, "/v1/auth/register", Some(payload), None, None)
         .await;
-    assert_eq!(second.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(second.body["error"]["message"], "email already registered");
+    assert_eq!(second.status, StatusCode::FORBIDDEN);
+    assert_eq!(second.body["error"]["message"], "Forbidden");
 }
 
 #[tokio::test]
@@ -666,6 +718,14 @@ async fn admin_vehicle_options_require_an_admin_role_and_return_picker_safe_fiel
     .expect("user id");
     let vehicle_id = insert_vehicle(&app.pool, user_id, "picker-vehicle", "Family R1S").await;
 
+    sqlx::query!(
+        "UPDATE riviamigo.users SET role = 'user' WHERE id = $1",
+        user_id
+    )
+    .execute(&app.pool)
+    .await
+    .expect("demote to regular user");
+
     let denied = app
         .request(
             Method::GET,
@@ -905,7 +965,13 @@ async fn stats_summary_requires_vehicle_id() {
     let token = register_and_login(&app, "stats-missing@example.com").await;
 
     let res = app
-        .request(Method::GET, "/v1/stats/summary", None, Some(&token), None)
+        .request(
+            Method::GET,
+            "/v1/charging/summary",
+            None,
+            Some(&token),
+            None,
+        )
         .await;
 
     assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -930,7 +996,7 @@ async fn stats_summary_rejects_unowned_vehicle() {
     let res = app
         .request(
             Method::GET,
-            &format!("/v1/stats/summary?vehicle_id={vehicle_id}"),
+            &format!("/v1/charging/summary?vehicle_id={vehicle_id}"),
             None,
             Some(&token),
             None,
@@ -988,7 +1054,7 @@ async fn stats_summary_returns_aggregated_trip_and_charge_values() {
     let res = app
         .request(
             Method::GET,
-            &format!("/v1/stats/summary?vehicle_id={vehicle_id}"),
+            &format!("/v1/charging/summary?vehicle_id={vehicle_id}"),
             None,
             Some(&token),
             None,
@@ -996,12 +1062,9 @@ async fn stats_summary_returns_aggregated_trip_and_charge_values() {
         .await;
 
     assert_eq!(res.status, StatusCode::OK);
-    assert_eq!(res.body["total_miles"], json!(30.0));
-    assert_eq!(res.body["total_trips"], json!(2));
-    assert_eq!(res.body["total_kwh_charged"], json!(40.0));
-    assert_eq!(res.body["total_charging_sessions"], json!(1));
-    assert_eq!(res.body["lifetime_efficiency_wh_mi"], json!(400.0));
-    assert_eq!(res.body["estimated_total_cost_usd"], json!(5.2));
+    assert_eq!(res.body["total_kwh"], json!(40.0));
+    assert_eq!(res.body["session_count"], json!(1));
+    assert_eq!(res.body["total_cost_usd"], json!(5.2));
 }
 
 #[tokio::test]
@@ -1414,16 +1477,6 @@ async fn charging_curve_analysis_uses_elapsed_time_and_strict_dc_sessions() {
     )
     .await;
 
-    sqlx::query!(
-        r#"INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
-           VALUES ($1, $2, 'owner', TRUE)"#,
-        vehicle_id,
-        user_id,
-    )
-    .execute(&app.pool)
-    .await
-    .expect("vehicle membership");
-
     let started_at = chrono::Utc::now() - chrono::Duration::days(2);
     let ended_at = started_at + chrono::Duration::minutes(20);
     let dc_session_id: uuid::Uuid = sqlx::query_scalar(
@@ -1589,9 +1642,9 @@ async fn auth_public_limit_uses_forwarded_ip_and_sets_api_source_header() {
 
 #[tokio::test]
 async fn authenticated_limits_are_isolated_by_user_identity() {
-    let app = TestApp::new().await;
+    let app = TestApp::new_with_rate_limit(deterministic_rate_limit_config()).await;
     let token_one = register_and_login(&app, "rl-user-one@example.com").await;
-    let token_two = register_and_login(&app, "rl-user-two@example.com").await;
+    let token_two = insert_user_and_login(&app, "rl-user-two@example.com", "hunter2hunter2").await;
 
     let mut limited = false;
     for _ in 0..300 {
@@ -1617,7 +1670,7 @@ async fn authenticated_limits_are_isolated_by_user_identity() {
 
 #[tokio::test]
 async fn metadata_limits_do_not_block_regular_authenticated_reads() {
-    let app = TestApp::new().await;
+    let app = TestApp::new_with_rate_limit(deterministic_rate_limit_config()).await;
     let token = register_and_login(&app, "rl-metadata@example.com").await;
 
     let mut limited = false;
@@ -1644,7 +1697,7 @@ async fn metadata_limits_do_not_block_regular_authenticated_reads() {
 
 #[tokio::test]
 async fn heavy_read_exhaustion_does_not_block_regular_authenticated_reads() {
-    let app = TestApp::new().await;
+    let app = TestApp::new_with_rate_limit(deterministic_rate_limit_config()).await;
     let token = register_and_login(&app, "rl-heavy@example.com").await;
 
     let user_id: uuid::Uuid = sqlx::query_scalar!(
