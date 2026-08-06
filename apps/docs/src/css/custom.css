@@ -336,6 +336,13 @@ code {
 }
 
 @media screen and (max-width: 996px) {
+  /* Docusaurus positions the mobile drawer as fixed inside the navbar.
+     A backdrop-filter on that ancestor makes the drawer size itself to the
+     60px navbar instead of the viewport. */
+  .navbar {
+    backdrop-filter: none;
+  }
+
   .navbar-sidebar {
     background: var(--rm-bg-page);
   }
