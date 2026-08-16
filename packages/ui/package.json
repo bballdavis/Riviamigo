@@ -2,10 +2,12 @@
   "name": "@riviamigo/ui",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "exports": {
     "./tokens": "./src/tokens/index.ts",
     "./tokens/globals.css": "./src/tokens/globals.css",
     "./primitives": "./src/primitives/index.ts",
+    "./hooks": "./src/hooks/index.ts",
     "./charts": "./src/charts/index.ts",
     "./tables": "./src/tables/index.ts",
     "./lib/driveMode": "./src/lib/driveMode.ts",
@@ -19,6 +21,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
+    "test": "vitest run",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },

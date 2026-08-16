@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useAuth, useTrips, useTripMapRoutes, useDocumentTheme } from '@riviamigo/hooks';
+import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes } from '@riviamigo/hooks';
+import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 import { Badge, SelectPicker } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
@@ -134,6 +135,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   );
   const routeIds = React.useMemo(() => new Set(routes.map((route) => route.id)), [routes]);
   const { ref, height } = useMeasuredWidgetHeight(360, 180);
+  const basemap = useBasemapConfig();
 
   React.useEffect(() => {
     resetTripSelection(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
@@ -160,6 +162,9 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
               mapStyle={effectiveMapStyle}
               className="h-full w-full"
               accessToken={accessToken}
+              basemapConfig={basemap.data}
+              basemapError={basemap.isError ? 'Map tiles unavailable' : null}
+              onBasemapRetry={() => void basemap.refetch()}
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-bg-elevated text-sm text-fg-tertiary">

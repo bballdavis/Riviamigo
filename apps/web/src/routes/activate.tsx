@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { api, useAuth, useDocumentTheme } from '@riviamigo/hooks';
+import { api, useAuth } from '@riviamigo/hooks';
+import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { Button, Input } from '@riviamigo/ui/primitives';
 import { rootRoute } from './__root';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../components/auth/PasswordRequirements';
