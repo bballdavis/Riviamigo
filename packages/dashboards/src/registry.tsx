@@ -1,10 +1,17 @@
 import type React from 'react';
 import type { DashboardTimeframe } from '@riviamigo/types';
-import type { DashboardDataRequirements } from './dashboardData';
 import type { DashboardVisibilityState } from './dashboardVisibility';
 import type { DashboardComponentType, WidgetInstance } from './schema';
 
 export type { WidgetInstance };
+
+export interface DashboardDataRequirements {
+  metrics?: import('@riviamigo/types').MetricBatchMetricRequest[];
+  status?: boolean;
+  batteryHealth?: boolean;
+  chargingSummary?: boolean;
+  efficiencySummary?: boolean;
+}
 
 export interface WidgetCtx {
   vehicleId: string | null;
