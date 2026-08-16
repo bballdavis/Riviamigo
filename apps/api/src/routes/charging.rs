@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{
+        require_vehicle_manager_access, require_vehicle_membership, require_vehicle_read_access,
+    },
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::cost::recompute_charge_session_cost,
@@ -394,8 +396,7 @@ async fn update_session_location(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id)
-        .await?;
+    update_charge_session_location(&state.pool, &auth, vehicle_id, id, payload.place_id).await?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -405,19 +406,18 @@ async fn update_session_location_path(
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<SessionLocationUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id)
-        .await?;
+    update_charge_session_location(&state.pool, &auth, vehicle_id, id, payload.place_id).await?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
 async fn update_charge_session_location(
     pool: &sqlx::PgPool,
-    user_id: Uuid,
+    auth: &AuthUser,
     vehicle_id: Uuid,
     session_id: Uuid,
     place_id: Option<Uuid>,
 ) -> Result<(), AppError> {
-    require_vehicle_owned(pool, user_id, vehicle_id).await?;
+    require_vehicle_manager_access(pool, auth, vehicle_id).await?;
 
     let updated_session_id = if let Some(place_id) = place_id {
         let place = sqlx::query_as::<_, PlaceLookupRow>(
@@ -426,7 +426,7 @@ async fn update_charge_session_location(
               WHERE id=$1 AND user_id=$2",
         )
         .bind(place_id)
-        .bind(user_id)
+        .bind(auth.user_id)
         .fetch_optional(pool)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -550,7 +550,7 @@ async fn get_curve_analysis(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let sessions = sqlx::query_as::<_, CurveAnalysisSessionRow>(
@@ -619,7 +619,7 @@ async fn list_sessions_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
     let from = p
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
@@ -704,7 +704,7 @@ async fn get_chart_series_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
     let rows = sqlx::query_as::<_, ChartSeriesSessionSourceRow>(
@@ -857,7 +857,7 @@ async fn get_session_response(
     vehicle_id: Uuid,
     id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, \
@@ -923,7 +923,7 @@ async fn get_session_curve_response(
     vehicle_id: Uuid,
     id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionBoundsRow>(
         "SELECT id, started_at, ended_at, charger_type, soc_start, soc_end FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
@@ -953,7 +953,7 @@ async fn get_summary_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let agg = sqlx::query_as::<_, SummaryAggRow>(
@@ -1219,6 +1219,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,

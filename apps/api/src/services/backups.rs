@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
-    io::{Cursor, Read},
+    io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration as StdDuration,
@@ -12,7 +12,7 @@ use chrono_tz::Tz;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgPool};
+use sqlx::{pool::PoolConnection, FromRow, PgPool, Postgres};
 use tar::{Archive, Builder};
 use tokio::{fs, process::Command, time::MissedTickBehavior};
 use uuid::Uuid;
@@ -31,12 +31,23 @@ use crate::{
 };
 
 const BACKUP_ADVISORY_LOCK_ID: i64 = 2_042_051_101;
+const RECOVERY_MUTATION_ADVISORY_LOCK_ID: i64 = 2_042_051_102;
 pub const RESTORE_CONFIRMATION_PHRASE: &str = "RESTORE";
 static PG_DUMP_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
 const PG_DUMP_UNAVAILABLE_MESSAGE: &str = "pg_dump is not installed or not on PATH; install PostgreSQL client tools before creating a full recovery package";
 const BACKUP_DRIVER_UNSUPPORTED_MESSAGE: &str =
     "manifest-only JSON backups are not valid recovery packages; use BACKUP_DRIVER=pg_dump";
 const RECOVERY_PACKAGE_FORMAT: &str = RECOVERY_FORMAT_V3;
+
+/// Hard safety ceilings for untrusted recovery packages. These are deliberately
+/// independent of the source manifest: a manifest is part of the untrusted
+/// archive and cannot be allowed to choose its own resource envelope.
+pub const MAX_RECOVERY_PACKAGE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+pub const MAX_RECOVERY_EXPANDED_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+pub const MAX_RECOVERY_MEMBER_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+pub const MAX_RECOVERY_MEMBERS: usize = 10_000;
+pub const MAX_RECOVERY_COMPRESSION_RATIO: u64 = 200;
+const MAX_RECOVERY_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BackupRunTrigger {
@@ -59,6 +70,54 @@ impl BackupRunTrigger {
 pub struct BackupExecutionResult {
     pub run_id: Uuid,
     pub artifact_ids: Vec<Uuid>,
+}
+
+/// Session-scoped recovery lock. It deliberately owns the PostgreSQL
+/// connection because advisory locks are tied to a backend session, not a
+/// pool. Call `release` on every normal path; dropping a failed connection is
+/// also safe because PostgreSQL releases the session lock when it closes.
+pub struct RecoveryMutationLock {
+    connection: Option<PoolConnection<Postgres>>,
+}
+
+impl RecoveryMutationLock {
+    pub async fn release(mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            let _: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+                .bind(RECOVERY_MUTATION_ADVISORY_LOCK_ID)
+                .fetch_one(&mut *connection)
+                .await;
+        }
+    }
+}
+
+impl Drop for RecoveryMutationLock {
+    fn drop(&mut self) {
+        // A guard dropped on an early error must never return a session that
+        // still owns an advisory lock to the pool. Detaching drops the physical
+        // connection, and PostgreSQL releases the session lock with it.
+        if let Some(connection) = self.connection.take() {
+            drop(connection.detach());
+        }
+    }
+}
+
+pub async fn acquire_recovery_mutation_lock(
+    pool: &PgPool,
+) -> Result<RecoveryMutationLock, AppError> {
+    let mut connection = pool.acquire().await?;
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(RECOVERY_MUTATION_ADVISORY_LOCK_ID)
+        .fetch_one(&mut *connection)
+        .await?;
+    if !locked {
+        return Err(AppError::RecoveryConflict(
+            "Another recovery upload or restore is already running.".into(),
+        ));
+    }
+    Ok(RecoveryMutationLock {
+        connection: Some(connection),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -711,6 +770,46 @@ pub async fn validate_recovery_package(
         .map_err(|error| {
             AppError::Internal(anyhow::anyhow!("package validation task failed: {error}"))
         })?
+        .map_err(classify_recovery_error)
+}
+
+/// Extract a recovery package only after applying the same validation contract
+/// used for imports, catalog reconciliation, and restore preflight.  This is
+/// intentionally not `Archive::unpack`: tar's convenient extractor does not
+/// give us a single place to enforce member, path, and expansion limits.
+pub async fn extract_recovery_package(
+    package_path: &Path,
+    destination: &Path,
+) -> Result<(), AppError> {
+    let package_path = package_path.to_path_buf();
+    let destination = destination.to_path_buf();
+    tokio::task::spawn_blocking(move || extract_recovery_package_sync(&package_path, &destination))
+        .await
+        .map_err(|error| {
+            AppError::Internal(anyhow::anyhow!("package extraction task failed: {error}"))
+        })?
+        .map_err(classify_recovery_error)
+}
+
+fn classify_recovery_error(error: AppError) -> AppError {
+    match error {
+        AppError::Validation(message) => {
+            let too_large = message.contains("exceeds")
+                || message.contains("too many archive members")
+                || message.contains("expanded size overflowed")
+                || message.contains("size overflowed");
+            if too_large {
+                AppError::RecoveryTooLarge(message)
+            } else {
+                AppError::RecoveryInvalid(message)
+            }
+        }
+        AppError::Io(error) => AppError::RecoveryInvalid(format!(
+            "Recovery package could not be read safely: {error}"
+        )),
+        AppError::Conflict(message) => AppError::RecoveryConflict(message),
+        error => error,
+    }
 }
 
 /// Rebuild missing local catalog rows from the persistent backup directory.
@@ -822,6 +921,12 @@ fn validate_recovery_package_sync(
     package_path: &Path,
 ) -> Result<ValidatedRecoveryPackage, AppError> {
     let metadata = std::fs::metadata(package_path)?;
+    if metadata.len() > MAX_RECOVERY_PACKAGE_BYTES {
+        return Err(AppError::Validation(format!(
+            "Recovery package exceeds the {} GiB compressed size limit.",
+            MAX_RECOVERY_PACKAGE_BYTES / 1024 / 1024 / 1024
+        )));
+    }
     let package_checksum = sha256_file(package_path).map_err(AppError::from)?;
     let file = File::open(package_path)?;
     let decoder = GzDecoder::new(file);
@@ -830,6 +935,9 @@ fn validate_recovery_package_sync(
     let mut file_checksums = HashMap::<String, String>::new();
     let mut file_sizes = HashMap::<String, u64>::new();
     let mut database_magic = Vec::with_capacity(5);
+    let mut members = HashSet::<String>::new();
+    let mut expanded_bytes = 0_u64;
+    let mut member_count = 0_usize;
 
     for entry in archive
         .entries()
@@ -857,6 +965,19 @@ fn validate_recovery_package_sync(
                 "Unsafe recovery package path: {normalized}"
             )));
         }
+        member_count = member_count.checked_add(1).ok_or_else(|| {
+            AppError::Validation("Recovery package has too many archive members.".into())
+        })?;
+        if member_count > MAX_RECOVERY_MEMBERS {
+            return Err(AppError::Validation(format!(
+                "Recovery package exceeds the {MAX_RECOVERY_MEMBERS} member limit."
+            )));
+        }
+        if !members.insert(normalized.clone()) {
+            return Err(AppError::Validation(format!(
+                "Recovery package contains duplicate member {normalized}."
+            )));
+        }
         let allowed = matches!(
             normalized.as_str(),
             "manifest.json" | "database.dump" | "backup-settings.json" | "operational-history.json"
@@ -871,23 +992,49 @@ fn validate_recovery_package_sync(
             continue;
         }
 
+        let entry_size = entry.size();
+        if entry_size > MAX_RECOVERY_MEMBER_BYTES {
+            return Err(AppError::Validation(format!(
+                "Recovery package member {normalized} exceeds the 64 GiB limit."
+            )));
+        }
+        expanded_bytes = expanded_bytes.checked_add(entry_size).ok_or_else(|| {
+            AppError::Validation("Recovery package expanded size overflowed.".into())
+        })?;
+        if expanded_bytes > MAX_RECOVERY_EXPANDED_BYTES {
+            return Err(AppError::Validation(
+                "Recovery package exceeds the 64 GiB expanded size limit.".into(),
+            ));
+        }
+        let compressed_bytes = metadata.len().max(1);
+        if expanded_bytes > compressed_bytes.saturating_mul(MAX_RECOVERY_COMPRESSION_RATIO) {
+            return Err(AppError::Validation(
+                "Recovery package exceeds the maximum expansion ratio.".into(),
+            ));
+        }
+
         if normalized == "manifest.json" {
-            if entry.size() > 1024 * 1024 {
+            if entry_size > MAX_RECOVERY_MANIFEST_BYTES {
                 return Err(AppError::Validation(
                     "Recovery package manifest is unexpectedly large.".into(),
                 ));
             }
-            let mut bytes = Vec::with_capacity(entry.size() as usize);
-            entry.read_to_end(&mut bytes)?;
+            let mut bytes = Vec::with_capacity(entry_size as usize);
+            entry.read_to_end(&mut bytes).map_err(|error| {
+                AppError::Validation(format!("Recovery package manifest is truncated: {error}"))
+            })?;
             manifest_bytes = Some(bytes);
             continue;
         }
 
-        let entry_size = entry.size();
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
-            let read = entry.read(&mut buffer)?;
+            let read = entry.read(&mut buffer).map_err(|error| {
+                AppError::Validation(format!(
+                    "Recovery package member {normalized} is truncated: {error}"
+                ))
+            })?;
             if read == 0 {
                 break;
             }
@@ -1069,6 +1216,128 @@ fn validate_recovery_package_sync(
         checksum_sha256: package_checksum,
         size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
     })
+}
+
+fn extract_recovery_package_sync(package_path: &Path, destination: &Path) -> Result<(), AppError> {
+    // Validate before extraction and then perform a second constrained stream
+    // pass. Validation is not reusable state: callers may replace a path
+    // between two operations, so the extractor must defend itself as well.
+    validate_recovery_package_sync(package_path)?;
+    std::fs::create_dir_all(destination)?;
+
+    let compressed_bytes = std::fs::metadata(package_path)?.len();
+    if compressed_bytes > MAX_RECOVERY_PACKAGE_BYTES {
+        return Err(AppError::Validation(
+            "Recovery package exceeds the 16 GiB compressed size limit.".into(),
+        ));
+    }
+    let file = File::open(package_path)?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    let mut created = Vec::<PathBuf>::new();
+    let result = (|| -> Result<(), AppError> {
+        let mut members = HashSet::<String>::new();
+        let mut expanded_bytes = 0_u64;
+        let mut member_count = 0_usize;
+        for entry in archive
+            .entries()
+            .map_err(|error| AppError::Validation(format!("Invalid recovery archive: {error}")))?
+        {
+            let mut entry = entry.map_err(|error| {
+                AppError::Validation(format!("Invalid recovery archive entry: {error}"))
+            })?;
+            let path = entry
+                .path()
+                .map_err(|error| AppError::Validation(format!("Invalid archive path: {error}")))?;
+            let normalized = path.to_string_lossy().replace('\\', "/");
+            let entry_type = entry.header().entry_type();
+            if !entry_type.is_file() && !entry_type.is_dir()
+                || path.is_absolute()
+                || normalized.starts_with('/')
+                || normalized.split('/').any(|segment| segment == "..")
+                || !members.insert(normalized.clone())
+            {
+                return Err(AppError::Validation(
+                    "Unsafe recovery archive member.".into(),
+                ));
+            }
+            member_count += 1;
+            if member_count > MAX_RECOVERY_MEMBERS {
+                return Err(AppError::Validation(
+                    "Recovery package has too many archive members.".into(),
+                ));
+            }
+            let allowed = matches!(
+                normalized.as_str(),
+                "manifest.json"
+                    | "database.dump"
+                    | "backup-settings.json"
+                    | "operational-history.json"
+            ) || normalized == "vehicle-image-cache"
+                || normalized.starts_with("vehicle-image-cache/");
+            if !allowed {
+                return Err(AppError::Validation(format!(
+                    "Unexpected recovery package member: {normalized}"
+                )));
+            }
+            if entry_type.is_dir() {
+                continue;
+            }
+            let entry_size = entry.size();
+            expanded_bytes = expanded_bytes.checked_add(entry_size).ok_or_else(|| {
+                AppError::Validation("Recovery package expanded size overflowed.".into())
+            })?;
+            if entry_size > MAX_RECOVERY_MEMBER_BYTES
+                || expanded_bytes > MAX_RECOVERY_EXPANDED_BYTES
+            {
+                return Err(AppError::Validation(
+                    "Recovery package exceeds extraction limits.".into(),
+                ));
+            }
+            if expanded_bytes
+                > compressed_bytes
+                    .max(1)
+                    .saturating_mul(MAX_RECOVERY_COMPRESSION_RATIO)
+            {
+                return Err(AppError::Validation(
+                    "Recovery package exceeds the maximum expansion ratio.".into(),
+                ));
+            }
+            let target = destination.join(&path);
+            let parent = target
+                .parent()
+                .ok_or_else(|| AppError::Validation("Invalid recovery archive path.".into()))?;
+            std::fs::create_dir_all(parent)?;
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(|error| {
+                    AppError::Validation(format!(
+                        "Recovery package would overwrite an existing file: {error}"
+                    ))
+                })?;
+            let copied = std::io::copy(&mut entry, &mut output).map_err(|error| {
+                AppError::Validation(format!(
+                    "Recovery package member {normalized} is truncated: {error}"
+                ))
+            })?;
+            if copied != entry_size {
+                return Err(AppError::Validation(format!(
+                    "Recovery package member {normalized} size changed during extraction."
+                )));
+            }
+            output.flush()?;
+            created.push(target);
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for path in created.into_iter().rev() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    result
 }
 
 fn verify_manifest_component(
@@ -1916,14 +2185,15 @@ fn should_log_scheduler_failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_dependency_error_if_unavailable, sha256_file, should_log_scheduler_failure,
-        validate_recovery_package, write_recovery_archive, BackupDriver,
+        classify_recovery_error, runtime_dependency_error_if_unavailable, sha256_file,
+        should_log_scheduler_failure, validate_recovery_package, validate_recovery_package_sync,
+        write_recovery_archive, BackupDriver, MAX_RECOVERY_MEMBERS,
     };
     use crate::{errors::AppError, services::restore_compatibility};
-    use flate2::read::GzDecoder;
+    use flate2::{read::GzDecoder, write::GzEncoder, Compression};
     use sha2::{Digest, Sha256};
-    use std::io::Read;
-    use tar::Archive;
+    use std::io::{Read, Write};
+    use tar::{Archive, Builder, Header};
     use uuid::Uuid;
 
     #[test]
@@ -1962,6 +2232,97 @@ mod tests {
         let err = runtime_dependency_error_if_unavailable(BackupDriver::PgDump, false)
             .expect("expected dependency error");
         assert!(matches!(err, AppError::DependencyUnavailable(_)));
+    }
+
+    #[test]
+    fn classifies_recovery_validation_failures_into_stable_errors() {
+        assert!(matches!(
+            classify_recovery_error(AppError::Validation("Recovery package exceeds the limit".into())),
+            AppError::RecoveryTooLarge(_)
+        ));
+        assert!(matches!(
+            classify_recovery_error(AppError::Validation("Unsafe recovery package path".into())),
+            AppError::RecoveryInvalid(_)
+        ));
+    }
+
+    #[test]
+    fn recovery_validation_rejects_duplicate_and_traversal_members_before_manifest_parsing() {
+        let root = std::env::temp_dir().join(format!("riviamigo-unsafe-tar-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let duplicate = root.join("duplicate.rma.tar.gz");
+        write_test_archive(
+            &duplicate,
+            &[("manifest.json", b"{}"), ("manifest.json", b"{}")],
+        );
+        assert!(
+            matches!(validate_recovery_package_sync(&duplicate), Err(AppError::Validation(message)) if message.contains("duplicate"))
+        );
+
+        let traversal = root.join("traversal.rma.tar.gz");
+        write_test_archive(&traversal, &[("../outside", b"no")]);
+        assert!(
+            matches!(validate_recovery_package_sync(&traversal), Err(AppError::Validation(message)) if message.contains("Unsafe"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovery_validation_enforces_member_and_expansion_ratio_limits() {
+        let root = std::env::temp_dir().join(format!("riviamigo-bounds-tar-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+
+        let member_flood = root.join("member-flood.rma.tar.gz");
+        let file = std::fs::File::create(&member_flood).expect("archive file");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+        for index in 0..=MAX_RECOVERY_MEMBERS {
+            let mut header = Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o600);
+            header.set_cksum();
+            archive
+                .append_data(
+                    &mut header,
+                    format!("vehicle-image-cache/{index}.webp"),
+                    std::io::empty(),
+                )
+                .expect("append member");
+        }
+        archive
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip");
+        assert!(
+            matches!(validate_recovery_package_sync(&member_flood), Err(AppError::Validation(message)) if message.contains("member limit"))
+        );
+
+        let expansion_bomb = root.join("expansion-ratio.rma.tar.gz");
+        let repeated_bytes = vec![0_u8; 256 * 1024];
+        write_test_archive(&expansion_bomb, &[("database.dump", repeated_bytes.as_slice())]);
+        assert!(
+            matches!(validate_recovery_package_sync(&expansion_bomb), Err(AppError::Validation(message)) if message.contains("expansion ratio"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn write_test_archive(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).expect("archive file");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+        for (path, contents) in entries {
+            let mut header = Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o600);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, path, *contents)
+                .expect("append member");
+        }
+        let encoder = archive.into_inner().expect("finish tar");
+        let mut file = encoder.finish().expect("finish gzip");
+        file.flush().expect("flush archive");
     }
 
     #[tokio::test]

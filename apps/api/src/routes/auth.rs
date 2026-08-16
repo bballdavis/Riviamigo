@@ -14,6 +14,7 @@ use crate::{
     errors::AppError,
     middleware::auth::{issue_access_token, AppState, AuthUser},
     routes::users_support::hash_password,
+    services::security_audit::SecurityAuditEvent,
 };
 
 const MIN_PASSWORD_LEN: usize = 12;
@@ -53,6 +54,7 @@ pub fn protected_router() -> Router<AppState> {
 struct RegisterBody {
     email: String,
     password: String,
+    setup_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,14 +90,19 @@ struct AccessTokenResponse {
 #[derive(Serialize)]
 struct SetupResponse {
     setup_required: bool,
+    setup_proof_required: bool,
+    setup_proof_available: bool,
 }
 
 async fn setup(State(state): State<AppState>) -> Result<Json<SetupResponse>, AppError> {
     let has_users: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users)")
         .fetch_one(&state.pool)
         .await?;
+    let setup_required = !has_users;
     Ok(Json(SetupResponse {
-        setup_required: !has_users,
+        setup_required,
+        setup_proof_required: setup_required && state.config.is_production(),
+        setup_proof_available: state.config.setup_proof_available(),
     }))
 }
 
@@ -123,6 +130,7 @@ struct PreferencesUpdateBody {
 
 async fn register(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<RegisterBody>,
 ) -> Result<Response, AppError> {
     if body.email.len() > 254 {
@@ -149,6 +157,12 @@ async fn register(
     if user_count != 0 {
         return Err(AppError::Forbidden);
     }
+    if state.config.is_production() {
+        let setup_token = body.setup_token.as_deref().ok_or(AppError::Forbidden)?;
+        if !state.config.verify_setup_token(setup_token)? {
+            return Err(AppError::Forbidden);
+        }
+    }
     let role = "super_user";
 
     let user_id: Uuid = sqlx::query_scalar!(
@@ -173,6 +187,13 @@ async fn register(
     )
     .execute(&mut *tx)
     .await;
+
+    SecurityAuditEvent::success("setup_claimed", Some(user_id))
+        .target(format!("user:{user_id}"))
+        .metadata(serde_json::json!({ "role": role }))
+        .request_id_from_headers(&headers)
+        .record_tx(&mut tx)
+        .await?;
 
     tx.commit().await?;
 
@@ -214,6 +235,7 @@ async fn preview_account_invitation(
 
 async fn accept_account_invitation(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<AcceptAccountInvitationBody>,
 ) -> Result<Response, AppError> {
     if !password_meets_minimum(&body.password) {
@@ -277,12 +299,11 @@ async fn accept_account_invitation(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    audit_log(
-        state.pool.clone(),
-        "account_invitation_accepted",
-        Some(user_id),
-        "account invitation accepted".to_string(),
-    );
+    SecurityAuditEvent::success("account_invitation_accepted", Some(user_id))
+        .target(format!("account_invitation:{invitation_id}"))
+        .request_id_from_headers(&headers)
+        .record(&state.pool)
+        .await?;
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
     let cookie = refresh_cookie(&refresh, 2_592_000);
@@ -329,6 +350,7 @@ const DUMMY_HASH: &str =
 
 async fn login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, AppError> {
     let email = body.email.trim().to_lowercase();
@@ -344,12 +366,11 @@ async fn login(
     if let Err(e) = verify_password(&body.password, hash) {
         tracing::warn!(email = %email, reason = "invalid_credentials", "auth.login_failed");
         if row.is_some() {
-            audit_log(
-                state.pool.clone(),
-                "login_failure",
-                None,
-                format!("failed login for {email}"),
-            );
+            SecurityAuditEvent::failure("login_failure", None)
+                .metadata(serde_json::json!({ "known_account": true }))
+                .request_id_from_headers(&headers)
+                .record(&state.pool)
+                .await?;
         }
         return Err(e);
     }
@@ -370,12 +391,11 @@ async fn login(
     let token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
 
-    audit_log(
-        state.pool.clone(),
-        "login_success",
-        Some(user_id),
-        "user logged in".to_string(),
-    );
+    SecurityAuditEvent::success("login_success", Some(user_id))
+        .target(format!("user:{user_id}"))
+        .request_id_from_headers(&headers)
+        .record(&state.pool)
+        .await?;
 
     let cookie = refresh_cookie(&refresh, 2_592_000);
     Ok((
@@ -488,6 +508,7 @@ async fn logout(
 async fn change_password(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ChangePasswordBody>,
 ) -> Result<Response, AppError> {
     if !password_meets_minimum(&body.new_password) {
@@ -519,15 +540,12 @@ async fn change_password(
     .bind(auth.user_id)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at)
-         VALUES ($1, $2, $3, now())",
-    )
-    .bind("password_changed")
-    .bind(auth.user_id)
-    .bind("user changed password and revoked active refresh sessions")
-    .execute(&mut *tx)
-    .await?;
+    SecurityAuditEvent::success("password_changed", Some(auth.user_id))
+        .target(format!("user:{}", auth.user_id))
+        .metadata(serde_json::json!({ "refresh_sessions_revoked": true }))
+        .request_id_from_headers(&headers)
+        .record_tx(&mut tx)
+        .await?;
     tx.commit().await?;
 
     let clear_cookie = refresh_cookie("", 0);
@@ -820,23 +838,6 @@ fn refresh_cookie(value: &str, max_age: u64) -> String {
     )
 }
 
-fn audit_log(pool: sqlx::PgPool, event: &'static str, user_id: Option<uuid::Uuid>, detail: String) {
-    tokio::spawn(async move {
-        if let Err(e) = sqlx::query(
-            "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) \
-             VALUES ($1, $2, $3, now())",
-        )
-        .bind(event)
-        .bind(user_id)
-        .bind(detail)
-        .execute(&pool)
-        .await
-        {
-            tracing::warn!(error = %e, event, "audit_log insert failed");
-        }
-    });
-}
-
 async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<String, AppError> {
     use rand::Rng;
     let raw: String = (0..32)
@@ -861,6 +862,37 @@ mod tests {
     use axum::body::Body;
     use http::{Request, StatusCode};
     use tower::ServiceExt; // for `oneshot`
+
+    #[test]
+    fn register_body_keeps_setup_token_additive() {
+        let legacy: RegisterBody = serde_json::from_value(serde_json::json!({
+            "email": "owner@example.test",
+            "password": "correct-password"
+        }))
+        .expect("legacy registration body");
+        assert!(legacy.setup_token.is_none());
+
+        let protected: RegisterBody = serde_json::from_value(serde_json::json!({
+            "email": "owner@example.test",
+            "password": "correct-password",
+            "setup_token": "not-an-actual-secret"
+        }))
+        .expect("protected registration body");
+        assert!(protected.setup_token.is_some());
+    }
+
+    #[test]
+    fn setup_response_serializes_additive_proof_flags() {
+        let value = serde_json::to_value(SetupResponse {
+            setup_required: true,
+            setup_proof_required: true,
+            setup_proof_available: false,
+        })
+        .expect("setup response serializes");
+        assert_eq!(value["setup_required"], true);
+        assert_eq!(value["setup_proof_required"], true);
+        assert_eq!(value["setup_proof_available"], false);
+    }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -904,6 +936,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,

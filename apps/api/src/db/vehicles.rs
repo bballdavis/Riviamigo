@@ -48,12 +48,38 @@ pub async fn require_vehicle_manager_access(
     auth: &AuthUser,
     vehicle_id: Uuid,
 ) -> Result<(), AppError> {
-    require_vehicle_access(auth, vehicle_id)?;
+    if auth.api_access_level.is_some() {
+        return Err(AppError::Forbidden);
+    }
     require_vehicle_role(pool, auth.user_id, vehicle_id, &["owner", "manager"]).await
 }
 
-#[deprecated(note = "use require_vehicle_membership or a composed access helper")]
-pub use require_vehicle_membership as require_vehicle_owned;
+/// Authorize a session-authenticated member without granting any API-key
+/// capability. Use this for member preferences that are mutations but do not
+/// require a manager/owner role.
+pub async fn require_vehicle_session_access(
+    pool: &PgPool,
+    auth: &AuthUser,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
+    if auth.api_access_level.is_some() {
+        return Err(AppError::Forbidden);
+    }
+    require_vehicle_membership(pool, auth.user_id, vehicle_id).await
+}
+
+/// Authorize an owner-only vehicle operation. API keys never authorize
+/// mutations, including owner-level administration.
+pub async fn require_vehicle_owner_access(
+    pool: &PgPool,
+    auth: &AuthUser,
+    vehicle_id: Uuid,
+) -> Result<(), AppError> {
+    if auth.api_access_level.is_some() {
+        return Err(AppError::Forbidden);
+    }
+    require_vehicle_role(pool, auth.user_id, vehicle_id, &["owner"]).await
+}
 
 pub async fn require_vehicle_role(
     pool: &PgPool,

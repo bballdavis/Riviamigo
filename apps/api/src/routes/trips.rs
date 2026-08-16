@@ -10,7 +10,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{require_vehicle_membership, require_vehicle_read_access},
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::trip_routes::build_route_preview,
@@ -504,7 +504,7 @@ async fn list_trips(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
@@ -603,7 +603,7 @@ async fn get_trip(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let row = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
@@ -640,7 +640,7 @@ async fn get_trip_map(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let search = p
         .search
@@ -790,7 +790,7 @@ async fn get_trip_detail(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
@@ -1064,7 +1064,7 @@ async fn get_track(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1150,7 +1150,7 @@ async fn get_speed_profile(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1192,7 +1192,7 @@ async fn get_elevation_profile(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1259,7 +1259,7 @@ async fn power_profile_response(
     vehicle_id: Uuid,
     trip_id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1322,7 +1322,7 @@ async fn trip_series_response(
     vehicle_id: Uuid,
     trip_id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
@@ -1506,6 +1506,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,

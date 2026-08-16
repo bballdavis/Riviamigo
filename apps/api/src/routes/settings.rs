@@ -1,4 +1,4 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -6,11 +6,13 @@ use uuid::Uuid;
 use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
-    services::app_settings,
+    services::{app_settings, security_audit::SecurityAuditEvent},
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/settings/timezone", get(get_timezone).put(update_timezone))
+    Router::new()
+        .route("/settings/timezone", get(get_timezone).put(update_timezone))
+        .route("/admin/security/status", get(get_security_status))
 }
 
 #[derive(Debug, Serialize)]
@@ -21,6 +23,14 @@ struct TimezoneResponse {
 #[derive(Debug, Deserialize)]
 struct UpdateTimezoneBody {
     timezone: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SecurityStatusResponse {
+    cryptographic_key_source: &'static str,
+    database_key_shared_fate: bool,
+    setup_proof_available: bool,
+    security_event_retention_days: i32,
 }
 
 async fn get_timezone(
@@ -35,6 +45,7 @@ async fn get_timezone(
 async fn update_timezone(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(body): Json<UpdateTimezoneBody>,
 ) -> Result<Json<TimezoneResponse>, AppError> {
     require_admin(&state, auth.user_id).await?;
@@ -43,9 +54,31 @@ async fn update_timezone(
         .trim()
         .parse::<Tz>()
         .map_err(|_| AppError::Validation("timezone must be a valid IANA timezone".into()))?;
-    app_settings::set_app_timezone(&state.pool, timezone).await?;
+    let mut transaction = state.pool.begin().await?;
+    app_settings::set_app_timezone_tx(&mut transaction, timezone).await?;
+    SecurityAuditEvent::success("application_timezone_updated", Some(auth.user_id))
+        .target("system_config:app_timezone")
+        .request_id_from_headers(&headers)
+        .record_tx(&mut transaction)
+        .await?;
+    transaction.commit().await?;
     Ok(Json(TimezoneResponse {
         timezone: timezone.name().to_string(),
+    }))
+}
+
+async fn get_security_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<SecurityStatusResponse>, AppError> {
+    require_admin(&state, auth.user_id).await?;
+    let cryptographic_key_source = state.config.cryptographic_key_source();
+    Ok(Json(SecurityStatusResponse {
+        cryptographic_key_source,
+        database_key_shared_fate: cryptographic_key_source == "database",
+        setup_proof_available: state.config.setup_proof_available(),
+        security_event_retention_days:
+            crate::services::security_audit::SECURITY_EVENT_RETENTION_DAYS,
     }))
 }
 

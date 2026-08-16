@@ -21,7 +21,10 @@ use std::{
 
 use crate::{
     db::users::require_admin_or_super_user,
-    db::vehicles::{get_default_vehicle_id, require_vehicle_role},
+    db::vehicles::{
+        get_default_vehicle_id, require_vehicle_read_access, require_vehicle_role,
+        require_vehicle_session_access,
+    },
     errors::AppError,
     ingestion::{
         rivian_auth::{RivianAuthError, RivianVehicleSummary},
@@ -1650,7 +1653,7 @@ async fn set_default_vehicle(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_session_access(&state.pool, &auth, vid).await?;
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
@@ -1693,7 +1696,7 @@ async fn list_vehicle_members(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_session_access(&state.pool, &auth, vid).await?;
 
     let rows = sqlx::query_as::<_, VehicleMemberRow>(
         "SELECT vm.user_id, u.email, vm.role, vm.is_default, vm.created_at
@@ -2282,7 +2285,7 @@ async fn vehicle_status(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<VehicleStatusResponse>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     queue_vehicle_artwork_repair(&state, vid).await;
 
     let vehicle = sqlx::query_scalar::<_, Option<f64>>(
@@ -3379,7 +3382,7 @@ async fn vehicle_images(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     Ok(Json(
         fetch_vehicle_images_json(&state.pool, &state.config, vid).await?,
     ))
@@ -4072,7 +4075,7 @@ async fn vehicle_image_cache_asset(
     if !sanitize_image_key(&image_key) {
         return Err(AppError::NotFound);
     }
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
     let Some(metadata) = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await? else {
         return Ok(vehicle_artwork_placeholder_response());
     };
@@ -4409,7 +4412,7 @@ async fn telemetry_lanes(
     Query(params): Query<TelemetryLaneParams>,
 ) -> Result<Json<TelemetryLaneFrame>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let requested_lanes = parse_telemetry_lanes(params.lanes.as_deref())?;
     let to = params.to.unwrap_or_else(chrono::Utc::now);
@@ -4597,7 +4600,7 @@ async fn raw_vehicle_data(
     Query(params): Query<RawDataParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     validate_raw_time_bounds(params.from, params.to)?;
     let selected_fields = parse_raw_fields(params.fields.as_deref())?;
     let selected_fields_csv = selected_fields
@@ -5065,6 +5068,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5128,6 +5133,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5338,6 +5345,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,

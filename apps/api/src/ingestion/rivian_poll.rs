@@ -8,7 +8,7 @@
 //! `riviamigo.rivian_stewardship_counters`.  The caller is responsible for
 //! invoking [`increment_poll_counter`] after each successful request.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -22,56 +22,14 @@ use crate::services::charge_sessions::{
     self, ChargeSessionPayloadRef, ChargeSessionSummaryPayload, UnmatchedInsertPolicy,
 };
 
+mod transport;
+
+pub use transport::{gql_request, AuthError};
+
 // ── URL constants ────────────────────────────────────────────────────────────
 
 const GATEWAY_URL: &str = "https://rivian.com/api/gql/gateway/graphql";
 const CHRG_URL: &str = "https://rivian.com/api/gql/chrg/user/graphql";
-
-const APOLLO_CLIENT_NAME: &str = "com.rivian.ios.consumer-apollo-ios";
-const USER_AGENT: &str = "RivianApp/707 CFNetwork/1237 Darwin/20.4.0";
-
-// ── Generic GQL helpers ──────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct GqlEnvelope<T> {
-    data: Option<T>,
-    errors: Option<Vec<GqlError>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GqlError {
-    message: String,
-    #[serde(default)]
-    extensions: Option<GqlErrorExtensions>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GqlErrorExtensions {
-    code: Option<String>,
-}
-
-fn fmt_errors(errors: &[GqlError]) -> String {
-    errors
-        .iter()
-        .map(|e| e.message.as_str())
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-/// Typed marker error: the Rivian API explicitly reported an authentication
-/// failure (HTTP 401 or GraphQL `extensions.code = "UNAUTHENTICATED"`).
-///
-/// `with_vehicle_auth_retry` downcasts on this to decide whether to attempt a
-/// CSRF refresh — string-matching the wrapped message is no longer the signal.
-#[derive(Debug, thiserror::Error)]
-#[error("Rivian API: authentication required")]
-pub struct AuthError;
-
-fn errors_indicate_auth(errors: &[GqlError]) -> bool {
-    errors
-        .iter()
-        .any(|e| e.extensions.as_ref().and_then(|x| x.code.as_deref()) == Some("UNAUTHENTICATED"))
-}
 
 fn json_number_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
     match value {
@@ -79,75 +37,6 @@ fn json_number_as_f64(value: Option<&serde_json::Value>) -> Option<f64> {
         Some(serde_json::Value::String(s)) => s.parse().ok(),
         _ => None,
     }
-}
-
-/// Send a single GraphQL request and deserialize the `data` object.
-///
-/// Returns `Err` on HTTP failure, non-200 status, GQL error list, or parse
-/// failure.  Callers should increment the stewardship counter after this
-/// succeeds.
-pub async fn gql_request<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    url: &str,
-    tokens: &RivianTokenBundle,
-    operation: &str,
-    query: &str,
-    variables: serde_json::Value,
-) -> Result<T> {
-    let body = serde_json::json!({
-        "operationName": operation,
-        "query": query,
-        "variables": variables,
-    });
-
-    let mut req = client
-        .post(url)
-        .header("User-Agent", USER_AGENT)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .header("Apollographql-Client-Name", APOLLO_CLIENT_NAME)
-        .header("dc-cid", format!("m-ios-{}", Uuid::new_v4()))
-        .header("A-Sess", &tokens.app_session_token)
-        .header("U-Sess", &tokens.user_session_token)
-        .json(&body);
-
-    if !tokens.csrf_token.is_empty() {
-        req = req.header("Csrf-Token", &tokens.csrf_token);
-    }
-    if !tokens.access_token.is_empty() {
-        req = req.bearer_auth(&tokens.access_token);
-    }
-
-    let response = req.send().await.context("HTTP request failed")?;
-    let status = response.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(anyhow!(AuthError));
-    }
-    if !status.is_success() {
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| String::from("<unreadable body>"));
-        return Err(anyhow!("Rivian API: HTTP {status} body={body} "));
-    }
-
-    let envelope = response
-        .json::<GqlEnvelope<T>>()
-        .await
-        .context("failed to parse Rivian API response")?;
-
-    if let Some(errors) = &envelope.errors {
-        if !errors.is_empty() {
-            if errors_indicate_auth(errors) {
-                return Err(anyhow!(AuthError));
-            }
-            return Err(anyhow!("Rivian GQL errors: {}", fmt_errors(errors)));
-        }
-    }
-
-    envelope
-        .data
-        .ok_or_else(|| anyhow!("Rivian API: empty data for {operation}"))
 }
 
 // ── Token-refresh helpers ────────────────────────────────────────────────────

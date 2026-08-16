@@ -1,14 +1,9 @@
 use chrono::Utc;
-use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, AssertSqlSafe, PgPool};
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
-use tar::Archive;
+use std::path::{Path, PathBuf};
 use tokio::{fs, process::Command};
 use url::Url;
 use uuid::Uuid;
@@ -16,6 +11,7 @@ use uuid::Uuid;
 use crate::{
     db::migrations::{self, LedgerValidationKind, MigrationIdentity, MIGRATION_CHAIN_ID, MIGRATOR},
     errors::AppError,
+    services::backups,
 };
 
 pub const RECOVERY_FORMAT_V1: &str = "riviamigo-recovery-v1";
@@ -116,25 +112,10 @@ pub use migrations::{compiled_migration_ledger, latest_migration_version};
 
 pub async fn inspect_recovery_dump(package: &Path) -> Result<DumpInspection, AppError> {
     let package = package.to_path_buf();
-    let temporary =
-        std::env::temp_dir().join(format!("riviamigo-dump-inspect-{}.dump", Uuid::new_v4()));
+    let temporary = std::env::temp_dir().join(format!("riviamigo-dump-inspect-{}", Uuid::new_v4()));
     let output = async {
-        let dump = temporary.clone();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let mut archive = Archive::new(GzDecoder::new(File::open(package)?));
-            for entry in archive.entries()? {
-                let mut entry = entry?;
-                if entry.path()?.to_string_lossy().replace('\\', "/") == "database.dump" {
-                    let mut file = File::create(&dump)?;
-                    std::io::copy(&mut entry, &mut file)?;
-                    return Ok(());
-                }
-            }
-            anyhow::bail!("recovery package is missing database.dump")
-        })
-        .await
-        .map_err(|error| AppError::Internal(anyhow::anyhow!(error)))?
-        .map_err(AppError::Internal)?;
+        backups::extract_recovery_package(&package, &temporary).await?;
+        let dump = temporary.join("database.dump");
         let pg_restore = resolve_pg_restore_executable().await.ok_or_else(|| {
             AppError::DependencyUnavailable(
                 "pg_restore is unavailable for restore preflight".into(),
@@ -143,7 +124,7 @@ pub async fn inspect_recovery_dump(package: &Path) -> Result<DumpInspection, App
         let inspected = Command::new(pg_restore)
             .arg("--schema-only")
             .arg("--file=-")
-            .arg(&temporary)
+            .arg(&dump)
             .output()
             .await
             .map_err(|error| {
@@ -164,7 +145,7 @@ pub async fn inspect_recovery_dump(package: &Path) -> Result<DumpInspection, App
         })
     }
     .await;
-    let _ = fs::remove_file(&temporary).await;
+    let _ = fs::remove_dir_all(&temporary).await;
     output
 }
 
