@@ -31,6 +31,9 @@ pnpm build
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm test:coverage
+pnpm test:e2e
+pnpm test:api
 pnpm docs:check
 pnpm docs:build
 pnpm docs:dev
@@ -65,6 +68,11 @@ pnpm db:migrate
 pnpm db:reset
 pnpm db:rebaseline
 ```
+
+`pnpm db:migrate` invokes the migration coordinator, which owns the public
+SQLx ledger and fails closed on contradictory bookkeeping. `pnpm db:rebaseline`
+is the explicit, backup-evidenced adoption command for the release baseline;
+it is not a normal migration repair command.
 
 ## Architecture Reminders
 

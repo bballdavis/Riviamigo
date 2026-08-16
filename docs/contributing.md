@@ -88,20 +88,19 @@ on every push to either protected branch. Container images are published only
 by intentional release workflows: stable images from a validated `main` tag
 and pre-release images from an approved `dev` candidate.
 
-PRs run deterministic quality, typecheck, unit-test, build, SQLx, and security
-checks. Browser E2E, live runtime/container validation, and fresh-install
-acceptance are intentionally outside the PR gate: E2E and runtime checks run
-weekly or by manual dispatch, while `Fresh install` and `Artwork`
-validation remain manual-only. Full coverage runs are kept out of the PR
-gate because they duplicate the unit-test pass; use the documented coverage
-commands when a coverage report is needed.
+PRs run deterministic quality, typecheck, unit-test, coverage, build, SQLx,
+and security checks. Browser E2E runs on pull requests when browser-contract
+inputs changed and otherwise reports an intentional successful no-op. Runtime
+and restore contract workflows use the same change-aware behavior, while
+fresh-install acceptance remains manual-only. Use the documented coverage and
+E2E commands when reproducing CI locally.
 
 | Area        | Current checks                                                                                                                               |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
-| PR Frontend | Typecheck, two-worker unit tests, and Storybook build on PRs; Playwright browser tests weekly or manually                                    |
+| PR Frontend | Typecheck, repository test contract, coverage floor, Storybook build, and change-aware Playwright browser E2E                                    |
 | PR Backend  | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
-| Runtime     | Fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build weekly or manually |
+| Runtime     | Change-aware fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build |
 | PR Security | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
 
 Dependency and secret failures are release blockers. High-risk Semgrep

@@ -1,10 +1,17 @@
 # Release database cutover
 
-Riviamigo's public release starts fresh installs from one SQLx baseline:
+Riviamigo's migration coordinator uses one public SQLx ledger and starts fresh installs from one immutable baseline:
 apps/api/migrations/0001_initial_schema.sql. The baseline contains the complete
 release-era application schema, including backup, dashboard, and TimescaleDB
 objects. Later migrations remain forward-only upgrades; the numbered history
 before the baseline is intentionally not part of the public install contract.
+
+The coordinator takes a database advisory lock, validates the compiled ordered
+ledger and checksums, uses `public._sqlx_migrations` as the canonical ledger,
+and either initializes it, uses it, relocates one matching historical ledger,
+or removes a redundant matching historical ledger. Contradictory or drifted
+bookkeeping fails closed; startup, backup creation, and restore do not repair a
+live ledger automatically.
 
 Existing installations from the earlier five-migration release must be adopted
 once before they run the public release. Adoption replaces only SQLx
@@ -42,7 +49,7 @@ that former chain are unsupported restore inputs after cutover.
    ledger before returning. The API must then start without checksum warnings
    or migration replay output.
 
-The command acquires an advisory lock, moves a historical bookkeeping table
+The command acquires a separate adoption advisory lock, moves a historical bookkeeping table
 into `public` when needed, and replaces its entries with the flattened
 baseline checksum. It then runs any migrations added after that baseline using
 the normal SQLx migrator. It refuses missing recovery evidence, active writers,

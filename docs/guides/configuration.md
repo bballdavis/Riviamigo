@@ -20,13 +20,40 @@ Set these before starting `compose/docker-compose.yml`:
 
 Riviamigo defaults to production mode; no production flag is required in `.env`.
 
-On first startup, Riviamigo generates its JWT signing pair and age encryption identity and stores them in PostgreSQL. They therefore survive normal restarts and recovery-package restores. Advanced deployments may supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` together; partial overrides are rejected, and rotating the age key without migrating encrypted values can make stored credentials unreadable.
+On first startup, Riviamigo generates its JWT signing pair and age encryption
+identity and stores them in PostgreSQL. They therefore survive normal restarts
+and recovery-package restores. This database-key arrangement is an explicitly
+accepted **P2 shared-fate risk**: database loss or compromise can also affect
+locally generated application keys. Advanced deployments that require separate
+key custody may supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and
+`AGE_ENCRYPTION_KEY` together from a secret manager; partial overrides are
+rejected. Maintain and test recovery of that external secret source. Rotating
+the age key without migrating encrypted values can make stored credentials
+unreadable.
+
+### Production first owner
+
+Before the first production registration, set exactly one setup proof:
+
+- `RIVIAMIGO_SETUP_TOKEN` for a securely injected value, or
+- `RIVIAMIGO_SETUP_TOKEN_FILE` for a mounted secret file (preferred).
+
+The proof must contain at least 32 bytes. The first registration sends it as
+`setup_token`; the app uses it only while no user exists. The public setup
+status intentionally reveals only whether a proof is required and available,
+not its source or value. Without a proof, an unclaimed production stack stays
+healthy but fails closed for registration. Remove or rotate the bootstrap secret
+after the first owner is created. See the [environment reference](../environment-variables.md)
+for the exact variable contract.
 
 ## Optional settings
 
 Weather, geocoding, basemap, and Iconify policies are configured in **Settings > External Connections** and stored in the database. Do not add provider URLs or API keys to `.env`; custom connection secrets are encrypted with the installation age key and remain write-only. See [external connections](./external-connections.md).
 
 - `RIVIAMIGO_ORIGIN_PORT` changes the published app port from `8080`.
+- `RIVIAMIGO_BIND_ADDRESS` defaults to `127.0.0.1`. A non-loopback bind also
+  requires `ALLOW_PUBLIC_ORIGIN_BIND=true`; use it only when the host firewall
+  and authenticated gateway are already in place.
 - `IMAGE_TAG` selects a published release and defaults to `latest`.
 - `RIVIAMIGO_IMAGE_REGISTRY` defaults to `ghcr.io/bballdavis`.
 - `BACKUP_DRIVER`, `BACKUP_ARTIFACT_DIR`, and `BACKUP_POLL_INTERVAL_SECONDS` tune recovery packages; normal Compose already uses `/backups`.
