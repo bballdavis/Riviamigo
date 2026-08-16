@@ -8,11 +8,13 @@ import {
   useChargingChartSeries,
   useDegradation,
   useEfficiencyByMode,
+  useEfficiencyByTag,
   useEfficiencyTrend,
   useEfficiencyVsTemp,
   usePhantomDrainPeriods,
   useRangeHistory,
   useSocHistory,
+  useTripTags,
 } from '@riviamigo/hooks';
 import {
   CHART_COLORS,
@@ -498,6 +500,7 @@ function ActiveDashboardChartSource(props: ActiveDashboardChartSourceProps) {
     case 'efficiency_trend': return <EfficiencyTrendSource {...props} />;
     case 'efficiency_temperature': return <EfficiencyTemperatureSource {...props} />;
     case 'efficiency_mode': return <EfficiencyModeSource {...props} />;
+    case 'efficiency_tags': return <EfficiencyTagsSource {...props} />;
     case 'phantom_drain': return <PhantomDrainSource {...props} />;
     case 'battery_degradation': return <BatteryDegradationSource {...props} />;
     case 'battery_capacity_mileage': return <BatteryMileageSource {...props} />;
@@ -581,19 +584,58 @@ function ChargingCurveAnalysisSource({ definition, ctx, height, settings, presen
 }
 
 function EfficiencyTrendSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
+  const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
   const { yRange } = sourceAxisRanges(settings);
   return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} timeFilter={timeFilter} smoothness={smoothness} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
 }
 
 function EfficiencyTemperatureSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyVsTemp(ctx.vehicleId, ctx.from, ctx.to);
+  const { data = [], isLoading } = useEfficiencyVsTemp(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
   return <EfficiencyTemperatureChart definition={definition} data={data} loading={isLoading} height={height} />;
 }
 
 function EfficiencyModeSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to);
+  const { data = [], isLoading } = useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
   return <EfficiencyModeChart definition={definition} data={data} loading={isLoading} height={height} />;
+}
+
+function EfficiencyTagsSource({ ctx, height }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useEfficiencyByTag(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
+  const tags = useTripTags(ctx.vehicleId);
+  if (tags.isError) {
+    return <EfficiencyTagsCatalogError height={height} onRetry={() => void tags.refetch()} />;
+  }
+  if (!tags.isLoading && (tags.data ?? []).length === 0) {
+    return <EfficiencyTagsOnboarding height={height} canManage={Boolean(ctx.canManageTripTags)} />;
+  }
+  const hasTagFilter = Boolean(ctx.tripTagFilter?.tagIds.length || ctx.tripTagFilter?.untagged);
+  return (
+    <EfficiencyTagsChart
+      data={data}
+      loading={isLoading || tags.isLoading}
+      height={height}
+      hasTagFilter={hasTagFilter}
+    />
+  );
+}
+
+function EfficiencyTagsCatalogError({ height, onRetry }: { height: number; onRetry: () => void }) {
+  return (
+    <div role="alert" className="flex flex-col items-center justify-center gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 px-4 text-center text-sm text-status-danger" style={{ height }}>
+      <p>Couldn’t load shared tags. Retry to compare tagged trips.</p>
+      <button type="button" className="min-h-11 rounded-lg border border-status-danger/40 px-3 text-sm font-medium transition-colors hover:bg-status-danger/10" onClick={onRetry}>Retry</button>
+    </div>
+  );
+}
+
+function EfficiencyTagsOnboarding({ height, canManage }: { height: number; canManage: boolean }) {
+  return (
+    <div className="flex items-center justify-center rounded-lg border border-dashed border-border px-4 text-center text-sm text-fg-tertiary" style={{ height }}>
+      {canManage
+        ? 'No shared tags yet. Create one with the Tags filter above to compare setups.'
+        : 'No shared tags yet. A vehicle manager can create tags from Trips.'}
+    </div>
+  );
 }
 
 function PhantomDrainSource({ definition, ctx, height, settings, presentation }: ActiveDashboardChartSourceProps) {
@@ -1348,6 +1390,54 @@ function EfficiencyModeChart({
       emptyTitle={definition.emptyTitle}
       height={height}
       valueUnit={getEfficiencyUnit()}
+    />
+  );
+}
+
+function EfficiencyTagsChart({
+  data,
+  loading,
+  height,
+  hasTagFilter,
+}: {
+  data: Array<{
+    tag_id: string | null;
+    tag_name: string;
+    trip_count: number;
+    total_miles: number;
+    efficiency_miles: number;
+    avg_efficiency_wh_mi: number | null;
+    coverage: number;
+  }>;
+  loading: boolean;
+  height: number;
+  hasTagFilter: boolean;
+}) {
+  const rows = data
+    .filter((point) => point.avg_efficiency_wh_mi != null)
+    .map((point) => ({
+      label: point.tag_name,
+      value: convertEfficiency(point.avg_efficiency_wh_mi),
+      count: point.trip_count,
+      distance: point.total_miles,
+      coverage: point.coverage,
+      tone: point.tag_id == null ? 'neutral' as const : 'accent' as const,
+    }))
+    .filter((point): point is { label: string; value: number; count: number; distance: number; coverage: number; tone: 'accent' | 'neutral' } => point.value != null);
+  const emptyTitle = hasTagFilter
+      ? 'No trips match these tag filters. Clear filters above or choose another range.'
+      : data.length > 0
+        ? 'Trips in this range do not have efficiency readings yet.'
+        : 'No trips in this period.';
+
+  return (
+    <EfficiencyPillBarChart
+      data={rows}
+      loading={loading}
+      emptyTitle={emptyTitle}
+      height={height}
+      valueUnit={getEfficiencyUnit()}
+      wideLabels
     />
   );
 }

@@ -114,7 +114,7 @@ export function DashboardDataProvider({
   const store = storeRef.current;
   const metrics = requirements.metrics ?? [];
   const lifetime = !ctx.from && !ctx.to;
-  const batch = useMetricBatch(ctx.vehicleId, metrics, ctx.from, ctx.to, lifetime);
+  const batch = useMetricBatch(ctx.vehicleId, metrics, ctx.from, ctx.to, lifetime, ctx.tripTagFilter);
   const status = useCurrentVehicleStatus(requirements.status ? ctx.vehicleId : null);
   const batteryHealth = useBatteryHealth(requirements.batteryHealth ? ctx.vehicleId : null);
   const chargingSummary = useChargingSummary(
@@ -126,6 +126,7 @@ export function DashboardDataProvider({
     requirements.efficiencySummary ? ctx.vehicleId : null,
     ctx.from,
     ctx.to,
+    ctx.tripTagFilter,
   );
 
   const snapshot = React.useMemo<DashboardDataSnapshot>(() => {

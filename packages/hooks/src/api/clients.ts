@@ -53,7 +53,7 @@ export const telemetryClient = client(
 
 export const analyticsClient = client(
   'getStats', 'getEfficiencySummary', 'getEfficiencyByMode', 'getEfficiencyTrend',
-  'getEfficiencyVsTemp',
+  'getEfficiencyVsTemp', 'getEfficiencyByTag',
 );
 
 export const systemClient = client(

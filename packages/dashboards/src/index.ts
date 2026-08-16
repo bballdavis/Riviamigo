@@ -6,6 +6,7 @@ export { DashboardGrid } from './DashboardGrid';
 export { WidgetHost } from './WidgetHost';
 export { WidgetChrome } from './WidgetChrome';
 export { DashboardChartWidget, DashboardChartRenderer } from './widgets/chart/DashboardChartWidget';
+export { TripTagPicker } from './widgets/table/TripTagPicker';
 export { PhantomDrainChart, buildPhantomDrainDailySeries } from './widgets/chart/PhantomDrainChart';
 export type { PhantomDrainChartProps, PhantomDrainDailyPoint } from './widgets/chart/PhantomDrainChart';
 export { SensorChipSummary } from './widgets/sensor/SensorChipSummary';

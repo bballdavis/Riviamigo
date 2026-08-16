@@ -24,7 +24,8 @@ export {
 	useUpdateTripTagAssignments,
 } from './useTrips';
 export { invalidateChargingData, useChargeSessions, useChargeSession, useSavedPlaces, useUpdateChargeSessionLocation, useUpdateChargeSession, useChargingNetworkPreferences, useUpdateChargingNetworkPreference, useChargeCurve, useChargeCurveAnalysis, useChargingSummary, useChargingChartSeries, useChargingSchedule, useUpdateChargingSchedule, useDepartureSchedules, useCreateDepartureSchedule, useUpdateDepartureSchedule, useDeleteDepartureSchedule, useLiveSession } from './useCharging';
-export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';
+export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp, useEfficiencyByTag } from './useEfficiency';
+export type { TripTagFilters } from './useTrips';
 export { useSummaryStats } from './useStats';
 export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } from './useMetrics';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';

@@ -166,6 +166,7 @@ struct PlaceLookupRow {
     is_home: bool,
     latitude: Option<f64>,
     longitude: Option<f64>,
+    cost_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -258,6 +259,37 @@ mod timeframe_tests {
         let cleared: super::SessionLocationUpdate =
             serde_json::from_str(r#"{\"place_id\":null}"#).unwrap();
         assert!(matches!(cleared.place_id, super::PatchField::Null));
+    }
+
+    #[test]
+    fn location_mode_changes_replace_or_clear_the_explicit_cost_profile() {
+        let place_profile = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            super::cost_profile_for_location(
+                super::LocationOverrideMode::SavedPlace,
+                Some(place_profile),
+            ),
+            Some(place_profile),
+        );
+        assert_eq!(
+            super::cost_profile_for_location(super::LocationOverrideMode::Automatic, None),
+            None,
+        );
+        assert_eq!(
+            super::cost_profile_for_location(super::LocationOverrideMode::None, None),
+            None,
+        );
+    }
+}
+
+fn cost_profile_for_location(
+    mode: LocationOverrideMode,
+    saved_place_profile_id: Option<Uuid>,
+) -> Option<Uuid> {
+    match mode {
+        LocationOverrideMode::SavedPlace => saved_place_profile_id,
+        LocationOverrideMode::Automatic | LocationOverrideMode::None => None,
     }
 }
 
@@ -553,7 +585,7 @@ async fn update_charge_session(
     let updated_session_id = if location_mode == Some(LocationOverrideMode::SavedPlace) {
         let place_id = requested_place_id.expect("validated saved place id");
         let place = sqlx::query_as::<_, PlaceLookupRow>(
-            "SELECT address_id, is_home, latitude, longitude
+            "SELECT address_id, is_home, latitude, longitude, cost_profile_id
                FROM riviamigo.geofences
               WHERE id=$1 AND user_id=$2",
         )
@@ -570,8 +602,9 @@ async fn update_charge_session(
                    is_home=$3,
                    location_lat=$4,
                    location_lng=$5,
+                   cost_profile_id=$6,
                    location_override_mode='saved_place'
-             WHERE id=$6 AND vehicle_id=$7
+             WHERE id=$7 AND vehicle_id=$8
              RETURNING id",
         )
         .bind(place_id)
@@ -579,6 +612,10 @@ async fn update_charge_session(
         .bind(place.is_home)
         .bind(place.latitude)
         .bind(place.longitude)
+        .bind(cost_profile_for_location(
+            LocationOverrideMode::SavedPlace,
+            place.cost_profile_id,
+        ))
         .bind(session_id)
         .bind(vehicle_id)
         .fetch_optional(pool)
@@ -591,10 +628,12 @@ async fn update_charge_session(
                    is_home=NULL,
                    location_lat=NULL,
                    location_lng=NULL,
+                   cost_profile_id=$1,
                    location_override_mode='none'
-             WHERE id=$1 AND vehicle_id=$2
+             WHERE id=$2 AND vehicle_id=$3
              RETURNING id",
         )
+        .bind(cost_profile_for_location(LocationOverrideMode::None, None))
         .bind(session_id)
         .bind(vehicle_id)
         .fetch_optional(pool)
@@ -622,12 +661,14 @@ async fn update_charge_session(
                          AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
                        ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
                     location_lat=cs.source_location_lat, location_lng=cs.source_location_lng,
+                    cost_profile_id=$4,
                     location_override_mode='automatic'
               WHERE cs.id=$1 AND cs.vehicle_id=$2 RETURNING cs.id"#,
         )
         .bind(session_id)
         .bind(vehicle_id)
         .bind(auth.user_id)
+        .bind(cost_profile_for_location(LocationOverrideMode::Automatic, None))
         .fetch_optional(pool)
         .await?
     } else {

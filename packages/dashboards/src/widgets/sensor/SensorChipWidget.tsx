@@ -180,7 +180,8 @@ export function SensorChipWidget({ instance, ctx }: { instance: WidgetInstance; 
   const { data: fetchedEfficiencySummary } = useEfficiencySummary(
     !dashboardDataAvailable && needsEfficiency ? ctx.vehicleId : null,
     ctx.from,
-    ctx.to
+    ctx.to,
+    ctx.tripTagFilter,
   );
   const { data: fetchedHealth, isLoading: healthLoading } = useBatteryHealth(
     !dashboardDataAvailable && needsHealth ? ctx.vehicleId : null

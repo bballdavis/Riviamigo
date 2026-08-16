@@ -19,6 +19,7 @@ import type {
   ChargeCurveAnalysisPoint,
   StatsSummary,
   EfficiencyByMode,
+  EfficiencyByTag,
   EfficiencySummary,
   ChargingSummary,
   ChargingChartSeries,
@@ -1602,7 +1603,8 @@ export class AuthenticatedTransport {
     vehicleId: string,
     from: string | null,
     to: string | null,
-    lifetime = false
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
   ) {
     const summary = await this.request<{
       avg_wh_per_mi: number;
@@ -1614,6 +1616,7 @@ export class AuthenticatedTransport {
     }>('GET', '/v1/efficiency/summary', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
+      ...buildTripTagFilterParams(filters),
     });
 
     return {
@@ -1630,7 +1633,8 @@ export class AuthenticatedTransport {
     vehicleId: string,
     from: string | null,
     to: string | null,
-    lifetime = false
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
   ) {
     const rows = await this.request<
       Array<{
@@ -1641,6 +1645,7 @@ export class AuthenticatedTransport {
     >('GET', '/v1/efficiency/by-mode', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
+      ...buildTripTagFilterParams(filters),
     });
 
     return rows.map((row) => ({
@@ -1656,13 +1661,15 @@ export class AuthenticatedTransport {
     vehicleId: string,
     from: string | null,
     to: string | null,
-    lifetime = false
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
   ) {
     return this.request<
       { ts: string; trip_efficiency_wh_mi: number | null; rolling_24h_wh_mi: number | null }[]
     >('GET', '/v1/efficiency/trend', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
+      ...buildTripTagFilterParams(filters),
     });
   }
 
@@ -1670,7 +1677,8 @@ export class AuthenticatedTransport {
     vehicleId: string,
     from: string | null,
     to: string | null,
-    lifetime = false
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
   ) {
     return this.request<
       {
@@ -1684,6 +1692,21 @@ export class AuthenticatedTransport {
     >('GET', '/v1/efficiency/vs-temp', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
+      ...buildTripTagFilterParams(filters),
+    });
+  }
+
+  async getEfficiencyByTag(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
+  ) {
+    return this.request<EfficiencyByTag[]>('GET', '/v1/efficiency/by-tag', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
+      ...buildTripTagFilterParams(filters),
     });
   }
 
@@ -2014,6 +2037,17 @@ function buildTimeframeParams(from: string | null, to: string | null, lifetime =
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
   };
+}
+
+function buildTripTagFilterParams(filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean }) {
+  const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
+  if (tagIds.length > 0) {
+    return {
+      tag_ids: tagIds.join(','),
+      tag_match: filters?.tagMatch === 'any' ? 'any' : 'all',
+    };
+  }
+  return filters?.untagged ? { untagged: 1 } : {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -38,6 +38,7 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
   const [activeIndex, setActiveIndex] = React.useState(0);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
+  const panelRef = React.useRef<HTMLDivElement>(null);
   const pendingCatalogIds = React.useRef(new Set<string>());
   const cleanedStaleSignature = React.useRef<string | null>(null);
   const isMobile = useMobilePicker();
@@ -51,6 +52,7 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
   );
   const exact = tags.find((tag) => normalizeTagName(tag.name) === normalizedQuery);
   const [catalogNotice, setCatalogNotice] = React.useState('');
+  const [createError, setCreateError] = React.useState('');
 
   React.useEffect(() => {
     if (!open) return;
@@ -90,6 +92,7 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
 
   const create = React.useCallback(async () => {
     if (!canManage || !query.trim() || exact) return;
+    setCreateError('');
     try {
       const created = await createTag.mutateAsync({ name: query });
       pendingCatalogIds.current.add(created.id);
@@ -97,9 +100,18 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
       setQuery('');
     } catch {
       // A duplicate submitted concurrently is resolved from the refreshed catalog.
-      const refreshed = await tagsQuery.refetch();
-      const existing = (refreshed.data ?? []).find((tag) => normalizeTagName(tag.name) === normalizedQuery);
-      if (existing) onChange([...selectedIds, existing.id].sort());
+      try {
+        const refreshed = await tagsQuery.refetch();
+        const existing = (refreshed.data ?? []).find((tag) => normalizeTagName(tag.name) === normalizedQuery);
+        if (existing) {
+          onChange([...selectedIds, existing.id].sort());
+          setQuery('');
+          return;
+        }
+      } catch {
+        // The actionable error below covers both create and conflict-resolution refresh failures.
+      }
+      setCreateError('Couldn’t create this tag. Check your connection and try again.');
     }
   }, [canManage, createTag, exact, normalizedQuery, onChange, query, selectedIds, tagsQuery]);
 
@@ -109,6 +121,7 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
 
   const panel = open ? (
     <div
+      ref={panelRef}
       className={isMobile
         ? 'fixed inset-x-0 bottom-0 z-50 max-h-[80vh] rounded-t-2xl border border-border bg-bg-surface p-4 shadow-xl'
         : 'absolute left-0 top-full z-40 mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-xl border border-border bg-bg-surface p-3 shadow-xl'}
@@ -116,6 +129,18 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
       aria-modal={isMobile || undefined}
       aria-label={label}
       onKeyDown={(event) => {
+        if (event.key === 'Tab' && isMobile) {
+          const focusable = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []);
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (first && last && event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (first && last && !event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
         if (event.key === 'Escape') { event.preventDefault(); setOpen(false); triggerRef.current?.focus(); }
         if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex((value) => Math.min(value + 1, Math.max(optionCount - 1, 0))); }
         if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex((value) => Math.max(value - 1, 0)); }
@@ -128,7 +153,7 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
       }}
     >
       {isMobile ? <div className="mb-3 flex items-center justify-between"><h2 className="text-base font-semibold text-fg">{label}</h2><Button type="button" variant="ghost" size="md" className="h-11 w-11 px-0" onClick={() => setOpen(false)} aria-label="Close tag picker"><X className="h-4 w-4" /></Button></div> : null}
-      <Input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tags" iconLeft={<Search className="h-4 w-4" />} className="h-11" aria-label="Search existing tags" />
+      <Input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setCreateError(''); }} placeholder="Search tags" iconLeft={<Search className="h-4 w-4" />} className="h-11" aria-label="Search existing tags" />
       <p className="mt-2 text-xs text-fg-tertiary" role="status" aria-live="polite">{query.trim() ? `${filtered.length} matching tag${filtered.length === 1 ? '' : 's'}` : `${tags.length} shared tag${tags.length === 1 ? '' : 's'}`}</p>
       {catalogNotice ? <p className="sr-only" role="status" aria-live="polite">{catalogNotice}</p> : null}
       <div className="mt-3 max-h-64 overflow-y-auto" role={isMobile ? 'listbox' : undefined}>
@@ -144,13 +169,14 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
         {!tagsQuery.isLoading && !tagsQuery.isError && filtered.length === 0 && query.trim() && !canManage ? <p className="px-2 py-4 text-sm text-fg-tertiary">No matching tags.</p> : null}
         {canManage && query.trim() && !exact ? <button type="button" disabled={createTag.isPending} onClick={() => void create()} className={`mt-1 flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-sm font-medium text-accent transition-colors hover:bg-accent/10 disabled:opacity-50 ${activeIndex === filtered.length ? 'bg-accent/10' : ''}`}><Plus className="h-4 w-4" />Create “{query.trim()}”</button> : null}
       </div>
+      {createError ? <p className="mt-2 rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-sm text-status-danger" role="alert">{createError}</p> : null}
       {isMobile ? <Button type="button" variant="secondary" size="md" className="mt-3 h-11 w-full" onClick={() => setOpen(false)}>Done</Button> : null}
     </div>
   ) : null;
 
   return (
     <div className="relative min-w-0">
-      <button ref={triggerRef} type="button" disabled={disabled} onClick={() => setOpen((value) => !value)} className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm text-fg transition-colors hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50" aria-expanded={open} aria-haspopup="listbox">
+      <button ref={triggerRef} type="button" disabled={disabled} onClick={() => setOpen((value) => !value)} className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm text-fg transition-colors hover:border-border-strong focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50" aria-expanded={open} aria-haspopup={isMobile ? 'dialog' : 'listbox'}>
         <span className="truncate">{selected.length ? `${selected.length} tag${selected.length === 1 ? '' : 's'} selected` : label}</span><ChevronDown className="ml-auto h-4 w-4 shrink-0 text-fg-tertiary" />
       </button>
       {selected.length ? <div className="mt-2 flex flex-wrap gap-1">{selected.map((tag) => <button type="button" key={tag.id} onClick={() => remove(tag.id)} className="inline-flex h-11 items-center gap-1 rounded-lg px-1.5 focus:outline-none focus:ring-1 focus:ring-accent" aria-label={`Remove ${tag.name}`}><TripTagBadge tag={tag} /><X className="h-3.5 w-3.5 text-fg-tertiary" /></button>)}</div> : null}

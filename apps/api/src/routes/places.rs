@@ -19,6 +19,12 @@ use crate::{
     services::cost::recompute_charge_session_cost,
 };
 
+const SYNC_LINKED_SESSION_COST_PROFILE_SQL: &str =
+    "UPDATE riviamigo.charge_sessions
+        SET cost_profile_id=$2
+      WHERE geofence_id=$1 AND cost_override_mode='automatic'
+      RETURNING id";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/places", get(list_places).post(create_place))
@@ -365,17 +371,18 @@ async fn update_place(
         return Err(AppError::NotFound);
     }
 
+    // Keep each linked automatic session's explicit profile synchronized with
+    // the place before recomputing. This also clears a removed place profile.
+    let sessions = sqlx::query_scalar::<_, Uuid>(SYNC_LINKED_SESSION_COST_PROFILE_SQL)
+    .bind(id)
+    .bind(cost_profile_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
-    // Place pricing is an automatic policy. Recompute only sessions that have
-    // not been explicitly marked free or manually priced before responding.
-    let sessions = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM riviamigo.charge_sessions
-          WHERE geofence_id=$1 AND cost_override_mode='automatic'",
-    )
-    .bind(id)
-    .fetch_all(&state.pool)
-    .await?;
+    // Place pricing is an automatic policy. Explicit Free/Manual session
+    // overrides are excluded above and retain their precedence.
     for session_id in sessions {
         recompute_charge_session_cost(&state.pool, session_id).await?;
     }
@@ -752,7 +759,7 @@ fn value_to_address_record(raw: Value) -> Option<AddressRecord> {
 
 #[cfg(test)]
 mod tests {
-    use super::search_cache_key;
+    use super::{search_cache_key, SYNC_LINKED_SESSION_COST_PROFILE_SQL};
 
     #[test]
     fn persistent_search_key_does_not_contain_address_text() {
@@ -760,5 +767,14 @@ mod tests {
         assert!(key.starts_with("external:nominatim:search:"));
         assert!(!key.contains("Main"));
         assert_ne!(key, search_cache_key("124 Main Street, Austin", 5));
+    }
+
+    #[test]
+    fn place_pricing_edits_replace_or_clear_linked_automatic_session_profiles() {
+        assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("SET cost_profile_id=$2"));
+        assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("geofence_id=$1"));
+        assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL
+            .contains("cost_override_mode='automatic'"));
+        assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("RETURNING id"));
     }
 }

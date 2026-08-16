@@ -437,6 +437,20 @@ const mockEfficiencyByMode = vi.fn(() => ({
   data: [{ drive_mode: 'all_purpose', avg_efficiency: 318, p10_efficiency: 0, p90_efficiency: 0, trip_count: 5 }],
   isLoading: false,
 }));
+type MockEfficiencyByTagResponse = {
+  data: Array<{ tag_id: string | null; tag_name: string; trip_count: number; total_miles: number; efficiency_miles: number; avg_efficiency_wh_mi: number | null; coverage: number }>;
+  isLoading: boolean;
+};
+const mockEfficiencyByTag = vi.fn<(...args: unknown[]) => MockEfficiencyByTagResponse>((..._args) => ({
+  data: [{ tag_id: 'tag-rack', tag_name: 'Bike rack', trip_count: 4, total_miles: 68, efficiency_miles: 51, avg_efficiency_wh_mi: 325, coverage: 0.75 }],
+  isLoading: false,
+}));
+const mockTripTags = vi.fn<(...args: unknown[]) => { data: Array<{ id: string; vehicle_id: string; name: string }>; isLoading: boolean; isError: boolean; refetch: () => Promise<unknown> }>((..._args) => ({
+  data: [{ id: 'tag-rack', vehicle_id: 'vehicle-1', name: 'Bike rack' }],
+  isLoading: false,
+  isError: false,
+  refetch: async () => undefined,
+}));
 type MockEfficiencyVsTempPoint = {
   temp_c_low: number;
   temp_c_high: number;
@@ -499,7 +513,9 @@ vi.mock('@riviamigo/hooks', () => ({
   useChargeCurveAnalysis: () => mockChargeCurveAnalysis(),
   useEfficiencyTrend: () => mockEfficiencyTrend(),
   useEfficiencyByMode: () => mockEfficiencyByMode(),
+  useEfficiencyByTag: (...args: unknown[]) => mockEfficiencyByTag(...args),
   useEfficiencyVsTemp: () => mockEfficiencyVsTemp(),
+  useTripTags: (...args: unknown[]) => mockTripTags(...args),
   usePhantomDrainPeriods: () => mockPhantomDrainPeriods(),
   useDegradation: () => mockDegradation(),
   useBatteryMileage: () => mockBatteryMileage(),
@@ -542,7 +558,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       data,
       emptyTitle,
     }: {
-      data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null }>;
+      data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null; coverage?: number | null }>;
       emptyTitle: string;
     }) =>
       data.length === 0 ? (
@@ -555,6 +571,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
               data-testid="efficiency-pill-label"
               data-distance={point.distance == null ? '' : String(point.distance)}
               data-speed={point.speed == null ? '' : String(point.speed)}
+              data-coverage={point.coverage == null ? '' : String(point.coverage)}
             >
               {point.label}
             </div>
@@ -906,6 +923,59 @@ describe('DashboardChartWidget — efficiency_mode', () => {
     mockEfficiencyByMode.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('efficiency-mode');
     expectChartEmpty('No drive mode efficiency data for this period');
+  });
+});
+
+describe('DashboardChartWidget — efficiency_tags', () => {
+  it('renders tag labels with trip distance and efficiency coverage', () => {
+    renderChart('efficiency-tags');
+
+    const row = screen.getByTestId('efficiency-pill-label');
+    expect(row).toHaveTextContent('Bike rack');
+    expect(row).toHaveAttribute('data-distance', '68');
+    expect(row).toHaveAttribute('data-coverage', '0.75');
+  });
+
+  it('keeps the untagged cohort visible when tags exist', () => {
+    mockEfficiencyByTag.mockReturnValueOnce({
+      data: [{ tag_id: null, tag_name: 'Untagged', trip_count: 2, total_miles: 30, efficiency_miles: 30, avg_efficiency_wh_mi: 310, coverage: 1 }],
+      isLoading: false,
+    });
+    renderChart('efficiency-tags');
+    expect(screen.getByTestId('efficiency-pill-label')).toHaveTextContent('Untagged');
+  });
+
+  it('uses the same selected tag cohort for the by-tag chart hook', () => {
+    const filter = { tagIds: ['tag-bike', 'tag-rack'], tagMatch: 'any' as const, untagged: false };
+    renderWidget(makeInstance('efficiency-tags'), { ...CTX, tripTagFilter: filter });
+    expect(mockEfficiencyByTag).toHaveBeenLastCalledWith(CTX.vehicleId, CTX.from, CTX.to, filter);
+  });
+
+  it('keeps no-tag onboarding ahead of a synthetic untagged API row', () => {
+    mockTripTags.mockReturnValueOnce({ data: [], isLoading: false, isError: false, refetch: async () => undefined });
+    mockEfficiencyByTag.mockReturnValueOnce({
+      data: [{ tag_id: null, tag_name: 'Untagged', trip_count: 2, total_miles: 30, efficiency_miles: 30, avg_efficiency_wh_mi: 310, coverage: 1 }],
+      isLoading: false,
+    });
+    renderWidget(makeInstance('efficiency-tags'), { ...CTX, canManageTripTags: true });
+    expect(screen.getByText(/Create one with the Tags filter above/i)).toBeTruthy();
+    expect(screen.queryByTestId('efficiency-pill-chart')).toBeNull();
+  });
+
+  it('offers recovery when the shared tag catalog cannot be loaded', () => {
+    mockTripTags.mockReturnValueOnce({ data: [], isLoading: false, isError: true, refetch: async () => undefined });
+    renderChart('efficiency-tags');
+    expect(screen.getByRole('alert')).toHaveTextContent(/Couldn’t load shared tags/i);
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('explains a filtered empty cohort without discarding the selected filters', () => {
+    mockEfficiencyByTag.mockReturnValueOnce({ data: [], isLoading: false });
+    renderWidget(makeInstance('efficiency-tags'), {
+      ...CTX,
+      tripTagFilter: { tagIds: ['tag-rack'], tagMatch: 'all', untagged: false },
+    });
+    expect(screen.getByText(/No trips match these tag filters/i)).toBeTruthy();
   });
 });
 
