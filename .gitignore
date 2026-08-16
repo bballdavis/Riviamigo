@@ -35,6 +35,7 @@ output/
 *.log
 *.tmp
 *.tsbuildinfo
+test_output.txt
 compose/resolv.conf
 .codex_tmp/
 

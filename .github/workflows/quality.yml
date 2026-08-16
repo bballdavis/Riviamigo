@@ -9,10 +9,11 @@ permissions:
 
 env:
   NODE_VERSION: '24.18.0'
+  PNPM_VERSION: '11.15.1'
 
 jobs:
   quality:
-    name: Checks
+    name: Quality checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -22,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          forbidden=$(git ls-files | grep -E '(^|/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(/|$)|(^|/)package-lock\.json$|(^|/)[^/]+\.tmp$' || true)
+          forbidden=$(git ls-files | grep -E '(^|/)(\.codex|\.claude|node_modules|target|dist|coverage|\.turbo|\.playwright-cli)(/|$)|(^|/)(package-lock\.json|test_output\.txt)$|(^|/)[^/]+\.tmp$' || true)
           if [[ -n "$forbidden" ]]; then
             echo "Generated or local-only files are tracked:"
             echo "$forbidden"
@@ -30,6 +31,8 @@ jobs:
           fi
           echo "Repository hygiene check passed"
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}

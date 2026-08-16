@@ -16,7 +16,17 @@ function walk(directory, filename) {
   const results = [];
   for (const entry of readdirSync(directory)) {
     if (
-      ['.git', 'node_modules', 'dist', 'coverage', '.turbo', 'storybook-static'].includes(entry)
+      [
+        '.agents',
+        '.claude',
+        '.codex',
+        '.git',
+        'node_modules',
+        'dist',
+        'coverage',
+        '.turbo',
+        'storybook-static',
+      ].includes(entry)
     ) {
       continue;
     }
@@ -32,7 +42,17 @@ function walkExtensions(directory, extensions) {
   const results = [];
   for (const entry of readdirSync(directory)) {
     if (
-      ['.git', 'node_modules', 'dist', 'coverage', '.turbo', 'storybook-static'].includes(entry)
+      [
+        '.agents',
+        '.claude',
+        '.codex',
+        '.git',
+        'node_modules',
+        'dist',
+        'coverage',
+        '.turbo',
+        'storybook-static',
+      ].includes(entry)
     ) {
       continue;
     }
@@ -102,11 +122,6 @@ if (!catalogsOnly) {
 
   for (const workflow of walkExtensions(resolve(root, '.github', 'workflows'), ['.yml', '.yaml'])) {
     const contents = readFileSync(workflow, 'utf8');
-    for (const match of contents.matchAll(/node-version:\s*['\"]?([0-9]+)/g)) {
-      if (match[1] !== baseline.node.split('.')[0]) {
-        failures.push(`${relative(root, workflow)} still references Node ${match[1]}.`);
-      }
-    }
     for (const match of contents.matchAll(
       /NODE_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
     )) {
@@ -114,6 +129,29 @@ if (!catalogsOnly) {
         failures.push(
           `${relative(root, workflow)} pins NODE_VERSION ${match[1]}; expected ${baseline.node}.`
         );
+      }
+    }
+    for (const match of contents.matchAll(
+      /PNPM_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
+    )) {
+      if (match[1] !== baseline.pnpm) {
+        failures.push(
+          `${relative(root, workflow)} pins PNPM_VERSION ${match[1]}; expected ${baseline.pnpm}.`
+        );
+      }
+    }
+    for (const match of contents.matchAll(
+      /RUST_VERSION:\s*['"]?([0-9]+(?:\.[0-9]+(?:\.[0-9]+)?)?)/g
+    )) {
+      if (match[1] !== baseline.rust) {
+        failures.push(
+          `${relative(root, workflow)} pins RUST_VERSION ${match[1]}; expected ${baseline.rust}.`
+        );
+      }
+    }
+    for (const match of contents.matchAll(/^\s*-\s+uses:\s+[^@\s]+@([^\s#]+)/gm)) {
+      if (!/^[a-f0-9]{40}$/i.test(match[1])) {
+        failures.push(`${relative(root, workflow)} uses a mutable action reference: ${match[1]}.`);
       }
     }
   }

@@ -73,6 +73,10 @@ If AI assistance was used, briefly describe its scope and the human verification
 
 ## Documentation Impact
 
+Choose exactly one classification for every non-trivial change. If the choice
+is not `No doc impact`, list the canonical docs changed or link the tracked
+in-repository documentation-debt item.
+
 - [ ] No doc impact
 - [ ] Internal doc update required
 - [ ] Documentation site update required

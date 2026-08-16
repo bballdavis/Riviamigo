@@ -11,19 +11,25 @@ permissions:
 
 env:
   NODE_VERSION: '24.18.0'
+  PNPM_VERSION: '11.15.1'
+  RUST_VERSION: '1.97.1'
 
 jobs:
   security:
-    name: Checks
+    name: Security checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Verify API route security inventory
@@ -87,4 +93,3 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '1'
-
