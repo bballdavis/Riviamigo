@@ -38,7 +38,9 @@ precise vehicle locations in public issues.
   not a public TLS endpoint. Non-loopback binding requires the explicit
   `ALLOW_PUBLIC_ORIGIN_BIND=true` opt-in.
 - Public HTTPS and HSTS are enforced by the authenticated outer gateway
-- `Secure` cookie flag enforced (disable only with COOKIE_INSECURE=1 in local dev)
+- `Secure` cookie flag enforced; `COOKIE_INSECURE` is local-development-only.
+  The narrow `ALLOW_INSECURE_LAN_HTTP_AUTH=true` production exception accepts
+  only documented private literal-IP HTTP origins and emits a startup warning.
 
 ## Rate Limiting
 
@@ -113,7 +115,8 @@ precise vehicle locations in public issues.
 
 ## Production Checklist
 
-- [ ] `COOKIE_INSECURE` is NOT set
+- [ ] `COOKIE_INSECURE` is NOT set (except local development)
+- [ ] `ALLOW_INSECURE_LAN_HTTP_AUTH` remains `false`, or the documented trusted-LAN exception and host firewall controls are in place
 - [ ] `POSTGRES_PASSWORD` changed from default
 - [ ] `REDIS_PASSWORD` is strong and Redis is not host-published
 - [ ] Generated application keys are protected by database backups, or all three explicit key overrides are stored safely

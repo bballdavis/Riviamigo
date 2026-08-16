@@ -1,6 +1,7 @@
 use anyhow::Context;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 const MIN_SETUP_TOKEN_BYTES: usize = 32;
@@ -55,6 +56,11 @@ pub struct Config {
     /// Set to any value to allow insecure (non-Secure) cookies. Must NOT be
     /// set when `RIVIAMIGO_ENV=production`.
     pub cookie_insecure: Option<String>,
+    /// Explicit, LAN-only production exception for browser clients that cannot
+    /// use HTTPS. This is deliberately a boolean so values such as `false`
+    /// never make refresh cookies insecure.
+    #[serde(default)]
+    pub allow_insecure_lan_http_auth: bool,
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
 }
@@ -284,6 +290,13 @@ impl Config {
     /// Hard-rejects insecure configurations when `RIVIAMIGO_ENV=production`.
     pub fn validate(&self) -> anyhow::Result<()> {
         let is_production = self.is_production();
+        let bind_address: IpAddr = self
+            .origin_bind
+            .riviamigo_bind_address
+            .parse()
+            .map_err(|_| {
+                anyhow::anyhow!("RIVIAMIGO_BIND_ADDRESS must be an IPv4 or IPv6 address")
+            })?;
 
         // Resolve the proof during startup so an invalid or unreadable secret
         // fails explicitly instead of leaving first-owner setup mysteriously
@@ -314,9 +327,20 @@ impl Config {
             }
 
             if self.allowed_origins.is_empty() {
-                anyhow::bail!(
-                    "ALLOWED_ORIGINS must contain the external HTTPS origin in production"
-                );
+                anyhow::bail!("ALLOWED_ORIGINS must contain an exact browser origin in production");
+            }
+
+            if self.allow_insecure_lan_http_auth {
+                if !self.origin_bind.allow_public_origin_bind {
+                    anyhow::bail!(
+                        "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires ALLOW_PUBLIC_ORIGIN_BIND=true"
+                    );
+                }
+                if !is_lan_accessible_bind_address(bind_address) {
+                    anyhow::bail!(
+                        "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires RIVIAMIGO_BIND_ADDRESS to be an unspecified, private, or link-local IP address"
+                    );
+                }
             }
 
             for origin in &self.allowed_origins {
@@ -325,12 +349,34 @@ impl Config {
                         "ALLOWED_ORIGINS contains an invalid origin `{origin}`: {error}"
                     )
                 })?;
-                if parsed.scheme() != "https"
-                    || parsed.host_str().is_none()
+                let common_invalid = parsed.host_str().is_none()
+                    || parsed.username() != ""
+                    || parsed.password().is_some()
                     || parsed.path() != "/"
                     || parsed.query().is_some()
-                    || parsed.fragment().is_some()
-                {
+                    || parsed.fragment().is_some();
+                if common_invalid {
+                    anyhow::bail!(
+                        "ALLOWED_ORIGINS must contain exact origins without credentials, paths, queries, or fragments in production; found `{origin}`"
+                    );
+                }
+
+                if self.allow_insecure_lan_http_auth {
+                    let ip = match parsed.host() {
+                        Some(url::Host::Ipv4(ip)) => IpAddr::V4(ip),
+                        Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip),
+                        Some(url::Host::Domain(_)) | None => {
+                            anyhow::bail!(
+                                "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires ALLOWED_ORIGINS to use private, loopback, or link-local literal IP hosts; found `{origin}`"
+                            );
+                        }
+                    };
+                    if parsed.scheme() != "http" || !is_lan_client_address(ip) {
+                        anyhow::bail!(
+                            "ALLOW_INSECURE_LAN_HTTP_AUTH=true requires exact HTTP origins using private, loopback, or link-local literal IP hosts; found `{origin}`"
+                        );
+                    }
+                } else if parsed.scheme() != "https" {
                     anyhow::bail!(
                         "ALLOWED_ORIGINS must contain exact HTTPS origins without paths, queries, or fragments in production; found `{origin}`"
                     );
@@ -363,13 +409,6 @@ impl Config {
         self.rate_limit.validate()?;
         self.validate_recovery_limits()?;
 
-        let bind_address: std::net::IpAddr = self
-            .origin_bind
-            .riviamigo_bind_address
-            .parse()
-            .map_err(|_| {
-                anyhow::anyhow!("RIVIAMIGO_BIND_ADDRESS must be an IPv4 or IPv6 address")
-            })?;
         if !bind_address.is_loopback() && !self.origin_bind.allow_public_origin_bind {
             anyhow::bail!(
                 "RIVIAMIGO_BIND_ADDRESS may be non-loopback only when ALLOW_PUBLIC_ORIGIN_BIND=true"
@@ -403,6 +442,20 @@ impl Config {
         self.riviamigo_env
             .as_deref()
             .is_some_and(|environment| environment.eq_ignore_ascii_case("production"))
+    }
+
+    pub fn is_development(&self) -> bool {
+        self.riviamigo_env
+            .as_deref()
+            .is_some_and(|environment| environment.eq_ignore_ascii_case("development"))
+    }
+
+    /// Determines whether refresh cookies may omit the Secure attribute.
+    /// Production reaches this state only through `validate`'s narrowly scoped
+    /// LAN opt-in. The legacy development switch remains development-only.
+    pub fn allows_insecure_refresh_cookies(&self) -> bool {
+        self.allow_insecure_lan_http_auth
+            || (self.is_development() && self.cookie_insecure.is_some())
     }
 
     /// Effective source for JWT signing and age encryption roots. This is safe
@@ -442,6 +495,22 @@ impl Config {
                 difference | (left ^ right)
             });
         Ok(difference == 0)
+    }
+}
+
+fn is_lan_client_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+    }
+}
+
+fn is_lan_accessible_bind_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(ip) if ip.is_unspecified() => true,
+        IpAddr::V6(ip) if ip.is_unspecified() => true,
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
     }
 }
 
@@ -623,6 +692,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: Some("production".into()),
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: RateLimitConfig::default(),
         }
     }
@@ -716,6 +786,126 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("non-default database password"));
+    }
+
+    #[test]
+    fn production_lan_http_auth_requires_the_complete_private_literal_opt_in() {
+        let mut config = production_config();
+        config.allow_insecure_lan_http_auth = true;
+        config.allowed_origins = vec!["http://192.168.1.20:8080".into()];
+
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("ALLOW_PUBLIC_ORIGIN_BIND"));
+
+        config.origin_bind.allow_public_origin_bind = true;
+        config.origin_bind.riviamigo_bind_address = "127.0.0.1".into();
+        assert!(
+            config.validate().is_err(),
+            "a loopback-only bind is not LAN-accessible"
+        );
+
+        config.origin_bind.riviamigo_bind_address = "0.0.0.0".into();
+        config
+            .validate()
+            .expect("the fully acknowledged private-literal LAN configuration is valid");
+    }
+
+    #[test]
+    fn production_lan_http_auth_rejects_public_hostname_credentials_and_mixed_origins() {
+        let mut config = production_config();
+        config.allow_insecure_lan_http_auth = true;
+        config.origin_bind.allow_public_origin_bind = true;
+        config.origin_bind.riviamigo_bind_address = "192.168.1.20".into();
+
+        for invalid_origin in [
+            "http://riviamigo.local:8080",
+            "http://8.8.8.8:8080",
+            "http://user:password@192.168.1.20:8080",
+            "https://192.168.1.20:8080",
+            "http://192.168.1.20:8080/app",
+        ] {
+            config.allowed_origins = vec![invalid_origin.into()];
+            assert!(
+                config.validate().is_err(),
+                "expected {invalid_origin} to be rejected"
+            );
+        }
+
+        config.allowed_origins = vec![
+            "http://192.168.1.20:8080".into(),
+            "https://192.168.1.21:8080".into(),
+        ];
+        assert!(config.validate().is_err(), "mixed origin schemes must fail");
+    }
+
+    #[test]
+    fn only_the_explicit_lan_opt_in_allows_insecure_production_refresh_cookies() {
+        let mut config = production_config();
+        assert!(!config.allows_insecure_refresh_cookies());
+
+        config.allow_insecure_lan_http_auth = true;
+        assert!(config.allows_insecure_refresh_cookies());
+
+        config.allow_insecure_lan_http_auth = false;
+        config.cookie_insecure = Some("false".into());
+        assert!(
+            !config.allows_insecure_refresh_cookies(),
+            "the legacy environment value must not weaken production cookies"
+        );
+    }
+
+    #[test]
+    fn cookie_insecure_remains_available_only_in_explicit_development_mode() {
+        let mut config = production_config();
+        config.riviamigo_env = Some("staging".into());
+        config.cookie_insecure = Some("1".into());
+        assert!(!config.allows_insecure_refresh_cookies());
+
+        config.riviamigo_env = Some("development".into());
+        assert!(config.allows_insecure_refresh_cookies());
+    }
+
+    #[test]
+    fn lan_address_helpers_only_accept_private_loopback_or_link_local_clients() {
+        assert!(is_lan_client_address("127.0.0.1".parse().unwrap()));
+        assert!(is_lan_client_address("169.254.10.2".parse().unwrap()));
+        assert!(is_lan_client_address("192.168.1.20".parse().unwrap()));
+        assert!(is_lan_client_address("fd00::20".parse().unwrap()));
+        assert!(!is_lan_client_address("8.8.8.8".parse().unwrap()));
+        assert!(!is_lan_client_address("2001:4860:4860::8888".parse().unwrap()));
+    }
+
+    #[test]
+    fn lan_http_auth_environment_value_is_a_strict_boolean() {
+        let base = vec![
+            (
+                "DATABASE_URL".to_owned(),
+                "postgresql://riviamigo:password@localhost/riviamigo".to_owned(),
+            ),
+            (
+                "REDIS_URL".to_owned(),
+                "redis://:password@localhost/".to_owned(),
+            ),
+        ];
+
+        let mut explicitly_false = base.clone();
+        explicitly_false.push((
+            "ALLOW_INSECURE_LAN_HTTP_AUTH".to_owned(),
+            "false".to_owned(),
+        ));
+        let config = envy::from_iter::<_, Config>(explicitly_false)
+            .expect("false is a valid explicit boolean");
+        assert!(!config.allow_insecure_lan_http_auth);
+
+        let mut invalid = base;
+        invalid.push(("ALLOW_INSECURE_LAN_HTTP_AUTH".to_owned(), "1".to_owned()));
+        assert!(
+            envy::from_iter::<_, Config>(invalid).is_err(),
+            "presence-like values must not enable insecure LAN cookies"
+        );
     }
 
     #[test]

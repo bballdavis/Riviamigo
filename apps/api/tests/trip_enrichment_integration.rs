@@ -105,6 +105,7 @@ impl TestApp {
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
+                allow_insecure_lan_http_auth: false,
                 rate_limit: Default::default(),
                 vehicle_image_cache_dir: std::env::temp_dir()
                     .join("riviamigo-trip-enrichment-test-images")

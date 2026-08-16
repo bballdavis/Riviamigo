@@ -15,6 +15,11 @@ async fn main() -> anyhow::Result<()> {
     logging::init();
 
     let mut config = Config::from_env()?;
+    if config.is_production() && config.allow_insecure_lan_http_auth {
+        tracing::warn!(
+            "ALLOW_INSECURE_LAN_HTTP_AUTH is enabled: browser credentials and telemetry may be intercepted on this LAN; use HTTPS behind an authenticated gateway whenever possible"
+        );
+    }
     let pool = create_pool(&config.database_url).await?;
 
     let migration_pool = PgPoolOptions::new()

@@ -48,6 +48,28 @@ the gateway itself is operated and patched by the self-hoster.
 - Do not publish API port 3001, PostgreSQL port 5432, Redis port 6379, or the
   origin port 8080 directly to the Internet.
 
+### Exceptional trusted-LAN HTTP access
+
+Do not use this procedure for public, guest, or untrusted Wi-Fi networks. If
+HTTPS cannot be provided on an isolated trusted LAN, set all of these in the
+Compose environment file:
+
+```dotenv
+RIVIAMIGO_BIND_ADDRESS=0.0.0.0
+ALLOW_PUBLIC_ORIGIN_BIND=true
+ALLOWED_ORIGINS=http://192.168.1.20:8080
+ALLOW_INSECURE_LAN_HTTP_AUTH=true
+```
+
+The final variable is a strict boolean and defaults to `false` in the standard
+Compose file. Startup accepts only private, loopback, or link-local literal IP
+HTTP origins; it rejects hostnames, public IPs, paths, credentials, and mixed
+HTTP/HTTPS origin lists. This is an intentional reduction in transport
+protection: refresh cookies remain HttpOnly, SameSite=Lax, rotating, and
+revocable, but they no longer carry the `Secure` attribute. Restrict the port
+to the trusted LAN with host firewall rules, disclose the interception risk to
+users, and restore HTTPS as soon as possible.
+
 ## Gateway requirements
 
 - Enforce authentication before forwarding any request, including `/v1/*` and

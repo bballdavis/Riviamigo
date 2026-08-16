@@ -15,6 +15,10 @@ services:
     restart: unless-stopped
     env_file:
       - ${RIVIAMIGO_ENV_FILE:-../.env}
+    environment:
+      # LAN-only escape hatch for browser clients without HTTPS. Keep false unless
+      # the documented private-network requirements are intentionally met.
+      ALLOW_INSECURE_LAN_HTTP_AUTH: ${ALLOW_INSECURE_LAN_HTTP_AUTH:-false}
     depends_on:
       riviamigo-init:
         condition: service_completed_successfully
