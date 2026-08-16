@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import type { MetricBatchMetricRequest } from '@riviamigo/types';
 import { useAuthReady } from './useAuthState';
+import type { TripTagFilters } from './useTrips';
 
 export type MetricSeriesBucket = 'auto' | 'raw' | 'minute' | '5min' | '15min' | 'hour' | 'day';
 
@@ -76,6 +77,7 @@ export function useMetricBatch(
   from: string | null,
   to: string | null,
   lifetime = false,
+  filters?: TripTagFilters,
 ) {
   const authReady = useAuthReady();
   const stableMetrics = metrics.map((metric) => ({
@@ -84,8 +86,14 @@ export function useMetricBatch(
     include_series: metric.include_series !== false,
   }));
   const metricKey = stableMetrics.map((metric) => `${metric.metric}:${Number(metric.include_latest)}:${Number(metric.include_series)}`).join('|');
+  const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
+  const tagFilters = {
+    tagIds,
+    tagMatch: filters?.tagMatch === 'any' ? 'any' as const : 'all' as const,
+    untagged: Boolean(filters?.untagged) && tagIds.length === 0,
+  };
   return useQuery({
-    queryKey: ['metrics', 'batch', vehicleId, from, to, lifetime, metricKey],
+    queryKey: ['metrics', 'batch', vehicleId, from, to, lifetime, metricKey, tagFilters],
     queryFn: () => api.getMetricBatch({
       vehicle_id: vehicleId!,
       metrics: stableMetrics,
@@ -94,6 +102,8 @@ export function useMetricBatch(
       lifetime,
       density: 'full',
       bucket: 'raw',
+      ...(tagFilters.tagIds.length ? { tag_ids: tagFilters.tagIds.join(','), tag_match: tagFilters.tagMatch } : {}),
+      ...(tagFilters.untagged ? { untagged: true } : {}),
     }),
     enabled: authReady && !!vehicleId && stableMetrics.length > 0,
     staleTime: 2 * 60 * 1000,

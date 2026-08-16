@@ -13,7 +13,26 @@ use crate::{
     middleware::auth::{AppState, AuthUser},
 };
 
-const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 1;
+// Advance this whenever a bundled system dashboard changes so existing
+// installations receive the new baseline on their next startup.
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 2;
+
+const UPSERT_SYSTEM_DEFAULT_SQL: &str = r#"
+    INSERT INTO dashboards
+      (id, owner_id, slug, name, is_default, is_locked, config, baseline_revision)
+    VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4, $5)
+    ON CONFLICT (id) DO UPDATE
+    SET slug = EXCLUDED.slug,
+        name = EXCLUDED.name,
+        is_default = TRUE,
+        is_locked = TRUE,
+        config = EXCLUDED.config,
+        baseline_revision = EXCLUDED.baseline_revision,
+        updated_at = NOW()
+    WHERE dashboards.owner_id IS NULL
+      AND dashboards.is_default = TRUE
+      AND COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision
+    "#;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -575,24 +594,7 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         let config =
             dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
 
-        sqlx::query(
-            r#"
-            INSERT INTO dashboards
-              (id, owner_id, slug, name, is_default, is_locked, config, baseline_revision)
-            VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4, $5)
-            ON CONFLICT (id) DO UPDATE
-            SET slug = EXCLUDED.slug,
-                name = EXCLUDED.name,
-                is_default = TRUE,
-                is_locked = TRUE,
-                config = EXCLUDED.config,
-                baseline_revision = EXCLUDED.baseline_revision,
-                updated_at = NOW()
-            WHERE dashboards.owner_id IS NULL
-              AND dashboards.is_default = TRUE
-              AND COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision
-            "#,
-        )
+        sqlx::query(UPSERT_SYSTEM_DEFAULT_SQL)
         .bind(id)
         .bind(slug)
         .bind(name)
@@ -642,6 +644,27 @@ mod tests {
             let frontend_config: Value = serde_json::from_str(frontend_source).unwrap();
             assert_eq!(api_config, frontend_config, "seed drift in {file_name}");
         }
+    }
+
+    #[test]
+    fn efficiency_tag_chart_advances_only_the_system_default_baseline() {
+        let efficiency: Value =
+            serde_json::from_str(include_str!("../../dashboards/efficiency.json")).unwrap();
+        let chart_ids = efficiency["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|widget| widget["componentType"] == "chart")
+            .and_then(|widget| widget["options"]["chartIds"].as_array())
+            .expect("efficiency chart IDs");
+
+        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 2);
+        assert!(chart_ids.iter().any(|id| id == "efficiency-tags"));
+        assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.owner_id IS NULL"));
+        assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.is_default = TRUE"));
+        assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains(
+            "COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision"
+        ));
     }
 
     #[test]

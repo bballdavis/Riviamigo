@@ -340,6 +340,14 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuthReady: () => true,
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
+  useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+  useUpdateChargingNetworkPreference: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+    variables: undefined,
+  }),
   resolveVehicleArtwork: (_images: unknown, model: string) => ({
     light: null,
     dark: null,
@@ -399,6 +407,7 @@ vi.mock('../../components/layout/AuthGuard', () => ({
 }));
 vi.mock('lucide-react', () => ({
   Activity: () => <svg data-testid="icon-activity" />,
+  AlertCircle: () => <svg data-testid="icon-alert-circle" />,
   Braces: () => <svg data-testid="icon-braces" />,
   Car: () => <svg data-testid="icon-car" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
@@ -444,6 +453,7 @@ vi.mock('lucide-react', () => ({
   SlidersHorizontal: () => <svg data-testid="icon-sliders" />,
   Star: () => <svg data-testid="icon-star" />,
   Users: () => <svg data-testid="icon-users" />,
+  Zap: () => <svg data-testid="icon-zap" />,
   X: () => <svg data-testid="icon-x" />,
   Trash2: () => <svg data-testid="icon-trash" />,
   Unlock: () => <svg data-testid="icon-unlock" />,

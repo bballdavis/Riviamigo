@@ -11,6 +11,7 @@ export type DashboardChartSource =
   | 'efficiency_trend'
   | 'efficiency_temperature'
   | 'efficiency_mode'
+  | 'efficiency_tags'
   | 'phantom_drain'
   | 'battery_degradation'
   | 'battery_capacity_mileage'
