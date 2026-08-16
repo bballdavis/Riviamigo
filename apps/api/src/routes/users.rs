@@ -15,6 +15,7 @@ use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
     routes::users_support::{parse_membership_role, parse_role},
+    services::security_audit::SecurityAuditEvent,
 };
 
 pub fn router() -> Router<AppState> {
@@ -268,11 +269,13 @@ fn hash_token(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-fn audit_log(pool: &sqlx::PgPool, event: &'static str, user_id: Uuid, detail: String) {
+fn audit_log(pool: &sqlx::PgPool, event: &'static str, user_id: Uuid, _detail: String) {
     let pool = pool.clone();
     tokio::spawn(async move {
-        if let Err(error) = sqlx::query("INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) VALUES ($1, $2, $3, now())")
-            .bind(event).bind(user_id).bind(detail).execute(&pool).await {
+        if let Err(error) = SecurityAuditEvent::success(event, Some(user_id))
+            .record(&pool)
+            .await
+        {
             tracing::warn!(%error, event, "failed to record account invitation audit event");
         }
     });
@@ -657,16 +660,11 @@ async fn list_user_invites_payload(
         .collect())
 }
 
-fn support_audit(pool: sqlx::PgPool, event: &'static str, user_id: Option<Uuid>, detail: String) {
+fn support_audit(pool: sqlx::PgPool, event: &'static str, user_id: Option<Uuid>, _detail: String) {
     tokio::spawn(async move {
-        let result = sqlx::query(
-            "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) VALUES ($1, $2, $3, now())",
-        )
-        .bind(event)
-        .bind(user_id)
-        .bind(detail)
-        .execute(&pool)
-        .await;
+        let result = SecurityAuditEvent::success(event, user_id)
+            .record(&pool)
+            .await;
         if let Err(error) = result {
             tracing::warn!(error = %error, event, "support audit insert failed");
         }

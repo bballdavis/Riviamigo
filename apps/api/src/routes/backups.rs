@@ -10,7 +10,11 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
-use tokio::{fs, io::AsyncWriteExt};
+use tokio::{
+    fs,
+    io::AsyncWriteExt,
+    time::{Duration as TokioDuration, Instant},
+};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -466,6 +470,15 @@ async fn upload_backup_artifact(
 ) -> Result<(StatusCode, Json<UploadBackupResponse>), AppError> {
     require_admin(&state, auth.user_id).await?;
 
+    let declared_size = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared_size.is_some_and(|size| size > state.config.recovery.max_upload_bytes) {
+        return Err(AppError::RecoveryTooLarge(
+            "Recovery package exceeds the configured upload limit.".into(),
+        ));
+    }
     let original_name = headers
         .get("x-riviamigo-file-name")
         .and_then(|value| value.to_str().ok())
@@ -477,10 +490,10 @@ async fn upload_backup_artifact(
             "Upload a Riviamigo .rma.tar.gz recovery package.".into(),
         ));
     }
-
     let run_id = Uuid::new_v4();
     let import_dir = std::path::Path::new(&state.config.backup_artifact_dir).join("imports");
     fs::create_dir_all(&import_dir).await?;
+    ensure_recovery_free_space(&import_dir, state.config.recovery.min_free_bytes)?;
     let final_name = format!(
         "import-{}-{}.rma.tar.gz",
         Utc::now().format("%Y%m%dT%H%M%SZ"),
@@ -489,22 +502,39 @@ async fn upload_backup_artifact(
     let final_path = import_dir.join(&final_name);
     let temporary_path = import_dir.join(format!(".{run_id}.uploading"));
 
-    sqlx::query(
-        "INSERT INTO riviamigo.backup_runs (id, trigger, status, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', $2, now(), now())",
-    )
-    .bind(run_id)
-    .bind(auth.user_id)
-    .execute(&state.pool)
-    .await?;
-
+    let recovery_lock = backup_service::acquire_recovery_mutation_lock(&state.pool).await?;
     let upload_result = async {
+        sqlx::query(
+            "INSERT INTO riviamigo.backup_runs (id, trigger, status, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', $2, now(), now())",
+        )
+        .bind(run_id)
+        .bind(auth.user_id)
+        .execute(&state.pool)
+        .await?;
         let mut output = fs::File::create(&temporary_path).await?;
         let mut stream = body.into_data_stream();
+        let deadline = Instant::now()
+            + TokioDuration::from_secs(state.config.recovery.upload_deadline_seconds);
+        let mut received = 0_u64;
         while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            if Instant::now() >= deadline {
+                return Err(AppError::RecoveryDeadline(
+                    "Recovery upload exceeded the configured deadline.".into(),
+                ));
+            }
             let chunk = chunk.map_err(|error| {
                 AppError::Validation(format!("Backup upload was interrupted: {error}"))
             })?;
+            received = received.checked_add(chunk.len() as u64).ok_or_else(|| {
+                AppError::RecoveryTooLarge("Recovery upload size overflowed.".into())
+            })?;
+            if received > state.config.recovery.max_upload_bytes {
+                return Err(AppError::RecoveryTooLarge(
+                    "Recovery package exceeds the configured upload limit.".into(),
+                ));
+            }
             output.write_all(&chunk).await?;
+            ensure_recovery_free_space(&import_dir, state.config.recovery.min_free_bytes)?;
         }
         output.flush().await?;
         drop(output);
@@ -545,7 +575,7 @@ async fn upload_backup_artifact(
     }
     .await;
 
-    match upload_result {
+    let response = match upload_result {
         Ok(artifact) => Ok((StatusCode::CREATED, Json(UploadBackupResponse { artifact }))),
         Err(error) => {
             let _ = fs::remove_file(&temporary_path).await;
@@ -559,7 +589,20 @@ async fn upload_backup_artifact(
             .await;
             Err(error)
         }
+    };
+    recovery_lock.release().await;
+    response
+}
+
+fn ensure_recovery_free_space(path: &std::path::Path, minimum: u64) -> Result<(), AppError> {
+    let available = fs2::available_space(path)?;
+    if available < minimum {
+        return Err(AppError::RecoveryInsufficientStorage(format!(
+            "Recovery storage needs at least {} GiB free before continuing.",
+            minimum / 1024 / 1024 / 1024
+        )));
     }
+    Ok(())
 }
 
 async fn delete_uploaded_artifact(

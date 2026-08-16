@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
@@ -454,7 +454,7 @@ async fn get_value(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let metric = find_metric(&p.metric)?;
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
@@ -478,7 +478,7 @@ async fn get_series(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let metric = find_metric(&p.metric)?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let bucket = resolve_bucket(p.bucket.as_deref(), from, to)?;
@@ -538,7 +538,7 @@ async fn get_batch(
     }
 
     require_vehicle_access(&auth, p.vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, p.vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, p.vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let (density, bucket, max_points) = resolve_batch_density(
         p.density.as_deref(),

@@ -29,9 +29,13 @@ async fn main() -> anyhow::Result<()> {
         })
         .connect(&config.database_url)
         .await?;
-    db::migrations::MIGRATOR.run(&migration_pool).await?;
+    let migration = db::migrations::run_current_migrations(&migration_pool).await?;
     migration_pool.close().await;
-    tracing::info!("database schema is current");
+    tracing::info!(
+        latest_version = migration.latest_version,
+        ledger_action = ?migration.ledger_action,
+        "database schema is current"
+    );
 
     match services::restore_jobs::reconcile_completed_jobs(&pool, &config).await {
         Ok(()) => tracing::info!("restore job journal reconciled"),
@@ -58,6 +62,11 @@ async fn main() -> anyhow::Result<()> {
         config.age_encryption_key.clone(),
     )
     .await?;
+    tracing::info!(
+        cryptographic_key_source = config.cryptographic_key_source(),
+        database_key_shared_fate = config.cryptographic_key_source() == "database",
+        "application cryptographic keys ready"
+    );
 
     let jwt_keys = Arc::new(JwtKeys::new(
         &active_keys.jwt_private_pem,
@@ -94,10 +103,16 @@ async fn main() -> anyhow::Result<()> {
         services::weather_enrichment::start_worker(pool.clone(), age_key.clone());
     let _trip_enrichment_reconciler =
         services::trip_enrichment::start_reconciliation_worker(pool.clone());
+    let _security_audit_retention =
+        services::security_audit::start_retention_worker(pool.clone());
 
     let app = routes::build_router(state);
 
-    let addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;
+    let addr: SocketAddr = format!(
+        "{}:{}",
+        config.origin_bind.riviamigo_bind_address, config.port
+    )
+    .parse()?;
     tracing::info!("listening on {addr}");
     let listener = TcpListener::bind(addr).await?;
     axum::serve(

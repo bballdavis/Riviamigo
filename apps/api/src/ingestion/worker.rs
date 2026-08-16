@@ -31,6 +31,10 @@ use crate::{
     },
 };
 
+mod state_decisions;
+
+use state_decisions::{is_synthetic_control, runtime_health_update_for_ws_control};
+
 const MIN_TRIP_DISTANCE_MILES: f64 = 0.1;
 const ADVISORY_LOCK_NAMESPACE: i64 = 0x52_49_56_57; // "RIVW"
 const WS_WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
@@ -1270,85 +1274,6 @@ async fn handle_inbound_accounting(
     if config.rivian_persist_raw_events {
         persist_raw_event(pool, batch, vehicle_id, inbound).await;
     }
-}
-
-fn is_synthetic_control(message_type: Option<&str>) -> bool {
-    matches!(
-        message_type,
-        Some(
-            "connection_open"
-                | "connection_init"
-                | "subscribe"
-                | "reconnect"
-                | "ws_handshake_rejected"
-                | "ws_schema_rejected"
-                | "ws_schema_degraded"
-                | "ws_no_active_subscriptions"
-        )
-    )
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimeHealthUpdate {
-    online: bool,
-    worker_health: &'static str,
-    worker_health_msg: String,
-    auth_state: &'static str,
-    auth_reason_code: Option<&'static str>,
-}
-
-fn runtime_health_update_for_ws_control(inbound: &WsInboundEvent) -> Option<RuntimeHealthUpdate> {
-    match inbound.message_type.as_deref() {
-        Some("connection_open") => Some(RuntimeHealthUpdate {
-            online: true,
-            worker_health: "connected",
-            worker_health_msg: String::new(),
-            auth_state: "authorized",
-            auth_reason_code: None,
-        }),
-        Some("ws_handshake_rejected") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "error",
-            worker_health_msg: read_ws_detail_message(&inbound.raw)
-                .unwrap_or_else(|| "Rivian WS handshake rejected".into()),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_handshake_rejected"),
-        }),
-        Some("ws_schema_rejected") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: read_ws_detail_message(&inbound.raw)
-                .unwrap_or_else(|| "Rivian WS VehicleState schema rejected".into()),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_schema_rejected"),
-        }),
-        Some("ws_schema_degraded") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: "Rivian WS subscription degraded to recover from schema drift"
-                .into(),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_schema_rejected"),
-        }),
-        Some("ws_no_active_subscriptions") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "degraded",
-            worker_health_msg: read_ws_detail_message(&inbound.raw).unwrap_or_else(|| {
-                "Rivian WS reported no active subscriptions; reconnecting".into()
-            }),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_no_active_subscriptions"),
-        }),
-        _ => None,
-    }
-}
-
-fn read_ws_detail_message(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    value
-        .get("reason")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
 }
 
 async fn persist_raw_event(

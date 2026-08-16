@@ -1,5 +1,5 @@
 use chrono_tz::Tz;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::errors::AppError;
 
@@ -36,22 +36,30 @@ pub async fn load_app_timezone(pool: &PgPool) -> Result<Tz, AppError> {
 }
 
 pub async fn set_app_timezone(pool: &PgPool, timezone: Tz) -> Result<(), AppError> {
-    let timezone_name = timezone.name();
     let mut transaction = pool.begin().await?;
+    set_app_timezone_tx(&mut transaction, timezone).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+pub async fn set_app_timezone_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    timezone: Tz,
+) -> Result<(), AppError> {
+    let timezone_name = timezone.name();
     sqlx::query(
         "INSERT INTO riviamigo.system_config (key, value) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
     )
     .bind(APP_TIMEZONE_KEY)
     .bind(timezone_name)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query(
         "UPDATE riviamigo.backup_settings SET timezone = $1, updated_at = now() WHERE id = TRUE",
     )
     .bind(timezone_name)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    transaction.commit().await?;
     Ok(())
 }

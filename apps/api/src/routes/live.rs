@@ -15,7 +15,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{require_vehicle_membership, require_vehicle_read_access},
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser, Claims},
 };
@@ -85,7 +85,7 @@ async fn live_handler(
 
     let claims = extract_jwt_from_headers(&headers, &state.jwt_keys)?;
 
-    require_vehicle_owned(&state.pool, claims.sub, vid).await?;
+    require_vehicle_membership(&state.pool, claims.sub, vid).await?;
 
     let redis = state.redis.clone();
     Ok(ws
@@ -102,7 +102,7 @@ async fn live_session_handler(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let key = format!("vehicle:{vehicle_id}:live_session");
     let mut conn = state.redis.get_multiplexed_async_connection().await?;

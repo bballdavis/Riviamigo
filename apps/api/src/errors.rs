@@ -15,6 +15,16 @@ pub enum AppError {
     Forbidden,
     #[error("Conflict: {0}")]
     Conflict(String),
+    #[error("Recovery operation conflict: {0}")]
+    RecoveryConflict(String),
+    #[error("Recovery package too large: {0}")]
+    RecoveryTooLarge(String),
+    #[error("Invalid recovery package: {0}")]
+    RecoveryInvalid(String),
+    #[error("Insufficient recovery storage: {0}")]
+    RecoveryInsufficientStorage(String),
+    #[error("Recovery operation deadline exceeded: {0}")]
+    RecoveryDeadline(String),
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
     #[error("IO error: {0}")]
@@ -46,6 +56,25 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", self.to_string()),
             AppError::Conflict(m) => (StatusCode::CONFLICT, "CONFLICT", m.clone()),
+            AppError::RecoveryConflict(m) => (StatusCode::CONFLICT, "RECOVERY_CONFLICT", m.clone()),
+            AppError::RecoveryTooLarge(m) => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "RECOVERY_TOO_LARGE",
+                m.clone(),
+            ),
+            AppError::RecoveryInvalid(m) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "RECOVERY_INVALID",
+                m.clone(),
+            ),
+            AppError::RecoveryInsufficientStorage(m) => (
+                StatusCode::INSUFFICIENT_STORAGE,
+                "RECOVERY_INSUFFICIENT_STORAGE",
+                m.clone(),
+            ),
+            AppError::RecoveryDeadline(m) => {
+                (StatusCode::GATEWAY_TIMEOUT, "RECOVERY_DEADLINE", m.clone())
+            }
             AppError::Validation(m) => (StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION", m.clone()),
             AppError::DependencyUnavailable(m) => (
                 StatusCode::SERVICE_UNAVAILABLE,

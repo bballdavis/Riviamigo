@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
@@ -168,7 +168,7 @@ async fn idle_drain(
     Query(params): Query<IdleDrainParams>,
 ) -> Result<Json<IdleDrainResponse>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let (from, to) =
         resolve_time_bounds(params.from, params.to, params.lifetime.unwrap_or(false), 30);
@@ -812,6 +812,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,

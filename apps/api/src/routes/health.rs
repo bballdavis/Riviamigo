@@ -11,7 +11,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
@@ -158,7 +158,7 @@ async fn health(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<HealthResponse>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count, extended) = tokio::try_join!(
         fetch_vehicle(&state.pool, vehicle_id),
