@@ -37,12 +37,13 @@ import { BackupSection } from '../../components/settings/BackupSection';
 import { ExternalConnectionsSection } from '../../components/settings/ExternalConnectionsSection';
 import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
+import { ChargingSection } from '../../components/settings/ChargingSection';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
 import {
-  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X,
+  Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
 } from 'lucide-react';
 
 type BatteryGen = 'gen1' | 'gen2';
@@ -65,13 +66,14 @@ const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: str
 const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
 const R2S_PRESET = { key: 'r2s', label: 'R2S', kwh: 82 };
 
-type SettingsSection = 'vehicles' | 'dashboards' | 'units' | 'places' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'dashboards' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
   { id: 'dashboards', label: 'Dashboards', icon: Clipboard },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
+  { id: 'charging', label: 'Charging', icon: Zap },
   { id: 'external', label: 'External Connections', icon: Globe2 },
   { id: 'api', label: 'API Access', icon: KeyRound },
   { id: 'jobs', label: 'Jobs', icon: ListChecks },
@@ -1764,6 +1766,8 @@ export function SettingsContent() {
             )}
 
             {activeSection === 'places' && <PlacesSection unitSystem={placesUnitSystem} />}
+
+            {activeSection === 'charging' && <ChargingSection />}
 
             {activeSection === 'external' && <ExternalConnectionsSection />}
 

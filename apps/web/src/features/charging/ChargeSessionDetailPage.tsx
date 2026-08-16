@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from '@tanstack/react-router';
-import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSessionLocation } from '@riviamigo/hooks';
-import type { Place } from '@riviamigo/types';
+import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSession, useVehicles } from '@riviamigo/hooks';
+import type { ChargeSessionUpdate, Place } from '@riviamigo/types';
 import {
-  PageLayout, StatCardGrid, StatCard, Card,
+  PageLayout, StatCardGrid, StatCard, Card, CardContent, CardHeader, CardTitle, Button, Input, SelectPicker, Badge,
 } from '@riviamigo/ui/primitives';
 import { DashboardChartWidget } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
@@ -11,7 +11,7 @@ import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatKwh, formatDuration, formatCurrency, formatPercent } from '@riviamigo/ui/lib/utils';
 import { formatAppDate, formatAppTime } from '@riviamigo/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
-import { ArrowLeft, ChevronDown, Database, MapPin, RadioTower, Receipt, Route, Zap } from 'lucide-react';
+import { ArrowLeft, Database, MapPin, RadioTower, Receipt, Route, RotateCcw, Zap } from 'lucide-react';
 
 export function ChargeSessionContent() {
   return <ChargeSessionContentInner />;
@@ -29,15 +29,12 @@ function ChargeSessionContentInner() {
     isFetching: placesFetching,
     isError: placesError,
   } = useSavedPlaces();
-  const { mutate: updateLocation, isPending: isUpdatingLocation } = useUpdateChargeSessionLocation(effectiveVehicleId);
-  const [selectedLocationName, setSelectedLocationName] = useState<string | null>(null);
+  const updateSession = useUpdateChargeSession(effectiveVehicleId);
+  const { data: vehicles = [] } = useVehicles();
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const hasVehicle = !!effectiveVehicleId;
   const isPlacesLoading = placesLoading || placesFetching;
 
-  useEffect(() => {
-    if (!session) return;
-    setSelectedLocationName(session.location_name);
-  }, [session?.location_name, session?.id]);
   const chargeCurveInstance = {
     id: `charge-session-curve-${sessionId}`,
     componentType: 'chart' as const,
@@ -64,35 +61,14 @@ function ChargeSessionContentInner() {
     })()
     : 'Charge Session';
 
-  const selectedLocationMatchesPlace = Boolean(
-    selectedLocationName
-      && places.find((place) => place.name.trim().toLowerCase() === selectedLocationName.trim().toLowerCase()),
-  );
-  const shouldShowLocationSelector = !selectedLocationName || selectedLocationMatchesPlace;
-
-  const locationSubtitle = session ? (
-    shouldShowLocationSelector ? (
-      <SessionLocationChip
-        currentLocationName={selectedLocationName}
-        places={places}
-        isLoading={isPlacesLoading}
-        isError={placesError}
-        isBusy={isUpdatingLocation}
-        disabled={isUpdatingLocation}
-        onChange={(placeId, placeName) => {
-          setSelectedLocationName(placeName);
-          updateLocation({ sessionId, placeId, placeName });
-        }}
-      />
-    ) : (
-      <span className="inline-flex items-center gap-1.5 text-sm text-fg">
-        <MapPin className="h-3.5 w-3.5 text-accent" />
-        <span className="max-w-52 truncate" title={selectedLocationName ?? undefined}>
-          {selectedLocationName}
-        </span>
-      </span>
-    )
+  const locationSubtitle = session?.location_name ? (
+    <span className="inline-flex items-center gap-1.5 text-sm text-fg">
+      <MapPin className="h-3.5 w-3.5 text-accent" />
+      <span className="max-w-52 truncate" title={session.location_name}>{session.location_name}</span>
+    </span>
   ) : null;
+  const membershipRole = vehicles.find((vehicle) => vehicle.id === effectiveVehicleId)?.membership_role ?? 'viewer';
+  const canManageSession = membershipRole === 'owner' || membershipRole === 'manager';
 
   const backButton = (
     <button
@@ -123,6 +99,23 @@ function ChargeSessionContentInner() {
         ) : (
           <>
             {session && <SessionSourcePanel session={session} />}
+
+            {session && (
+              <ChargeSessionCorrectionPanel
+                session={session}
+                places={places}
+                placesLoading={isPlacesLoading}
+                placesError={placesError}
+                canManage={canManageSession}
+                isPending={updateSession.isPending}
+                {...(updateSession.error?.message ? { error: updateSession.error.message } : {})}
+                {...(saveMessage ? { successMessage: saveMessage } : {})}
+                onSave={(body) => {
+                  setSaveMessage(null);
+                  updateSession.mutate({ sessionId, ...body }, { onSuccess: () => setSaveMessage('Corrections saved.') });
+                }}
+              />
+            )}
 
             <StatCardGrid>
               <StatCard label="Energy Added" value={session ? formatKwh(session.energy_added_kwh ?? 0) : '-'} accent />
@@ -175,99 +168,182 @@ function ChargeSessionContentInner() {
   );
 }
 
-function SessionLocationChip({
-  currentLocationName,
+function ChargeSessionCorrectionPanel({
+  session,
   places,
-  isLoading,
-  isError,
-  isBusy,
-  disabled,
-  onChange,
+  placesLoading,
+  placesError,
+  canManage,
+  isPending,
+  error,
+  successMessage,
+  onSave,
 }: {
-  currentLocationName: string | null;
+  session: ChargeSessionDetail;
   places: Place[];
-  isLoading: boolean;
-  isError: boolean;
-  isBusy: boolean;
-  disabled: boolean;
-  onChange: (placeId: string | null, placeName: string | null) => void;
+  placesLoading: boolean;
+  placesError: boolean;
+  canManage: boolean;
+  isPending: boolean;
+  error?: string;
+  successMessage?: string;
+  onSave: (body: ChargeSessionUpdate) => void;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
-
+  type LocationMode = NonNullable<ChargeSessionDetail['location_override_mode']>;
+  type CostMode = NonNullable<ChargeSessionDetail['cost_override_mode']>;
   const sortedPlaces = useMemo(
     () => [...places].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
     [places],
   );
-  const hasLocation = !!currentLocationName?.trim();
-  const chipLabel = currentLocationName?.trim() || 'Add location';
+  const initialLocationMode: LocationMode = session.location_override_mode ?? 'automatic';
+  const initialCostMode: CostMode = session.cost_override_mode ?? 'automatic';
+  const [locationMode, setLocationMode] = useState<LocationMode>(initialLocationMode);
+  const [costMode, setCostMode] = useState<CostMode>(initialCostMode);
+  const [placeId, setPlaceId] = useState('');
+  const [manualCost, setManualCost] = useState(session.cost_override_usd?.toFixed(2) ?? '');
 
-  const handleSelect = (placeId: string | null, placeName: string | null) => {
-    onChange(placeId, placeName);
-    setIsOpen(false);
-  };
+  useEffect(() => {
+    setLocationMode(session.location_override_mode ?? 'automatic');
+    setCostMode(session.cost_override_mode ?? 'automatic');
+    setManualCost(session.cost_override_usd?.toFixed(2) ?? '');
+    const matchingPlace = places.find((place) => place.name.trim().toLocaleLowerCase() === session.location_name?.trim().toLocaleLowerCase());
+    setPlaceId(matchingPlace?.id ?? '');
+  }, [session.id, session.location_override_mode, session.cost_override_mode, session.cost_override_usd, session.location_name, places]);
+
+  const trimmedManualCost = manualCost.trim();
+  const parsedManualCost = Number(trimmedManualCost);
+  const manualCostError = costMode === 'manual' && (!trimmedManualCost || !Number.isFinite(parsedManualCost) || parsedManualCost < 0)
+    ? 'Enter a non-negative USD amount.'
+    : undefined;
+  const locationError = locationMode === 'saved_place' && !placeId
+    ? 'Choose a saved place before saving.'
+    : undefined;
+  const sourceLocation = formatCoordinates(session.source_location_lat, session.source_location_lng);
+  const effectiveLocation = session.location_name ?? formatCoordinates(session.location_lat, session.location_lng) ?? 'No location';
+  const costDescription = costMode === 'free'
+    ? 'Marked free for this session.'
+    : costMode === 'manual'
+      ? 'Manually set for this session.'
+      : 'Calculated from charging data, network preferences, or saved-place pricing.';
+
+  function save() {
+    if (manualCostError || locationError) return;
+    onSave({
+      location_mode: locationMode,
+      ...(locationMode === 'saved_place' ? { place_id: placeId } : {}),
+      cost_mode: costMode,
+      ...(costMode === 'manual' ? { cost_usd: parsedManualCost } : {}),
+    });
+  }
 
   return (
-    <div className="relative inline-block">
-      <button
-        type="button"
-        className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-bg-elevated px-2.5 text-xs font-medium text-fg transition-colors hover:bg-bg-surface disabled:cursor-not-allowed disabled:opacity-50"
-        onClick={() => setIsOpen((current) => !current)}
-        disabled={disabled}
-      >
-        <MapPin className="h-3.5 w-3.5 text-accent" />
-        <span className="max-w-36 truncate" title={chipLabel}>
-          {chipLabel}
-        </span>
-        <ChevronDown className="h-3.5 w-3.5 text-fg-tertiary" />
-      </button>
-
-      {isOpen ? (
-        <div className="absolute z-20 mt-2 w-80 rounded-lg border border-border bg-bg-surface p-2 shadow-lg">
-          <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-            {isLoading ? 'Loading saved places...' : isError ? 'Unable to load saved places.' : 'Use one of your saved places'}
-          </p>
-          <div className="max-h-60 space-y-1 overflow-auto">
-            {hasLocation ? (
-              <button
-                type="button"
-                className="flex w-full rounded-md border border-dashed border-border px-2.5 py-2 text-left text-sm text-fg transition-colors hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => handleSelect(null, null)}
-                disabled={isBusy}
-              >
-                Clear location
-              </button>
-            ) : null}
-            {isLoading || isError ? null : (
-              sortedPlaces.map((place) => (
-                <button
-                  type="button"
-                  key={place.id}
-                  className="flex w-full flex-col rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => handleSelect(place.id, place.name)}
-                  disabled={isBusy}
-                >
-                  <span className="font-medium text-fg">{place.name}</span>
-                  {place.address?.display_name ? (
-                    <span className="text-xs text-fg-tertiary">{place.address.display_name}</span>
-                  ) : null}
-                  {place.id === places.find((candidate) => candidate.name === currentLocationName)?.id ? (
-                    <span className="text-xs text-fg-tertiary">Current location</span>
-                  ) : null}
-                </button>
-              ))
-            )}
-            {isLoading ? null : isError ? (
-              <p className="px-2.5 py-2 text-sm text-fg-tertiary">
-                Unable to load saved places. Reload this page and try again.
-              </p>
-            ) : sortedPlaces.length === 0 ? (
-              <p className="px-2.5 py-2 text-sm text-fg-tertiary">No saved places yet.</p>
-            ) : null}
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Corrections</CardTitle>
+          <p className="mt-1 text-sm text-fg-tertiary">Refine this charge without replacing its original telemetry.</p>
+        </div>
+        <Badge variant={canManage ? 'info' : 'default'}>{canManage ? 'Editable' : 'Read only'}</Badge>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-3 sm:grid-cols-2">
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Effective location</p>
+            <p className="mt-1 truncate text-sm font-medium text-fg" title={effectiveLocation}>{effectiveLocation}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Original telemetry</p>
+            <p className="mt-1 truncate text-sm text-fg-secondary" title={sourceLocation ?? undefined}>{sourceLocation ?? 'Unavailable'}</p>
           </div>
         </div>
-      ) : null}
+
+        <div className="grid gap-3 lg:grid-cols-2 lg:gap-6">
+          <fieldset className="min-w-0" disabled={!canManage || isPending}>
+            <legend className="text-sm font-medium text-fg">Location</legend>
+            <p className="mt-1 text-xs text-fg-tertiary">Use automatic matching, a saved place, or intentionally clear the location.</p>
+            <ModeSegments
+              label="Location source"
+              value={locationMode}
+              options={[
+                { value: 'automatic', label: 'Automatic' },
+                { value: 'saved_place', label: 'Saved place' },
+                { value: 'none', label: 'No location' },
+              ]}
+              onChange={setLocationMode}
+            />
+            {locationMode === 'saved_place' ? (
+              <div className="mt-3">
+                <SelectPicker
+                  className="w-full"
+                  value={placeId}
+                  aria-label="Saved place"
+                  onChange={setPlaceId}
+                  disabled={placesLoading || placesError || !canManage || isPending}
+                  placeholder={placesLoading ? 'Loading saved places…' : placesError ? 'Unable to load saved places' : 'Choose a saved place'}
+                  options={sortedPlaces.map((place) => ({ value: place.id, label: place.name, description: place.address?.display_name ?? undefined }))}
+                />
+                {locationError ? <p className="mt-1 text-xs text-status-danger">{locationError}</p> : null}
+              </div>
+            ) : null}
+            {locationMode !== 'automatic' && canManage ? (
+              <button type="button" className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-medium text-accent hover:text-accent-hover focus:outline-none focus:ring-1 focus:ring-accent" onClick={() => onSave({ location_mode: 'automatic' })} disabled={isPending}>
+                <RotateCcw className="h-4 w-4" /> Restore automatic location
+              </button>
+            ) : null}
+          </fieldset>
+
+          <fieldset className="min-w-0" disabled={!canManage || isPending}>
+            <legend className="text-sm font-medium text-fg">Cost</legend>
+            <p className="mt-1 text-xs text-fg-tertiary">{costDescription}</p>
+            <ModeSegments
+              label="Cost source"
+              value={costMode}
+              options={[
+                { value: 'automatic', label: 'Automatic' },
+                { value: 'free', label: 'Free' },
+                { value: 'manual', label: 'Manual' },
+              ]}
+              onChange={setCostMode}
+            />
+            {costMode === 'manual' ? (
+              <Input label="Manual cost (USD)" value={manualCost} onChange={(event) => setManualCost(event.target.value)} inputMode="decimal" {...(manualCostError ? { error: manualCostError } : {})} className="mt-3" />
+            ) : null}
+            {costMode !== 'automatic' && canManage ? (
+              <button type="button" className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-medium text-accent hover:text-accent-hover focus:outline-none focus:ring-1 focus:ring-accent" onClick={() => onSave({ cost_mode: 'automatic' })} disabled={isPending}>
+                <RotateCcw className="h-4 w-4" /> Restore automatic cost
+              </button>
+            ) : null}
+          </fieldset>
+        </div>
+
+        {error ? <p role="alert" className="rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">{error} Try again.</p> : null}
+        {successMessage ? <p role="status" className="rounded-lg border border-status-positive/30 bg-status-positive/10 px-3 py-2 text-sm text-status-positive">{successMessage}</p> : null}
+        {canManage ? (
+          <div className="flex justify-end">
+            <Button size="md" className="min-h-11" loading={isPending} disabled={Boolean(manualCostError || locationError)} onClick={save}>Save corrections</Button>
+          </div>
+        ) : (
+          <p className="text-sm text-fg-tertiary">Only the vehicle owner or a manager can change charging corrections.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ModeSegments<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: string }>; onChange: (value: T) => void }) {
+  return (
+    <div role="group" aria-label={label} className="mt-3 grid grid-cols-3 gap-1 rounded-xl border border-border bg-bg-page/60 p-1">
+      {options.map((option) => (
+        <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)} className={`min-h-11 rounded-lg px-2 text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-accent ${value === option.value ? 'bg-bg-elevated text-fg shadow-sm' : 'text-fg-secondary hover:bg-bg-elevated/70 hover:text-fg'}`}>
+          {option.label}
+        </button>
+      ))}
     </div>
   );
+}
+
+function formatCoordinates(lat: number | null | undefined, lng: number | null | undefined) {
+  return lat != null && lng != null ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : null;
 }
 
 type ChargeSessionDetail = NonNullable<ReturnType<typeof useChargeSession>['data']>;

@@ -37,7 +37,8 @@ vi.mock('@riviamigo/hooks', () => ({
   }),
   useChargeCurve: () => ({ data: [], isLoading: false }),
   useSavedPlaces: () => ({ data: [], isLoading: false }),
-  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false, isLoading: false }),
+  useUpdateChargeSession: () => ({ mutate: vi.fn(), isPending: false, isLoading: false, error: null }),
+  useVehicles: () => ({ data: [{ id: 'v1', membership_role: 'owner' }] }),
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
@@ -60,12 +61,12 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
   Database: () => <svg data-testid="icon-database" />,
-  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   RadioTower: () => <svg data-testid="icon-radio" />,
   Receipt: () => <svg data-testid="icon-receipt" />,
   Route: () => <svg data-testid="icon-route" />,
   Zap: () => <svg data-testid="icon-zap" />,
+  RotateCcw: () => <svg data-testid="icon-restore" />,
 }));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
@@ -113,7 +114,6 @@ describe('ChargeSessionContent', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
   });
 });
-
 
 
 
