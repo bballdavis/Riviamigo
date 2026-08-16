@@ -33,7 +33,7 @@ import {
   useResolvedVehicleSelection,
   useVehicleHealth,
 } from '@riviamigo/hooks';
-import type { VehicleHealthClosures, VehicleHealthTires } from '@riviamigo/types';
+import type { VehicleHealthTires } from '@riviamigo/types';
 import {
   Badge,
   Card,
@@ -98,7 +98,7 @@ export function VehicleHealthContent() {
     data?.latest?.hv_thermal_event ?? null,
     data?.thermal_events_30d ?? 0
   );
-  const closures = summarizeClosures(status, data?.closures ?? null);
+  const closureModel = data?.vehicle?.model ?? activeVehicle?.model ?? null;
   const tireSummary = summarizeTires(status, data?.tires ?? null);
   const softwareHistory = dedupeSoftwareHistory(data?.software_history ?? []);
   const currentSoftwareEntry =
@@ -132,6 +132,8 @@ export function VehicleHealthContent() {
     door_rear_right_closed:
       status?.door_rear_right_closed ?? data?.closures?.door_rear_right_closed ?? null,
   };
+  const closureRows = getHealthClosureRows(closureModel, closureStatusFallback, status);
+  const closures = summarizeClosures(closureRows);
 
   return (
     <AppLayout activeKey="health">
@@ -172,14 +174,14 @@ export function VehicleHealthContent() {
                     'radial-gradient(circle at 18% 0%, color-mix(in oklab, var(--rm-accent) 18%, transparent) 32%, transparent), var(--rm-bg-surface)',
                 }}
               >
-                <div className="flex flex-col gap-2">
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-1">
-                    <div className="flex h-full min-h-[14.5rem] flex-col pb-1">
-                      <div className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-accent-muted px-2 py-0.5 text-xs font-medium text-accent">
+                <div className="flex flex-col gap-4">
+                  <div className="grid min-w-0 gap-4 min-[1200px]:grid-cols-[minmax(0,1fr)_minmax(20rem,0.9fr)] min-[1200px]:items-end">
+                    <div className="flex min-w-0 flex-col gap-3 pb-1">
+                      <div className="inline-flex w-fit items-center gap-2 rounded-lg border border-accent/20 bg-accent-muted px-2 py-0.5 text-xs font-medium text-accent">
                         <HeartPulse className="h-3.5 w-3.5" />
                         Health Overview
                       </div>
-                      <div className="mt-auto">
+                      <div className="min-w-0">
                         <h2 className="font-display text-4xl font-semibold tracking-tight text-fg">
                           {vehicleName}
                         </h2>
@@ -194,20 +196,20 @@ export function VehicleHealthContent() {
                       </div>
                     </div>
                     {heroImageUrl || fallbackHeroImageUrl ? (
-                      <div className="relative h-56 w-[24rem] shrink-0 overflow-hidden lg:h-64 lg:w-[30rem]">
+                      <div className="relative aspect-[16/9] w-full min-w-0 max-w-[42rem] justify-self-center overflow-hidden min-[1200px]:aspect-auto min-[1200px]:h-64 min-[1200px]:max-w-none">
                         <AuthenticatedVehicleArtwork
                           source={heroImageUrl}
                           fallbackSource={fallbackHeroImageUrl}
                           fallbackProps={{
-                            className: 'absolute inset-0 h-full w-full object-contain object-right-bottom',
+                            className: 'absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom',
                           }}
                           alt="Vehicle three-quarter view"
-                          className="absolute -right-2 -top-3 h-[110%] w-[110%] object-contain object-right-bottom lg:-right-3 lg:-top-4"
+                          className="absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom"
                         />
                       </div>
                     ) : null}
                   </div>
-                  <div className="grid w-full grid-cols-4 gap-3">
+                  <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 min-[1200px]:grid-cols-4">
                     <HeroMetric label="Collector" state={collector} kind="collector" />
                     <HeroMetric label="12V" state={twelveVolt} kind="battery" />
                     <HeroMetric label="Thermal" state={thermal} kind="thermal" />
@@ -492,69 +494,14 @@ export function VehicleHealthContent() {
                     <EmptyPanel text="No door and gate telemetry found yet." />
                   ) : (
                     <div className="grid gap-2 sm:grid-cols-2">
-                      <ClosureRow
-                        label="Frunk"
-                        value={closureStatusFallback.closure_frunk_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['closure_frunk_closed'])
-                            : null
-                        }
-                      />
-                      <ClosureRow
-                        label="Liftgate"
-                        value={closureStatusFallback.closure_liftgate_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['closure_liftgate_closed'])
-                            : null
-                        }
-                      />
-                      <ClosureRow
-                        label="Tailgate"
-                        value={closureStatusFallback.closure_tailgate_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['closure_tailgate_closed'])
-                            : null
-                        }
-                      />
-                      <ClosureRow
-                        label="Front left door"
-                        value={closureStatusFallback.door_front_left_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['door_front_left_closed'])
-                            : null
-                        }
-                      />
-                      <ClosureRow
-                        label="Front right door"
-                        value={closureStatusFallback.door_front_right_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['door_front_right_closed'])
-                            : null
-                        }
-                      />
-                      <ClosureRow
-                        label="Rear left door"
-                        value={closureStatusFallback.door_rear_left_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['door_rear_left_closed'])
-                            : null
-                        }
-                      />
-                      <ClosureRow
-                        label="Rear right door"
-                        value={closureStatusFallback.door_rear_right_closed}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, ['door_rear_right_closed'])
-                            : null
-                        }
-                      />
+                      {closureRows.map((row) => (
+                        <ClosureRow
+                          key={row.field}
+                          label={row.label}
+                          value={row.value}
+                          availability={row.availability}
+                        />
+                      ))}
                     </div>
                   )}
                 </CardContent>
@@ -968,19 +915,68 @@ function summarizeTires(
   return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
 }
 
-function summarizeClosures(
-  status: import('@riviamigo/types').VehicleStatus | null | undefined,
-  closures: VehicleHealthClosures | null
-) {
-  const values = [
-    status?.closure_frunk_closed ?? closures?.closure_frunk_closed ?? null,
-    status?.closure_liftgate_closed ?? closures?.closure_liftgate_closed ?? null,
-    status?.closure_tailgate_closed ?? closures?.closure_tailgate_closed ?? null,
-    status?.door_front_left_closed ?? closures?.door_front_left_closed ?? null,
-    status?.door_front_right_closed ?? closures?.door_front_right_closed ?? null,
-    status?.door_rear_left_closed ?? closures?.door_rear_left_closed ?? null,
-    status?.door_rear_right_closed ?? closures?.door_rear_right_closed ?? null,
-  ];
+type HealthClosureField =
+  | 'closure_frunk_closed'
+  | 'closure_liftgate_closed'
+  | 'closure_tailgate_closed'
+  | 'door_front_left_closed'
+  | 'door_front_right_closed'
+  | 'door_rear_left_closed'
+  | 'door_rear_right_closed';
+
+type HealthClosureRow = {
+  field: HealthClosureField;
+  label: string;
+  value: boolean | null;
+  availability: StatusAvailabilitySummary | null;
+};
+
+const HEALTH_CLOSURE_DEFINITIONS: Array<Pick<HealthClosureRow, 'field' | 'label'>> = [
+  { field: 'closure_frunk_closed', label: 'Frunk' },
+  { field: 'closure_liftgate_closed', label: 'Liftgate' },
+  { field: 'closure_tailgate_closed', label: 'Tailgate' },
+  { field: 'door_front_left_closed', label: 'Front left door' },
+  { field: 'door_front_right_closed', label: 'Front right door' },
+  { field: 'door_rear_left_closed', label: 'Rear left door' },
+  { field: 'door_rear_right_closed', label: 'Rear right door' },
+];
+
+function getHealthClosureRows(
+  model: string | null | undefined,
+  values: Record<HealthClosureField, boolean | null>,
+  status: import('@riviamigo/types').VehicleStatus | null | undefined
+): HealthClosureRow[] {
+  const normalizedModel = model?.trim().toUpperCase() ?? '';
+  const knownModel =
+    normalizedModel.includes('R1T') ||
+    normalizedModel.includes('R1S') ||
+    normalizedModel.includes('R2S');
+  const supportedGate: HealthClosureField | null = normalizedModel.includes('R1T')
+    ? 'closure_tailgate_closed'
+    : normalizedModel.includes('R1S') || normalizedModel.includes('R2S')
+      ? 'closure_liftgate_closed'
+      : null;
+  const definitions = HEALTH_CLOSURE_DEFINITIONS.filter(({ field }) => {
+    if (field === 'closure_liftgate_closed' || field === 'closure_tailgate_closed') {
+      if (knownModel) return field === supportedGate;
+      return values[field] !== null || status?.field_availability?.[field]?.ever_seen === true;
+    }
+    if (!knownModel) {
+      return values[field] !== null || status?.field_availability?.[field]?.ever_seen === true;
+    }
+    return true;
+  });
+
+  return definitions.map(({ field, label }) => ({
+    field,
+    label,
+    value: values[field],
+    availability: status ? summarizeStatusAvailability(status, [field]) : null,
+  }));
+}
+
+function summarizeClosures(rows: HealthClosureRow[]) {
+  const values = rows.map((row) => row.value);
   const open = values.filter((value) => value === false).length;
   if (open > 0) return { label: `${open} open`, variant: 'warning' as const };
   const known = values.filter((value) => value !== null).length;
