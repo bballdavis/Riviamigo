@@ -32,6 +32,7 @@ export const vehicleClient = client(
 export const tripClient = client(
   'listTrips', 'getTripMap', 'getTrip', 'getTripDetailData', 'getTripTrack',
   'getSpeedProfile', 'getElevationProfile', 'getTripPowerProfile', 'getTripDetailSeries',
+  'listTripTags', 'createTripTag', 'updateTripTag', 'deleteTripTag', 'updateTripTagAssignments',
 );
 
 export const chargingClient = client(

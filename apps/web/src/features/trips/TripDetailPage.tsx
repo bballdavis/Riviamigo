@@ -4,11 +4,10 @@ import {
   useAuth, useBasemapConfig, useResolvedVehicleSelection, useTripDetailData,
 } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
-import {
-  PageLayout,
-} from '@riviamigo/ui/primitives';
+import { PageLayout } from '@riviamigo/ui/primitives';
 import { SensorChipSummary } from '@riviamigo/dashboards';
 import type { TripDetailSamples } from '@riviamigo/types';
+import { TripTagBadge } from '@riviamigo/ui/tables';
 import {
   TripMapChart,
   RichTimeSeriesChart,
@@ -216,7 +215,7 @@ export function TripDetailContent() {
     <AppLayout activeKey="trips">
       <PageLayout
         title={title}
-        subtitle={trip ? subtitle : undefined}
+        subtitle={trip ? <div>{subtitle}{trip.tags?.length ? <div className="mt-2 flex flex-wrap gap-1">{trip.tags.map((tag) => <TripTagBadge key={tag.id} tag={tag} />)}</div> : null}</div> : undefined}
         titleAction={backButton}
         titleActionPosition="left"
       >
