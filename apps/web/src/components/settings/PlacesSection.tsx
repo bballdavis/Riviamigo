@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@riviamigo/hooks';
+import { api, invalidateChargingData } from '@riviamigo/hooks';
 import type { Place, PlaceAddress, PlaceChargingInput, PlaceSearchSuggestion, TouPeriod, UpsertPlaceBody } from '@riviamigo/types';
 import type { UnitSystem } from '@riviamigo/ui/lib/utils';
 import { getAppTimezone } from '@riviamigo/ui/lib/dateTime';
@@ -149,12 +149,16 @@ export function PlacesSection({ unitSystem }: { unitSystem: UnitSystem }) {
       setAddressQuery('');
       setSubmittedAddressQuery('');
       queryClient.invalidateQueries({ queryKey: ['places'] });
+      invalidateChargingData(queryClient);
     },
   });
 
   const deletePlace = useMutation({
     mutationFn: (id: string) => api.deletePlace(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['places'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['places'] });
+      invalidateChargingData(queryClient);
+    },
   });
 
   React.useEffect(() => {

@@ -9,6 +9,7 @@ export function useVehicleHealth(vehicleId: string | null) {
     queryFn: () => api.getVehicleHealth(vehicleId!),
     enabled: authReady && !!vehicleId,
     staleTime: 60 * 1000,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
