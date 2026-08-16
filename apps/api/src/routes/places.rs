@@ -16,6 +16,7 @@ use crate::{
     errors::AppError,
     middleware::auth::{AppState, AuthUser},
     models::cost_profile::{validate_tou_periods, TouPeriod},
+    services::cost::recompute_charge_session_cost,
 };
 
 pub fn router() -> Router<AppState> {
@@ -365,6 +366,19 @@ async fn update_place(
     }
 
     tx.commit().await?;
+
+    // Place pricing is an automatic policy. Recompute only sessions that have
+    // not been explicitly marked free or manually priced before responding.
+    let sessions = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM riviamigo.charge_sessions
+          WHERE geofence_id=$1 AND cost_override_mode='automatic'",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    for session_id in sessions {
+        recompute_charge_session_cost(&state.pool, session_id).await?;
+    }
 
     get_place(auth, State(state), Path(id)).await
 }

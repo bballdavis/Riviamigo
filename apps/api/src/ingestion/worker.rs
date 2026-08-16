@@ -2407,7 +2407,7 @@ async fn persist_charge_session(
     sqlx::query(
         r#"INSERT INTO riviamigo.charge_sessions
            (id, vehicle_id, started_at, ended_at,
-            location_lat, location_lng,
+            location_lat, location_lng, source_location_lat, source_location_lng,
             is_home,
             soc_start, soc_end, charge_limit, duration_minutes,
             kwh_added, max_charge_rate_kw, cost_usd,
@@ -2415,7 +2415,7 @@ async fn persist_charge_session(
             avg_charge_rate_kw, peak_voltage,
             geofence_id, address_id, cost_profile_id, cost_method,
             charger_type, source, data_confidence)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry','telemetry')"#,
+              VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry','telemetry')"#,
     )
     .bind(session.session_id)
     .bind(session.vehicle_id)

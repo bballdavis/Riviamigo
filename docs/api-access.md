@@ -76,7 +76,7 @@ routes.
 | Battery | `GET /v1/battery/soc`, `/range`, `/capacity`, `/health`, `/mileage`, `/phantom-drain`, `/degradation` |
 | Metrics | `GET /v1/metrics/catalog`, `/value`, `/series`; `POST /v1/metrics/batch` |
 | Trips | `GET /v1/trips`, `/trips/map`, and `/trips/{id}` with `/detail`, `/track`, `/speed`, `/elevation`, `/power`, or `/series`; `GET /v1/vehicles/{id}/drives/{trip_id}/power` is the path-scoped power alias |
-| Charging | `GET /v1/charging`, `/summary`, `/chart-series`, `/curve-analysis`, and individual session/curve routes; path-scoped aliases are available below `/v1/vehicles/{id}/charging-sessions` and `/costs` |
+| Charging | `GET /v1/charging`, `/summary`, `/chart-series`, `/curve-analysis`, and individual session/curve routes; path-scoped aliases are available below `/v1/vehicles/{id}/charging-sessions` and `/costs`. Managers may patch a session with additive `location_mode` (`automatic`, `saved_place`, `none`) and `cost_mode` (`automatic`, `free`, `manual`); legacy `{ place_id }` requests remain supported. `GET/PATCH /v1/vehicles/{id}/charging-networks` exposes only networks already observed for that vehicle and lets managers mark their automatic cost as Free. |
 | Efficiency | `GET /v1/efficiency/summary`, `/by-mode`, `/trend`, `/vs-temp`, `/range-vs-temp` |
 | Overview | `GET /v1/dashboard/overview/{vehicle_id}` and `GET /v1/vehicles/{id}/live-session` |
 | Grafana compatibility | `GET /v1/grafana`; `POST /v1/grafana/search`, `/query`, `/annotations`, `/tag-keys`, `/tag-values` |

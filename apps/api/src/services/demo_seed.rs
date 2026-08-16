@@ -423,13 +423,13 @@ async fn seed_charges(
         };
         let charge_id = sqlx::query_scalar::<_, Uuid>(
             r#"INSERT INTO riviamigo.charge_sessions
-                 (vehicle_id, started_at, ended_at, location_lat, location_lng, is_home,
+                 (vehicle_id, started_at, ended_at, location_lat, location_lng, source_location_lat, source_location_lng, is_home,
                   charger_type, kwh_added, soc_start, soc_end, charge_limit, max_charge_rate_kw,
                   duration_minutes, cost_usd, outside_temp_c, energy_added_wh, energy_used_wh,
                   avg_charge_rate_kw, address_id, network_vendor, is_free_session,
                   is_rivian_network, source, currency_code, data_confidence)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,85,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-                       FALSE,$20,'telemetry','USD','telemetry') RETURNING id"#,
+               VALUES ($1,$2,$3,$4,$5,$4,$5,$6,$7,$8,$9,$10,85,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+                       FALSE,'telemetry','USD','telemetry') RETURNING id"#,
         )
         .bind(vehicle_id)
         .bind(started_at)
