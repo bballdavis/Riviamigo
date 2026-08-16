@@ -509,7 +509,8 @@ async fn update_session_from_summary(
             is_free_session = COALESCE(is_free_session, $7),
             is_rivian_network = COALESCE(is_rivian_network, $8),
             rivian_paid_total = COALESCE(rivian_paid_total, $9),
-            is_home = COALESCE(is_home, $10),
+            is_home = CASE WHEN location_override_mode = 'automatic'
+                THEN COALESCE(is_home, $10) ELSE is_home END,
             duration_minutes = COALESCE(
                 duration_minutes,
                 CASE
@@ -1667,9 +1668,36 @@ pub async fn canonicalize_charge_sessions(
                     r#"
                     UPDATE riviamigo.charge_sessions canonical
                     SET
-                        location_lat = COALESCE(canonical.location_lat, duplicate.location_lat),
-                        location_lng = COALESCE(canonical.location_lng, duplicate.location_lng),
-                        is_home = COALESCE(canonical.is_home, duplicate.is_home),
+                        source_location_lat = COALESCE(canonical.source_location_lat, duplicate.source_location_lat, canonical.location_lat, duplicate.location_lat),
+                        source_location_lng = COALESCE(canonical.source_location_lng, duplicate.source_location_lng, canonical.location_lng, duplicate.location_lng),
+                        location_override_mode = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic'
+                            THEN duplicate.location_override_mode ELSE canonical.location_override_mode END,
+                        location_lat = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.location_lat
+                            WHEN canonical.location_override_mode = 'automatic'
+                            THEN COALESCE(canonical.location_lat, duplicate.source_location_lat, duplicate.location_lat)
+                            ELSE canonical.location_lat END,
+                        location_lng = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.location_lng
+                            WHEN canonical.location_override_mode = 'automatic'
+                            THEN COALESCE(canonical.location_lng, duplicate.source_location_lng, duplicate.location_lng)
+                            ELSE canonical.location_lng END,
+                        is_home = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.is_home
+                            ELSE COALESCE(canonical.is_home, duplicate.is_home) END,
+                        geofence_id = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.geofence_id
+                            ELSE COALESCE(canonical.geofence_id, duplicate.geofence_id) END,
+                        address_id = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.address_id
+                            ELSE COALESCE(canonical.address_id, duplicate.address_id) END,
                         charger_type = COALESCE(canonical.charger_type, duplicate.charger_type),
                         kwh_added = CASE
                             WHEN canonical.kwh_added IS NULL THEN duplicate.kwh_added
@@ -1684,8 +1712,22 @@ pub async fn canonicalize_charge_sessions(
                             WHEN duplicate.max_charge_rate_kw IS NULL THEN canonical.max_charge_rate_kw
                             ELSE GREATEST(canonical.max_charge_rate_kw, duplicate.max_charge_rate_kw)
                         END,
-                        cost_usd = COALESCE(canonical.cost_usd, duplicate.cost_usd),
-                        cost_method = COALESCE(canonical.cost_method, duplicate.cost_method),
+                        cost_override_mode = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic'
+                            THEN duplicate.cost_override_mode ELSE canonical.cost_override_mode END,
+                        cost_override_usd = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic'
+                            THEN duplicate.cost_override_usd ELSE canonical.cost_override_usd END,
+                        cost_usd = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic' THEN duplicate.cost_usd
+                            ELSE COALESCE(canonical.cost_usd, duplicate.cost_usd) END,
+                        cost_method = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic' THEN duplicate.cost_method
+                            ELSE COALESCE(canonical.cost_method, duplicate.cost_method) END,
                         energy_added_wh = CASE
                             WHEN canonical.energy_added_wh IS NULL THEN duplicate.energy_added_wh
                             WHEN duplicate.energy_added_wh IS NULL THEN canonical.energy_added_wh

@@ -420,6 +420,29 @@ export interface ChargeSession {
   live_range_added_km?: number | null;
   live_power_kw?: number | null;
   live_charge_rate_kph?: number | null;
+  /** Effective coordinates after a user location correction. */
+  location_lat?: number | null;
+  location_lng?: number | null;
+  /** Immutable telemetry/API coordinates, retained when a location is overridden. */
+  source_location_lat?: number | null;
+  source_location_lng?: number | null;
+  location_override_mode?: 'automatic' | 'saved_place' | 'none' | null;
+  cost_override_mode?: 'automatic' | 'free' | 'manual' | null;
+  cost_override_usd?: number | null;
+}
+
+export interface ChargeSessionUpdate {
+  /** Backward-compatible saved place update. Null clears the effective location. */
+  place_id?: string | null;
+  location_mode?: 'automatic' | 'saved_place' | 'none';
+  cost_mode?: 'automatic' | 'free' | 'manual';
+  cost_usd?: number;
+}
+
+export interface ChargingNetworkPreference {
+  network_vendor: string;
+  cost_mode: 'automatic' | 'free';
+  session_count: number;
 }
 
 export interface ChargeCurvePoint {
