@@ -16,7 +16,7 @@ export function useTrips(vehicleId: string | null, from: string | null, to: stri
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
   });
 }
 
@@ -37,7 +37,7 @@ export function useTripMapRoutes(
     gcTime: 10 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     meta: { persist: false },
   });
 }
@@ -51,7 +51,7 @@ export function useTrip(tripId: string | null, vehicleId: string | null) {
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -66,7 +66,7 @@ export function useTripDetailData(tripId: string | null, vehicleId: string | nul
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
     meta: { persist: false },
   });
@@ -81,7 +81,7 @@ export function useTripTrack(tripId: string | null, vehicleId: string | null) {
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
     meta: { persist: false },
   });
@@ -96,7 +96,7 @@ export function useSpeedProfile(tripId: string | null, vehicleId: string | null)
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
     meta: { persist: false },
   });
@@ -111,7 +111,7 @@ export function useElevationProfile(tripId: string | null, vehicleId: string | n
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
     meta: { persist: false },
   });
@@ -126,7 +126,7 @@ export function useTripPowerProfile(tripId: string | null, vehicleId: string | n
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
     meta: { persist: false },
   });
@@ -141,7 +141,7 @@ export function useTripDetailSeries(tripId: string | null, vehicleId: string | n
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
     meta: { persist: false },
   });

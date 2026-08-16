@@ -10,6 +10,7 @@ export function useEfficiencySummary(vehicleId: string | null, from: string | nu
     queryFn: () => api.getEfficiencySummary(vehicleId!, from, to, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -22,6 +23,7 @@ export function useEfficiencyByMode(vehicleId: string | null, from: string | nul
     queryFn: () => api.getEfficiencyByMode(vehicleId!, from, to, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -34,6 +36,7 @@ export function useEfficiencyTrend(vehicleId: string | null, from: string | null
     queryFn: () => api.getEfficiencyTrend(vehicleId!, from, to, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 5 * 60 * 1000,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -46,6 +49,7 @@ export function useEfficiencyVsTemp(vehicleId: string | null, from: string | nul
     queryFn: () => api.getEfficiencyVsTemp(vehicleId!, from, to, lifetime),
     enabled: authReady && !!vehicleId,
     staleTime: 10 * 60 * 1000,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }

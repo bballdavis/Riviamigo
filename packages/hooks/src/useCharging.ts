@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { DepartureScheduleInput, ChargingScheduleInput } from './api';
 import type { ChargeSession, Place } from '@riviamigo/types';
@@ -22,6 +22,17 @@ type UpdateChargeSessionLocationContext = {
   previousSession: ChargeSession | undefined;
   queryKey: readonly ['charging', 'detail', string, string | null];
 };
+
+/**
+ * Invalidate all data that can change when a saved place or charge-session
+ * location changes. Keep this seam shared by charging mutations and the
+ * Settings > Places mutations so stale derived data cannot survive a save.
+ */
+export function invalidateChargingData(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ['charging'] });
+  void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch'] });
+  void queryClient.invalidateQueries({ queryKey: ['trips'] });
+}
 
 export function useChargeSessions(
   vehicleId: string | null,
@@ -51,7 +62,7 @@ export function useChargeSessions(
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -65,7 +76,7 @@ export function useChargeSession(sessionId: string | null, vehicleId: string | n
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -79,7 +90,7 @@ export function useSavedPlaces() {
     staleTime: 60 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
   });
 }
 
@@ -121,11 +132,7 @@ export function useUpdateChargeSessionLocation(vehicleId: string | null) {
         );
       }
 
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'detail', variables.sessionId, vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'list', vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'summary', vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'chart-series', vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch', vehicleId] });
+      invalidateChargingData(queryClient);
     },
   });
 }
@@ -139,7 +146,7 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -154,7 +161,7 @@ export function useChargeCurveAnalysis(vehicleId: string | null, from: string | 
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -169,7 +176,7 @@ export function useChargingSummary(vehicleId: string | null, from: string | null
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -184,7 +191,7 @@ export function useChargingChartSeries(vehicleId: string | null, from: string | 
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -260,4 +267,3 @@ export function useLiveSession(vehicleId: string | null, active = true) {
     staleTime: 0,
   });
 }
-
