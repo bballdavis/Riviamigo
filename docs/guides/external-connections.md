@@ -35,7 +35,7 @@ A custom or self-hosted Nominatim base URL can optionally enable debounced autoc
 
 Trip geometry remains exact. CARTO tiles are requested through an authenticated Riviamigo proxy, so the tile provider sees the requested map area and the server connection, not each viewer's browser identity. Custom XYZ raster templates require `{z}`, `{x}`, and `{y}`, attribution, and may include an encrypted bearer token. A missing dark template falls back to the light template.
 
-Choosing **Disabled** keeps the route on a neutral background. Custom XYZ raster tile servers are supported, including TileServer GL-compatible raster templates; the selector provides a TileServer GL local example. HTTP is accepted only for an explicitly confirmed local/private endpoint.
+Choosing **Disabled** keeps the route on a neutral background. Custom XYZ raster tile servers are supported, including TileServer GL-compatible raster templates; the selector provides a TileServer GL local example. HTTP is accepted only for a confirmed RFC1918 or IPv6-ULA private endpoint with an explicit CIDR allowlist; loopback, link-local, cloud-metadata, unspecified, multicast, and other forbidden ranges are never allowed.
 
 ## Local provider caches
 
@@ -53,7 +53,23 @@ The selected connection shows its entry count and storage use. Administrators ca
 
 ## Custom endpoint safety
 
-Custom endpoints accept HTTPS. HTTP is restricted to confirmed local/private destinations. Riviamigo rejects executable and file schemes, link-local and cloud-metadata addresses, validates DNS destinations, does not follow redirects, bounds proxy responses, and never returns stored secrets to the browser. Connection logs omit coordinates, addresses, search text, query strings, credentials, VINs, and vehicle names.
+Custom endpoints accept HTTPS. HTTP is restricted to confirmed private
+destinations. Private service access requires a non-empty CIDR allowlist made
+only of RFC1918 IPv4 or IPv6 ULA ranges; the resolved private address must be
+inside that list. A legacy private-network opt-in is deliberately represented as
+`migration_required` and is disabled until an administrator saves explicit
+allowlists. The connection inventory exposes the policy state and canonical
+allowlist but never a stored secret.
+
+Riviamigo resolves the hostname both while validating a change and immediately
+before each outbound request. It rejects mixed public/private results and pins
+the request to the approved resolved addresses while retaining the hostname for
+HTTP Host and TLS SNI. It does not follow redirects, so a provider cannot turn
+an approved URL into a second destination. The service also rejects executable
+and file schemes, credentials/query strings/fragments in custom URLs,
+link-local and cloud-metadata addresses, bounds proxy responses, and never
+returns stored secrets to the browser. Connection logs omit coordinates,
+addresses, search text, query strings, credentials, VINs, and vehicle names.
 
 ## Verify a connection
 

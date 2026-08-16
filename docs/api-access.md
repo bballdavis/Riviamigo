@@ -12,6 +12,18 @@ Create and revoke them in **Settings > API Access**. The secret is shown once;
 store it in the integration's secret store rather than in a dashboard or source
 file.
 
+New keys expire after 90 days by default. Creation accepts `expires_in_days`
+from 1 through 365. Rotating a supported read key creates a new 90-day key and
+shortens the old key to a 24-hour overlap; replace the secret in the consuming
+integration before that overlap ends. Creation and rotation return the new
+secret once only.
+
+Older records without `expires_at` are reported as `legacy_no_expiry` and
+continue to authenticate only if they are otherwise valid read keys. Treat that
+state as migration debt: rotate the key to move it onto the current 90-day
+expiry policy. Legacy `view`, `edit`, and `admin` access-level records are
+shown as `legacy_unmigrated` and are not treated as integration read access.
+
 The Settings inventory preserves legacy `view`, `edit`, or `admin` values as
 `legacy_unmigrated` compatibility state while the database catches up. Those
 values are never treated as read access; restart the current API build so its

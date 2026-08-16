@@ -1,11 +1,25 @@
 # Secure Deployment Boundary
 
+This is the normative secure-deployment procedure. The [secure deployment
+guide](../guides/secure-deployment.md) is a short operator entry point and the
+[security architecture](../security.md) records the product posture; neither
+changes the requirements in this runbook.
+
 ## Supported exposure model
 
-Riviamigo is not approved for direct Internet exposure. The production Compose
-stack publishes its web origin on port `8080`; place an authenticated tunnel or
-identity-aware reverse proxy and host firewall rule in front of that listener. A tunnel that
-only publishes the port without an access policy is not sufficient.
+Riviamigo is not approved for direct Internet exposure. The standard production
+Compose stack publishes its web origin on port `8080` bound to `127.0.0.1` and
+runs the long-lived app as UID/GID `1001`, with a read-only root filesystem,
+all Linux capabilities dropped, `no-new-privileges`, and a bounded `/tmp`
+tmpfs. Its one-shot initialization service is intentionally the only root
+process. Do not weaken these defaults to make an origin public.
+
+Place an authenticated tunnel or identity-aware reverse proxy and host firewall
+rule in front of that loopback listener. A tunnel that only publishes the port
+without an access policy is not sufficient. A non-loopback bind requires both
+`RIVIAMIGO_BIND_ADDRESS` and the explicit
+`ALLOW_PUBLIC_ORIGIN_BIND=true` opt-in; it remains unsupported as a direct
+Internet exposure pattern.
 
 The outer gateway must terminate public HTTPS, require an identity policy, and
 forward normal HTTP and WebSocket traffic to `http://localhost:8080`. Riviamigo
@@ -16,9 +30,17 @@ the gateway itself is operated and patched by the self-hoster.
 ## Required production configuration
 
 - Riviamigo defaults to production mode; use `RIVIAMIGO_ENV=development` only for local development.
+- Configure a 32-byte-or-longer production first-owner proof through exactly
+  one of `RIVIAMIGO_SETUP_TOKEN` or `RIVIAMIGO_SETUP_TOKEN_FILE`. The setup
+  endpoint reports availability but never reveals which source is used. Before
+  a user exists, registration fails closed without a valid proof; after the
+  first owner claims the instance, remove or rotate the bootstrap proof.
 - Let Riviamigo generate and persist its application keys in PostgreSQL, or
   supply `JWT_SECRET`, `JWT_PUBLIC_KEY`, and `AGE_ENCRYPTION_KEY` together from
-  a secret manager. Partial overrides fail startup.
+  a secret manager. Partial overrides fail startup. Database-persisted keys are
+  an explicitly accepted P2 shared-fate risk; preserve PostgreSQL backups and,
+  for externally managed keys, document and test the secret-manager recovery
+  path.
 - Set `ALLOWED_ORIGINS` to the exact public HTTPS origin, with no path.
 - Set strong `POSTGRES_PASSWORD` and `REDIS_PASSWORD` values. Standard Compose
   safely constructs its internal URLs; custom `DATABASE_URL` values must be valid URLs.
@@ -43,8 +65,10 @@ the gateway itself is operated and patched by the self-hoster.
 
 ## Verification
 
-1. Run `docker compose --env-file .env -f compose/docker-compose.yml config` and confirm
-   the unified app publishes port `8080:8080` and no database or Redis port.
+1. Run `docker compose --env-file .env -f compose/docker-compose.yml config`
+   and confirm the unified app publishes
+   `127.0.0.1:8080:8080` (or the intentionally selected loopback address) and
+   no database or Redis port.
 2. Start the stack and check `curl http://localhost:8080/health` locally.
 3. Confirm external access is denied by the gateway before reaching Riviamigo,
    then authenticate through the gateway and sign in to Riviamigo.
@@ -55,6 +79,10 @@ the gateway itself is operated and patched by the self-hoster.
 6. From the public address, leave a signed-in dashboard open beyond the
    gateway idle window, background and refocus the tab, and confirm the status
    transitions through `Reconnecting...` to `Online` without a page reload.
+7. Confirm `docker compose ... config` retains `user: "1001:1001"`,
+   `read_only: true`, `cap_drop: [ALL]`, and `no-new-privileges:true` for the
+   long-lived `riviamigo` service. These are deployment controls, not optional
+   tuning.
 
 ## Limits of this guidance
 

@@ -40,6 +40,23 @@ The lab rechecks the package SHA-256, reads the expected source head and chain i
 
 The unified production image runs nginx, the API, and a local-only restore supervisor. A restore job is journaled under `/backups/.restore-jobs`; nginx proxies its capability-token status endpoint even while the API process is intentionally stopped. Before handoff, that journal also snapshots the backup runs, artifact catalog, and restore request history. The restarted API merges the snapshot back after the supervisor marks the job complete. The supervisor never receives Docker access and does not restart PostgreSQL or Redis.
 
+### Resource envelope and contention
+
+Import and restore share a PostgreSQL-backed recovery-mutation lock; do not
+start a second import, restore, or recovery intervention while one is active.
+The imported package is streamed to a temporary artifact only after a free-space
+check and is rechecked while receiving bytes. The default envelope is 16 GiB
+compressed upload, 64 GiB expanded/member size, 10,000 members, 200:1 maximum
+compression ratio, and at least 2 GiB free artifact storage. Upload has a
+30-minute deadline; the restore supervisor has a four-hour deadline. Limits
+are configuration, not estimates—an archive that exceeds any one is rejected.
+
+When a limit, free-space, or deadline error occurs, preserve the original
+package and journal, correct the condition, and retry after the active lock has
+cleared. Do not bypass the check by copying unvalidated content into staging.
+The service rejects unsafe or duplicate paths and validates the entire package
+before extraction or cataloging.
+
 For an in-app restore:
 
 1. Confirm the package finishes import validation and preflight records the expected package checksum, chain/catalog identities, and source/target heads.

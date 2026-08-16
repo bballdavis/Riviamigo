@@ -27,6 +27,25 @@ This document defines the approved layering for dashboard work and the package b
 - Widget registry: `packages/dashboards/src/registry.tsx`
 - Dashboard defaults and persistence helpers: `packages/dashboards/src/api.ts`, `packages/dashboards/src/defaults/`
 
+## Canonical shared frontend ownership
+
+- `packages/ui` owns reusable primitives, tables, charts, tokens, and the
+  document-theme hook. Routes and widgets consume `useDocumentTheme` from
+  `@riviamigo/ui/hooks`; do not duplicate theme/media-query listeners in
+  app-local code. `ThemeToggle` remains the shared control.
+- `packages/dashboards` owns dashboard framework, widget registry, grid editor,
+  and the responsive editor drawer. The drawer is a full-height right panel on
+  desktop and a bounded bottom panel on mobile; page code must not create a
+  competing route-local editor panel.
+- `packages/hooks` owns typed API hooks and cache contracts, including
+  `useBasemapConfig`. `TripMapChart` in `packages/ui` owns map rendering and
+  receives the authenticated same-origin basemap configuration from its caller.
+  Browser map traffic must use Riviamigo's `/v1/external/basemap/...` proxy;
+  direct browser-to-provider map requests are not a supported transport.
+- `apps/web` owns route composition and page-specific integrations of these
+  seams. A trip-detail route and the Trips widget may compose the shared map,
+  but neither owns a second map client, theme source, or provider URL policy.
+
 ## Approved Layering
 
 ### 1. Route Layer
