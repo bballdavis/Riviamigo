@@ -16,15 +16,9 @@ import type {
   VehicleStatus,
 } from '@riviamigo/types';
 import { getWidgetForInstance } from './registry';
-import type { WidgetInstance, WidgetCtx } from './registry';
+import type { DashboardDataRequirements, WidgetInstance, WidgetCtx } from './registry';
 
-export interface DashboardDataRequirements {
-  metrics?: MetricBatchMetricRequest[];
-  status?: boolean;
-  batteryHealth?: boolean;
-  chargingSummary?: boolean;
-  efficiencySummary?: boolean;
-}
+export type { DashboardDataRequirements } from './registry';
 
 export interface DashboardMetricData {
   value?: MetricValueResponse;

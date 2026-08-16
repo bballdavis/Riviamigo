@@ -63,6 +63,7 @@ vi.mock('@riviamigo/ui/tables', () => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
+  useBasemapConfig: () => ({ data: undefined, isLoading: false }),
   useAuth: () => ({ defaultVehicleId: null, accessToken: null }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: null, vehicleSelectionReady: true, vehicles: [] }),
   useMe: () => ({ data: { role: 'user' } }),
