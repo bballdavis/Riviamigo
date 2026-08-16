@@ -570,6 +570,21 @@ describe('/health page cleanup', () => {
     expect(screen.getAllByText('Closed').length).toBeGreaterThan(0);
   });
 
+  it('omits unsupported tailgate telemetry for an R1S health view', () => {
+    mockUseVehicleHealth.mockReturnValueOnce({
+      data: {
+        ...healthDataBase,
+        vehicle: { ...healthDataBase.vehicle, model: 'R1S' },
+      },
+      isLoading: false,
+    });
+
+    render(<HealthContent />);
+
+    expect(screen.getByText('Liftgate')).toBeInTheDocument();
+    expect(screen.queryByText('Tailgate')).not.toBeInTheDocument();
+  });
+
   it('renders unavailable diagnostics and historical timestamps while deduping software history versions', () => {
     render(<HealthContent />);
     expect(screen.getByText('Unavailable')).toBeInTheDocument();
