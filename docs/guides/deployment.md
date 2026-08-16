@@ -14,9 +14,10 @@ Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of 
 ## Initial deployment
 
 1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords plus your exact public HTTPS `ALLOWED_ORIGINS` value. Internal service URLs and persistent application keys are generated automatically.
-2. Start the stack:
+2. Create the bind-mount directories, then start the stack:
 
    ```bash
+   ./compose/prepare-data.sh
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
@@ -42,6 +43,27 @@ The standard stack keeps operator-visible files under `./data`:
 | `data/cache`   | `/data/cache`  | Application cache files, including vehicle artwork |
 
 Do not delete `data` during updates. Copy recovery packages off-host for disaster recovery.
+
+Some NAS container managers do not create bind-mount source directories or grant
+container access automatically. On those systems, create all four directories
+before the first deployment and grant the Container Manager service read/write
+access to them. `compose/prepare-data.sh` creates the directories; NAS ACLs may
+still need to be assigned through the host's administration UI.
+
+## Synology DSM
+
+The production Compose file intentionally uses memory and process limits without
+Compose `cpus` limits. Synology kernels that do not expose CPU CFS controls reject
+NanoCPU settings before any container starts; operators who have verified CPU
+quota support can add a local Compose override.
+
+The app publishes on `127.0.0.1:8080` by default. Keep that loopback binding when
+DSM's HTTPS reverse proxy runs on the same NAS, and configure the proxy to forward
+HTTP and WebSocket traffic to `http://127.0.0.1:8080`. Set
+`RIVIAMIGO_BIND_ADDRESS` only when the reverse proxy runs on another host, and
+set `ALLOW_PUBLIC_ORIGIN_BIND=true` to acknowledge the non-loopback listener.
+Restrict that port to the proxy host with the NAS firewall; the acknowledgement
+does not make direct exposure safe.
 
 ## Logs and updates
 

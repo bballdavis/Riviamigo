@@ -41,6 +41,13 @@ pub(super) fn runtime_health_update_for_ws_control(
             auth_state: "authorized",
             auth_reason_code: None,
         }),
+        Some("reconnect") => Some(RuntimeHealthUpdate {
+            online: false,
+            worker_health: "degraded",
+            worker_health_msg: "Rivian telemetry connection interrupted; reconnecting".into(),
+            auth_state: "authorized",
+            auth_reason_code: None,
+        }),
         Some("ws_handshake_rejected") => Some(RuntimeHealthUpdate {
             online: false,
             worker_health: "error",
@@ -118,5 +125,20 @@ mod tests {
         assert_eq!(update.worker_health, "error");
         assert_eq!(update.worker_health_msg, "Rivian WS handshake rejected");
         assert_eq!(update.auth_state, "authorized");
+    }
+
+    #[test]
+    fn reconnect_is_non_healthy_until_connection_reopens() {
+        let reconnect = control("reconnect", serde_json::json!({"backoff_seconds": 5}));
+        let reconnect_update =
+            runtime_health_update_for_ws_control(&reconnect).expect("reconnect health update");
+        assert!(!reconnect_update.online);
+        assert_eq!(reconnect_update.worker_health, "degraded");
+
+        let opened = control("connection_open", serde_json::Value::Null);
+        let opened_update =
+            runtime_health_update_for_ws_control(&opened).expect("connection health update");
+        assert!(opened_update.online);
+        assert_eq!(opened_update.worker_health, "connected");
     }
 }

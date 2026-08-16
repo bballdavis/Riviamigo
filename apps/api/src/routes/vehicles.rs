@@ -1256,20 +1256,16 @@ async fn add_vehicle(
         .fetch_one(&mut *tx)
         .await?;
 
-        if already_member {
-            return Err(AppError::Conflict(
-                "vehicle already exists; refresh credentials from vehicle settings".into(),
-            ));
+        if !already_member {
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+                 VALUES ($1, $2, 'owner', FALSE)",
+            )
+            .bind(existing_vehicle_id)
+            .bind(auth.user_id)
+            .execute(&mut *tx)
+            .await?;
         }
-
-        sqlx::query(
-            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
-             VALUES ($1, $2, 'owner', FALSE)",
-        )
-        .bind(existing_vehicle_id)
-        .bind(auth.user_id)
-        .execute(&mut *tx)
-        .await?;
 
         sqlx::query(
             "INSERT INTO riviamigo.vehicle_user_settings
@@ -1368,12 +1364,15 @@ async fn add_vehicle(
     .await?;
 
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
-         VALUES ($1, 'authorized', NULL, NULL, now())
+        "INSERT INTO riviamigo.vehicle_runtime_state
+         (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
+         VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
          ON CONFLICT (vehicle_id) DO UPDATE
-         SET auth_state = 'authorized',
+         SET is_online = FALSE,
+             worker_health = 'starting',
+             worker_health_msg = 'Initializing Rivian telemetry collector',
+             auth_state = 'authorized',
              auth_reason_code = NULL,
-             worker_health_msg = NULL,
              updated_at = now()",
     )
     .bind(vehicle_id)
@@ -1382,9 +1381,18 @@ async fn add_vehicle(
 
     tx.commit().await?;
 
-    cache_vehicle_images(&state.pool, &state.config, vehicle_id, &tokens).await;
+    // The vehicle and credentials are durable after commit. Artwork and one-time
+    // session cleanup must not turn a successful add into a client-visible error.
+    queue_vehicle_artwork_repair(&state, vehicle_id).await;
 
-    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
+    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vehicle_id,
+            err = %error,
+            "vehicle.add.connect_session_cleanup_failed"
+        );
+    }
     info!(
         user_id = %auth.user_id,
         vehicle_id = %vehicle_id,
@@ -1449,6 +1457,8 @@ async fn refresh_vehicle_credentials(
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(AppError::Internal)?;
 
+    let mut tx = state.pool.begin().await?;
+
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
          VALUES ($1,$2,now(),now())
@@ -1458,23 +1468,35 @@ async fn refresh_vehicle_credentials(
     )
     .bind(vid)
     .bind(encrypted.as_slice())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
-         VALUES ($1, 'authorized', NULL, NULL, now())
+        "INSERT INTO riviamigo.vehicle_runtime_state
+         (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
+         VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
          ON CONFLICT (vehicle_id) DO UPDATE
-         SET auth_state = 'authorized',
+         SET is_online = FALSE,
+             worker_health = 'starting',
+             worker_health_msg = 'Initializing Rivian telemetry collector',
+             auth_state = 'authorized',
              auth_reason_code = NULL,
-             worker_health_msg = NULL,
              updated_at = now()",
     )
     .bind(vid)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
-    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
+    tx.commit().await?;
+
+    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            err = %error,
+            "vehicle.refresh_credentials.connect_session_cleanup_failed"
+        );
+    }
     // Credential refresh is also the recovery path after a sanitized restore.
     // Start the worker immediately so an existing vehicle does not remain
     // authorized in the database but disconnected from Rivian.
