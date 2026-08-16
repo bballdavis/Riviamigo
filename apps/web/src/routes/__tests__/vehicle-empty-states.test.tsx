@@ -7,6 +7,10 @@ vi.mock('@riviamigo/ui/primitives', async () => {
   return m;
 });
 
+vi.mock('@riviamigo/ui/hooks', () => ({
+  useDocumentTheme: () => false,
+}));
+
 const mockNavigate = vi.fn();
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -64,7 +68,6 @@ vi.mock('@riviamigo/hooks', () => ({
   useMe: () => ({ data: { role: 'user' } }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [] }),
-  useDocumentTheme: () => false,
   useChargeSession: () => ({ data: undefined, isLoading: false }),
   useChargeCurve: () => ({ data: undefined, isLoading: false }),
   useSavedPlaces: () => ({ data: [], isLoading: false, isFetching: false, isError: false }),

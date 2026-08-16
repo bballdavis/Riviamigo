@@ -7,6 +7,10 @@ vi.mock('@riviamigo/ui/primitives', async () => {
   return m;
 });
 
+vi.mock('@riviamigo/ui/hooks', () => ({
+  useDocumentTheme: () => false,
+}));
+
 const mockNavigate = vi.fn();
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -33,7 +37,6 @@ vi.mock('@riviamigo/ui/charts', () => ({
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: null }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true }),
-  useDocumentTheme: () => false,
   useTripDetailData: () => ({
     data: {
       trip: {

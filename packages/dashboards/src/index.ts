@@ -9,6 +9,7 @@ export { DashboardChartWidget, DashboardChartRenderer } from './widgets/chart/Da
 export { PhantomDrainChart, buildPhantomDrainDailySeries } from './widgets/chart/PhantomDrainChart';
 export type { PhantomDrainChartProps, PhantomDrainDailyPoint } from './widgets/chart/PhantomDrainChart';
 export { SensorChipSummary } from './widgets/sensor/SensorChipSummary';
+export { CurrentVehicleStatePanel } from './widgets/custom/OverviewVehicleWidget';
 export { registerWidget, getWidget, getAllWidgets, getWidgetKeys, getWidgetEditorMeta } from './registry';
 export type { WidgetDef, WidgetCtx, WidgetEditorMeta } from './registry';
 export * from './schema';

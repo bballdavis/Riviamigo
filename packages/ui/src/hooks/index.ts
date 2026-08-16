@@ -1,0 +1,1 @@
+export { useDocumentTheme } from './useDocumentTheme';
