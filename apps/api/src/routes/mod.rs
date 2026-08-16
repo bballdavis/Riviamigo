@@ -50,6 +50,7 @@ pub mod schedules;
 pub mod settings;
 pub mod state_timeline;
 pub mod trips;
+pub mod trip_tag_filter;
 pub mod trip_tags;
 pub mod users;
 pub mod users_support;

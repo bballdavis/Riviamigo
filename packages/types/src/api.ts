@@ -52,6 +52,10 @@ export interface MetricBatchRequest {
   /** `full` returns every retained source point in the requested range. */
   density?: 'compact' | 'full';
   max_points?: number;
+  /** Canonical comma-separated shared trip-tag IDs for trip-derived metrics. */
+  tag_ids?: string;
+  tag_match?: 'all' | 'any';
+  untagged?: boolean;
 }
 
 export interface MetricBatchSeriesResponse {
@@ -510,6 +514,17 @@ export interface EfficiencySummary {
   total_miles: number;
   efficiency_miles: number;
   coverage_percent: number;
+}
+
+export interface EfficiencyByTag {
+  tag_id: string | null;
+  tag_name: string;
+  trip_count: number;
+  total_miles: number;
+  efficiency_miles: number;
+  avg_efficiency_wh_mi: number | null;
+  /** Fraction of miles with an efficiency measurement, in the range 0–1. */
+  coverage: number;
 }
 
 export interface ChargingSummary {
