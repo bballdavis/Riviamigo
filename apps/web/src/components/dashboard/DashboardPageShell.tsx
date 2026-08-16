@@ -67,6 +67,8 @@ export interface DashboardPageShellProps {
   renderDashboard?: (state: DashboardPageShellRenderState) => boolean;
   enableDashboardEditing?: boolean | undefined;
   showEfficiencyDisplayToggle?: boolean;
+  /** Page-scoped values consumed by a subset of widgets. */
+  widgetCtx?: Pick<WidgetCtx, 'tripTagFilter' | 'canManageTripTags'>;
 }
 
 export interface DashboardEditMutations {
@@ -172,6 +174,7 @@ function DashboardPageShellContent({
   renderDashboard,
   enableDashboardEditing = true,
   showEfficiencyDisplayToggle = false,
+  widgetCtx,
 }: DashboardPageShellProps) {
   const { setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
@@ -297,6 +300,7 @@ function DashboardPageShellContent({
       chargeSessionDayLocal,
       setChargeSessionDayLocal: setChargeSessionDayFilter,
       updateWidgetLayout,
+      ...widgetCtx,
     }),
     [
       effectiveVehicleId,
@@ -310,6 +314,7 @@ function DashboardPageShellContent({
       chargeSessionDayLocal,
       setChargeSessionDayFilter,
       updateWidgetLayout,
+      widgetCtx,
     ],
   );
 

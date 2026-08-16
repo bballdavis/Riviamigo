@@ -17,6 +17,11 @@ export {
 	useElevationProfile,
 	useTripPowerProfile,
 	useTripDetailSeries,
+	useTripTags,
+	useCreateTripTag,
+	useUpdateTripTag,
+	useDeleteTripTag,
+	useUpdateTripTagAssignments,
 } from './useTrips';
 export { invalidateChargingData, useChargeSessions, useChargeSession, useSavedPlaces, useUpdateChargeSessionLocation, useChargeCurve, useChargeCurveAnalysis, useChargingSummary, useChargingChartSeries, useChargingSchedule, useUpdateChargingSchedule, useDepartureSchedules, useCreateDepartureSchedule, useUpdateDepartureSchedule, useDeleteDepartureSchedule, useLiveSession } from './useCharging';
 export { useEfficiencySummary, useEfficiencyByMode, useEfficiencyTrend, useEfficiencyVsTemp } from './useEfficiency';

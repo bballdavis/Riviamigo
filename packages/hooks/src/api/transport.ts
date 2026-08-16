@@ -88,6 +88,9 @@ import type {
   UpdateExternalConnectionBody,
   TestExternalConnectionResponse,
   PurgeExternalConnectionCacheResponse,
+  TripTag,
+  TripTagAssignmentRequest,
+  TripTagColorToken,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -1128,10 +1131,12 @@ export class AuthenticatedTransport {
     page = 1,
     perPage = 25,
     search = '',
-    lifetime = false
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
   ) {
     const offset = (page - 1) * perPage;
     const trimmedSearch = search.trim();
+    const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
     const response = await this.request<
       PaginatedResponse<unknown> & { data?: unknown[]; limit?: number; offset?: number }
     >('GET', '/v1/trips', undefined, {
@@ -1142,6 +1147,8 @@ export class AuthenticatedTransport {
       limit: perPage,
       offset,
       ...(trimmedSearch ? { search: trimmedSearch } : {}),
+      ...(tagIds.length ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' } : {}),
+      ...(filters?.untagged ? { untagged: 1 } : {}),
     });
     const normalized = normalizePaginated(response, page, perPage);
     return {
@@ -1155,13 +1162,37 @@ export class AuthenticatedTransport {
     from: string | null,
     to: string | null,
     search = '',
-    lifetime = false
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
   ) {
+    const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
     return this.request<TripMapResponse>('GET', '/v1/trips/map', undefined, {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
       ...(search.trim() ? { search: search.trim() } : {}),
+      ...(tagIds.length ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' } : {}),
+      ...(filters?.untagged ? { untagged: 1 } : {}),
     });
+  }
+
+  async listTripTags(vehicleId: string) {
+    return this.request<TripTag[]>('GET', `/v1/vehicles/${vehicleId}/trip-tags`);
+  }
+
+  async createTripTag(vehicleId: string, body: { name: string; color_token?: TripTagColorToken }) {
+    return this.request<TripTag>('POST', `/v1/vehicles/${vehicleId}/trip-tags`, body);
+  }
+
+  async updateTripTag(vehicleId: string, tagId: string, body: { name?: string; color_token?: TripTagColorToken }) {
+    return this.request<TripTag>('PATCH', `/v1/vehicles/${vehicleId}/trip-tags/${tagId}`, body);
+  }
+
+  async deleteTripTag(vehicleId: string, tagId: string) {
+    return this.request<{ ok: true }>('DELETE', `/v1/vehicles/${vehicleId}/trip-tags/${tagId}`);
+  }
+
+  async updateTripTagAssignments(vehicleId: string, body: TripTagAssignmentRequest) {
+    return this.request<{ updated_trip_count: number }>('POST', `/v1/vehicles/${vehicleId}/trip-tags/assignments`, body);
   }
 
   async getTrip(tripId: string, vehicleId: string) {
@@ -1812,6 +1843,23 @@ function normalizeTrip(raw: unknown): Trip {
     (efficiency !== undefined && distance > 0 ? (efficiency * distance) / 1000 : undefined);
   const startCoordinate = normalizeCoordinateValue(row.start_lat, row.start_lng);
   const endCoordinate = normalizeCoordinateValue(row.end_lat, row.end_lng);
+  const tags = Array.isArray(row.tags)
+    ? row.tags.flatMap((tag): TripTag[] => {
+      if (!isRecord(tag) || typeof tag.id !== 'string' || typeof tag.name !== 'string') return [];
+      const color = tag.color_token;
+      const color_token: TripTagColorToken = color === 'neutral' || color === 'info' || color === 'success'
+        || color === 'warning' || color === 'danger' ? color : 'accent';
+      return [{
+        id: tag.id,
+        vehicle_id: typeof tag.vehicle_id === 'string' ? tag.vehicle_id : String(row.vehicle_id ?? ''),
+        name: tag.name,
+        color_token,
+        created_by: typeof tag.created_by === 'string' ? tag.created_by : '',
+        created_at: typeof tag.created_at === 'string' ? tag.created_at : '',
+        updated_at: typeof tag.updated_at === 'string' ? tag.updated_at : '',
+      }];
+    })
+    : [];
 
   return {
     id: String(row.id ?? ''),
@@ -1844,6 +1892,7 @@ function normalizeTrip(raw: unknown): Trip {
         : typeof row.end_place_name === 'string'
           ? row.end_place_name
           : null,
+    tags,
   };
 }
 

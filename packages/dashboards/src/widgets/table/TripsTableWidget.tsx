@@ -4,10 +4,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Sun, Moon } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
-import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes } from '@riviamigo/hooks';
+import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
-import { Badge, SelectPicker } from '@riviamigo/ui/primitives';
+import { Badge, Button, SelectPicker } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
 import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
@@ -15,6 +15,7 @@ import { format, parseISO } from 'date-fns';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
+import { TripTagBadges, TripTagPicker } from './TripTagPicker';
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState(() =>
@@ -94,6 +95,7 @@ function TripCard({
           </span>
         )}
       </div>
+      <TripTagBadges tags={trip.tags} />
       </button>
     </div>
   );
@@ -125,7 +127,7 @@ export function TripsMapWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   const [mapStyleOverride, setMapStyleOverride] = React.useState<MapStyleMode | null>(null);
   const effectiveMapStyle: MapStyleMode = mapStyleOverride ?? mapStyle;
   const deferredSearch = React.useDeferredValue(search);
-  const mapQuery = useTripMapRoutes(ctx.vehicleId, ctx.from, ctx.to, deferredSearch);
+  const mapQuery = useTripMapRoutes(ctx.vehicleId, ctx.from, ctx.to, deferredSearch, ctx.tripTagFilter);
   const routes = React.useMemo(
     () => (mapQuery.data?.routes ?? []).map((route) => ({
       id: route.trip_id,
@@ -223,8 +225,10 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const { page, pageSize, search } = useTripTableState();
   const deferredSearch = React.useDeferredValue(search);
   const { selectedIds } = useTripSelection();
+  const [batchTagIds, setBatchTagIds] = React.useState<string[]>([]);
   const isMobile = useIsMobile();
-  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim());
+  const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim(), ctx.tripTagFilter);
+  const updateAssignments = useUpdateTripTagAssignments(ctx.vehicleId);
   const placesQuery = useQuery({
     queryKey: ['places'],
     queryFn: () => api.listPlaces(),
@@ -244,6 +248,10 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   React.useEffect(() => {
     resetTripTableState(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
   }, [ctx.from, ctx.to, ctx.vehicleId]);
+
+  React.useEffect(() => {
+    setBatchTagIds([]);
+  }, [selectedIds.length, ctx.vehicleId]);
 
   React.useEffect(() => {
     if (trips.length > 0) registerTripsInStore(trips);
@@ -315,6 +323,36 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
           )}
         </div>
       </div>
+
+      {ctx.tripTagFilter?.setFilter ? (
+        <div className="rounded-xl border border-border bg-bg-elevated/40 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-[13rem] flex-1">
+              <TripTagPicker
+                vehicleId={ctx.vehicleId}
+                canManage={Boolean(ctx.canManageTripTags)}
+                selectedIds={ctx.tripTagFilter.tagIds}
+                onChange={(tagIds) => ctx.tripTagFilter?.setFilter?.({ tagIds, tagMatch: ctx.tripTagFilter?.tagMatch ?? 'all', untagged: false })}
+              />
+            </div>
+            <div className="flex min-h-11 items-center rounded-lg border border-border p-1 text-xs" aria-label="Tag match mode">
+              {(['all', 'any'] as const).map((match) => <button key={match} type="button" disabled={ctx.tripTagFilter!.untagged || ctx.tripTagFilter!.tagIds.length === 0} onClick={() => ctx.tripTagFilter?.setFilter?.({ ...ctx.tripTagFilter!, tagMatch: match })} className={`min-h-9 rounded-md px-3 font-medium capitalize transition-colors ${ctx.tripTagFilter!.tagMatch === match ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-tertiary hover:text-fg'} disabled:opacity-40`}>{match}</button>)}
+            </div>
+            <button type="button" onClick={() => ctx.tripTagFilter?.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: !ctx.tripTagFilter?.untagged })} className={`min-h-11 rounded-lg border px-3 text-sm font-medium transition-colors ${ctx.tripTagFilter.untagged ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-fg-secondary hover:bg-bg-surface'}`} aria-pressed={ctx.tripTagFilter.untagged}>Untagged</button>
+            {(ctx.tripTagFilter.tagIds.length > 0 || ctx.tripTagFilter.untagged) ? <button type="button" className="min-h-11 px-2 text-sm font-medium text-accent hover:underline" onClick={() => ctx.tripTagFilter?.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: false })}>Clear filters</button> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedIds.length > 0 && ctx.canManageTripTags ? (
+        <div className="rounded-xl border border-accent/30 bg-accent/10 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[13rem] flex-1"><TripTagPicker vehicleId={ctx.vehicleId} canManage selectedIds={batchTagIds} onChange={setBatchTagIds} label="Add tags to selected trips" /></div>
+            <Button type="button" size="md" className="h-11" disabled={batchTagIds.length === 0 || updateAssignments.isPending} loading={updateAssignments.isPending} onClick={() => void updateAssignments.mutateAsync({ trip_ids: selectedIds, tag_ids: batchTagIds, mode: 'add' }).then(() => { setBatchTagIds([]); clearTripSelection(); })}>Apply to {selectedIds.length} selected</Button>
+          </div>
+          {updateAssignments.isError ? <p role="alert" className="mt-2 text-sm text-status-danger">Couldn’t update trip tags. Try again.</p> : null}
+        </div>
+      ) : null}
 
       {isMobile ? (
         <div className="flex flex-col gap-2">

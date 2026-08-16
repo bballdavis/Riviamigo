@@ -13,7 +13,7 @@ import {
 import { formatDriveMode, getDriveModeBadgeClass } from '../lib/driveMode';
 import { resolveTripLocation } from '../lib/tripPresentation';
 import { formatAppDateTime } from '../lib/dateTime';
-import type { Place } from '@riviamigo/types';
+import type { Place, TripTag } from '@riviamigo/types';
 
 export interface TripRow {
   id: string;
@@ -35,6 +35,7 @@ export interface TripRow {
   end_address?: string | null;
   start_place?: string | null;
   end_place?: string | null;
+  tags?: TripTag[];
 }
 
 const col = createColumnHelper<TripRow>();
@@ -137,6 +138,24 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
         );
       },
     }),
+    col.accessor('tags', {
+      header: 'Tags',
+      enableSorting: false,
+      meta: {
+        headerClassName: 'w-[11rem]',
+        cellClassName: 'w-[11rem]',
+      },
+      cell: (info) => {
+        const tags: TripTag[] = info.getValue() ?? [];
+        if (tags.length === 0) return <span className="text-fg-tertiary">—</span>;
+        return (
+          <div className="flex max-w-[10.5rem] flex-wrap gap-1 py-0.5">
+            {tags.slice(0, 2).map((tag) => <TripTagBadge key={tag.id} tag={tag} />)}
+            {tags.length > 2 ? <Badge size="sm" title={`${tags.length - 2} more tags`}>+{tags.length - 2}</Badge> : null}
+          </div>
+        );
+      },
+    }),
   ];
 
   if (options.onInfoClick) {
@@ -171,6 +190,11 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
   }
 
   return columns;
+}
+
+export function TripTagBadge({ tag }: { tag: Pick<TripTag, 'name' | 'color_token'> }) {
+  const variant = tag.color_token === 'neutral' ? 'default' : tag.color_token;
+  return <Badge size="sm" variant={variant} className="max-w-[8rem] truncate" title={tag.name}>{tag.name}</Badge>;
 }
 
 export const tripColumns = createTripColumns();
