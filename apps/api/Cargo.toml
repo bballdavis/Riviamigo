@@ -86,6 +86,7 @@ ipnet           = "2"
 walkdir         = "2"
 http            = "1"
 url             = "2"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 testcontainers          = "0.27"

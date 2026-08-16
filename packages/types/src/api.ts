@@ -168,6 +168,28 @@ export interface Trip {
   end_place?: string | null;
   outside_temp_c?: number | null;
   outside_temp_source?: OutsideTemperatureSource | null;
+  /** Additive server field; older API versions return no tag collection. */
+  tags?: TripTag[];
+}
+
+export type TripTagColorToken = 'accent' | 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+
+export interface TripTag {
+  id: string;
+  vehicle_id: string;
+  name: string;
+  color_token: TripTagColorToken;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TripTagMatch = 'all' | 'any';
+
+export interface TripTagAssignmentRequest {
+  trip_ids: string[];
+  tag_ids: string[];
+  mode: 'add' | 'remove' | 'replace';
 }
 
 export interface TrackPoint {
@@ -221,6 +243,7 @@ export type TripRouteCoordinate = [lng: number, lat: number];
 export interface TripMapRoute {
   trip_id: string;
   coordinates: TripRouteCoordinate[];
+  tags: TripTag[];
 }
 
 export interface TripMapResponse {

@@ -486,6 +486,12 @@ fn catalog() -> ApiCatalogResponse {
         endpoint("GET", "/v1/trips", true, "Read trip summaries."),
         endpoint(
             "GET",
+            "/v1/vehicles/{vehicle_id}/trip-tags",
+            true,
+            "Read the shared trip tag catalog for a vehicle.",
+        ),
+        endpoint(
+            "GET",
             "/v1/trips/map",
             true,
             "Read compact trip-route previews.",

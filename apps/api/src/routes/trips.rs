@@ -44,11 +44,85 @@ struct TripListParams {
     page: Option<i64>,
     per_page: Option<i64>,
     search: Option<String>,
+    /// Canonical comma-separated UUID list. Repeated query keys are not
+    /// portable across all clients/proxies, so the URL form stays stable.
+    tag_ids: Option<String>,
+    tag_match: Option<TripTagMatch>,
+    untagged: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TripTagMatch {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone)]
+struct TripTagFilter {
+    tag_ids: Option<Vec<Uuid>>,
+    match_all: bool,
+    untagged: bool,
+}
+
+fn parse_tag_filter(params: &TripListParams) -> Result<TripTagFilter, AppError> {
+    let mut tag_ids = params
+        .tag_ids
+        .as_deref()
+        .map(|value| {
+            value
+                .split(',')
+                .filter(|part| !part.trim().is_empty())
+                .map(|part| Uuid::parse_str(part.trim()).map_err(|_| AppError::Validation("tag_ids must be a comma-separated list of UUIDs".into())))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .filter(|ids| !ids.is_empty());
+    if let Some(ids) = tag_ids.as_mut() {
+        ids.sort_unstable();
+        if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(AppError::Validation("tag_ids must not contain duplicates".into()));
+        }
+        if ids.len() > 50 {
+            return Err(AppError::Validation("tag_ids may contain at most 50 IDs".into()));
+        }
+    }
+    let untagged = params.untagged.unwrap_or(false);
+    if untagged && tag_ids.is_some() {
+        return Err(AppError::Validation("untagged cannot be combined with tag_ids".into()));
+    }
+    Ok(TripTagFilter {
+        tag_ids,
+        match_all: !matches!(params.tag_match, Some(TripTagMatch::Any)),
+        untagged,
+    })
+}
+
+async fn require_known_vehicle_tags(
+    pool: &sqlx::PgPool,
+    vehicle_id: Uuid,
+    filter: &TripTagFilter,
+) -> Result<(), AppError> {
+    let Some(tag_ids) = filter.tag_ids.as_deref() else {
+        return Ok(());
+    };
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM riviamigo.trip_tags WHERE vehicle_id=$1 AND id=ANY($2)",
+    )
+    .bind(vehicle_id)
+    .bind(tag_ids)
+    .fetch_one(pool)
+    .await?;
+    if count != tag_ids.len() as i64 {
+        return Err(AppError::Validation("tag_ids must belong to the selected vehicle".into()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod timeframe_tests {
     use chrono::{TimeZone, Utc};
+    use uuid::Uuid;
 
     #[test]
     fn lifetime_time_bounds_use_epoch_instead_of_default_window() {
@@ -57,6 +131,34 @@ mod timeframe_tests {
 
         assert_eq!(resolved_to, to);
         assert_eq!(from, chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    }
+
+    #[test]
+    fn tag_filter_defaults_to_all_and_rejects_untagged_combination() {
+        let tag = Uuid::new_v4();
+        let params = super::TripListParams {
+            vehicle_id: None,
+            from: None,
+            to: None,
+            lifetime: None,
+            limit: None,
+            offset: None,
+            page: None,
+            per_page: None,
+            search: None,
+            tag_ids: Some(tag.to_string()),
+            tag_match: None,
+            untagged: None,
+        };
+        let filter = super::parse_tag_filter(&params).unwrap();
+        assert!(filter.match_all);
+        assert_eq!(filter.tag_ids, Some(vec![tag]));
+
+        let invalid = super::TripListParams {
+            untagged: Some(true),
+            ..params
+        };
+        assert!(super::parse_tag_filter(&invalid).is_err());
     }
 }
 
@@ -102,6 +204,7 @@ struct TripRow {
     end_address: Option<String>,
     outside_temp_c: Option<f64>,
     outside_temp_source: Option<String>,
+    tags: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -111,6 +214,7 @@ struct TripMapRow {
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
     route_preview: Option<serde_json::Value>,
+    tags: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize, sqlx::FromRow)]
@@ -290,6 +394,7 @@ struct TripWeatherRow {
 struct TripMapRoute {
     trip_id: Uuid,
     coordinates: Vec<[f64; 2]>,
+    tags: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -505,6 +610,8 @@ async fn list_trips(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = parse_tag_filter(&p)?;
+    require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
@@ -528,7 +635,8 @@ async fn list_trips(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $7 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -543,6 +651,10 @@ async fn list_trips(
               COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\') \
+         AND ($8::uuid[] IS NULL OR CASE WHEN $9 THEN
+              (SELECT COUNT(DISTINCT tta.tag_id) FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($8)) = cardinality($8)
+              ELSE EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($8)) END)
+         AND (NOT $10 OR NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id))
          ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
     )
     .bind(vid)
@@ -552,6 +664,9 @@ async fn list_trips(
     .bind(offset)
     .bind(search.as_deref())
     .bind(auth.user_id)
+    .bind(tag_filter.tag_ids.clone())
+    .bind(tag_filter.match_all)
+    .bind(tag_filter.untagged)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -570,13 +685,20 @@ async fn list_trips(
               COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')",
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
+         AND ($6::uuid[] IS NULL OR CASE WHEN $7 THEN
+              (SELECT COUNT(DISTINCT tta.tag_id) FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) = cardinality($6)
+              ELSE EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) END)
+         AND (NOT $8 OR NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id))",
     )
     .bind(vid)
     .bind(from)
     .bind(to)
     .bind(search.as_deref())
     .bind(auth.user_id)
+    .bind(tag_filter.tag_ids.clone())
+    .bind(tag_filter.match_all)
+    .bind(tag_filter.untagged)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -612,7 +734,8 @@ async fn get_trip(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -641,6 +764,8 @@ async fn get_trip_map(
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = parse_tag_filter(&p)?;
+    require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let search = p
         .search
@@ -650,7 +775,8 @@ async fn get_trip_map(
         .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
 
     let rows = sqlx::query_as::<_, TripMapRow>(
-        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview
+        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
            FROM riviamigo.trips t
            LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5
            LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id)
@@ -665,6 +791,10 @@ async fn get_trip_map(
                   COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
                   COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
                   COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
+             AND ($6::uuid[] IS NULL OR CASE WHEN $7 THEN
+                  (SELECT COUNT(DISTINCT tta.tag_id) FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) = cardinality($6)
+                  ELSE EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) END)
+             AND (NOT $8 OR NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id))
            ORDER BY t.started_at DESC"#,
     )
     .bind(vid)
@@ -672,6 +802,9 @@ async fn get_trip_map(
     .bind(to)
     .bind(search.as_deref())
     .bind(auth.user_id)
+    .bind(tag_filter.tag_ids.clone())
+    .bind(tag_filter.match_all)
+    .bind(tag_filter.untagged)
     .fetch_all(&state.pool)
     .await?;
 
@@ -757,6 +890,7 @@ async fn get_trip_map(
             route_by_id.remove(&row.id).map(|coordinates| TripMapRoute {
                 trip_id: row.id,
                 coordinates,
+                tags: row.tags.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -799,7 +933,8 @@ async fn get_trip_detail(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
