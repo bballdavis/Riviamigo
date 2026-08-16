@@ -15,6 +15,9 @@ The release stack pins PostgreSQL 18.4 with TimescaleDB 2.28.3, Redis 8.8, and i
 - Git and Docker Engine with Docker Compose v2 (`docker compose`).
 - Enough persistent storage for PostgreSQL/TimescaleDB and backups. Start with at least 20 GB and leave room for your history to grow.
 - A modern browser and a Rivian account with a vehicle attached.
+- Permission to pre-create the `data/db`, `data/redis`, `data/backups`, and
+  `data/cache` bind-mount directories and grant the container runtime read/write
+  access. This is commonly required on NAS platforms such as Synology DSM.
 - If you want remote access: an authenticated HTTPS tunnel or identity-aware reverse proxy. Do not forward a public port directly to Riviamigo.
 
 ## Helpful, but optional
@@ -23,7 +26,11 @@ The release stack pins PostgreSQL 18.4 with TimescaleDB 2.28.3, Redis 8.8, and i
 - A hostname for the authenticated gateway.
 - A UPS for a home server or NAS.
 
-The database and Redis remain inside the Compose network. The web origin publishes port 8080 by default, so host firewall and gateway configuration are part of a remote installation rather than an optional afterthought.
+The database and Redis remain inside the Compose network. The web origin binds
+`127.0.0.1:8080` by default, which is suitable for a reverse proxy on the same
+host. If the proxy is elsewhere, explicitly change `RIVIAMIGO_BIND_ADDRESS` and
+set `ALLOW_PUBLIC_ORIGIN_BIND=true`, then restrict that port to the proxy with
+the host firewall.
 
 ## Building from source
 

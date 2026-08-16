@@ -139,6 +139,7 @@ async function verifyProduction() {
     ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
   };
   productionEnvironment = environment;
+  run('sh', ['compose/prepare-data.sh'], { env: environment });
   run('docker', [...compose, '--env-file', productionEnv, 'config', '--quiet'], {
     env: environment,
   });

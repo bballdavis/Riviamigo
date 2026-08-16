@@ -406,7 +406,10 @@ pub async fn recompute_charge_session_cost(
            SET cost_profile_id = $2,
                cost_method = $3,
                cost_usd = $4
-           WHERE id = $1"#,
+           WHERE id = $1
+             AND (cost_profile_id IS DISTINCT FROM $2
+                  OR cost_method IS DISTINCT FROM $3
+                  OR cost_usd IS DISTINCT FROM $4)"#,
     )
     .bind(session.id)
     .bind(result.cost_profile_id)
@@ -428,7 +431,14 @@ pub async fn recompute_charge_session_cost(
                    cost_usd = EXCLUDED.cost_usd,
                    currency_code = EXCLUDED.currency_code,
                    computed_at = now(),
-                   updated_at = now()"#,
+                   updated_at = now()
+               WHERE (riviamigo.charge_session_user_annotations.cost_profile_id IS DISTINCT FROM EXCLUDED.cost_profile_id
+                      OR riviamigo.charge_session_user_annotations.cost_method IS DISTINCT FROM EXCLUDED.cost_method
+                      OR riviamigo.charge_session_user_annotations.cost_usd IS DISTINCT FROM EXCLUDED.cost_usd
+                      OR (EXCLUDED.geofence_id IS NOT NULL
+                          AND riviamigo.charge_session_user_annotations.geofence_id IS DISTINCT FROM EXCLUDED.geofence_id)
+                      OR (EXCLUDED.is_home IS NOT NULL
+                          AND riviamigo.charge_session_user_annotations.is_home IS DISTINCT FROM EXCLUDED.is_home))"#,
         )
         .bind(session.id)
         .bind(owner_id)

@@ -24,6 +24,7 @@ export function ConnectContent() {
   const [loading, setLoading] = useState(false);
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
+  const [successVehicleId, setSuccessVehicleId] = useState('');
   const currentStep = successVehicleName ? 2 : loading ? 1 : 0;
   const reportError = (message: string) => {
     setError(message);
@@ -71,7 +72,11 @@ export function ConnectContent() {
       }
       await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
       setDefaultVehicleId(refreshVehicleId);
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
+        queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', refreshVehicleId] }),
+      ]);
+      setSuccessVehicleId(refreshVehicleId);
       setSuccessVehicleName(formatVehicleName(matchingVehicle));
       setVehicles([]);
       return;
@@ -100,6 +105,11 @@ export function ConnectContent() {
         vin: vehicle.vin,
       });
       setDefaultVehicleId(added.vehicle_id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
+        queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', added.vehicle_id] }),
+      ]);
+      setSuccessVehicleId(added.vehicle_id);
       setSuccessVehicleName(formatVehicleName(vehicle));
       setVehicles([]);
     } finally {
@@ -125,6 +135,7 @@ export function ConnectContent() {
 
             {successVehicleName ? (
               <ConnectedVehicleSuccess
+                vehicleId={successVehicleId}
                 vehicleName={successVehicleName}
                 onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
               />

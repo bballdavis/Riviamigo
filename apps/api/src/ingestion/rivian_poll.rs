@@ -880,6 +880,35 @@ async fn fetch_charge_history_inner_v2(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
+    // Hold a distributed per-vehicle transaction lock across the upstream fetch
+    // and reconciliation writes. SQLx rolls back a dropped transaction before
+    // reusing its pooled connection, so cancellation cannot leak the lock.
+    let mut lock_transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("rivian-charge-history:{vehicle_id}"))
+        .execute(&mut *lock_transaction)
+        .await?;
+
+    let result = fetch_charge_history_locked(vehicle_id, full_backfill, pool, client, tokens).await;
+    if let Err(error) = lock_transaction.rollback().await {
+        tracing::error!(vehicle_id=%vehicle_id, error=%error, "charge history lock release failed");
+        if result.is_ok() {
+            return Err(anyhow!(
+                "failed to release charge-history transaction lock: {error}"
+            ));
+        }
+    }
+
+    result
+}
+
+async fn fetch_charge_history_locked(
+    vehicle_id: Uuid,
+    full_backfill: bool,
+    pool: &PgPool,
+    client: &reqwest::Client,
+    tokens: &RivianTokenBundle,
+) -> Result<usize> {
     const Q: &str = r#"
         query getCompletedSessionSummaries {
           getCompletedSessionSummaries {
@@ -930,13 +959,14 @@ async fn fetch_charge_history_inner_v2(
     let mut total_processed = 0usize;
     let mut total_linked = 0usize;
     for summary in &data.get_completed_session_summaries.unwrap_or_default() {
+        let payload = serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({}));
         let payload_ref = match record_charge_payload_with_ref(
             pool,
             vehicle_id,
             "getCompletedSessionSummaries",
             summary.transaction_id.as_deref(),
             summary.vehicle_id.as_deref(),
-            serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({})),
+            payload,
         )
         .await
         {
@@ -947,16 +977,24 @@ async fn fetch_charge_history_inner_v2(
             }
         };
 
-        let matched_session_id = charge_sessions::reconcile_completed_session_summary(
-            pool,
-            vehicle_id,
-            summary,
-            insert_policy,
-            payload_ref,
-        )
-        .await?;
+        let already_linked_session = unchanged_linked_session(payload_ref);
+        let matched_session_id = if let Some(session_id) = already_linked_session {
+            Some(session_id)
+        } else {
+            charge_sessions::reconcile_completed_session_summary(
+                pool,
+                vehicle_id,
+                summary,
+                insert_policy,
+                payload_ref,
+            )
+            .await?
+        };
 
-        if let (Some(payload_ref), Some(session_id)) = (payload_ref, matched_session_id) {
+        if let (Some(payload_ref), Some(session_id)) = (
+            payload_ref.filter(|_| already_linked_session.is_none()),
+            matched_session_id,
+        ) {
             sqlx::query(
                 "UPDATE riviamigo.rivian_charge_payloads
                  SET charge_session_id = $2
@@ -968,7 +1006,7 @@ async fn fetch_charge_history_inner_v2(
             .await?;
         }
 
-        if let Some(session_id) = matched_session_id {
+        if let Some(session_id) = matched_session_id.filter(|_| already_linked_session.is_none()) {
             total_linked += 1;
             let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
         }
@@ -985,6 +1023,16 @@ async fn fetch_charge_history_inner_v2(
     );
 
     Ok(total_processed)
+}
+
+fn unchanged_linked_session(payload_ref: Option<ChargeSessionPayloadRef>) -> Option<Uuid> {
+    payload_ref.and_then(|payload| {
+        if payload.unchanged {
+            payload.charge_session_id
+        } else {
+            None
+        }
+    })
 }
 
 async fn record_charge_payload_with_ref(
@@ -1017,6 +1065,36 @@ async fn record_charge_payload_with_ref(
         None
     };
 
+    if let Some(existing) = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
+        r#"SELECT payload.id, payload.captured_at, session.id
+           FROM riviamigo.rivian_charge_payloads payload
+           LEFT JOIN riviamigo.charge_sessions session
+             ON session.id = payload.charge_session_id
+            AND session.vehicle_id = payload.vehicle_id
+           WHERE payload.vehicle_id = $1
+             AND payload.operation = $2
+             AND payload.rivian_transaction_id IS NOT DISTINCT FROM $3
+             AND payload.rivian_vehicle_id IS NOT DISTINCT FROM $4
+             AND payload.payload = $5
+           ORDER BY (session.id IS NOT NULL) DESC, payload.captured_at ASC, payload.id ASC
+           LIMIT 1"#,
+    )
+    .bind(vehicle_id)
+    .bind(operation)
+    .bind(rivian_transaction_id)
+    .bind(rivian_vehicle_id)
+    .bind(&payload)
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok(ChargeSessionPayloadRef {
+            payload_id: existing.0,
+            captured_at: existing.1,
+            charge_session_id: existing.2,
+            unchanged: true,
+        });
+    }
+
     let (payload_id, captured_at) = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
         "INSERT INTO riviamigo.rivian_charge_payloads
              (vehicle_id, charge_session_id, operation, rivian_transaction_id, rivian_vehicle_id, payload)
@@ -1035,6 +1113,8 @@ async fn record_charge_payload_with_ref(
     Ok(ChargeSessionPayloadRef {
         payload_id,
         captured_at,
+        charge_session_id,
+        unchanged: false,
     })
 }
 
@@ -2303,8 +2383,13 @@ pub(crate) async fn run_poll_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{live_session_redis_key, LiveSessionApiData, LIVE_SESSION_TTL_SECONDS};
-    use crate::services::charge_sessions::{infer_is_rivian_network, normalize_api_charger_type};
+    use super::{
+        live_session_redis_key, unchanged_linked_session, LiveSessionApiData,
+        LIVE_SESSION_TTL_SECONDS,
+    };
+    use crate::services::charge_sessions::{
+        infer_is_rivian_network, normalize_api_charger_type, ChargeSessionPayloadRef,
+    };
     use chrono::Utc;
 
     #[test]
@@ -2315,6 +2400,33 @@ mod tests {
             "vehicle:76d88de5-f6fa-41cb-b560-126defb7885b:live_session"
         );
         assert_eq!(LIVE_SESSION_TTL_SECONDS, 120);
+    }
+
+    #[test]
+    fn only_unchanged_payloads_with_a_live_session_link_skip_reconciliation() {
+        let session_id = uuid::Uuid::new_v4();
+        let base = ChargeSessionPayloadRef {
+            payload_id: uuid::Uuid::new_v4(),
+            captured_at: Utc::now(),
+            charge_session_id: Some(session_id),
+            unchanged: true,
+        };
+
+        assert_eq!(unchanged_linked_session(Some(base)), Some(session_id));
+        assert_eq!(
+            unchanged_linked_session(Some(ChargeSessionPayloadRef {
+                unchanged: false,
+                ..base
+            })),
+            None
+        );
+        assert_eq!(
+            unchanged_linked_session(Some(ChargeSessionPayloadRef {
+                charge_session_id: None,
+                ..base
+            })),
+            None
+        );
     }
 
     #[test]

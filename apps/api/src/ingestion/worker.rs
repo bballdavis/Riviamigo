@@ -181,9 +181,9 @@ pub async fn run_vehicle_worker(
     upsert_health(
         &pool,
         vehicle_id,
-        true,
-        "connected",
-        "",
+        false,
+        "starting",
+        "Initializing Rivian telemetry collector",
         Some("authorized"),
         None,
     )
@@ -217,6 +217,25 @@ pub async fn run_vehicle_worker(
             .await
             .ok()
             .flatten();
+
+    let mut redis_conn = match redis.get_multiplexed_async_connection().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(err=%e, "redis connect failed");
+            upsert_health(
+                &pool,
+                vehicle_id,
+                false,
+                "error",
+                "Telemetry collector could not connect to Redis",
+                Some("authorized"),
+                None,
+            )
+            .await;
+            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+            return;
+        }
+    };
 
     let mut worker_shutdown = shutdown.resubscribe();
     let spawn_ws_loop = || {
@@ -298,15 +317,6 @@ pub async fn run_vehicle_worker(
         } else {
             ChargeDetectorState::new(vehicle_id)
         };
-    let mut redis_conn = match redis.get_multiplexed_async_connection().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(err=%e, "redis connect failed");
-            let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
-            return;
-        }
-    };
-
     // State periods are durable state, not a best-effort in-memory overlay.
     // Rehydrate before processing any new payload so a worker restart can close
     // the existing period instead of colliding with the partial unique index.

@@ -23,6 +23,7 @@ export function ConnectOtpContent() {
   const [loading, setLoading] = useState(false);
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
+  const [successVehicleId, setSuccessVehicleId] = useState('');
   const reportError = (message: string) => {
     setError(message);
     emitAuthError('Rivian connection failed', message);
@@ -57,7 +58,11 @@ export function ConnectOtpContent() {
       }
       await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
       setDefaultVehicleId(refreshVehicleId);
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
+        queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', refreshVehicleId] }),
+      ]);
+      setSuccessVehicleId(refreshVehicleId);
       setSuccessVehicleName(formatVehicleName(matchingVehicle));
       setVehicles([]);
       return;
@@ -85,7 +90,11 @@ export function ConnectOtpContent() {
       vin: vehicle.vin,
     });
     setDefaultVehicleId(added.vehicle_id);
-    queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
+      queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', added.vehicle_id] }),
+    ]);
+    setSuccessVehicleId(added.vehicle_id);
     setSuccessVehicleName(formatVehicleName(vehicle));
     setVehicles([]);
   }
@@ -107,6 +116,7 @@ export function ConnectOtpContent() {
 
             {successVehicleName ? (
               <ConnectedVehicleSuccess
+                vehicleId={successVehicleId}
                 vehicleName={successVehicleName}
                 onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
               />
