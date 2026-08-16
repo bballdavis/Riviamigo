@@ -91,6 +91,8 @@ import type {
   TripTag,
   TripTagAssignmentRequest,
   TripTagColorToken,
+  ChargeSessionUpdate,
+  ChargingNetworkPreference,
 } from '@riviamigo/types';
 
 // ── Schedule & live-session types ─────────────────────────────────────────────
@@ -1342,6 +1344,37 @@ export class AuthenticatedTransport {
     );
   }
 
+  async updateChargeSession(
+    vehicleId: string,
+    sessionId: string,
+    body: ChargeSessionUpdate,
+  ): Promise<ChargeSession> {
+    const response = await this.request<unknown>(
+      'PATCH',
+      `/v1/vehicles/${vehicleId}/charging-sessions/${sessionId}`,
+      body,
+    );
+    return normalizeChargeSession(
+      isRecord(response) && 'session' in response ? response.session : response,
+    );
+  }
+
+  async listChargingNetworkPreferences(vehicleId: string): Promise<ChargingNetworkPreference[]> {
+    return this.request('GET', `/v1/vehicles/${vehicleId}/charging-networks`);
+  }
+
+  async updateChargingNetworkPreference(
+    vehicleId: string,
+    networkVendor: string,
+    costMode: ChargingNetworkPreference['cost_mode'],
+  ): Promise<Pick<ChargingNetworkPreference, 'network_vendor' | 'cost_mode'>> {
+    return this.request(
+      'PATCH',
+      `/v1/vehicles/${vehicleId}/charging-networks/${encodeURIComponent(networkVendor)}`,
+      { cost_mode: costMode },
+    );
+  }
+
   async getChargeCurve(sessionId: string, vehicleId: string) {
     const rows = await this.request<Array<Record<string, unknown>>>(
       'GET',
@@ -1956,6 +1989,19 @@ function normalizeChargeSession(raw: unknown): ChargeSession {
     live_range_added_km: finiteNumber(row.live_range_added_km) ?? null,
     live_power_kw: finiteNumber(row.live_power_kw) ?? null,
     live_charge_rate_kph: finiteNumber(row.live_charge_rate_kph) ?? null,
+    location_lat: finiteNumber(row.location_lat) ?? null,
+    location_lng: finiteNumber(row.location_lng) ?? null,
+    source_location_lat: finiteNumber(row.source_location_lat) ?? null,
+    source_location_lng: finiteNumber(row.source_location_lng) ?? null,
+    location_override_mode:
+      row.location_override_mode === 'automatic' || row.location_override_mode === 'saved_place' || row.location_override_mode === 'none'
+        ? row.location_override_mode
+        : null,
+    cost_override_mode:
+      row.cost_override_mode === 'automatic' || row.cost_override_mode === 'free' || row.cost_override_mode === 'manual'
+        ? row.cost_override_mode
+        : null,
+    cost_override_usd: finiteNumber(row.cost_override_usd) ?? null,
   };
 }
 

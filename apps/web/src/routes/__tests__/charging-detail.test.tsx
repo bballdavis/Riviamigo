@@ -13,6 +13,10 @@ const mockSession = vi.hoisted(() => ({
   source: 'telemetry+rivian_api' as string,
   telemetry_sample_count: 12 as number,
 }));
+const correctionMutation = vi.hoisted(() => ({
+  mutate: vi.fn(),
+  role: 'owner' as 'owner' | 'manager' | 'viewer',
+}));
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -31,7 +35,8 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => ({ defaultVehicleId: null }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true }),
   useSavedPlaces: () => ({ data: [], isLoading: false }),
-  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false, isLoading: false }),
+  useUpdateChargeSession: () => ({ mutate: correctionMutation.mutate, isPending: false, isLoading: false, error: null }),
+  useVehicles: () => ({ data: [{ id: 'vehicle-1', membership_role: correctionMutation.role }] }),
   useChargeSession: () => ({
     data: {
       id: 'session-1',
@@ -71,12 +76,12 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
   Database: () => <svg data-testid="icon-database" />,
-  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
   RadioTower: () => <svg data-testid="icon-radio" />,
   Receipt: () => <svg data-testid="icon-receipt" />,
   Route: () => <svg data-testid="icon-route" />,
   Zap: () => <svg data-testid="icon-zap" />,
+  RotateCcw: () => <svg data-testid="icon-restore" />,
 }));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
@@ -87,19 +92,21 @@ describe('ChargeSessionContent', () => {
     mockSession.cost_usd = 8.75;
     mockSession.source = 'telemetry+rivian_api';
     mockSession.telemetry_sample_count = 12;
+    correctionMutation.role = 'owner';
+    correctionMutation.mutate.mockClear();
   });
 
   it('renders session details and the charge curve chart', () => {
     render(<ChargeSessionContent />);
 
-    expect(screen.getByText('Home Charger')).toBeInTheDocument();
+    expect(screen.getAllByText('Home Charger').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Energy Added')).toBeInTheDocument();
     expect(screen.getByText('28.5 kWh')).toBeInTheDocument();
     expect(screen.getByText('SoC')).toBeInTheDocument();
     expect(screen.getByText('20% -> 80%')).toBeInTheDocument();
     expect(screen.getByText('Duration')).toBeInTheDocument();
     expect(screen.getByText('75 min')).toBeInTheDocument();
-    expect(screen.getByText('Cost')).toBeInTheDocument();
+    expect(screen.getByTestId('stat-cost')).toBeInTheDocument();
     expect(screen.getAllByText('$8.75').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
     expect(screen.getByText('Telemetry')).toBeInTheDocument();
@@ -116,8 +123,7 @@ describe('ChargeSessionContent', () => {
     mockSession.cost_usd = null;
     render(<ChargeSessionContent />);
 
-    const costLabel = screen.getByText('Cost');
-    expect(costLabel.parentElement).toHaveTextContent('-');
+    expect(screen.getByTestId('stat-cost')).toHaveTextContent('-');
     expect(screen.queryByText('$0')).not.toBeInTheDocument();
   });
 
@@ -137,9 +143,44 @@ describe('ChargeSessionContent', () => {
     expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
     expect(screen.queryByText('Rivian API backfill')).not.toBeInTheDocument();
   });
+
+  it('saves a free override and restores automatic cost with partial payloads', () => {
+    render(<ChargeSessionContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Free' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save corrections' }));
+    expect(correctionMutation.mutate).toHaveBeenLastCalledWith(
+      { sessionId: 'session-1', location_mode: 'automatic', cost_mode: 'free' },
+      expect.any(Object),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Restore automatic cost/ }));
+    expect(correctionMutation.mutate).toHaveBeenLastCalledWith(
+      { sessionId: 'session-1', cost_mode: 'automatic' },
+      expect.any(Object),
+    );
+  });
+
+  it('blocks empty and negative manual costs with recovery copy', () => {
+    render(<ChargeSessionContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manual' }));
+    expect(screen.getByText('Enter a non-negative USD amount.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save corrections' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Manual cost (USD)'), { target: { value: '-1' } });
+    expect(screen.getByText('Enter a non-negative USD amount.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save corrections' })).toBeDisabled();
+    expect(correctionMutation.mutate).not.toHaveBeenCalled();
+  });
+
+  it('keeps correction values visible but disables controls for a viewer', () => {
+    correctionMutation.role = 'viewer';
+    render(<ChargeSessionContent />);
+
+    expect(screen.getByText('Read only')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Free' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save corrections' })).not.toBeInTheDocument();
+    expect(correctionMutation.mutate).not.toHaveBeenCalled();
+  });
 });
-
-
-
-
-

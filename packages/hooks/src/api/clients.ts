@@ -36,7 +36,8 @@ export const tripClient = client(
 );
 
 export const chargingClient = client(
-  'listChargeSessions', 'getChargeSession', 'getChargeCurve', 'getChargeCurveAnalysis',
+  'listChargeSessions', 'getChargeSession', 'updateChargeSession', 'listChargingNetworkPreferences',
+  'updateChargingNetworkPreference', 'getChargeCurve', 'getChargeCurveAnalysis',
   'getChargingSummary', 'getChargingChartSeries', 'getChargingSchedule',
   'putChargingSchedule', 'listDepartureSchedules', 'createDepartureSchedule',
   'updateDepartureSchedule', 'deleteDepartureSchedule', 'getLiveSession',
