@@ -200,7 +200,11 @@ async fn register(
     // auto-login: issue tokens so the client is immediately authenticated
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
-    let cookie = refresh_cookie(&refresh, 2_592_000);
+    let cookie = refresh_cookie(
+        &refresh,
+        2_592_000,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok((
         StatusCode::CREATED,
         [(SET_COOKIE, cookie)],
@@ -306,7 +310,11 @@ async fn accept_account_invitation(
         .await?;
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
-    let cookie = refresh_cookie(&refresh, 2_592_000);
+    let cookie = refresh_cookie(
+        &refresh,
+        2_592_000,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok((
         StatusCode::CREATED,
         [(SET_COOKIE, cookie)],
@@ -397,7 +405,11 @@ async fn login(
         .record(&state.pool)
         .await?;
 
-    let cookie = refresh_cookie(&refresh, 2_592_000);
+    let cookie = refresh_cookie(
+        &refresh,
+        2_592_000,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok((
         [(SET_COOKIE, cookie)],
         Json(AccessTokenResponse {
@@ -426,7 +438,11 @@ async fn bootstrap(
         return Ok(response);
     }
 
-    let clear_cookie = refresh_cookie("", 0);
+    let clear_cookie = refresh_cookie(
+        "",
+        0,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
@@ -468,7 +484,11 @@ async fn refresh_from_cookie(
     let access_token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
 
     let max_age = 30 * 24 * 3600;
-    let cookie = refresh_cookie(&new_refresh, max_age);
+    let cookie = refresh_cookie(
+        &new_refresh,
+        max_age,
+        state.config.allows_insecure_refresh_cookies(),
+    );
 
     Ok(Some(
         (
@@ -501,7 +521,11 @@ async fn logout(
             .await;
         }
     }
-    let clear_cookie = refresh_cookie("", 0);
+    let clear_cookie = refresh_cookie(
+        "",
+        0,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok(([("Set-Cookie", clear_cookie)], StatusCode::NO_CONTENT))
 }
 
@@ -548,7 +572,11 @@ async fn change_password(
         .await?;
     tx.commit().await?;
 
-    let clear_cookie = refresh_cookie("", 0);
+    let clear_cookie = refresh_cookie(
+        "",
+        0,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
@@ -827,8 +855,8 @@ fn sha2_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-fn refresh_cookie(value: &str, max_age: u64) -> String {
-    let secure = if std::env::var("COOKIE_INSECURE").is_ok() {
+fn refresh_cookie(value: &str, max_age: u64, allow_insecure: bool) -> String {
+    let secure = if allow_insecure {
         ""
     } else {
         "; Secure"
@@ -945,6 +973,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 
@@ -1065,7 +1094,7 @@ mod tests {
 
     #[test]
     fn refresh_cookie_format_contains_httponly() {
-        let cookie = refresh_cookie("mytoken", 3600);
+        let cookie = refresh_cookie("mytoken", 3600, false);
         assert!(cookie.contains("HttpOnly"), "cookie must be HttpOnly");
         assert!(
             cookie.contains("SameSite=Lax"),
@@ -1076,11 +1105,20 @@ mod tests {
             "cookie must contain token value"
         );
         assert!(cookie.contains("Max-Age=3600"), "cookie must set Max-Age");
+        assert!(cookie.contains("Secure"), "cookies are secure by default");
+    }
+
+    #[test]
+    fn refresh_cookie_omits_secure_only_for_explicitly_allowed_lan_http_auth() {
+        let cookie = refresh_cookie("mytoken", 3600, true);
+        assert!(!cookie.contains("Secure"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Lax"));
     }
 
     #[test]
     fn refresh_cookie_clear_sets_zero_max_age() {
-        let cookie = refresh_cookie("", 0);
+        let cookie = refresh_cookie("", 0, false);
         assert!(
             cookie.contains("Max-Age=0"),
             "clearing cookie must set Max-Age=0"

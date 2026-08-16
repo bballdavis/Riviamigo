@@ -37,6 +37,21 @@ applies after the gateway.
 - Use strong `POSTGRES_PASSWORD` and `REDIS_PASSWORD` values.
 - Leave `COOKIE_INSECURE` unset.
 
+### LAN-only HTTP exception
+
+HTTPS behind the authenticated gateway remains the supported production shape.
+For a trusted private network that cannot provide HTTPS, the Compose default
+includes `ALLOW_INSECURE_LAN_HTTP_AUTH=false`. Change it to `true` only with
+all of the following: `ALLOW_PUBLIC_ORIGIN_BIND=true`, a LAN-accessible bind,
+and `ALLOWED_ORIGINS` containing only exact `http://` private, loopback, or
+link-local **IP literals** (for example, `http://192.168.1.20:8080`).
+Hostnames, public addresses, credentials, paths, and mixed HTTP/HTTPS origins
+are rejected at startup. This removes only the cookie `Secure` attribute;
+tokens remain HttpOnly, SameSite=Lax, rotated, and revocable. Anyone able to
+observe that network can intercept browser credentials and telemetry, so use a
+trusted wired/WPA-protected network and host firewall rules, and return to
+HTTPS when possible.
+
 ## Network rules
 
 - Do not publish API port 3001, PostgreSQL port 5432, Redis port 6379, or the

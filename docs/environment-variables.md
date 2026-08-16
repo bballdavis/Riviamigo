@@ -15,7 +15,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 |---|---:|---|---|
 | `POSTGRES_PASSWORD` | Yes | None | Password shared by TimescaleDB and the app's generated internal connection URL. Any dotenv-safe value is URL-encoded by the app. |
 | `REDIS_PASSWORD` | Yes | None | Password shared by Redis and the app's generated internal connection URL. |
-| `ALLOWED_ORIGINS` | Yes | None in production | Comma-separated exact HTTPS browser origins. Paths, queries, fragments, and HTTP origins are rejected in production. |
+| `ALLOWED_ORIGINS` | Yes | None in production | Comma-separated exact HTTPS browser origins. Paths, credentials, queries, fragments, and HTTP origins are rejected in production unless the explicit LAN-only exception below is enabled. |
 | `POSTGRES_USER` | No | `riviamigo` | Database role used by production Compose. |
 | `DATABASE_URL` | No | Built from `POSTGRES_USER` and `POSTGRES_PASSWORD` | Complete PostgreSQL URL. Overrides the standard Compose-derived URL and is required for direct API runs without `POSTGRES_PASSWORD`. |
 | `REDIS_URL` | No | Built from `REDIS_PASSWORD` | Complete Redis URL using the Redis ACL `default` user. Overrides the standard Compose-derived URL and is required for direct API runs without `REDIS_PASSWORD`. |
@@ -29,6 +29,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `RIVIAMIGO_ORIGIN_PORT` | `8080` | Host port mapped to the unified app container. Protect it with host firewall rules when using a remote gateway. |
 | `RIVIAMIGO_BIND_ADDRESS` | `127.0.0.1` | Host address for the published origin port. The standard Compose stack is loopback-only by default. |
 | `ALLOW_PUBLIC_ORIGIN_BIND` | `false` | Required, with the literal value `true`, before a non-loopback `RIVIAMIGO_BIND_ADDRESS` is accepted. This is an explicit exposure opt-in, not a substitute for the authenticated gateway and firewall. |
+| `ALLOW_INSECURE_LAN_HTTP_AUTH` | `false` | **LAN-only exception.** With the literal value `true`, permits non-Secure refresh cookies only when `ALLOW_PUBLIC_ORIGIN_BIND=true`, the API binds to an unspecified/private/loopback/link-local IP, and every `ALLOWED_ORIGINS` entry is an exact `http://` private/loopback/link-local IP literal. It rejects hostnames, public IPs, HTTPS/HTTP mixes, paths, and credentials. Browser credentials and telemetry can be intercepted; prefer HTTPS. |
 | `RIVIAMIGO_ENV_FILE` | `../.env` relative to `compose/docker-compose.yml` | Alternate dotenv file injected into the app container. Restore and verification scripts set this automatically. |
 
 ## Application security and runtime
@@ -44,7 +45,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `PORT` | `3001` | Internal API listener port. The unified production nginx expects `3001`. |
 | `RUST_LOG` | `riviamigo_api=debug,tower_http=info` | Rust tracing filter. Structured `[riviamigo][LEVEL]` key-value logs are written to stdout. |
 | `TZ` | UTC | Docker/container timezone used by nginx and other runtime processes. This does not control Riviamigo’s user-facing application timezone, which is configured in Settings → Units. |
-| `COOKIE_INSECURE` | Unset | Allows non-Secure cookies for local development. Any value enables it; production rejects it. |
+| `COOKIE_INSECURE` | Unset | Legacy local-development-only switch for non-Secure cookies. Any value enables it in development; production rejects it. Use `ALLOW_INSECURE_LAN_HTTP_AUTH=true` only for the documented LAN exception. |
 | `VEHICLE_IMAGE_CACHE_DIR` | Platform cache directory; `/data/cache/riviamigo/vehicle-images` in the production image | Persistent local artwork mirror. Standard Compose does not need to set it. |
 | `RIVIAMIGO_DATA_DIR` | `../data` relative to `compose/docker-compose.yml` | Overrides the host directory used for PostgreSQL, Redis, backups, and cache data. Primarily useful for isolated verification stacks. |
 | `BACKUP_DRIVER` | `pg_dump` | Recovery-package database exporter. Other values are rejected for full recovery packages. |
