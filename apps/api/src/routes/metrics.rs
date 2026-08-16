@@ -12,6 +12,7 @@ use crate::{
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
+    routes::trip_tag_filter::{parse_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagFilter, TripTagMatch},
 };
 
 pub fn router() -> Router<AppState> {
@@ -111,6 +112,9 @@ struct MetricBatchRequest {
     /// external callers that have not opted into full density.
     density: Option<String>,
     max_points: Option<usize>,
+    tag_ids: Option<String>,
+    tag_match: Option<TripTagMatch>,
+    untagged: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -458,7 +462,15 @@ async fn get_value(
     let metric = find_metric(&p.metric)?;
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
-    let (value, ts) = metric_value(&state.pool, vid, metric, from, to).await?;
+    let (value, ts) = metric_value(
+        &state.pool,
+        vid,
+        metric,
+        from,
+        to,
+        &TripTagFilter::default(),
+    )
+    .await?;
 
     Ok(Json(MetricValueResponse {
         metric: metric.id.to_string(),
@@ -485,7 +497,7 @@ async fn get_series(
 
     let points = match metric.source {
         MetricSource::Summary => {
-            summary_series(&state.pool, vid, metric.id, from, to, bucket).await?
+            summary_series(&state.pool, vid, metric.id, from, to, bucket, &TripTagFilter::default()).await?
         }
         MetricSource::Telemetry(column) => {
             telemetry_daily_series(
@@ -539,6 +551,8 @@ async fn get_batch(
 
     require_vehicle_access(&auth, p.vehicle_id)?;
     require_vehicle_read_access(&state.pool, &auth, p.vehicle_id).await?;
+    let tag_filter = parse_tag_filter(p.tag_ids.as_deref(), p.tag_match, p.untagged)?;
+    require_known_vehicle_tags(&state.pool, p.vehicle_id, &tag_filter).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
     let (density, bucket, max_points) = resolve_batch_density(
         p.density.as_deref(),
@@ -552,7 +566,7 @@ async fn get_batch(
     let mut series = Vec::new();
     for (metric, include_latest, include_series) in requested {
         if include_latest {
-            let (value, ts) = metric_value(&state.pool, p.vehicle_id, metric, from, to).await?;
+            let (value, ts) = metric_value(&state.pool, p.vehicle_id, metric, from, to, &tag_filter).await?;
             values.push(MetricValueResponse {
                 metric: metric.id.to_string(),
                 value,
@@ -562,7 +576,7 @@ async fn get_batch(
             });
         }
         if include_series {
-            let points = metric_series(&state.pool, p.vehicle_id, metric, from, to, bucket).await?;
+            let points = metric_series(&state.pool, p.vehicle_id, metric, from, to, bucket, &tag_filter).await?;
             series.push(MetricBatchSeriesResponse {
                 metric: metric.id.to_string(),
                 points: max_points.map_or(points.clone(), |limit| cap_metric_points(points, limit)),
@@ -585,9 +599,10 @@ async fn metric_value(
     metric: &MetricDef,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
+    tag_filter: &TripTagFilter,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
     match metric.source {
-        MetricSource::Summary => summary_value(pool, vehicle_id, metric.id, from, to).await,
+        MetricSource::Summary => summary_value(pool, vehicle_id, metric.id, from, to, tag_filter).await,
         MetricSource::Telemetry(column) => latest_telemetry_value(pool, vehicle_id, column).await,
     }
 }
@@ -599,10 +614,11 @@ async fn metric_series(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     bucket: &str,
+    tag_filter: &TripTagFilter,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
     match metric.source {
         MetricSource::Summary => {
-            summary_series(pool, vehicle_id, metric.id, from, to, bucket).await
+            summary_series(pool, vehicle_id, metric.id, from, to, bucket, tag_filter).await
         }
         MetricSource::Telemetry(column) => {
             telemetry_daily_series(
@@ -683,7 +699,11 @@ async fn summary_value(
     metric: &str,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
+    tag_filter: &TripTagFilter,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
+    if tag_filter.is_active() && is_trip_metric(metric) {
+        return filtered_summary_value(pool, vid, metric, from, to, tag_filter).await;
+    }
     let value = match metric {
         "total_miles" => sqlx::query_scalar(
             "SELECT COALESCE(SUM(distance_miles), 0)::float8
@@ -819,7 +839,11 @@ async fn summary_series(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     bucket: &str,
+    tag_filter: &TripTagFilter,
 ) -> Result<Vec<MetricSeriesPoint>, AppError> {
+    if tag_filter.is_active() && is_trip_metric(metric) {
+        return filtered_summary_series(pool, vid, metric, from, to, bucket, tag_filter).await;
+    }
     if bucket == "raw" {
         let sql = match metric {
             "total_miles" | "trip_miles" =>
@@ -1009,6 +1033,137 @@ async fn summary_series(
             .fetch_all(pool)
             .await?,
     )
+}
+
+fn is_trip_metric(metric: &str) -> bool {
+    matches!(
+        metric,
+        "total_miles"
+            | "trip_miles"
+            | "total_trips"
+            | "avg_efficiency"
+            | "avg_gross_efficiency"
+            | "avg_outside_temp_c"
+            | "avg_trip_duration"
+    )
+}
+
+fn filtered_trip_scope() -> String {
+    format!(
+        "WITH filtered_trips AS (SELECT t.* FROM riviamigo.trips t \
+         WHERE t.vehicle_id=$1 AND t.started_at >= $2 AND t.started_at <= $3{}) ",
+        sql_predicate("t", 4, 5, 6)
+    )
+}
+
+async fn filtered_summary_value(
+    pool: &sqlx::PgPool,
+    vid: Uuid,
+    metric: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    filter: &TripTagFilter,
+) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
+    let scope = filtered_trip_scope();
+    let sql = match metric {
+        "total_miles" | "trip_miles" => format!(
+            "{scope} SELECT COALESCE(SUM(distance_miles), 0)::float8 FROM filtered_trips WHERE distance_miles > 0"
+        ),
+        "total_trips" => format!("{scope} SELECT COUNT(*)::float8 FROM filtered_trips"),
+        "avg_efficiency" => format!(
+            "{scope} SELECT $3 AS ts, SUM(distance_miles)::float8 AS total_distance_miles, \
+             SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi \
+             FROM filtered_trips WHERE efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0"
+        ),
+        "avg_gross_efficiency" => format!(
+            "{scope} SELECT CASE WHEN SUM(distance_miles) > 0 THEN \
+             SUM(energy_wh + COALESCE(regen_wh, 0)) / SUM(distance_miles) ELSE NULL END::float8 \
+             FROM filtered_trips WHERE energy_wh IS NOT NULL AND distance_miles > 0"
+        ),
+        "avg_outside_temp_c" => format!(
+            "{scope} SELECT CASE WHEN SUM(duration_seconds) > 0 THEN \
+             SUM(outside_temp_c * duration_seconds) / SUM(duration_seconds) ELSE NULL END::float8 \
+             FROM filtered_trips WHERE outside_temp_c IS NOT NULL AND duration_seconds > 0"
+        ),
+        "avg_trip_duration" => format!(
+            "{scope} SELECT AVG(duration_seconds / 60.0)::float8 FROM filtered_trips WHERE duration_seconds IS NOT NULL"
+        ),
+        _ => return Ok((None, Some(to))),
+    };
+
+    let value = if metric == "avg_efficiency" {
+        let row = sqlx::query_as::<_, WeightedEfficiencyRow>(&sql)
+            .bind(vid).bind(from).bind(to)
+            .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
+            .fetch_one(pool).await?;
+        weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi)
+    } else {
+        sqlx::query_scalar::<_, Option<f64>>(&sql)
+            .bind(vid).bind(from).bind(to)
+            .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
+            .fetch_optional(pool).await?
+            .flatten()
+    };
+    Ok((value, Some(to)))
+}
+
+async fn filtered_summary_series(
+    pool: &sqlx::PgPool,
+    vid: Uuid,
+    metric: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    bucket: &str,
+    filter: &TripTagFilter,
+) -> Result<Vec<MetricSeriesPoint>, AppError> {
+    let scope = filtered_trip_scope();
+    let bucket_expr = match bucket {
+        "raw" => "started_at".to_string(),
+        "minute" => "date_trunc('minute', started_at)".to_string(),
+        "5min" => "time_bucket(INTERVAL '5 minutes', started_at)".to_string(),
+        "15min" => "time_bucket(INTERVAL '15 minutes', started_at)".to_string(),
+        "hour" => "date_trunc('hour', started_at)".to_string(),
+        _ => "date_trunc('day', started_at)".to_string(),
+    };
+    let (value_expr, where_clause, aggregate) = match metric {
+        "total_miles" | "trip_miles" => ("SUM(distance_miles)::float8", "distance_miles > 0", true),
+        "total_trips" => ("COUNT(*)::float8", "TRUE", true),
+        "avg_efficiency" => ("SUM(distance_miles)::float8 AS total_distance_miles, SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi", "efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0", true),
+        "avg_gross_efficiency" => ("(SUM(energy_wh + COALESCE(regen_wh, 0)) / NULLIF(SUM(distance_miles), 0))::float8", "energy_wh IS NOT NULL AND distance_miles > 0", true),
+        "avg_outside_temp_c" => ("CASE WHEN SUM(duration_seconds) > 0 THEN SUM(outside_temp_c * duration_seconds) / SUM(duration_seconds) ELSE NULL END::float8", "outside_temp_c IS NOT NULL AND duration_seconds > 0", true),
+        "avg_trip_duration" => ("AVG(duration_seconds / 60.0)::float8", "duration_seconds IS NOT NULL", true),
+        _ => return Ok(Vec::new()),
+    };
+    let group = if aggregate { " GROUP BY 1 ORDER BY 1" } else { " ORDER BY 1" };
+    let sql = format!(
+        "{scope} SELECT {bucket_expr} AS ts, {value_expr} AS value \
+         FROM filtered_trips WHERE {where_clause}{group}"
+    );
+
+    if metric == "avg_efficiency" {
+        // The weighted row aliases above intentionally replace the generic value
+        // column, so build the select without that trailing alias.
+        let sql = format!(
+            "{scope} SELECT {bucket_expr} AS ts, SUM(distance_miles)::float8 AS total_distance_miles, \
+             SUM(distance_miles * efficiency_wh_per_mile)::float8 AS weighted_efficiency_wh_mi \
+             FROM filtered_trips WHERE efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0 \
+             GROUP BY 1 ORDER BY 1"
+        );
+        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(&sql)
+            .bind(vid).bind(from).bind(to)
+            .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
+            .fetch_all(pool).await?;
+        return Ok(rows.into_iter().map(|row| MetricSeriesPoint {
+            ts: row.ts,
+            value: weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi),
+        }).collect());
+    }
+
+    sqlx::query_as::<_, MetricSeriesPoint>(&sql)
+        .bind(vid).bind(from).bind(to)
+        .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
+        .fetch_all(pool).await
+        .map_err(AppError::from)
 }
 
 async fn telemetry_daily_series(

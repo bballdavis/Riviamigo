@@ -14,6 +14,7 @@ use crate::{
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::trip_routes::build_route_preview,
+    routes::trip_tag_filter::{parse_tag_filter as parse_shared_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagFilter, TripTagMatch},
 };
 
 pub fn router() -> Router<AppState> {
@@ -51,72 +52,8 @@ struct TripListParams {
     untagged: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TripTagMatch {
-    All,
-    Any,
-}
-
-#[derive(Debug, Clone)]
-struct TripTagFilter {
-    tag_ids: Option<Vec<Uuid>>,
-    match_all: bool,
-    untagged: bool,
-}
-
 fn parse_tag_filter(params: &TripListParams) -> Result<TripTagFilter, AppError> {
-    let mut tag_ids = params
-        .tag_ids
-        .as_deref()
-        .map(|value| {
-            value
-                .split(',')
-                .filter(|part| !part.trim().is_empty())
-                .map(|part| Uuid::parse_str(part.trim()).map_err(|_| AppError::Validation("tag_ids must be a comma-separated list of UUIDs".into())))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .filter(|ids| !ids.is_empty());
-    if let Some(ids) = tag_ids.as_mut() {
-        ids.sort_unstable();
-        if ids.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(AppError::Validation("tag_ids must not contain duplicates".into()));
-        }
-        if ids.len() > 50 {
-            return Err(AppError::Validation("tag_ids may contain at most 50 IDs".into()));
-        }
-    }
-    let untagged = params.untagged.unwrap_or(false);
-    if untagged && tag_ids.is_some() {
-        return Err(AppError::Validation("untagged cannot be combined with tag_ids".into()));
-    }
-    Ok(TripTagFilter {
-        tag_ids,
-        match_all: !matches!(params.tag_match, Some(TripTagMatch::Any)),
-        untagged,
-    })
-}
-
-async fn require_known_vehicle_tags(
-    pool: &sqlx::PgPool,
-    vehicle_id: Uuid,
-    filter: &TripTagFilter,
-) -> Result<(), AppError> {
-    let Some(tag_ids) = filter.tag_ids.as_deref() else {
-        return Ok(());
-    };
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM riviamigo.trip_tags WHERE vehicle_id=$1 AND id=ANY($2)",
-    )
-    .bind(vehicle_id)
-    .bind(tag_ids)
-    .fetch_one(pool)
-    .await?;
-    if count != tag_ids.len() as i64 {
-        return Err(AppError::Validation("tag_ids must belong to the selected vehicle".into()));
-    }
-    Ok(())
+    parse_shared_tag_filter(params.tag_ids.as_deref(), params.tag_match, params.untagged)
 }
 
 #[cfg(test)]
@@ -628,7 +565,7 @@ async fn list_trips(
         .execute(&mut *tx)
         .await?;
 
-    let rows = sqlx::query_as::<_, TripRow>(
+    let rows_sql = format!(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
                 t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
@@ -651,12 +588,10 @@ async fn list_trips(
               COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\') \
-         AND ($8::uuid[] IS NULL OR CASE WHEN $9 THEN
-              (SELECT COUNT(DISTINCT tta.tag_id) FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($8)) = cardinality($8)
-              ELSE EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($8)) END)
-         AND (NOT $10 OR NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id))
-         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
-    )
+         {} ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
+        sql_predicate("t", 8, 9, 10),
+    );
+    let rows = sqlx::query_as::<_, TripRow>(&rows_sql)
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -670,7 +605,7 @@ async fn list_trips(
     .fetch_all(&mut *tx)
     .await?;
 
-    let total: i64 = sqlx::query_scalar(
+    let total_sql = format!(
         "SELECT COUNT(*) \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5 \
@@ -686,11 +621,10 @@ async fn list_trips(
               COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
-         AND ($6::uuid[] IS NULL OR CASE WHEN $7 THEN
-              (SELECT COUNT(DISTINCT tta.tag_id) FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) = cardinality($6)
-              ELSE EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) END)
-         AND (NOT $8 OR NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id))",
-    )
+         {}",
+        sql_predicate("t", 6, 7, 8),
+    );
+    let total: i64 = sqlx::query_scalar(&total_sql)
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -774,7 +708,7 @@ async fn get_trip_map(
         .filter(|value| !value.is_empty())
         .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
 
-    let rows = sqlx::query_as::<_, TripMapRow>(
+    let map_sql = format!(
         r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview,
                   COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
            FROM riviamigo.trips t
@@ -791,12 +725,11 @@ async fn get_trip_map(
                   COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
                   COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
                   COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
-             AND ($6::uuid[] IS NULL OR CASE WHEN $7 THEN
-                  (SELECT COUNT(DISTINCT tta.tag_id) FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) = cardinality($6)
-                  ELSE EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id AND tta.tag_id=ANY($6)) END)
-             AND (NOT $8 OR NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=t.id))
+             {}
            ORDER BY t.started_at DESC"#,
-    )
+        sql_predicate("t", 6, 7, 8),
+    );
+    let rows = sqlx::query_as::<_, TripMapRow>(&map_sql)
     .bind(vid)
     .bind(from)
     .bind(to)
