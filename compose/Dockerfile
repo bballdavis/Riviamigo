@@ -3,7 +3,7 @@
 FROM --platform=$BUILDPLATFORM rust:1.97.1-slim@sha256:754a8924e308fb20a327febeda1a07053a2b0fd7474b5ac1cc460a6d33ab18f3 AS api-builder
 ARG TARGETARCH
 WORKDIR /build/apps/api
-ENV SQLX_OFFLINE=true
+ENV SQLX_OFFLINE=true CARGO_BUILD_JOBS=1
 RUN set -eux; \
     if [ "$TARGETARCH" = "arm64" ]; then \
         dpkg --add-architecture arm64; \
@@ -36,6 +36,10 @@ RUN mkdir -p src/bin && printf 'fn main() {}\n' > src/main.rs \
         target_flag='--target aarch64-unknown-linux-gnu'; \
     fi \
     && cargo build --release $target_flag \
+        --bin riviamigo-api \
+        --bin riviamigo-restore-agent \
+        --bin riviamigo-parallax-collector \
+        --bin rebaseline_db \
     && rm -rf src
 COPY apps/api/ ./
 RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/riviamigo-parallax-collector.rs src/bin/rebaseline_db.rs migrations/0001_initial_schema.sql \
@@ -54,6 +58,10 @@ RUN touch src/lib.rs src/main.rs src/bin/riviamigo-restore-agent.rs src/bin/rivi
         binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-api; \
     fi \
     && cargo build --release $target_flag \
+        --bin riviamigo-api \
+        --bin riviamigo-restore-agent \
+        --bin riviamigo-parallax-collector \
+        --bin rebaseline_db \
     && cp "$binary_path" /build/apps/api/riviamigo-api \
     && restore_binary_path=target/release/riviamigo-restore-agent \
     && if [ "$TARGETARCH" = "arm64" ]; then restore_binary_path=target/aarch64-unknown-linux-gnu/release/riviamigo-restore-agent; fi \
@@ -113,4 +121,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD /app/production-healthcheck.sh
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/production-init.sh"]
+USER 1001:1001
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/production-services.sh"]

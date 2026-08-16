@@ -1,16 +1,37 @@
 services:
+  riviamigo-init:
+    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
+    user: "0:0"
+    env_file:
+      - ${RIVIAMIGO_ENV_FILE:-../.env}
+    entrypoint: ['/app/production-init.sh']
+    volumes:
+      - ${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups
+      - ${RIVIAMIGO_DATA_DIR:-../data}/cache:/data/cache
+    restart: 'no'
+
   riviamigo:
     image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file:
       - ${RIVIAMIGO_ENV_FILE:-../.env}
     depends_on:
+      riviamigo-init:
+        condition: service_completed_successfully
       timescaledb:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
+      - "${RIVIAMIGO_BIND_ADDRESS:-127.0.0.1}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"
+    user: "1001:1001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m
     networks:
       - internal
       - proxy
@@ -28,6 +49,7 @@ services:
         limits:
           cpus: '1.5'
           memory: 640M
+          pids: 256
         reservations:
           memory: 160M
 

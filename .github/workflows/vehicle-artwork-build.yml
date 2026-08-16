@@ -1,10 +1,16 @@
 name: Artwork
 
 on:
+  pull_request:
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  NODE_VERSION: '24.18.0'
+  PNPM_VERSION: '11.15.1'
 
 concurrency:
   group: vehicle-artwork-${{ github.event.pull_request.number || github.ref }}
@@ -12,42 +18,66 @@ concurrency:
 
 jobs:
   validate:
-    name: Checks
+    name: Artwork contract
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Detect artwork-contract changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "pull_request" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- apps/web/public/vehicle-images apps/web/src packages/hooks/src packages/dashboards/src scripts/build_vehicle_fallback_artwork.py .github/workflows/vehicle-artwork-build.yml; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No artwork-contract inputs changed; reporting a successful no-op."
+          fi
 
       - name: Set up Python
+        if: steps.changes.outputs.run == 'true'
         uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: '3.12'
 
       - name: Set up Node
+        if: steps.changes.outputs.run == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '24.18.0'
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Enable pnpm
+        if: steps.changes.outputs.run == 'true'
         run: corepack enable
 
       - name: Install image tooling
+        if: steps.changes.outputs.run == 'true'
         run: python -m pip install --disable-pip-version-check Pillow==11.3.0
 
       - name: Verify checked-in fallback artwork
+        if: steps.changes.outputs.run == 'true'
         run: python scripts/build_vehicle_fallback_artwork.py --check
 
       - name: Build review preview
+        if: steps.changes.outputs.run == 'true'
         run: |
           python scripts/build_vehicle_fallback_artwork.py \
             --output vehicle-artwork-build/fallbacks \
             --preview vehicle-artwork-build/contact-sheet.png
 
       - name: Install workspace dependencies
+        if: steps.changes.outputs.run == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Test fallback contract
+        if: steps.changes.outputs.run == 'true'
         shell: bash
         run: |
           set -o pipefail
@@ -56,11 +86,13 @@ jobs:
             --reporter=verbose 2>&1 | tee vehicle-artwork-build/test.log
 
       - name: Typecheck shared artwork seams
+        if: steps.changes.outputs.run == 'true'
         run: |
           pnpm --filter @riviamigo/hooks typecheck
           pnpm --filter @riviamigo/dashboards typecheck
 
       - name: Build web application
+        if: steps.changes.outputs.run == 'true'
         run: pnpm --filter @riviamigo/web build
 
       - name: Upload normalized artwork preview and validation log

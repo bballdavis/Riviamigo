@@ -1,6 +1,8 @@
 name: Runtime
 
 on:
+  pull_request:
+    branches: [main, dev]
   workflow_dispatch:
   schedule:
     - cron: '0 7 * * 1'
@@ -8,9 +10,13 @@ on:
 permissions:
   contents: read
 
+env:
+  NODE_VERSION: '24.18.0'
+  RUST_VERSION: '1.97.1'
+
 jobs:
   runtime:
-    name: Checks
+    name: Runtime contract
     runs-on: ubuntu-latest
     services:
       timescaledb:
@@ -42,22 +48,47 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+      - name: Detect runtime-contract changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "pull_request" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- apps/api compose scripts/database.mjs scripts/verify-fresh-install.mjs tools/migration-integrity.mjs .github/workflows/runtime.yml; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No runtime-contract inputs changed; reporting a successful no-op."
+          fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Verify migration integrity
+        if: steps.changes.outputs.run == 'true'
         run: node tools/migration-integrity.mjs
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        if: steps.changes.outputs.run == 'true'
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        if: steps.changes.outputs.run == 'true'
         with:
           workspaces: apps/api
       - name: Install sqlx-cli
+        if: steps.changes.outputs.run == 'true'
         working-directory: apps/api
         run: cargo install sqlx-cli --no-default-features --features postgres --locked
       - name: Run migrations on fresh DB
+        if: steps.changes.outputs.run == 'true'
         working-directory: apps/api
         run: cargo sqlx migrate run
       - name: Verify migration idempotency
+        if: steps.changes.outputs.run == 'true'
         working-directory: apps/api
         run: cargo sqlx migrate run
       - name: Start API and probe health
+        if: steps.changes.outputs.run == 'true'
         working-directory: apps/api
         run: |
           REDIS_URL=redis://localhost:6379 cargo run &
@@ -74,6 +105,7 @@ jobs:
           kill $API_PID
           exit 1
       - name: Validate Compose and build deployable images
+        if: steps.changes.outputs.run == 'true'
         env:
           POSTGRES_PASSWORD: ci-password
           REDIS_PASSWORD: ci-redis-password

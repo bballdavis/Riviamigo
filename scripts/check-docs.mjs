@@ -336,15 +336,33 @@ function checkEnvironmentReferenceCoverage() {
   );
   const runtimeFields = [...configBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
     .map((match) => match[1].toUpperCase())
-    .filter((name) => name !== "RATE_LIMIT");
+    .filter((name) => !["RATE_LIMIT", "RECOVERY", "ORIGIN_BIND"].includes(name));
   const rateBlock = configContent.slice(
     configContent.indexOf("pub struct RateLimitConfig"),
-    configContent.indexOf("fn default_port"),
+    configContent.indexOf("pub struct RecoveryConfig"),
   );
   const rateFields = [...rateBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
     .map((match) => `RATE_LIMIT_${match[1].toUpperCase()}`);
+  const recoveryBlock = configContent.slice(
+    configContent.indexOf("pub struct RecoveryConfig"),
+    configContent.indexOf("pub struct OriginBindConfig"),
+  );
+  const recoveryFields = [...recoveryBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => `RECOVERY_${match[1].toUpperCase()}`);
+  const originBlock = configContent.slice(
+    configContent.indexOf("pub struct OriginBindConfig"),
+    configContent.indexOf("fn default_port"),
+  );
+  const originFields = [...originBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => match[1].toUpperCase());
   const directRuntimeVars = ["RIVIAN_GRAPHQL_GATEWAY_URL", "RUST_LOG"];
-  for (const name of [...runtimeFields, ...rateFields, ...directRuntimeVars]) {
+  for (const name of [
+    ...runtimeFields,
+    ...rateFields,
+    ...recoveryFields,
+    ...originFields,
+    ...directRuntimeVars,
+  ]) {
     if (!supported.has(name)) {
       fail(`compose/.env.full.example is missing runtime variable: ${name}`);
     }
@@ -364,7 +382,7 @@ function checkProductionDeploymentContract() {
   const nginxConfig = readFile("compose/nginx/nginx.conf");
 
   for (const requiredSnippet of [
-    '"${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
+    '"${RIVIAMIGO_BIND_ADDRESS:-127.0.0.1}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
     "${RIVIAMIGO_DATA_DIR:-../data}/db:/db",
     "${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups",

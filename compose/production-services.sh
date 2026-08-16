@@ -6,8 +6,7 @@ agent_pid=
 nginx_pid=
 
 start_api() {
-  /usr/bin/setpriv --reuid=1001 --regid=1001 --clear-groups /app/riviamigo-api \
-    2> >(normalize_child_errors api) &
+  /app/riviamigo-api 2> >(normalize_child_errors api) &
   api_pid=$!
   printf '%s\n' "$api_pid" > /tmp/riviamigo-api.pid
 }

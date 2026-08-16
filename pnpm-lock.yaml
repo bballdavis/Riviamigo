@@ -361,6 +361,9 @@ importers:
       '@riviamigo/types':
         specifier: workspace:*
         version: link:../types
+      '@riviamigo/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.101.2(react@19.2.7)
@@ -6251,12 +6254,6 @@ packages:
         integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==,
       }
 
-  balanced-match@1.0.2:
-    resolution:
-      {
-        integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==,
-      }
-
   balanced-match@4.0.4:
     resolution:
       {
@@ -6341,7 +6338,7 @@ packages:
       {
         integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==,
       }
-    engines: { node: 18 || 20 || >=22 }
+    engines: { node: 20 || >=22 }
 
   braces@3.0.3:
     resolution:
@@ -6724,12 +6721,6 @@ packages:
         integrity: sha512-9mAqGPHLakhCLeNyxPkK4xVo746zQ/czLH1Ky+vkitMnWfWZps8r0qXuwhwizagCRttsL4lfG4pIOvaWLpAP0w==,
       }
     engines: { node: '>= 0.8.0' }
-
-  concat-map@0.0.1:
-    resolution:
-      {
-        integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==,
-      }
 
   config-chain@1.1.13:
     resolution:
@@ -18024,8 +18015,6 @@ snapshots:
 
   bail@2.0.2: {}
 
-  balanced-match@1.0.2: {}
-
   balanced-match@4.0.4: {}
 
   baseline-browser-mapping@2.10.43: {}
@@ -18312,8 +18301,6 @@ snapshots:
       vary: 1.1.2
     transitivePeerDependencies:
       - supports-color
-
-  concat-map@0.0.1: {}
 
   config-chain@1.1.13:
     dependencies:

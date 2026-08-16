@@ -12,12 +12,16 @@ if (!['migrate', 'reset'].includes(mode)) {
 }
 
 const commands = mode === 'reset'
-  ? [['database', 'drop'], ['database', 'create'], ['migrate', 'run']]
-  : [['migrate', 'run']];
+  ? [
+      { command: 'sqlx', args: ['database', 'drop'] },
+      { command: 'sqlx', args: ['database', 'create'] },
+      { command: 'cargo', args: ['run', '--bin', 'riviamigo-migrate'] },
+    ]
+  : [{ command: 'cargo', args: ['run', '--bin', 'riviamigo-migrate'] }];
 
-for (const args of commands) {
+for (const { command, args } of commands) {
   await new Promise((resolveCommand, rejectCommand) => {
-    const child = spawn('sqlx', args, {
+    const child = spawn(command, args, {
       cwd: apiDir,
       env: { ...process.env, PGOPTIONS: '-c search_path=public' },
       stdio: 'inherit',
@@ -27,7 +31,7 @@ for (const args of commands) {
     child.once('error', rejectCommand);
     child.once('exit', (code, signal) => {
       if (code === 0) resolveCommand();
-      else rejectCommand(new Error(`sqlx ${args.join(' ')} failed with ${signal ?? `exit code ${code}`}`));
+      else rejectCommand(new Error(`${command} ${args.join(' ')} failed with ${signal ?? `exit code ${code}`}`));
     });
   });
 }
