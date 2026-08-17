@@ -108,6 +108,19 @@ mod tests {
         handle.send(SupervisorCommand::Shutdown).await;
     }
 
+    #[tokio::test]
+    async fn send_reports_when_supervisor_channel_is_closed() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let handle = SupervisorHandle { tx };
+
+        assert!(!handle
+            .send(SupervisorCommand::StartWorker {
+                vehicle_id: Uuid::new_v4(),
+            })
+            .await);
+    }
+
     // ── StopWorker sends shutdown signal ─────────────────────────────────────
 
     #[tokio::test]
@@ -262,8 +275,8 @@ pub struct SupervisorHandle {
 }
 
 impl SupervisorHandle {
-    pub async fn send(&self, cmd: SupervisorCommand) {
-        let _ = self.tx.send(cmd).await;
+    pub async fn send(&self, cmd: SupervisorCommand) -> bool {
+        self.tx.send(cmd).await.is_ok()
     }
 
     /// Creates a handle whose commands are silently dropped — for use in tests.
