@@ -111,7 +111,7 @@ export function ChartPicker<TValue extends string = string>({
           onClick={() => setIsOpen((current) => !current)}
           className={cn(
             'flex h-10 max-w-[min(16rem,calc(100vw-8rem))] items-center justify-between gap-2 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm font-medium text-fg',
-            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
+            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
           )}
         >
           <span className="truncate">{selectedOption?.label ?? 'Select chart'}</span>
@@ -182,7 +182,7 @@ export function ChartPicker<TValue extends string = string>({
           onClick={() => setIsOpen((current) => !current)}
           className={cn(
             'flex h-9 w-full items-center justify-between gap-3 rounded-lg border border-border bg-bg-surface px-3 text-left text-sm text-fg',
-            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
+            'transition-colors hover:border-border-strong focus:border-accent focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
           )}
         >
           <span className="truncate">{selectedOption?.label ?? 'Select chart'}</span>
