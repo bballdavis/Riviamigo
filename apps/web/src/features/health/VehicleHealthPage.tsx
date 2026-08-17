@@ -1,6 +1,7 @@
 import React from 'react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { useQuery } from '@tanstack/react-query';
+import { TbCarDoor } from 'react-icons/tb';
 import {
   Activity,
   AlertTriangle,
@@ -10,7 +11,6 @@ import {
   CheckCircle2,
   CircleAlert,
   Cpu,
-  DoorOpen,
   Droplets,
   Gauge,
   HeartPulse,
@@ -31,9 +31,12 @@ import {
   useAuth,
   useCurrentVehicleStatus,
   useResolvedVehicleSelection,
+  useTelemetryLanes,
   useVehicleHealth,
 } from '@riviamigo/hooks';
-import type { VehicleHealthTires } from '@riviamigo/types';
+import type { TelemetryLaneFrame, VehicleHealthTires } from '@riviamigo/types';
+import { SensorChipSummary } from '@riviamigo/dashboards';
+import { CHART_COLORS } from '@riviamigo/ui/charts';
 import {
   Badge,
   Card,
@@ -46,7 +49,11 @@ import {
   Tooltip,
   type BadgeProps,
 } from '@riviamigo/ui/primitives';
-import { formatTireLabel, getTireHealthTone } from '@riviamigo/ui/lib/vehicleTires';
+import {
+  DEFAULT_TARGET_TIRE_PRESSURE_PSI,
+  formatTireLabel,
+  getTireHealthTone,
+} from '@riviamigo/ui/lib/vehicleTires';
 import {
   buildAvailabilityTooltip,
   formatAvailabilityLastUpdated,
@@ -81,6 +88,14 @@ export function VehicleHealthContent() {
   const activeVehicle = availableVehicles.find((vehicle) => vehicle.id === effectiveVehicleId);
   const { data, isLoading } = useVehicleHealth(effectiveVehicleId);
   const { data: status } = useCurrentVehicleStatus(effectiveVehicleId);
+  const tireHistoryFrom = React.useMemo(
+    () => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    []
+  );
+  const { data: tireHistory, isLoading: isTireHistoryLoading } = useTelemetryLanes(
+    effectiveVehicleId,
+    { from: tireHistoryFrom, lanes: ['health'], resolution: '1h', max_points: 168 }
+  );
   const { data: images } = useQuery({
     queryKey: ['vehicles', 'images', effectiveVehicleId],
     queryFn: () => api.vehicleImages(effectiveVehicleId!),
@@ -99,6 +114,9 @@ export function VehicleHealthContent() {
     data?.thermal_events_30d ?? 0
   );
   const closureModel = data?.vehicle?.model ?? activeVehicle?.model ?? null;
+  const targetTirePressurePsi = Math.round(
+    activeVehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI
+  );
   const tireSummary = summarizeTires(status, data?.tires ?? null);
   const softwareHistory = dedupeSoftwareHistory(data?.software_history ?? []);
   const currentSoftwareEntry =
@@ -112,7 +130,7 @@ export function VehicleHealthContent() {
   const resolvedHealthArtwork = resolveVehicleArtwork(
     images ?? activeVehicle?.images,
     data?.vehicle?.model ?? activeVehicle?.model,
-    'health',
+    'health'
   );
   const heroImageUrl = resolvedHealthArtwork.light;
   const fallbackHeroImageUrl = resolvedHealthArtwork.fallback;
@@ -151,7 +169,10 @@ export function VehicleHealthContent() {
               options={availableVehicles.map((vehicle) => ({
                 value: vehicle.id,
                 label: vehicle.display_name || vehicle.model,
-                description: vehicle.display_name && vehicle.model !== vehicle.display_name ? vehicle.model : undefined,
+                description:
+                  vehicle.display_name && vehicle.model !== vehicle.display_name
+                    ? vehicle.model
+                    : undefined,
               }))}
             />
           ) : null
@@ -201,7 +222,8 @@ export function VehicleHealthContent() {
                           source={heroImageUrl}
                           fallbackSource={fallbackHeroImageUrl}
                           fallbackProps={{
-                            className: 'absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom',
+                            className:
+                              'absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom',
                           }}
                           alt="Vehicle three-quarter view"
                           className="absolute inset-0 h-full w-full object-contain object-center min-[1200px]:object-right-bottom"
@@ -347,7 +369,7 @@ export function VehicleHealthContent() {
                       value={
                         extended.network?.wifi_connected
                           ? `Wi-Fi ${formatSignal(extended.network.wifi_rssi_dbm)}`
-                          : extended.network?.cellular_access_technology ?? 'Disconnected'
+                          : (extended.network?.cellular_access_technology ?? 'Disconnected')
                       }
                       detail={[
                         extended.network?.wifi_link_speed_mbps == null
@@ -378,7 +400,11 @@ export function VehicleHealthContent() {
                           ? `${Math.round(extended.mass.estimated_mass_kg * 2.20462).toLocaleString()} lb`
                           : '—'
                       }
-                      detail={extended.mass ? `${extended.mass.estimated_mass_kg.toLocaleString()} kg · Rivian estimate` : ''}
+                      detail={
+                        extended.mass
+                          ? `${extended.mass.estimated_mass_kg.toLocaleString()} kg · Rivian estimate`
+                          : ''
+                      }
                     />
                     {extended.cold_weather ? (
                       <ExtendedReading
@@ -396,7 +422,8 @@ export function VehicleHealthContent() {
                 )}
                 {extended?.collector?.last_event_at ? (
                   <p className="mt-3 text-xs text-fg-tertiary">
-                    Collector last received data {formatAppDateTime(extended.collector.last_event_at)}
+                    Collector last received data{' '}
+                    {formatAppDateTime(extended.collector.last_event_at)}
                   </p>
                 ) : null}
               </CardContent>
@@ -417,6 +444,7 @@ export function VehicleHealthContent() {
                     <div className="grid grid-cols-2 gap-3">
                       <TireGauge
                         label="Front Left"
+                        targetPressurePsi={targetTirePressurePsi}
                         value={status?.tire_fl_psi ?? data.tires.tire_fl_psi}
                         status={status?.tire_fl_status ?? data.tires.tire_fl_status}
                         valid={status?.tire_fl_valid ?? null}
@@ -429,9 +457,13 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
+                        history={buildTireHistory(tireHistory, 'tire_fl_psi')}
+                        historyColor={CHART_COLORS.accent}
+                        historyLoading={isTireHistoryLoading}
                       />
                       <TireGauge
                         label="Front Right"
+                        targetPressurePsi={targetTirePressurePsi}
                         value={status?.tire_fr_psi ?? data.tires.tire_fr_psi}
                         status={status?.tire_fr_status ?? data.tires.tire_fr_status}
                         valid={status?.tire_fr_valid ?? null}
@@ -444,9 +476,13 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
+                        history={buildTireHistory(tireHistory, 'tire_fr_psi')}
+                        historyColor={CHART_COLORS.sky}
+                        historyLoading={isTireHistoryLoading}
                       />
                       <TireGauge
                         label="Rear Left"
+                        targetPressurePsi={targetTirePressurePsi}
                         value={status?.tire_rl_psi ?? data.tires.tire_rl_psi}
                         status={status?.tire_rl_status ?? data.tires.tire_rl_status}
                         valid={status?.tire_rl_valid ?? null}
@@ -459,9 +495,13 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
+                        history={buildTireHistory(tireHistory, 'tire_rl_psi')}
+                        historyColor={CHART_COLORS.success}
+                        historyLoading={isTireHistoryLoading}
                       />
                       <TireGauge
                         label="Rear Right"
+                        targetPressurePsi={targetTirePressurePsi}
                         value={status?.tire_rr_psi ?? data.tires.tire_rr_psi}
                         status={status?.tire_rr_status ?? data.tires.tire_rr_status}
                         valid={status?.tire_rr_valid ?? null}
@@ -474,6 +514,9 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
+                        history={buildTireHistory(tireHistory, 'tire_rr_psi')}
+                        historyColor={CHART_COLORS.warning}
+                        historyLoading={isTireHistoryLoading}
                       />
                     </div>
                   )}
@@ -497,6 +540,7 @@ export function VehicleHealthContent() {
                       {closureRows.map((row) => (
                         <ClosureRow
                           key={row.field}
+                          field={row.field}
                           label={row.label}
                           value={row.value}
                           availability={row.availability}
@@ -691,15 +735,23 @@ function HealthLine({
 function TireGauge({
   label,
   value,
+  targetPressurePsi,
   status,
   valid,
   availability,
+  history,
+  historyColor,
+  historyLoading,
 }: {
   label: string;
   value: number | null;
+  targetPressurePsi: number;
   status: string | null;
   valid: boolean | null;
   availability: StatusAvailabilitySummary | null;
+  history: Array<{ ts?: string; value: number | null | undefined }>;
+  historyColor: string;
+  historyLoading: boolean;
 }) {
   const state = getTireState(status, valid, availability);
   const displayValue =
@@ -708,36 +760,54 @@ function TireGauge({
       : availability?.availability === 'never_seen' && value === null
         ? 'Unavailable'
         : formatTireLabel(value, status);
-  const tone = getTireHealthTone({ psi: value, status });
-  const valueClass =
+  const tone = getTireHealthTone({ psi: value, status, targetPsi: targetPressurePsi });
+  const valueTone =
     valid === false || availability?.availability === 'never_seen'
-      ? 'text-status-info'
+      ? 'info'
       : tone === 'danger'
-        ? 'text-status-danger'
+        ? 'danger'
         : tone === 'warning'
-          ? 'text-status-warning'
-          : 'text-fg';
-  const badge = (
-    <Badge variant={state.variant} size="sm">
-      {state.label}
-    </Badge>
+          ? 'warning'
+          : tone === 'success'
+            ? 'success'
+            : 'neutral';
+  const sensor = (
+    <SensorChipSummary
+      title={label}
+      value={displayValue}
+      icon="lucide:gauge"
+      valueTone={valueTone}
+      valueSize="lg"
+      secondary={[
+        state.label,
+        state.lastUpdatedLabel,
+        historyLoading ? 'Loading history' : history.length > 0 ? '7-day history' : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')}
+      history={history}
+      historyColor={historyColor}
+      historyDomain={buildTirePressureDomain(history, targetPressurePsi)}
+    />
   );
-  return (
-    <div className="rounded-xl border border-border bg-bg-elevated/55 p-4">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-fg-tertiary">{label}</p>
-        {state.tooltip ? <Tooltip content={state.tooltip}>{badge}</Tooltip> : badge}
-      </div>
-      <div className="mt-5 flex items-end gap-2">
-        <p className={`font-mono text-3xl font-semibold tabular-nums ${valueClass}`}>
-          {displayValue}
-        </p>
-      </div>
-      {state.lastUpdatedLabel ? (
-        <p className="mt-1 text-[11px] text-fg-tertiary">{state.lastUpdatedLabel}</p>
-      ) : null}
-    </div>
+  return state.tooltip ? <Tooltip content={state.tooltip}>{sensor}</Tooltip> : sensor;
+}
+
+function buildTirePressureDomain(
+  history: Array<{ ts?: string; value: number | null | undefined }>,
+  targetPressurePsi: number
+) {
+  const maxDeviation = Math.max(
+    8,
+    ...history
+      .map((point) => point.value)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+      .map((value) => Math.abs(value - targetPressurePsi) + 2)
   );
+  return {
+    min: targetPressurePsi - maxDeviation,
+    max: targetPressurePsi + maxDeviation,
+  };
 }
 
 function DiagnosticRow({
@@ -771,22 +841,18 @@ function DiagnosticRow({
 }
 
 function ClosureRow({
+  field,
   label,
   value,
   availability,
 }: {
+  field: HealthClosureField;
   label: string;
   value: boolean | null;
   availability: StatusAvailabilitySummary | null;
 }) {
   const isUnavailable = availability?.availability === 'never_seen' && value === null;
-  const Icon = isUnavailable
-    ? CircleAlert
-    : value === false
-      ? DoorOpen
-      : value === true
-        ? CheckCircle2
-        : CircleAlert;
+  const isGate = field.startsWith('closure_');
   const variant = isUnavailable
     ? 'info'
     : value === false
@@ -811,7 +877,7 @@ function ClosureRow({
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-elevated/55 px-3 py-2">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon className="h-4 w-4 shrink-0 text-fg-tertiary" />
+          <ClosureIcon field={field} isGate={isGate} isUnavailable={isUnavailable} />
           <span className="truncate text-sm text-fg-secondary">{label}</span>
         </div>
         {availability && formatAvailabilityLastUpdated(availability) ? (
@@ -840,6 +906,79 @@ function EmptyPanel({ text }: { text: string }) {
     <div className="rounded-xl border border-dashed border-border bg-bg-elevated/40 px-4 py-8 text-center text-sm text-fg-tertiary">
       {text}
     </div>
+  );
+}
+
+function ClosureIcon({
+  field,
+  isGate,
+  isUnavailable,
+}: {
+  field: HealthClosureField;
+  isGate: boolean;
+  isUnavailable: boolean;
+}) {
+  const className = 'h-4 w-4 shrink-0 text-fg-tertiary';
+  const isRightDoor = !isGate && field.endsWith('_right_closed');
+  const testId = `closure-icon-${field}`;
+
+  return (
+    <span
+      className="inline-flex shrink-0"
+      data-testid={testId}
+      data-closure-kind={isGate ? 'gate' : 'door'}
+      aria-hidden="true"
+    >
+      {isUnavailable ? (
+        <CircleAlert className={className} />
+      ) : !isGate ? (
+        <TbCarDoor
+          className={className}
+          style={isRightDoor ? { transform: 'scaleX(-1)' } : undefined}
+        />
+      ) : field === 'closure_frunk_closed' ? (
+        <FrunkIcon className={className} />
+      ) : (
+        <LiftgateIcon className={className} />
+      )}
+    </span>
+  );
+}
+
+function FrunkIcon({ className }: { className: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 20v-1.6c0-2.1 1.4-3.8 3.5-4.2l9.5-1.9" />
+      <path d="m8.5 5.5 2.7-1.4 8.9 8.8-3.2.8-8.4-8.2Z" />
+      <path d="M5 14v-4m0 0h4m-4 0 6 6" />
+    </svg>
+  );
+}
+
+function LiftgateIcon({ className }: { className: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 4h7.2c1.5 0 2.8.6 3.8 1.7l2.4 2.8H12" />
+      <path d="M5 20c2.1-.2 3.5-1.6 3.5-4V8.5C8.5 6 7.2 4.5 5 4" />
+      <path d="M12 15h7" />
+      <path d="m16 12 3 3-3 3" />
+    </svg>
   );
 }
 
@@ -930,6 +1069,20 @@ type HealthClosureRow = {
   value: boolean | null;
   availability: StatusAvailabilitySummary | null;
 };
+
+function buildTireHistory(
+  frame: TelemetryLaneFrame | undefined,
+  field: 'tire_fl_psi' | 'tire_fr_psi' | 'tire_rl_psi' | 'tire_rr_psi'
+) {
+  const values = frame?.lanes.health?.numeric[field] ?? [];
+  const series = (frame?.spine ?? []).map((ts, index) => ({
+    ts,
+    value: values[index] ?? null,
+  }));
+  return series.some((point) => typeof point.value === 'number' && Number.isFinite(point.value))
+    ? series
+    : [];
+}
 
 const HEALTH_CLOSURE_DEFINITIONS: Array<Pick<HealthClosureRow, 'field' | 'label'>> = [
   { field: 'closure_frunk_closed', label: 'Frunk' },
