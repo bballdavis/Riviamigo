@@ -117,7 +117,7 @@ function ChargeSessionCard({ session, onClick }: { session: ChargeSessionRow; on
   );
 }
 
-function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
+export function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -171,7 +171,7 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
   ) : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    <div className="flex !h-auto min-h-full flex-col gap-2">
       {/* Search and controls header */}
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <label className="relative flex-1 min-w-0 sm:min-w-[14rem] max-w-md">
@@ -218,20 +218,18 @@ function ChargingTableWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetCtx
           }
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <DataTable
-            data={sessions}
-            columns={chargingColumns}
-            loading={isLoading}
-            loadingRows={pageSize}
-            onRowClick={handleRowClick}
-            emptyTitle="No charging sessions"
-            emptyDescription={search ? 'No sessions match that location.' : 'Sessions will appear here after your vehicle has charged.'}
-            columnVisibilityMenu
-            defaultHiddenColumns={['network_vendor']}
-            className="overflow-x-auto overflow-y-auto"
-          />
-        </div>
+        <DataTable
+          data={sessions}
+          columns={chargingColumns}
+          loading={isLoading}
+          loadingRows={pageSize}
+          onRowClick={handleRowClick}
+          emptyTitle="No charging sessions"
+          emptyDescription={search ? 'No sessions match that location.' : 'Sessions will appear here after your vehicle has charged.'}
+          columnVisibilityMenu
+          defaultHiddenColumns={['network_vendor']}
+          className="overflow-x-hidden"
+        />
       )}
 
       {/* Pagination */}

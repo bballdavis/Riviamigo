@@ -3,19 +3,21 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { useChargeSession, useResolvedVehicleSelection, useSavedPlaces, useUpdateChargeSession, useVehicles } from '@riviamigo/hooks';
 import type { ChargeSessionUpdate, Place } from '@riviamigo/types';
 import {
-  PageLayout, StatCardGrid, StatCard, Card, CardContent, CardHeader, CardTitle, Button, Input, SelectPicker, Badge,
+  PageLayout, Card, CardContent, CardHeader, CardTitle, Button, Input, SelectPicker,
 } from '@riviamigo/ui/primitives';
-import { DashboardChartWidget } from '@riviamigo/dashboards';
+import { DashboardChartWidget, SensorChipSummary } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { NoVehicleState } from '../../components/layout/NoVehicleState';
-import { formatKwh, formatDuration, formatCurrency, formatPercent } from '@riviamigo/ui/lib/utils';
+import { formatKwh, formatDuration, formatCurrency, formatDistanceKm, formatPercent } from '@riviamigo/ui/lib/utils';
 import { formatAppDate, formatAppTime } from '@riviamigo/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
-import { ArrowLeft, Database, MapPin, RadioTower, Receipt, Route, RotateCcw, Zap } from 'lucide-react';
+import { ArrowLeft, Edit2, Info, MapPin, RotateCcw, Save } from 'lucide-react';
 
 export function ChargeSessionContent() {
   return <ChargeSessionContentInner />;
 }
+
+const SOURCE_DETAILS_ID = 'charge-session-source-details';
 
 function ChargeSessionContentInner() {
   const { effectiveVehicleId, authReady, vehicleSelectionReady } = useResolvedVehicleSelection();
@@ -32,6 +34,8 @@ function ChargeSessionContentInner() {
   const updateSession = useUpdateChargeSession(effectiveVehicleId);
   const { data: vehicles = [] } = useVehicles();
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [isEditingCorrections, setIsEditingCorrections] = useState(false);
+  const [showSourceDetails, setShowSourceDetails] = useState(false);
   const hasVehicle = !!effectiveVehicleId;
   const isPlacesLoading = placesLoading || placesFetching;
 
@@ -62,9 +66,9 @@ function ChargeSessionContentInner() {
     : 'Charge Session';
 
   const locationSubtitle = session?.location_name ? (
-    <span className="inline-flex items-center gap-1.5 text-sm text-fg">
+    <span className="flex max-w-full min-w-0 items-start gap-1.5 text-sm text-fg">
       <MapPin className="h-3.5 w-3.5 text-accent" />
-      <span className="max-w-52 truncate" title={session.location_name}>{session.location_name}</span>
+      <span className="min-w-0 break-words whitespace-normal" title={session.location_name}>{session.location_name}</span>
     </span>
   ) : null;
   const membershipRole = vehicles.find((vehicle) => vehicle.id === effectiveVehicleId)?.membership_role ?? 'viewer';
@@ -88,6 +92,31 @@ function ChargeSessionContentInner() {
         subtitle={locationSubtitle}
         titleAction={backButton}
         titleActionPosition="left"
+        titleActionAfter={canManageSession ? (
+          <button
+            type="button"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-fg-tertiary/80 transition-colors hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-page"
+            title={isEditingCorrections ? 'Close correction editor' : 'Edit charging session'}
+            aria-label={isEditingCorrections ? 'Close correction editor' : 'Edit charging session'}
+            aria-expanded={isEditingCorrections}
+            onClick={() => setIsEditingCorrections((editing) => !editing)}
+          >
+            <Edit2 className="h-5 w-5" />
+          </button>
+        ) : undefined}
+        actions={session ? (
+          <button
+            type="button"
+            aria-label={showSourceDetails ? 'Hide session source details' : 'Show session source details'}
+            title={showSourceDetails ? 'Hide session source details' : 'Show session source details'}
+            aria-expanded={showSourceDetails}
+            aria-controls={SOURCE_DETAILS_ID}
+            className="inline-flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-lg border border-accent bg-bg-surface text-accent transition-colors hover:bg-accent/10 focus:outline-none focus:ring-1 focus:ring-accent"
+            onClick={() => setShowSourceDetails((visible) => !visible)}
+          >
+            <Info className="h-5 w-5" />
+          </button>
+        ) : undefined}
       >
         {!authReady || !vehicleSelectionReady ? (
           <div className="p-4 text-xs text-fg-tertiary">Loading...</div>
@@ -98,9 +127,9 @@ function ChargeSessionContentInner() {
           />
         ) : (
           <>
-            {session && <SessionSourcePanel session={session} />}
+            {session && showSourceDetails && <SessionSourcePanel session={session} />}
 
-            {session && (
+            {session && isEditingCorrections && (
               <ChargeSessionCorrectionPanel
                 session={session}
                 places={places}
@@ -117,25 +146,34 @@ function ChargeSessionContentInner() {
               />
             )}
 
-            <StatCardGrid>
-              <StatCard label="Energy Added" value={session ? formatKwh(session.energy_added_kwh ?? 0) : '-'} accent />
-              <StatCard
-                label="SoC"
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <SensorChipSummary
+                title="Energy Added"
+                value={session ? formatKwh(session.energy_added_kwh ?? 0) : '-'}
+                secondary={session?.range_added_km != null ? `Range added: ${formatDistanceKm(session.range_added_km)}` : undefined}
+                icon="lucide:bolt"
+                accentBorder
+              />
+              <SensorChipSummary
+                title="SoC"
                 value={
                   session?.soc_start != null && session?.soc_end != null
                     ? `${formatPercent(session.soc_start, 0)} -> ${formatPercent(session.soc_end, 0)}`
                     : '-'
                 }
+                icon="lucide:battery"
               />
-              <StatCard
-                label="Duration"
+              <SensorChipSummary
+                title="Duration"
                 value={session ? formatDuration((session as unknown as { duration_min?: number }).duration_min ?? 0) : '-'}
+                icon="lucide:clock-3"
               />
-              <StatCard
-                label="Cost"
+              <SensorChipSummary
+                title="Cost"
                 value={session?.cost_usd != null ? formatCurrency(session.cost_usd) : '-'}
+                icon="lucide:receipt"
               />
-            </StatCardGrid>
+            </div>
 
             {/* Charge curve + cumulative energy on a shared time axis.
                 DashboardChartWidget renders its own compact header (title +
@@ -239,21 +277,40 @@ function ChargeSessionCorrectionPanel({
   return (
     <Card>
       <CardHeader>
-        <div>
+        <div className="min-w-0">
           <CardTitle>Corrections</CardTitle>
-          <p className="mt-1 text-sm text-fg-tertiary">Refine this charge without replacing its original telemetry.</p>
+          <p className="mt-1 text-sm text-fg-tertiary">Update the location or cost used for this charge.</p>
         </div>
-        <Badge variant={canManage ? 'info' : 'default'}>{canManage ? 'Editable' : 'Read only'}</Badge>
+        {canManage ? (
+          <Button
+            type="button"
+            size="md"
+            loading={isPending}
+            disabled={Boolean(manualCostError || locationError)}
+            onClick={save}
+            aria-label="Save charging corrections"
+            title="Save charging corrections"
+            className="h-11 w-11 shrink-0 p-0"
+          >
+            <Save className="h-4 w-4" />
+          </Button>
+        ) : null}
       </CardHeader>
       <CardContent className="grid gap-5">
-        <div className="grid gap-3 rounded-xl border border-border bg-bg-elevated/35 p-3 sm:grid-cols-2">
-          <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Effective location</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="min-w-0 rounded-xl border border-border bg-bg-elevated/35 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Location</p>
             <p className="mt-1 truncate text-sm font-medium text-fg" title={effectiveLocation}>{effectiveLocation}</p>
+            <p className="mt-1 truncate text-xs text-fg-tertiary" title={sourceLocation ?? undefined}>
+              Recorded coordinates: {sourceLocation ?? 'Unavailable'}
+            </p>
           </div>
-          <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Original telemetry</p>
-            <p className="mt-1 truncate text-sm text-fg-secondary" title={sourceLocation ?? undefined}>{sourceLocation ?? 'Unavailable'}</p>
+          <div className="min-w-0 rounded-xl border border-border bg-bg-elevated/35 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Cost</p>
+            <p className="mt-1 truncate text-sm font-medium text-fg" title={session.cost_usd != null ? formatCurrency(session.cost_usd) : undefined}>
+              {session.cost_usd != null ? formatCurrency(session.cost_usd) : 'Unavailable'}
+            </p>
+            <p className="mt-1 text-xs text-fg-tertiary">Current session cost</p>
           </div>
         </div>
 
@@ -318,13 +375,6 @@ function ChargeSessionCorrectionPanel({
 
         {error ? <p role="alert" className="rounded-lg border border-status-danger/30 bg-status-danger/10 px-3 py-2 text-sm text-status-danger">{error} Try again.</p> : null}
         {successMessage ? <p role="status" className="rounded-lg border border-status-positive/30 bg-status-positive/10 px-3 py-2 text-sm text-status-positive">{successMessage}</p> : null}
-        {canManage ? (
-          <div className="flex justify-end">
-            <Button size="md" className="min-h-11" loading={isPending} disabled={Boolean(manualCostError || locationError)} onClick={save}>Save corrections</Button>
-          </div>
-        ) : (
-          <p className="text-sm text-fg-tertiary">Only the vehicle owner or a manager can change charging corrections.</p>
-        )}
       </CardContent>
     </Card>
   );
@@ -358,34 +408,42 @@ function SessionSourcePanel({ session }: { session: ChargeSessionDetail }) {
     ?? session.charger_id
     ?? session.rivian_charger_type
     ?? (session.charger_type ? session.charger_type.toUpperCase() : 'Unknown');
-  const evidence = [
-    session.range_added_km != null
-      ? { icon: <Route className="h-4 w-4" />, label: 'Range', value: `${session.range_added_km.toFixed(1)} km added` }
-      : null,
+  const facts = [
+    { icon: 'lucide:database', label: 'Source', value: formatSourceLabel(session.source, telemetryCount) },
+    { icon: 'lucide:radio-tower', label: 'Telemetry', value: telemetryLabel },
+    { icon: 'lucide:zap', label: 'Network', value: networkLabel },
     session.rivian_paid_total != null
-      ? { icon: <Receipt className="h-4 w-4" />, label: 'Rivian billed', value: formatCurrency(session.rivian_paid_total) }
+      ? { icon: 'lucide:receipt', label: 'Rivian billed', value: formatCurrency(session.rivian_paid_total) }
       : null,
     session.is_free_session
-      ? { icon: <Receipt className="h-4 w-4" />, label: 'Billing', value: 'Free session' }
+      ? { icon: 'lucide:receipt', label: 'Billing', value: 'Free session' }
       : null,
     session.rivian_city
-      ? { icon: <MapPin className="h-4 w-4" />, label: 'Rivian city', value: session.rivian_city }
+      ? { icon: 'lucide:map-pin', label: 'Rivian city', value: session.rivian_city }
       : null,
-  ].filter(Boolean) as Array<{ icon: React.ReactNode; label: string; value: string }>;
+  ].filter(Boolean) as Array<{ icon: string; label: string; value: string }>;
 
   return (
-    <Card padding="md" className="grid gap-x-6 gap-y-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-      <SourceFact
-        icon={<Database className="h-4 w-4" />}
-        label="Source"
-        value={formatSourceLabel(session.source, telemetryCount)}
-      />
-      <SourceFact icon={<RadioTower className="h-4 w-4" />} label="Telemetry" value={telemetryLabel} />
-      <SourceFact icon={<Zap className="h-4 w-4" />} label="Network" value={networkLabel} />
-      {evidence.map((fact) => (
-        <SourceFact key={`${fact.label}-${fact.value}`} icon={fact.icon} label={fact.label} value={fact.value} />
-      ))}
-    </Card>
+    <section
+      id={SOURCE_DETAILS_ID}
+      aria-labelledby="source-information-title"
+      className="rounded-xl border border-border bg-bg-surface p-4"
+    >
+      <h2 id="source-information-title" className="mb-3 text-sm font-semibold text-fg">
+        Source Information
+      </h2>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {facts.map((fact) => (
+          <SensorChipSummary
+            key={`${fact.label}-${fact.value}`}
+            title={fact.label}
+            value={fact.value}
+            valueColor="default"
+            icon={fact.icon}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -394,18 +452,4 @@ function formatSourceLabel(source: string | null | undefined, telemetryCount: nu
   if (source === 'rivian_api') return 'Rivian API backfill';
   if (source === 'telemetry+rivian_api') return 'Telemetry + Rivian API';
   return 'Live telemetry';
-}
-
-function SourceFact({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-bg-elevated text-accent">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{label}</p>
-        <p className="truncate text-sm font-medium text-fg">{value}</p>
-      </div>
-    </div>
-  );
 }
