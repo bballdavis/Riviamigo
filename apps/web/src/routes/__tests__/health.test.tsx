@@ -645,16 +645,51 @@ describe('/health page cleanup', () => {
     expect(spriteLayers).toHaveLength(4);
     expect(spriteLayers.every((layer) => layer.querySelector('canvas'))).toBe(true);
     expect(
-      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-domain-min="40"]'))
+      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-domain-min="42"]'))
     ).toBe(true);
     expect(
-      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-domain-max="56"]'))
+      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-domain-max="54"]'))
     ).toBe(true);
+    expect(
+      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-filter="raw"]'))
+    ).toBe(true);
+    expect(screen.getAllByText('30-day history')).toHaveLength(4);
     expect(screen.getAllByText('48 psi')).toHaveLength(2);
     expect(mockUseTelemetryLanes).toHaveBeenCalledWith(
       'veh-1',
-      expect.objectContaining({ lanes: ['health'], resolution: '1h', max_points: 168 })
+      expect.objectContaining({ lanes: ['health'], resolution: 'auto', max_points: 512 })
     );
+  });
+
+  it('labels sparse tire history accurately and preserves the full timestamp window', () => {
+    mockUseTelemetryLanes.mockReturnValueOnce({
+      data: {
+        spine: [
+          '2026-05-29T01:00:00Z',
+          '2026-05-30T01:00:00Z',
+          '2026-05-31T01:00:00Z',
+        ],
+        lanes: {
+          health: {
+            numeric: {
+              tire_fl_psi: [null, 47, null],
+              tire_fr_psi: [null, null, null],
+              tire_rl_psi: [null, 49, null],
+              tire_rr_psi: [null, null, null],
+            },
+          },
+        },
+      },
+      isLoading: false,
+    } as any);
+
+    render(<HealthContent />);
+
+    expect(screen.getAllByText('1 observation · 30-day window')).toHaveLength(2);
+    expect(screen.getAllByText('No history')).toHaveLength(2);
+    const firstSprite = screen.getAllByTestId('sensor-sprite-layer')[0]!;
+    expect(firstSprite.querySelector('[data-sparkline-point-count="3"]')).toBeInTheDocument();
+    expect(firstSprite.querySelector('[data-sparkline-filter="raw"]')).toBeInTheDocument();
   });
 
   it('omits unsupported tailgate telemetry for an R1S health view', () => {

@@ -66,6 +66,7 @@ import { AppLayout } from '../../components/layout/AppLayout';
 import { NoVehicleState } from '../../components/layout/NoVehicleState';
 
 type BadgeVariant = NonNullable<BadgeProps['variant']>;
+const TIRE_HISTORY_DAYS = 30;
 type HealthState = { label: string; variant: BadgeVariant };
 type DiagnosticState = {
   label: string;
@@ -89,12 +90,12 @@ export function VehicleHealthContent() {
   const { data, isLoading } = useVehicleHealth(effectiveVehicleId);
   const { data: status } = useCurrentVehicleStatus(effectiveVehicleId);
   const tireHistoryFrom = React.useMemo(
-    () => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    () => new Date(Date.now() - TIRE_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString(),
     []
   );
   const { data: tireHistory, isLoading: isTireHistoryLoading } = useTelemetryLanes(
     effectiveVehicleId,
-    { from: tireHistoryFrom, lanes: ['health'], resolution: '1h', max_points: 168 }
+    { from: tireHistoryFrom, lanes: ['health'], resolution: 'auto', max_points: 512 }
   );
   const { data: images } = useQuery({
     queryKey: ['vehicles', 'images', effectiveVehicleId],
@@ -116,6 +117,16 @@ export function VehicleHealthContent() {
   const closureModel = data?.vehicle?.model ?? activeVehicle?.model ?? null;
   const targetTirePressurePsi = Math.round(
     activeVehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI
+  );
+  const tireHistories = {
+    frontLeft: buildTireHistory(tireHistory, 'tire_fl_psi'),
+    frontRight: buildTireHistory(tireHistory, 'tire_fr_psi'),
+    rearLeft: buildTireHistory(tireHistory, 'tire_rl_psi'),
+    rearRight: buildTireHistory(tireHistory, 'tire_rr_psi'),
+  };
+  const tirePressureDomain = buildTirePressureDomain(
+    Object.values(tireHistories).flat(),
+    targetTirePressurePsi
   );
   const tireSummary = summarizeTires(status, data?.tires ?? null);
   const softwareHistory = dedupeSoftwareHistory(data?.software_history ?? []);
@@ -457,8 +468,9 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
-                        history={buildTireHistory(tireHistory, 'tire_fl_psi')}
+                        history={tireHistories.frontLeft}
                         historyColor={CHART_COLORS.accent}
+                        historyDomain={tirePressureDomain}
                         historyLoading={isTireHistoryLoading}
                       />
                       <TireGauge
@@ -476,8 +488,9 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
-                        history={buildTireHistory(tireHistory, 'tire_fr_psi')}
+                        history={tireHistories.frontRight}
                         historyColor={CHART_COLORS.sky}
+                        historyDomain={tirePressureDomain}
                         historyLoading={isTireHistoryLoading}
                       />
                       <TireGauge
@@ -495,8 +508,9 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
-                        history={buildTireHistory(tireHistory, 'tire_rl_psi')}
+                        history={tireHistories.rearLeft}
                         historyColor={CHART_COLORS.success}
+                        historyDomain={tirePressureDomain}
                         historyLoading={isTireHistoryLoading}
                       />
                       <TireGauge
@@ -514,8 +528,9 @@ export function VehicleHealthContent() {
                               ])
                             : null
                         }
-                        history={buildTireHistory(tireHistory, 'tire_rr_psi')}
+                        history={tireHistories.rearRight}
                         historyColor={CHART_COLORS.warning}
+                        historyDomain={tirePressureDomain}
                         historyLoading={isTireHistoryLoading}
                       />
                     </div>
@@ -742,6 +757,7 @@ function TireGauge({
   history,
   historyColor,
   historyLoading,
+  historyDomain,
 }: {
   label: string;
   value: number | null;
@@ -752,6 +768,7 @@ function TireGauge({
   history: Array<{ ts?: string; value: number | null | undefined }>;
   historyColor: string;
   historyLoading: boolean;
+  historyDomain: { min: number; max: number };
 }) {
   const state = getTireState(status, valid, availability);
   const displayValue =
@@ -781,16 +798,36 @@ function TireGauge({
       secondary={[
         state.label,
         state.lastUpdatedLabel,
-        historyLoading ? 'Loading history' : history.length > 0 ? '7-day history' : null,
+        getTireHistoryLabel(history, historyLoading),
       ]
         .filter(Boolean)
         .join(' · ')}
       history={history}
       historyColor={historyColor}
-      historyDomain={buildTirePressureDomain(history, targetPressurePsi)}
+      historyDomain={historyDomain}
+      historyTimeFilter="raw"
     />
   );
   return state.tooltip ? <Tooltip content={state.tooltip}>{sensor}</Tooltip> : sensor;
+}
+
+function getTireHistoryLabel(
+  history: Array<{ ts?: string; value: number | null | undefined }>,
+  historyLoading: boolean
+) {
+  if (historyLoading) return 'Loading history';
+  const sampleCount = countTireHistorySamples(history);
+  if (sampleCount >= 2) return '30-day history';
+  if (sampleCount === 1) return '1 observation · 30-day window';
+  return 'No history';
+}
+
+function countTireHistorySamples(
+  history: Array<{ ts?: string; value: number | null | undefined }>
+) {
+  return history.filter(
+    (point) => typeof point.value === 'number' && Number.isFinite(point.value)
+  ).length;
 }
 
 function buildTirePressureDomain(
@@ -798,7 +835,7 @@ function buildTirePressureDomain(
   targetPressurePsi: number
 ) {
   const maxDeviation = Math.max(
-    8,
+    6,
     ...history
       .map((point) => point.value)
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
