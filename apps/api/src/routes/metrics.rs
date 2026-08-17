@@ -1092,13 +1092,13 @@ async fn filtered_summary_value(
     };
 
     let value = if metric == "avg_efficiency" {
-        let row = sqlx::query_as::<_, WeightedEfficiencyRow>(&sql)
+        let row = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(vid).bind(from).bind(to)
             .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
             .fetch_one(pool).await?;
         weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi)
     } else {
-        sqlx::query_scalar::<_, Option<f64>>(&sql)
+        sqlx::query_scalar::<_, Option<f64>>(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(vid).bind(from).bind(to)
             .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
             .fetch_optional(pool).await?
@@ -1149,7 +1149,7 @@ async fn filtered_summary_series(
              FROM filtered_trips WHERE efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0 \
              GROUP BY 1 ORDER BY 1"
         );
-        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(&sql)
+        let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
             .bind(vid).bind(from).bind(to)
             .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
             .fetch_all(pool).await?;
@@ -1159,7 +1159,7 @@ async fn filtered_summary_series(
         }).collect());
     }
 
-    sqlx::query_as::<_, MetricSeriesPoint>(&sql)
+    sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(vid).bind(from).bind(to)
         .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
         .fetch_all(pool).await

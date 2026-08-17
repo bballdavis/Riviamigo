@@ -220,7 +220,7 @@ async fn get_summary(
          FROM riviamigo.trips t
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.distance_miles > 0{}", sql_predicate("t", 4, 5, 6));
-    let row = sqlx::query_as::<_, SummaryRow>(&sql)
+    let row = sqlx::query_as::<_, SummaryRow>(sqlx::AssertSqlSafe(sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -271,7 +271,7 @@ async fn get_by_mode(
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.drive_mode IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 0{}
          GROUP BY t.drive_mode ORDER BY avg_wh_per_mi", sql_predicate("t", 4, 5, 6));
-    let rows = sqlx::query_as::<_, ModeRow>(&sql)
+    let rows = sqlx::query_as::<_, ModeRow>(sqlx::AssertSqlSafe(sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -319,7 +319,7 @@ async fn get_vs_temp_binned(
            AND t.outside_temp_c IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL
            AND t.distance_miles > 0
          {} GROUP BY 1, 2 ORDER BY 1", sql_predicate("t", 4, 5, 6));
-    let rows = sqlx::query_as::<_, VsTempPoint>(&sql)
+    let rows = sqlx::query_as::<_, VsTempPoint>(sqlx::AssertSqlSafe(sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -354,7 +354,7 @@ async fn get_trend(
            AND t.efficiency_wh_per_mile IS NOT NULL
            AND t.distance_miles > 0
          {} ORDER BY t.started_at", sql_predicate("t", 4, 5, 6));
-    let samples = sqlx::query_as::<_, TrendSample>(&sql)
+    let samples = sqlx::query_as::<_, TrendSample>(sqlx::AssertSqlSafe(sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -389,7 +389,7 @@ async fn get_range_vs_temp(
            AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0
            AND t.outside_temp_c IS NOT NULL
          {} ORDER BY t.started_at DESC LIMIT 500", sql_predicate("t", 4, 5, 6));
-    let rows = sqlx::query_as::<_, RangeVsTempRow>(&sql)
+    let rows = sqlx::query_as::<_, RangeVsTempRow>(sqlx::AssertSqlSafe(sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -444,7 +444,7 @@ async fn get_by_tag(
          FROM grouped GROUP BY tag_id, tag_name
          ORDER BY tag_id IS NULL, lower(tag_name), tag_id"
     );
-    let rows = sqlx::query_as::<_, ByTagRow>(&sql)
+    let rows = sqlx::query_as::<_, ByTagRow>(sqlx::AssertSqlSafe(sql.as_str()))
     .bind(vid).bind(from).bind(to)
     .bind(tag_filter.tag_ids).bind(tag_filter.match_all).bind(tag_filter.untagged)
     .fetch_all(&state.pool).await?;
