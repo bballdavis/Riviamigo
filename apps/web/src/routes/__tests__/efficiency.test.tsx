@@ -52,8 +52,8 @@ const mockConfig = {
 };
 
 vi.mock('@riviamigo/dashboards', () => ({
-  TripTagPicker: ({ label, mode }: { label?: string; mode?: string }) => (
-    <div data-testid="efficiency-tag-picker" data-mode={mode}>
+  TripTagPicker: ({ label, mode, canManage, inlineClassName }: { label?: string; mode?: string; canManage?: boolean; inlineClassName?: string }) => (
+    <div data-testid="efficiency-tag-picker" data-mode={mode} data-can-manage={canManage} data-inline-class-name={inlineClassName}>
       <input aria-label={label} />
     </div>
   ),
@@ -133,6 +133,8 @@ describe('Efficiency dashboard page', () => {
     expect(screen.getByRole('button', { name: 'Hide efficiency filters' })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByLabelText('Efficiency tag filters')).toBeInTheDocument();
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-mode', 'inline');
+    expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-can-manage', 'false');
+    expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('border-0'));
     expect(screen.getByRole('textbox', { name: 'Filter efficiency by tags' })).toBeInTheDocument();
   });
 
