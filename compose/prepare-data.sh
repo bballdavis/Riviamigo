@@ -15,4 +15,19 @@ mkdir -p \
   "$data_dir/backups" \
   "$data_dir/cache"
 
-printf 'Prepared Riviamigo data directories under %s\n' "$data_dir"
+for directory in \
+  "$data_dir/db" \
+  "$data_dir/redis" \
+  "$data_dir/backups" \
+  "$data_dir/cache"
+do
+  if [ ! -d "$directory" ]; then
+    echo "Riviamigo data directory was not created: $directory" >&2
+    exit 1
+  fi
+  if [ ! -w "$directory" ]; then
+    echo "Riviamigo data directory is not writable by this user: $directory" >&2
+    exit 1
+  fi
+  printf 'Prepared %s\n' "$directory"
+done

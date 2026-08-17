@@ -7,7 +7,7 @@ sidebar_label: Deployment and updates
 
 # Deployment and updates
 
-The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is bound to the host, on port `8080` by default.
+The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is published to the host, on port `8080` by default. Set `RIVIAMIGO_HOST_BIND_ADDRESS` when a specific host interface is required.
 
 Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of the app and restrict direct port `8080` access with your host firewall. Never publish the API listener, database, or Redis directly.
 
@@ -52,18 +52,10 @@ still need to be assigned through the host's administration UI.
 
 ## Synology DSM
 
-The production Compose file intentionally uses memory and process limits without
-Compose `cpus` limits. Synology kernels that do not expose CPU CFS controls reject
-NanoCPU settings before any container starts; operators who have verified CPU
-quota support can add a local Compose override.
-
-The app publishes on `127.0.0.1:8080` by default. Keep that loopback binding when
-DSM's HTTPS reverse proxy runs on the same NAS, and configure the proxy to forward
-HTTP and WebSocket traffic to `http://127.0.0.1:8080`. Set
-`RIVIAMIGO_BIND_ADDRESS` only when the reverse proxy runs on another host, and
-set `ALLOW_PUBLIC_ORIGIN_BIND=true` to acknowledge the non-loopback listener.
-Restrict that port to the proxy host with the NAS firewall; the acknowledgement
-does not make direct exposure safe.
+Use the dedicated [Synology DSM installation guide](./synology.md). It uses a
+generated standalone Compose file with the same services and images, a
+loopback-only host publication for DSM Reverse Proxy, absolute data paths, and
+no CPU quota fields. Do not edit the standard Compose file to accommodate DSM.
 
 ## Logs and updates
 

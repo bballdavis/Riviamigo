@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Disposable new-user verification. Run from a clean worktree:
- *   node scripts/verify-fresh-install.mjs --mode all --production-env /path/to/fresh.env --source-build
+ *   node scripts/verify-fresh-install.mjs --mode standard --production-env /path/to/fresh.env --source-build
+ *   node scripts/verify-fresh-install.mjs --mode synology --production-env /path/to/fresh.env
  * The env file is intentionally caller-owned: it must contain valid production
  * secrets and is never copied into this repository or logged by this script.
  */
@@ -20,12 +21,13 @@ const imageTag = value('--image-tag');
 const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
+const composeFile = mode === 'synology' ? 'compose/docker-compose.synology.yml' : 'compose/docker-compose.yml';
 const compose = [
   'compose',
   '-p',
   project,
   '-f',
-  'compose/docker-compose.yml',
+  composeFile,
   ...(sourceBuild ? ['-f', 'compose/docker-compose.build.yml'] : []),
 ];
 let productionStarted = false;
@@ -150,6 +152,16 @@ async function verifyProduction() {
   );
   productionStarted = true;
   await verifyOwnerSetup(`http://localhost:${port}`);
+  run('docker', [...compose, '--env-file', productionEnv, 'restart', 'riviamigo'], {
+    env: productionEnvironment,
+  });
+  await waitFor(`http://localhost:${port}/health`);
+  const persistedSetup = await fetch(`http://localhost:${port}/v1/auth/setup`).then((response) =>
+    response.json()
+  );
+  if (persistedSetup.setup_required)
+    throw new Error(`${composeFile} restart did not preserve the first owner.`);
+  run('sh', ['compose/prepare-data.sh'], { env: productionEnvironment });
 }
 
 function printProductionLogs() {
@@ -199,10 +211,11 @@ function cleanupProductionDataRoot() {
 
 try {
   ensureCleanWorktree();
-  if (!['all', 'production', 'dev'].includes(mode))
-    throw new Error('--mode must be all, production, or dev.');
+  if (!['all', 'standard', 'synology', 'production', 'dev'].includes(mode))
+    throw new Error('--mode must be all, standard, synology, production, or dev.');
   if (mode === 'all' || mode === 'dev') verifyDevSmoke();
-  if (mode === 'all' || mode === 'production') await verifyProduction();
+  if (mode === 'all' || mode === 'standard' || mode === 'production' || mode === 'synology')
+    await verifyProduction();
   console.log('Fresh-install verification passed.');
 } catch (error) {
   printProductionLogs();

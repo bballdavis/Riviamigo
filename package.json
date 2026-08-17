@@ -35,6 +35,10 @@
     "verify:restore-compatibility": "node ./tools/restore-lab/run.mjs",
     "verify:migration-integrity": "node ./tools/migration-integrity.mjs",
     "verify:release-image": "node ./scripts/verify-release-image.mjs",
+    "compose:synology:generate": "node ./scripts/generate-synology-compose.mjs",
+    "compose:synology:check": "node ./scripts/generate-synology-compose.mjs --check",
+    "compose:check": "node ./scripts/check-compose-contracts.mjs",
+    "compose:render-check": "node ./scripts/validate-compose.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
@@ -53,6 +57,7 @@
     "globals": "^17.7.0",
     "knip": "^6.27.0",
     "prettier": "^3.9.5",
+    "yaml": "^2.9.0",
     "turbo": "^2.10.5"
   },
   "knip": {

@@ -27,10 +27,11 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `RIVIAMIGO_IMAGE_REGISTRY` | `ghcr.io/bballdavis` | Registry namespace containing the unified `riviamigo` image. |
 | `IMAGE_TAG` | `latest` | Image tag; use a Calendar Version for repeatable deployments. |
 | `RIVIAMIGO_ORIGIN_PORT` | `8080` | Host port mapped to the unified app container. Protect it with host firewall rules when using a remote gateway. |
-| `RIVIAMIGO_BIND_ADDRESS` | `127.0.0.1` | Host address for the published origin port. The standard Compose stack is loopback-only by default. |
-| `ALLOW_PUBLIC_ORIGIN_BIND` | `false` | Required, with the literal value `true`, before a non-loopback `RIVIAMIGO_BIND_ADDRESS` is accepted. This is an explicit exposure opt-in, not a substitute for the authenticated gateway and firewall. |
+| `RIVIAMIGO_HOST_BIND_ADDRESS` | `0.0.0.0` | Docker host-side address for the published origin port. This Compose-only setting is separate from the application's internal listener. Restrict it with a host firewall. |
+| `RIVIAMIGO_BIND_ADDRESS` | `127.0.0.1` | Application listener address inside the container. It is not the Docker host publication address. |
+| `ALLOW_PUBLIC_ORIGIN_BIND` | `false` | Required, with the literal value `true`, before a non-loopback application `RIVIAMIGO_BIND_ADDRESS` is accepted. This is an explicit exposure opt-in, not a substitute for the authenticated gateway and firewall. |
 | `ALLOW_INSECURE_LAN_HTTP_AUTH` | `false` | **LAN-only exception.** With the literal value `true`, permits non-Secure refresh cookies only when `ALLOW_PUBLIC_ORIGIN_BIND=true`, the API binds to an unspecified/private/loopback/link-local IP, and every `ALLOWED_ORIGINS` entry is an exact `http://` private/loopback/link-local IP literal. It rejects hostnames, public IPs, HTTPS/HTTP mixes, paths, and credentials. Browser credentials and telemetry can be intercepted; prefer HTTPS. |
-| `RIVIAMIGO_ENV_FILE` | `../.env` relative to `compose/docker-compose.yml` | Alternate dotenv file injected into the app container. Restore and verification scripts set this automatically. |
+| `RIVIAMIGO_ENV_FILE` | `../.env` relative to `compose/docker-compose.yml` | Alternate dotenv file injected into the app container. The generated Synology file defaults to `.env.synology`; restore and verification scripts set this automatically. |
 
 ## Application security and runtime
 

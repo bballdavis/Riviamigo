@@ -32,6 +32,8 @@ This directory is canonical for operational and process runbooks. Update it when
   Catalog ownership, upgrade grouping, runtime baselines, audits, and release qualification.
 - [`parallax-capture.md`](./parallax-capture.md)
   Operate and troubleshoot the optional, independent normalized Parallax telemetry collector.
+- [`charge-payload-cleanup.md`](./charge-payload-cleanup.md)
+  Diagnose and compact redundant charging payload evidence without broad or automatic deletion.
 
 ## When To Add A Runbook
 

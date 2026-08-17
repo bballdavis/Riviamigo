@@ -83,7 +83,9 @@ export function findCircularDependencies(root) {
   function visit(file) {
     if (visiting.has(file)) {
       const start = stack.indexOf(file);
-      cycles.push([...stack.slice(start), file].map((entry) => relative(root, entry)));
+      cycles.push(
+        [...stack.slice(start), file].map((entry) => relative(root, entry).replaceAll('\\', '/')),
+      );
       return;
     }
     if (visited.has(file)) return;

@@ -44,8 +44,11 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
    characters; the setup screen shows the live requirement as you type.
 
 The standard stack defaults to production mode and publishes port `8080` only
-on `127.0.0.1`. Follow [secure deployment](./secure-deployment.md) before
-making it available outside your local network.
+using the normal Docker host publication. Set `RIVIAMIGO_HOST_BIND_ADDRESS`
+when a specific host interface is required, and follow [secure deployment](./secure-deployment.md)
+before making it available outside your local network.
+
+Using Synology DSM? Follow the dedicated [Synology installation guide](./synology.md).
 
 ## Copy the standard Compose file
 

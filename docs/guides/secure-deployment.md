@@ -13,10 +13,11 @@ operator route into that runbook.
 
 ## Required boundary
 
-Riviamigo is not approved for direct Internet exposure. The production stack
-binds its port `8080` origin to `127.0.0.1` by default. Put an authenticated
-tunnel or identity-aware reverse proxy and host firewall rule in front of it; a
-tunnel without an access policy is not enough.
+Riviamigo is not approved for direct Internet exposure. Standard Compose uses
+normal host publication for port `8080`; set `RIVIAMIGO_HOST_BIND_ADDRESS` to
+the required host interface and use a host firewall. Put an authenticated
+tunnel or identity-aware reverse proxy in front of it; a tunnel without an
+access policy is not enough.
 
 Cloudflare Tunnel with Access and Authentik in front of Caddy, Nginx, or Traefik
 are suitable deployment patterns. The gateway terminates public HTTPS and
