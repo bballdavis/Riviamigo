@@ -1400,12 +1400,21 @@ async fn add_vehicle(
         "vehicle.add.persisted"
     );
 
-    state
+    let telemetry_start_queued = state
         .supervisor
         .send(SupervisorCommand::StartWorker { vehicle_id })
         .await;
 
-    Ok(Json(serde_json::json!({"vehicle_id": vehicle_id})))
+    Ok(Json(serde_json::json!({
+        "vehicle_id": vehicle_id,
+        "vehicle_saved": true,
+        "telemetry_status": if telemetry_start_queued { "starting" } else { "delayed" },
+        "telemetry_error": if telemetry_start_queued {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
+        },
+    })))
 }
 
 async fn refresh_vehicle_credentials(
@@ -1500,11 +1509,21 @@ async fn refresh_vehicle_credentials(
     // Credential refresh is also the recovery path after a sanitized restore.
     // Start the worker immediately so an existing vehicle does not remain
     // authorized in the database but disconnected from Rivian.
-    state
+    let telemetry_start_queued = state
         .supervisor
         .send(SupervisorCommand::StartWorker { vehicle_id: vid })
         .await;
-    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vid })))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "vehicle_id": vid,
+        "vehicle_saved": true,
+        "telemetry_status": if telemetry_start_queued { "starting" } else { "delayed" },
+        "telemetry_error": if telemetry_start_queued {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
+        },
+    })))
 }
 
 async fn delete_vehicle(
