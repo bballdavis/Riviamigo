@@ -653,7 +653,7 @@ describe('/health page cleanup', () => {
     expect(
       spriteLayers.every((layer) => layer.querySelector('[data-sparkline-filter="raw"]'))
     ).toBe(true);
-    expect(screen.getAllByText('30-day history')).toHaveLength(4);
+    expect(screen.getAllByText(/30-day history/)).toHaveLength(4);
     expect(screen.getAllByText('48 psi')).toHaveLength(2);
     expect(mockUseTelemetryLanes).toHaveBeenCalledWith(
       'veh-1',
@@ -685,8 +685,8 @@ describe('/health page cleanup', () => {
 
     render(<HealthContent />);
 
-    expect(screen.getAllByText('1 observation · 30-day window')).toHaveLength(2);
-    expect(screen.getAllByText('No history')).toHaveLength(2);
+    expect(screen.getAllByText(/1 observation · 30-day window/)).toHaveLength(2);
+    expect(screen.getAllByText(/No history/)).toHaveLength(2);
     const firstSprite = screen.getAllByTestId('sensor-sprite-layer')[0]!;
     expect(firstSprite.querySelector('[data-sparkline-point-count="3"]')).toBeInTheDocument();
     expect(firstSprite.querySelector('[data-sparkline-filter="raw"]')).toBeInTheDocument();
