@@ -127,15 +127,16 @@ export function Tooltip({
     </span>
   ) : null;
 
+  const describedBy = React.isValidElement(children)
+    ? [
+      (children as React.ReactElement<{ 'aria-describedby'?: string }>).props['aria-describedby'],
+      open ? tooltipId : null,
+    ].filter((value): value is string => Boolean(value)).join(' ')
+    : '';
   const describedChild = React.isValidElement(children)
     ? React.cloneElement(
       children as React.ReactElement<{ 'aria-describedby'?: string }>,
-      {
-        'aria-describedby': [
-          (children as React.ReactElement<{ 'aria-describedby'?: string }>).props['aria-describedby'],
-          open ? tooltipId : null,
-        ].filter(Boolean).join(' ') || undefined,
-      },
+      describedBy ? { 'aria-describedby': describedBy } : {},
     )
     : children;
 
