@@ -43,6 +43,7 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
+      UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -55,7 +56,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" != "pull_request" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- apps/api compose scripts/database.mjs scripts/verify-fresh-install.mjs tools/migration-integrity.mjs .github/workflows/runtime.yml; then
+          if [[ "${{ github.event_name }}" != "pull_request" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- apps/api compose package.json scripts/database.mjs scripts/verify-fresh-install.mjs scripts/verify-populated-upgrade.mjs tools/migration-integrity.mjs .github/workflows/runtime.yml; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -87,6 +88,12 @@ jobs:
         if: steps.changes.outputs.run == 'true'
         working-directory: apps/api
         run: cargo sqlx migrate run
+      - name: Verify populated charge identity upgrade
+        if: steps.changes.outputs.run == 'true'
+        env:
+          UPGRADE_DATABASE_URL: ${{ env.UPGRADE_DATABASE_URL }}
+          REDIS_URL: redis://127.0.0.1:6379
+        run: node scripts/verify-populated-upgrade.mjs
       - name: Start API and probe health
         if: steps.changes.outputs.run == 'true'
         working-directory: apps/api

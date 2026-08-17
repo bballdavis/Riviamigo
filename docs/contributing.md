@@ -95,6 +95,12 @@ and restore contract workflows use the same change-aware behavior, while
 fresh-install acceptance remains manual-only. Use the documented coverage and
 E2E commands when reproducing CI locally.
 
+The runtime workflow proves fresh migration, idempotency, health, the deployable
+image contract, and the populated charge-identity upgrade. The populated gate
+creates its disposable database through migration 0006, seeds synthetic data,
+and proves health-first startup plus resumable, idempotent background completion.
+Release workflows repeat that gate against both published image platforms.
+
 | Area        | Current checks                                                                                                                               |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
