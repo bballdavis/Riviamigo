@@ -26,8 +26,11 @@ function walk(value, visit) {
 }
 
 const standardText = read('compose/docker-compose.yml');
+const buildText = read('compose/docker-compose.build.yml');
+const dockerfileText = read('compose/Dockerfile');
 const synologyText = read('compose/docker-compose.synology.yml');
 const standard = parse(standardText);
+const build = parse(buildText);
 const synology = parse(synologyText);
 const standardServices = Object.keys(standard.services ?? {}).sort();
 const synologyServices = Object.keys(synology.services ?? {}).sort();
@@ -67,6 +70,25 @@ assert(
 assert(
   standard.services.timescaledb.deploy?.resources?.limits?.cpus === '2.00',
   'standard Compose must retain the database CPU limit'
+);
+assert(
+  standard.services['riviamigo-init'].networks?.includes('internal'),
+  'the init service must share the internal database network'
+);
+assert(
+  synology.services['riviamigo-init'].networks?.includes('internal'),
+  'the Synology init service must share the internal database network'
+);
+for (const service of ['riviamigo-init', 'riviamigo']) {
+  assert(
+    build.services?.[service]?.image === 'riviamigo:local',
+    `the source-build overlay must run ${service} from the candidate image`
+  );
+}
+assert(
+  dockerfileText.includes('rust:1.97.1-slim-bookworm@') &&
+    dockerfileText.includes('postgres:18.4-bookworm@'),
+  'the Rust builder and runtime must retain a compatible Bookworm glibc baseline'
 );
 
 for (const forbiddenKey of ['cpus', 'cpu_period', 'cpu_quota']) {

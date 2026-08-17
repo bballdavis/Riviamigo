@@ -306,7 +306,10 @@ async function assertPortAvailable(port, label) {
   }
 }
 
-async function waitForHttp(url, child, label, timeoutMs = 30000) {
+// API startup can bind and report health before the resumable charge-history
+// worker finishes its first pass. Keep local readiness tolerant of a cold Rust
+// start and database recovery without changing the single-container contract.
+async function waitForHttp(url, child, label, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {

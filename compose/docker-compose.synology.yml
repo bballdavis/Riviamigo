@@ -12,6 +12,8 @@ services:
     volumes:
       - ${RIVIAMIGO_DATA_DIR:?Set RIVIAMIGO_DATA_DIR to an absolute Synology path}/backups:/backups
       - ${RIVIAMIGO_DATA_DIR:?Set RIVIAMIGO_DATA_DIR to an absolute Synology path}/cache:/data/cache
+    networks:
+      - internal
     restart: no
   riviamigo:
     image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
