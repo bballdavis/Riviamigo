@@ -27,7 +27,7 @@ import {
 import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@riviamigo/ui/lib/tripPresentation';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
-import { ArrowLeft, Pencil, Save, X } from 'lucide-react';
+import { ArrowLeft, Edit2, Eraser, Save } from 'lucide-react';
 
 const TRIP_PRIMARY_CHART_HEIGHT = 360;
 
@@ -220,17 +220,23 @@ export function TripDetailContent() {
   const editTagsButton = canManageTripTags ? (
     <button
       type="button"
-      aria-label="Edit trip tags"
-      title="Edit trip tags"
-      className="inline-flex h-[2.125rem] w-[2.125rem] shrink-0 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+      aria-label={isEditingTags ? 'Close trip tag editor' : 'Edit trip tags'}
+      title={isEditingTags ? 'Close trip tag editor' : 'Edit trip tags'}
+      aria-expanded={isEditingTags}
+      className="inline-flex h-11 w-11 items-center justify-center rounded-md text-fg-tertiary/80 transition-colors hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-page disabled:opacity-50"
       onClick={() => {
+        if (isEditingTags) {
+          setIsEditingTags(false);
+          setTagSaveError('');
+          return;
+        }
         setDraftTagIds(trip?.tags?.map((tag) => tag.id) ?? []);
         setTagSaveError('');
         setIsEditingTags(true);
       }}
       disabled={!trip || updateAssignments.isPending}
     >
-      <Pencil className="h-4 w-4" aria-hidden="true" />
+      <Edit2 className="h-5 w-5" aria-hidden="true" />
     </button>
   ) : null;
 
@@ -245,53 +251,55 @@ export function TripDetailContent() {
     }
   };
 
-  const tagContent = trip ? (
+  const tagEditor = trip && isEditingTags ? (
+    <div className="w-full rounded-xl border border-accent/30 bg-accent/10 p-3" aria-label="Edit trip tags">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          <TripTagPicker
+            vehicleId={effectiveVehicleId}
+            canManage={canManageTripTags}
+            selectedIds={draftTagIds}
+            onChange={setDraftTagIds}
+            label="Add tags to this trip"
+            mode="inline"
+            disabled={updateAssignments.isPending}
+          />
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            className="h-11 w-11 shrink-0 p-0"
+            onClick={() => setDraftTagIds([])}
+            disabled={updateAssignments.isPending || draftTagIds.length === 0}
+            title="Clear trip tags"
+            aria-label="Clear trip tags"
+          >
+            <Eraser className="h-4 w-4" aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            className="h-11 w-11 shrink-0 p-0"
+            onClick={() => void saveTripTags()}
+            loading={updateAssignments.isPending}
+            title="Save trip tags"
+            aria-label="Save trip tags"
+          >
+            <Save className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+      {tagSaveError ? <p className="mt-2 text-sm text-status-danger" role="alert">{tagSaveError}</p> : null}
+    </div>
+  ) : null;
+
+  const tripSubtitle = trip ? (
     <div>
       {subtitle}
-      {isEditingTags ? (
-        <div className="mt-3 rounded-xl border border-accent/30 bg-accent/10 p-3" aria-label="Edit trip tags">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-            <div className="min-w-0 flex-1">
-              <TripTagPicker
-                vehicleId={effectiveVehicleId}
-                canManage={canManageTripTags}
-                selectedIds={draftTagIds}
-                onChange={setDraftTagIds}
-                label="Add tags to this trip"
-                mode="inline"
-                disabled={updateAssignments.isPending}
-              />
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="md"
-                className="h-11"
-                onClick={() => { setIsEditingTags(false); setTagSaveError(''); }}
-                disabled={updateAssignments.isPending}
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                size="md"
-                className="h-11"
-                onClick={() => void saveTripTags()}
-                loading={updateAssignments.isPending}
-              >
-                <Save className="h-4 w-4" aria-hidden="true" />
-                Save
-              </Button>
-            </div>
-          </div>
-          {tagSaveError ? <p className="mt-2 text-sm text-status-danger" role="alert">{tagSaveError}</p> : null}
-        </div>
-      ) : trip.tags?.length ? (
-        <div className="mt-2 flex flex-wrap gap-1">{trip.tags.map((tag) => <TripTagBadge key={tag.id} tag={tag} />)}</div>
-      ) : null}
+      {!isEditingTags && trip.tags?.length ? <div className="mt-2 flex flex-wrap gap-1">{trip.tags.map((tag) => <TripTagBadge key={tag.id} tag={tag} />)}</div> : null}
     </div>
   ) : undefined;
 
@@ -299,11 +307,12 @@ export function TripDetailContent() {
     <AppLayout activeKey="trips">
       <PageLayout
         title={title}
-        subtitle={tagContent}
+        subtitle={tripSubtitle}
         titleAction={backButton}
         titleActionPosition="left"
         titleActionAfter={editTagsButton}
       >
+        {tagEditor}
         {!authReady || !vehicleSelectionReady ? (
           <div className="p-4 text-xs text-fg-tertiary">Loading...</div>
         ) : !hasVehicle ? (
