@@ -151,9 +151,20 @@ docker compose --env-file compose/.env.synology -f compose/docker-compose.synolo
 docker compose --env-file compose/.env.synology -f compose/docker-compose.synology.yml ps
 ```
 
-Startup applies forward-only migrations. Confirm the app becomes healthy and
-inspect the logs for migration completion before using the UI. Never remove
-the data directory during an update.
+Startup applies forward-only migrations. The charge identity schema expansion
+must finish before the unified app binds; after `/health` succeeds, its
+resumable in-process worker may continue backfilling existing charge history
+in the background. Confirm the app is healthy, then inspect the structured app
+log events named `charge_payload_identity_backfill_started`,
+`charge_payload_identity_backfill_progress`,
+`charge_payload_identity_backfill_complete`, or
+`charge_payload_identity_backfill_failed` before treating a populated upgrade
+as complete. Never add a second migration/backfill container or remove the
+data directory during an update.
+
+Before updating, verify a recovery package and a raw `pg_dump`. If rollback is
+needed after the migration ledger advances, restore that pre-upgrade dump with
+the previous image; reverting only the image is not a safe rollback.
 
 ## Troubleshooting
 

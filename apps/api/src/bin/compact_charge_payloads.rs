@@ -46,6 +46,16 @@ async fn main() -> Result<()> {
     .fetch_one(&pool)
     .await?;
 
+    let pending_identity_count: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*)::bigint
+           FROM riviamigo.rivian_charge_payloads
+           WHERE ($1::uuid IS NULL OR vehicle_id = $1)
+             AND payload_fingerprint IS NULL"#,
+    )
+    .bind(args.vehicle_id)
+    .fetch_one(&pool)
+    .await?;
+
     if !args.apply {
         println!(
             "Charge payload storage: {relation_bytes} relation bytes, {payload_bytes} payload bytes."
@@ -53,7 +63,16 @@ async fn main() -> Result<()> {
         println!(
             "Found {duplicate_count} semantically duplicate charge payloads. Re-run with --apply to remove them."
         );
+        println!(
+            "Identity backfill has {pending_identity_count} payloads remaining; compaction will refuse to apply until it reaches zero."
+        );
         return Ok(());
+    }
+
+    if pending_identity_count > 0 {
+        return Err(anyhow!(
+            "charge-payload compaction is unsafe while {pending_identity_count} payloads lack semantic identities; wait for the identity backfill to complete"
+        ));
     }
 
     let mut transaction = pool.begin().await?;

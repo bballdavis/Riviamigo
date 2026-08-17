@@ -43,19 +43,9 @@ $$;
 ALTER TABLE riviamigo.rivian_charge_payloads
     ADD COLUMN IF NOT EXISTS payload_fingerprint bytea;
 
-UPDATE riviamigo.rivian_charge_payloads
-SET payload_fingerprint = digest(
-    convert_to(riviamigo.semantic_charge_payload(payload)::text, 'UTF8'),
-    'sha256'
-);
-
-ALTER TABLE riviamigo.rivian_charge_payloads
-    ALTER COLUMN payload_fingerprint SET NOT NULL;
-
-CREATE INDEX IF NOT EXISTS rivian_charge_payloads_semantic_identity_idx
-    ON riviamigo.rivian_charge_payloads
-        (vehicle_id, operation, payload_fingerprint, captured_at DESC);
-
+-- New writes populate payload_fingerprint immediately. Existing rows are
+-- completed by the charge_payload_identity_backfill worker after the API is
+-- healthy, in bounded restart-safe transactions.
 CREATE TABLE IF NOT EXISTS riviamigo.rivian_charge_payload_identities (
     identity_key bytea PRIMARY KEY,
     vehicle_id uuid NOT NULL REFERENCES riviamigo.vehicles(id) ON DELETE CASCADE,
@@ -69,51 +59,19 @@ CREATE INDEX IF NOT EXISTS rivian_charge_payload_identities_payload_idx
     ON riviamigo.rivian_charge_payload_identities
         (vehicle_id, operation, payload_fingerprint);
 
--- Preserve all payload rows while choosing the oldest linked row as the
--- canonical identity for future replays. The identity key includes the
--- upstream identifiers and the canonical JSONB representation, so volatile
--- retrieval timestamps outside the stored semantic payload cannot create a
--- second identity.
-INSERT INTO riviamigo.rivian_charge_payload_identities (
-    identity_key,
-    vehicle_id,
-    operation,
-    payload_fingerprint,
-    canonical_payload_id
-)
-SELECT DISTINCT ON (
-    payload.vehicle_id,
-    payload.operation,
-    payload.payload_fingerprint,
-    payload.rivian_transaction_id,
-    payload.rivian_vehicle_id
-)
-    digest(
-        convert_to(
-            concat_ws(
-                E'\x1f',
-                payload.vehicle_id::text,
-                payload.operation,
-                coalesce(payload.rivian_transaction_id, ''),
-                coalesce(payload.rivian_vehicle_id, ''),
-                encode(payload.payload_fingerprint, 'hex')
-            ),
-            'UTF8'
-        ),
-        'sha256'
-    ),
-    payload.vehicle_id,
-    payload.operation,
-    payload.payload_fingerprint,
-    payload.id
-FROM riviamigo.rivian_charge_payloads payload
-ORDER BY
-    payload.vehicle_id,
-    payload.operation,
-    payload.payload_fingerprint,
-    payload.rivian_transaction_id,
-    payload.rivian_vehicle_id,
-    (payload.charge_session_id IS NOT NULL) DESC,
-    payload.captured_at,
-    payload.id
-ON CONFLICT (identity_key) DO NOTHING;
+CREATE TABLE IF NOT EXISTS riviamigo.charge_payload_identity_backfill_status (
+    job_key text PRIMARY KEY,
+    status text NOT NULL,
+    rows_scanned bigint NOT NULL DEFAULT 0,
+    fingerprints_filled bigint NOT NULL DEFAULT 0,
+    identities_inserted bigint NOT NULL DEFAULT 0,
+    last_error text,
+    started_at timestamptz,
+    completed_at timestamptz,
+    heartbeat_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO riviamigo.charge_payload_identity_backfill_status (job_key, status)
+VALUES ('charge_payload_identity', 'pending')
+ON CONFLICT (job_key) DO NOTHING;

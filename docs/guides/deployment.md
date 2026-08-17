@@ -73,6 +73,23 @@ adoption in the [release database cutover runbook](../runbooks/release-database-
 before starting the flattened public release; startup never edits migration
 bookkeeping automatically.
 
+The charge identity upgrade is health-first: the schema expansion completes
+before the app binds, then the unified app container reports `/health` while a
+resumable in-process worker backfills existing charge history in the
+background. A healthy response does not mean that every vehicle's backfill is
+complete. Monitor the structured `charge_payload_identity_backfill_started`,
+`charge_payload_identity_backfill_progress`,
+`charge_payload_identity_backfill_complete`, and
+`charge_payload_identity_backfill_failed` events before declaring a populated
+upgrade finished. The PostgreSQL
+`riviamigo.charge_payload_identity_backfill_status` row is the durable
+checkpoint; a restart resumes rows whose `payload_fingerprint` is still null.
+Do not add a second migration or backfill container.
+
+Before an upgrade, verify a recovery package and a raw `pg_dump`. If rollback
+is required after the migration ledger advances, restore that pre-upgrade dump
+using the previous image; reverting the image alone is not a safe rollback.
+
 The PostgreSQL 18 image cannot reuse a PostgreSQL 16 data directory. Before upgrading an existing PostgreSQL 16 installation, create and verify a recovery package plus a raw `pg_dump`, stop the old stack, move its data directory aside, and restore into a newly initialized PostgreSQL 18 volume. Never point PostgreSQL 18 at the former PG16 directory. Follow the [backup and restore runbook](../runbooks/backup-restore.md) for the validation sequence.
 
 Redis 8 can read the tested Redis 7 append-only snapshot format. Preserve a copy of `data/redis` before the upgrade. If Redis rejects the snapshot, start with an empty Redis directory; users will need to sign in again and external providers may need to reconnect, but PostgreSQL telemetry and configuration remain intact.
