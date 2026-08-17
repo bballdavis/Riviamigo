@@ -64,7 +64,7 @@ function EfficiencyTagFilterBar({
       : 'All trips';
 
   return (
-    <section id="efficiency-tag-filters" className="mb-4 rounded-xl border border-border bg-bg-elevated/40 p-3" aria-label="Efficiency tag filters">
+    <section id="efficiency-tag-filters" className="mb-4 rounded-xl border border-border bg-bg-surface p-3" aria-label="Efficiency tag filters">
       <div className="mb-2 flex items-center gap-2">
         <Tag className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
         <span className="text-sm font-semibold text-fg">Trip tags</span>

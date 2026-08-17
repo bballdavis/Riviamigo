@@ -131,7 +131,7 @@ describe('Efficiency dashboard page', () => {
 
     fireEvent.click(filterButton);
     expect(screen.getByRole('button', { name: 'Hide efficiency filters' })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByLabelText('Efficiency tag filters')).toBeInTheDocument();
+    expect(screen.getByLabelText('Efficiency tag filters')).toHaveClass('bg-bg-surface');
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-mode', 'inline');
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-can-manage', 'false');
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('border-0'));
