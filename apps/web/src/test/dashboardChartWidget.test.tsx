@@ -174,6 +174,14 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(search.className).toContain('focus-visible:!outline-offset-0');
     expect(search.className).toContain('focus-visible:ring-0');
     expect(search.className).not.toContain('focus:ring-1');
+
+    const chartSelector = screen.getByRole('button', { name: 'Chart' });
+    expect(chartSelector.className).toContain('focus-visible:!outline-none');
+    expect(chartSelector.className).toContain('focus-visible:ring-0');
+
+    const settings = screen.getByRole('button', { name: 'Chart settings' });
+    expect(settings.className).toContain('focus-visible:!outline-none');
+    expect(settings.className).toContain('focus-visible:ring-0');
   });
 
   it('maps saved smoothing values to the chart filter default and preserves a zero value as raw', () => {
