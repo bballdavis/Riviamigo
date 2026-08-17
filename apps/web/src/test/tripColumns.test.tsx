@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
 
@@ -38,6 +38,63 @@ describe('trip columns', () => {
     const detailsHeader = container.querySelector('th:last-child');
     if (!detailsHeader) throw new Error('Expected the details header cell to render');
     expect(detailsHeader).toHaveClass('w-[3.25rem]');
+  });
+
+  it('uses a compact tag action only when the visible page has tags', () => {
+    const withoutTags = createTripColumns([], { includeTags: false });
+    expect(withoutTags.some((column) => column.id === 'tags')).toBe(false);
+
+    const trip: TripRow = {
+      id: 'trip-with-tags',
+      started_at: '2024-01-01T12:00:00Z',
+      ended_at: '2024-01-01T13:00:00Z',
+      distance_mi: 18.3,
+      duration_min: 60,
+      energy_used_kwh: 6.5,
+      efficiency_wh_mi: 355,
+      soc_start: 80,
+      soc_end: 68,
+      tags: [
+        { id: 'tag-1', vehicle_id: 'vehicle-1', name: 'Home', color_token: 'accent', created_by: 'user-1', created_at: '', updated_at: '' },
+        { id: 'tag-2', vehicle_id: 'vehicle-1', name: 'School', color_token: 'success', created_by: 'user-1', created_at: '', updated_at: '' },
+      ],
+    };
+
+    const { container } = render(
+      <DataTable data={[trip]} columns={createTripColumns([], { includeTags: true })} />,
+    );
+
+    expect(screen.getByRole('columnheader', { name: 'Tags' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show 2 tags for trip' })).toHaveClass('h-7', 'w-7');
+    expect(container.querySelector('th:nth-last-child(1)')).not.toHaveClass('w-[11rem]');
+  });
+
+  it('opens the tag tooltip from keyboard focus with accessible canonical chips', () => {
+    const trip: TripRow = {
+      id: 'trip-tooltip',
+      started_at: '2024-01-01T12:00:00Z',
+      ended_at: '2024-01-01T13:00:00Z',
+      distance_mi: 18.3,
+      duration_min: 60,
+      energy_used_kwh: 6.5,
+      efficiency_wh_mi: 355,
+      soc_start: 80,
+      soc_end: 68,
+      tags: [{ id: 'tag-1', vehicle_id: 'vehicle-1', name: 'school', color_token: 'accent', created_by: 'user-1', created_at: '', updated_at: '' }],
+    };
+
+    render(<DataTable data={[trip]} columns={createTripColumns([], { includeTags: true })} />);
+    const trigger = screen.getByRole('button', { name: 'Show 1 tag for trip' });
+    fireEvent.focus(trigger);
+
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip).toHaveTextContent('School');
+    expect(tooltip.querySelector('.lucide-tag')).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-describedby');
+    expect(tooltip).toHaveClass('max-w-[calc(100vw-1rem)]', 'max-h-[calc(100vh-1rem)]');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 
   it('shows explicit unavailable copy instead of blank or zero coordinates', () => {

@@ -1,13 +1,13 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Sun, Moon } from 'lucide-react';
+import { Eraser, Moon, Plus, Save, Sun } from 'lucide-react';
 import { LuBadgeInfo } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { api, useAuth, useBasemapConfig, useTrips, useTripMapRoutes, useUpdateTripTagAssignments } from '@riviamigo/hooks';
 import { useDocumentTheme } from '@riviamigo/ui/hooks';
 import { DataTable, createTripColumns, type TripRow } from '@riviamigo/ui/tables';
-import { Badge, Button, SelectPicker } from '@riviamigo/ui/primitives';
+import { Badge, Button, SelectPicker, Tooltip } from '@riviamigo/ui/primitives';
 import { TripMapChart, type TripMapRoute, type MapStyleMode } from '@riviamigo/ui/charts';
 import { formatMiles, formatDuration, formatPercent, formatEfficiency } from '@riviamigo/ui/lib/utils';
 import { formatDriveMode, getDriveModeBadgeClass } from '@riviamigo/ui/lib/driveMode';
@@ -15,7 +15,7 @@ import { format, parseISO } from 'date-fns';
 import { registerWidget } from '../../registry';
 import type { WidgetInstance, WidgetCtx } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
-import { TripTagBadges, TripTagPicker } from './TripTagPicker';
+import { deriveCommonTagIds, TripTagBadges, TripTagPicker } from './TripTagPicker';
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState(() =>
@@ -224,8 +224,9 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   const navigate = useNavigate();
   const { page, pageSize, search } = useTripTableState();
   const deferredSearch = React.useDeferredValue(search);
-  const { selectedIds } = useTripSelection();
+  const { selectedIds, tripRegistry } = useTripSelection();
   const [batchTagIds, setBatchTagIds] = React.useState<string[]>([]);
+  const [pendingBatchAction, setPendingBatchAction] = React.useState<'clear' | 'add' | 'save' | null>(null);
   const isMobile = useIsMobile();
   const { data, isLoading } = useTrips(ctx.vehicleId, ctx.from, ctx.to, page, pageSize, deferredSearch.trim(), ctx.tripTagFilter);
   const updateAssignments = useUpdateTripTagAssignments(ctx.vehicleId);
@@ -236,22 +237,54 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   });
   const totalPages = data ? Math.ceil(data.total / data.per_page) : 1;
   const trips = (data?.items ?? []) as TripRow[];
+  const hasVisibleTags = trips.some((trip) => (trip.tags?.length ?? 0) > 0);
   const columns = React.useMemo(
     () => createTripColumns(placesQuery.data ?? [], {
+      includeTags: hasVisibleTags,
       onInfoClick: (tripId) => {
         navigate({ to: '/trips/$tripId', params: { tripId } });
       },
     }),
-    [placesQuery.data],
+    [hasVisibleTags, navigate, placesQuery.data],
   );
 
   React.useEffect(() => {
     resetTripTableState(`${ctx.vehicleId}::${ctx.from}::${ctx.to}`, { force: true });
   }, [ctx.from, ctx.to, ctx.vehicleId]);
 
+  const selectedTrips = React.useMemo(
+    () => selectedIds
+      .map((id) => tripRegistry[id] ?? trips.find((trip) => trip.id === id))
+      .filter((trip): trip is TripRow => Boolean(trip)),
+    [selectedIds, tripRegistry, trips],
+  );
+  const allSelectedTripsLoaded = selectedTrips.length === selectedIds.length;
+  const commonTagIds = React.useMemo(() => allSelectedTripsLoaded ? deriveCommonTagIds(selectedTrips) : [], [allSelectedTripsLoaded, selectedTrips]);
+  const hasMixedTags = allSelectedTripsLoaded && selectedTrips.length > 1 && selectedTrips.some((trip) => {
+    const ids = new Set((trip.tags ?? []).map((tag) => tag.id));
+    return ids.size !== commonTagIds.length || commonTagIds.some((id) => !ids.has(id));
+  });
+  const stagedAddTagIds = React.useMemo(
+    () => batchTagIds.filter((id) => !commonTagIds.includes(id)),
+    [batchTagIds, commonTagIds],
+  );
+
+  const runBatchTagAction = React.useCallback(async (action: 'clear' | 'add' | 'save', mode: 'add' | 'replace', tagIds: string[]) => {
+    setPendingBatchAction(action);
+    try {
+      await updateAssignments.mutateAsync({ trip_ids: selectedIds, tag_ids: tagIds, mode });
+      setBatchTagIds([]);
+      clearTripSelection();
+    } catch {
+      // The mutation's error state is rendered below while keeping the staged selection intact.
+    } finally {
+      setPendingBatchAction(null);
+    }
+  }, [selectedIds, updateAssignments]);
+
   React.useEffect(() => {
-    setBatchTagIds([]);
-  }, [selectedIds.length, ctx.vehicleId]);
+    setBatchTagIds(commonTagIds);
+  }, [commonTagIds, ctx.vehicleId, selectedIds.join('|')]);
 
   React.useEffect(() => {
     if (trips.length > 0) registerTripsInStore(trips);
@@ -284,19 +317,19 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
   return (
     <div className="flex !h-auto min-h-full flex-col gap-3">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <label className="relative flex-1 min-w-0 sm:min-w-[14rem] max-w-md">
+        <label className="relative min-w-0 flex-1 sm:min-w-[14rem]">
           <span className="sr-only">Search trips</span>
           <input
             type="search"
             value={search}
             onChange={(event) => setTripTableSearch(event.target.value)}
-            placeholder="Search start or destination"
-            className="w-full rounded-lg border border-border bg-bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent"
+            placeholder="Search start, destination, or tag"
+            className="h-9 w-full rounded-lg border border-border bg-bg-surface px-3 text-sm text-fg outline-none placeholder:text-fg-tertiary focus:border-accent focus:ring-0"
           />
         </label>
-        <div className="flex items-center gap-3">
+        <div className="flex h-9 items-center gap-3">
           {selectedIds.length > 0 ? (
-            <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs text-fg-secondary">
+            <div className="inline-flex h-9 items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 text-xs text-fg-secondary">
               <span>{selectedIds.length} selected</span>
               <button className="font-medium text-accent hover:underline" onClick={clearTripSelection}>
                 Clear
@@ -304,7 +337,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
             </div>
           ) : null}
           {!isMobile && (
-            <label className="flex items-center gap-2 text-xs text-fg-tertiary">
+            <label className="flex h-9 items-center gap-2 text-xs text-fg-tertiary">
               Rows
               <SelectPicker
                 className="min-w-[4.5rem]"
@@ -316,7 +349,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
                   }
                 }}
                 aria-label="Trips per page"
-                size="sm"
+                size="md"
                 options={ROWS_PER_PAGE_OPTIONS.map((option) => ({ value: String(option), label: String(option) }))}
               />
             </label>
@@ -324,31 +357,41 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
         </div>
       </div>
 
-      {ctx.tripTagFilter?.setFilter ? (
-        <div className="rounded-xl border border-border bg-bg-elevated/40 p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="min-w-[13rem] flex-1">
-              <TripTagPicker
-                vehicleId={ctx.vehicleId}
-                canManage={Boolean(ctx.canManageTripTags)}
-                selectedIds={ctx.tripTagFilter.tagIds}
-                onChange={(tagIds) => ctx.tripTagFilter?.setFilter?.({ tagIds, tagMatch: ctx.tripTagFilter?.tagMatch ?? 'all', untagged: false })}
-              />
-            </div>
-            <div className="flex min-h-11 items-center rounded-lg border border-border p-1 text-xs" aria-label="Tag match mode">
-              {(['all', 'any'] as const).map((match) => <button key={match} type="button" disabled={ctx.tripTagFilter!.untagged || ctx.tripTagFilter!.tagIds.length === 0} onClick={() => ctx.tripTagFilter?.setFilter?.({ ...ctx.tripTagFilter!, tagMatch: match })} className={`min-h-11 rounded-md px-3 font-medium capitalize transition-colors ${ctx.tripTagFilter!.tagMatch === match ? 'bg-bg-surface text-fg shadow-sm' : 'text-fg-tertiary hover:text-fg'} disabled:opacity-40`}>{match}</button>)}
-            </div>
-            <button type="button" onClick={() => ctx.tripTagFilter?.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: !ctx.tripTagFilter?.untagged })} className={`min-h-11 rounded-lg border px-3 text-sm font-medium transition-colors ${ctx.tripTagFilter.untagged ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-fg-secondary hover:bg-bg-surface'}`} aria-pressed={ctx.tripTagFilter.untagged}>Untagged</button>
-            {(ctx.tripTagFilter.tagIds.length > 0 || ctx.tripTagFilter.untagged) ? <button type="button" className="min-h-11 px-2 text-sm font-medium text-accent hover:underline" onClick={() => ctx.tripTagFilter?.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: false })}>Clear filters</button> : null}
-          </div>
-        </div>
-      ) : null}
-
       {selectedIds.length > 0 && ctx.canManageTripTags ? (
         <div className="rounded-xl border border-accent/30 bg-accent/10 p-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[13rem] flex-1"><TripTagPicker vehicleId={ctx.vehicleId} canManage selectedIds={batchTagIds} onChange={setBatchTagIds} label="Add tags to selected trips" /></div>
-            <Button type="button" size="md" className="h-11" disabled={batchTagIds.length === 0 || updateAssignments.isPending} loading={updateAssignments.isPending} onClick={() => void updateAssignments.mutateAsync({ trip_ids: selectedIds, tag_ids: batchTagIds, mode: 'add' }).then(() => { setBatchTagIds([]); clearTripSelection(); })}>Apply to {selectedIds.length} selected</Button>
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <TripTagPicker
+                vehicleId={ctx.vehicleId}
+                canManage
+                selectedIds={batchTagIds}
+                onChange={setBatchTagIds}
+                label="Add tags to selected trips"
+                mode="inline"
+                mixed={hasMixedTags}
+                disabled={updateAssignments.isPending}
+              />
+            </div>
+            {[
+              { key: 'clear' as const, label: `Clear tags from ${selectedIds.length} selected trips`, tooltip: 'Clear all tags from selected trips', icon: <Eraser className="h-4 w-4" />, tagIds: [], mode: 'replace' as const, disabled: false },
+              { key: 'add' as const, label: `Add staged tags to ${selectedIds.length} selected trips`, tooltip: 'Add staged tags without overwriting existing tags', icon: <Plus className="h-4 w-4" />, tagIds: stagedAddTagIds, mode: 'add' as const, disabled: stagedAddTagIds.length === 0 },
+              { key: 'save' as const, label: `Replace tags on ${selectedIds.length} selected trips`, tooltip: 'Replace all selected-trip tags with the staged tags', icon: <Save className="h-4 w-4" />, tagIds: batchTagIds, mode: 'replace' as const, disabled: batchTagIds.length === 0 },
+            ].map((action) => (
+              <Tooltip key={action.key} content={action.tooltip}>
+                <Button
+                  type="button"
+                  variant={action.key === 'save' ? 'primary' : action.key === 'clear' ? 'danger' : 'secondary'}
+                  size="md"
+                  className="h-11 w-11 shrink-0 px-0"
+                  aria-label={action.label}
+                  disabled={action.disabled || pendingBatchAction !== null || updateAssignments.isPending}
+                  loading={pendingBatchAction === action.key}
+                  onClick={() => void runBatchTagAction(action.key, action.mode, action.tagIds)}
+                >
+                  {action.icon}
+                </Button>
+              </Tooltip>
+            ))}
           </div>
           {updateAssignments.isError ? <p role="alert" className="mt-2 text-sm text-status-danger">Couldn’t update trip tags. Try again.</p> : null}
         </div>
@@ -382,7 +425,7 @@ export function TripsTableWidget({ ctx }: { instance: WidgetInstance; ctx: Widge
           onRowClick={(row) => toggleTripSelection(row.original.id)}
           getRowIsSelected={(row) => selectedIds.includes(row.original.id)}
           emptyTitle="No trips found"
-          emptyDescription={deferredSearch.trim() ? 'No trips match that start or destination.' : 'Trips will appear here once your vehicle has been driven.'}
+          emptyDescription={deferredSearch.trim() ? 'No trips match that start, destination, or tag.' : 'Trips will appear here once your vehicle has been driven.'}
           fixedLayout
           columnVisibilityMenu
           className="overflow-x-hidden"
