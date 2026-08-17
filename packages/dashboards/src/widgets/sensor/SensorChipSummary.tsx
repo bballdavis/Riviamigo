@@ -70,7 +70,7 @@ export function SensorChipSummary({
             height={36}
             color={historyColor}
             showFallback
-            timeFilter={historyTimeFilter}
+            {...(historyTimeFilter ? { timeFilter: historyTimeFilter } : {})}
             yDomain={historyDomain}
           />
           <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
