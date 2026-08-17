@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, SlidersHorizontal, X } from 'lucide-react';
+import { useNavigate } from '@tanstack/react-router';
 import {
   useBatteryMileage,
   useChargeCurve,
@@ -14,7 +15,9 @@ import {
   usePhantomDrainPeriods,
   useRangeHistory,
   useSocHistory,
+  useTirePressureTimeline,
   useTripTags,
+  useVehicles,
 } from '@riviamigo/hooks';
 import {
   CHART_COLORS,
@@ -30,6 +33,7 @@ import {
   curveSmoothnessLabel,
   normalizeCurveSmoothness,
   RichTimeSeriesChart,
+  TirePressureTripsChart,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
   type TimeFilterWindow,
@@ -43,10 +47,12 @@ import {
   formatTemp,
   getEfficiencyDisplay,
   getUnitSystem,
+  getUnitPreferences,
   whPerMileToKmPerKwh,
   whPerMileToMiPerKwh,
   whPerMileToWhPerKm,
 } from '@riviamigo/ui/lib/utils';
+import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@riviamigo/types';
 import {
   getChartDefinition,
@@ -505,6 +511,7 @@ function ActiveDashboardChartSource(props: ActiveDashboardChartSourceProps) {
     case 'battery_degradation': return <BatteryDegradationSource {...props} />;
     case 'battery_capacity_mileage': return <BatteryMileageSource {...props} />;
     case 'projected_range_mileage': return <ProjectedRangeMileageSource {...props} />;
+    case 'tire_pressure_trips': return <TirePressureTripsSource {...props} />;
   }
 }
 
@@ -669,6 +676,31 @@ function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, sett
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
   return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
+}
+
+function TirePressureTripsSource({ definition, ctx, height, presentation }: ActiveDashboardChartSourceProps) {
+  const { data, isLoading } = useTirePressureTimeline(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
+  const { data: vehicles } = useVehicles();
+  const navigate = useNavigate();
+  const activeVehicle = vehicles?.find((vehicle) => vehicle.id === ctx.vehicleId);
+  const unitPreferences = getUnitPreferences();
+  const pressureFactor = unitPreferences.pressure_unit === 'kpa' ? 6.89476 : 1;
+  const pressureUnit = unitPreferences.pressure_unit === 'kpa' ? 'kPa' : 'psi';
+
+  return (
+    <TirePressureTripsChart
+      samples={data?.samples ?? []}
+      trips={data?.trips ?? []}
+      targetPressure={activeVehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI}
+      pressureFactor={pressureFactor}
+      pressureUnit={pressureUnit}
+      loading={isLoading}
+      height={height}
+      {...(definition.emptyTitle ? { emptyTitle: definition.emptyTitle } : {})}
+      interactionMode={chartInteractionMode(presentation)}
+      onTripClick={(tripId) => void navigate({ to: '/trips/$tripId', params: { tripId } })}
+    />
+  );
 }
 
 function renderSocHistoryChart(

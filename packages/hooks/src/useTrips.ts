@@ -61,6 +61,28 @@ export function useTripMapRoutes(
   });
 }
 
+export function useTirePressureTimeline(
+  vehicleId: string | null,
+  from: string | null,
+  to: string | null,
+  filters?: TripTagFilters,
+) {
+  const authReady = useAuthReady();
+  const lifetime = !from && !to;
+  const tagFilters = normalizeTagFilters(filters);
+  return useQuery({
+    queryKey: ['trips', 'tire-pressure-timeline', 'v1', vehicleId, from, to, lifetime, tagFilters],
+    queryFn: () => api.getTirePressureTimeline(vehicleId!, from, to, lifetime, tagFilters),
+    enabled: authReady && !!vehicleId,
+    staleTime: 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: 'always',
+    meta: { persist: false },
+  });
+}
+
 export function useTripTags(vehicleId: string | null) {
   const authReady = useAuthReady();
   return useQuery({

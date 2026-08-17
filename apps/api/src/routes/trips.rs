@@ -20,6 +20,7 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/trips", get(list_trips))
+        .route("/trips/tire-pressure-timeline", get(get_tire_pressure_timeline))
         .route("/trips/{id}", get(get_trip))
         .route("/trips/{id}/detail", get(get_trip_detail))
         .route("/trips/{id}/track", get(get_track))
@@ -54,6 +55,21 @@ struct TripListParams {
 
 fn parse_tag_filter(params: &TripListParams) -> Result<TripTagFilter, AppError> {
     parse_shared_tag_filter(params.tag_ids.as_deref(), params.tag_match, params.untagged)
+}
+
+fn trip_search_predicate(param: usize) -> String {
+    format!(
+        r#" AND (${param}::text IS NULL OR
+                  COALESCE(sg.name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(eg.name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(sa.display_name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(ea.display_name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta
+                          JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id
+                          WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || ${param} || '%' ESCAPE '\'))"#
+    )
 }
 
 #[cfg(test)]
@@ -96,6 +112,26 @@ mod timeframe_tests {
             ..params
         };
         assert!(super::parse_tag_filter(&invalid).is_err());
+    }
+
+    #[test]
+    fn trip_search_predicate_is_balanced() {
+        let predicate = super::trip_search_predicate(4);
+
+        assert!(predicate.contains("$4::text IS NULL"));
+        assert!(predicate.contains("EXISTS"));
+        assert!(predicate.ends_with("))"));
+
+        let mut depth = 0;
+        for character in predicate.chars() {
+            match character {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "predicate closed before it opened");
+        }
+        assert_eq!(depth, 0);
     }
 }
 
@@ -344,6 +380,40 @@ struct TripMapResponse {
     routes: Vec<TripMapRoute>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TirePressureTimelineSample {
+    ts: DateTime<Utc>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TirePressureTimelineTrip {
+    id: Uuid,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    duration_seconds: Option<i32>,
+    duration_min: Option<f64>,
+    distance_miles: Option<f64>,
+    start_place: Option<String>,
+    end_place: Option<String>,
+    start_address: Option<String>,
+    end_address: Option<String>,
+    tags: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct TirePressureTimelineResponse {
+    vehicle_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    samples: Vec<TirePressureTimelineSample>,
+    trips: Vec<TirePressureTimelineTrip>,
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct DetailSampleRow {
     bucket_ts: DateTime<Utc>,
@@ -581,17 +651,12 @@ async fn list_trips(
          LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
          LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
-         AND ($6::text IS NULL OR \
-              COALESCE(sg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(eg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(sa.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\') \
+         {} \
          {} ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
+        trip_search_predicate(6),
         sql_predicate("t", 8, 9, 10),
     );
-    let rows = sqlx::query_as::<_, TripRow>(&rows_sql)
+    let rows = sqlx::query_as::<_, TripRow>(sqlx::AssertSqlSafe(rows_sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -620,11 +685,12 @@ async fn list_trips(
               COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || $4 || '%' ESCAPE '\\'))
          {}",
         sql_predicate("t", 6, 7, 8),
     );
-    let total: i64 = sqlx::query_scalar(&total_sql)
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(total_sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -647,6 +713,78 @@ async fn list_trips(
         "page": (offset / limit) + 1,
         "per_page": limit
     })))
+}
+
+async fn get_tire_pressure_timeline(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(p): Query<TripListParams>,
+) -> Result<Json<TirePressureTimelineResponse>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = parse_tag_filter(&p)?;
+    require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
+
+    let samples = sqlx::query_as::<_, TirePressureTimelineSample>(
+        r#"SELECT ts, tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi
+           FROM timeseries.telemetry
+           WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3
+           ORDER BY ts"#,
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let trips_sql = format!(
+        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.duration_seconds,
+                  COALESCE(t.duration_seconds::float8 / 60.0,
+                           EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) / 60.0) AS duration_min,
+                  t.distance_miles,
+                  COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place,
+                  COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place,
+                  sa.display_name AS start_address, ea.display_name AS end_address,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                      'id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name,
+                      'color_token', tt.color_token, 'created_by', tt.created_by,
+                      'created_at', tt.created_at, 'updated_at', tt.updated_at)
+                      ORDER BY lower(tt.name), tt.id)
+                    FROM riviamigo.trip_tag_assignments tta
+                    JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id
+                    WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
+           FROM riviamigo.trips t
+           LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id=t.id AND tua.user_id=$4
+           LEFT JOIN riviamigo.geofences sg ON sg.id=COALESCE(tua.start_geofence_id, t.start_geofence_id)
+           LEFT JOIN riviamigo.geofences eg ON eg.id=COALESCE(tua.end_geofence_id, t.end_geofence_id)
+           LEFT JOIN riviamigo.addresses sa ON sa.id=COALESCE(tua.start_address_id, t.start_address_id)
+           LEFT JOIN riviamigo.addresses ea ON ea.id=COALESCE(tua.end_address_id, t.end_address_id)
+           WHERE t.vehicle_id=$1 AND t.started_at <= $3 AND t.ended_at >= $2
+             {} ORDER BY t.started_at"#,
+        sql_predicate("t", 5, 6, 7),
+    );
+    let trips = sqlx::query_as::<_, TirePressureTimelineTrip>(sqlx::AssertSqlSafe(trips_sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
+
+    Ok(Json(TirePressureTimelineResponse {
+        vehicle_id: vid,
+        from,
+        to,
+        samples,
+        trips,
+    }))
 }
 
 async fn get_trip(
@@ -718,18 +856,13 @@ async fn get_trip_map(
            LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id)
            LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id)
            WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-             AND ($4::text IS NULL OR
-                  COALESCE(sg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(eg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
+             {}
              {}
            ORDER BY t.started_at DESC"#,
+        trip_search_predicate(4),
         sql_predicate("t", 6, 7, 8),
     );
-    let rows = sqlx::query_as::<_, TripMapRow>(&map_sql)
+    let rows = sqlx::query_as::<_, TripMapRow>(sqlx::AssertSqlSafe(map_sql.as_str()))
     .bind(vid)
     .bind(from)
     .bind(to)
@@ -1625,6 +1758,16 @@ mod tests {
         let app = make_app().await;
         assert_eq!(
             get_status(app, "/v1/trips/map").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn tire_pressure_timeline_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(
+            get_status(app, "/v1/trips/tire-pressure-timeline").await,
             StatusCode::UNAUTHORIZED
         );
     }

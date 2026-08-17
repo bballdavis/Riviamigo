@@ -17,6 +17,7 @@ export {
 	useElevationProfile,
 	useTripPowerProfile,
 	useTripDetailSeries,
+	useTirePressureTimeline,
 	useTripTags,
 	useCreateTripTag,
 	useUpdateTripTag,
@@ -30,6 +31,7 @@ export { useSummaryStats } from './useStats';
 export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } from './useMetrics';
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
+export { useTelemetryLanes } from './useTelemetryLanes';
 export { useBasemapConfig } from './useBasemapConfig';
 export type { BasemapConfigPayload } from './useBasemapConfig';
 export { useDocumentTheme } from './useDocumentTheme';

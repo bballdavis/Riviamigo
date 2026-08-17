@@ -287,6 +287,37 @@ export interface TripDetailResponse {
   outside_temperature: OutsideTemperatureSeries;
 }
 
+export interface TirePressureTimelineSample {
+  ts: string;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+}
+
+export interface TirePressureTimelineTrip {
+  id: string;
+  vehicle_id: string;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number | null;
+  duration_min: number | null;
+  distance_miles: number | null;
+  start_place: string | null;
+  end_place: string | null;
+  start_address: string | null;
+  end_address: string | null;
+  tags: TripTag[];
+}
+
+export interface TirePressureTimelineResponse {
+  vehicle_id: string;
+  from: string;
+  to: string;
+  samples: TirePressureTimelineSample[];
+  trips: TirePressureTimelineTrip[];
+}
+
 export type OutsideTemperatureSource = 'vehicle' | 'open_meteo' | 'mixed' | 'unavailable';
 
 export interface OutsideTemperatureSample {
@@ -654,6 +685,7 @@ export interface VehicleHealth {
   extended_telemetry: {
     collector: {
       status: 'starting' | 'connected' | 'disconnected' | 'error';
+      running: boolean;
       connected_at: string | null;
       last_event_at: string | null;
       last_error: string | null;

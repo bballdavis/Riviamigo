@@ -72,6 +72,16 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('projected-range-mileage');
   });
 
+  it('registers the tire-pressure timeline through the shared catalog widget on Trips', () => {
+    const trips = getDefaultBySlug('trips');
+    const chart = trips?.widgets.find((widget) => widget.definitionId === 'catalog');
+    const options = chart?.options as Record<string, unknown> | undefined;
+
+    expect(chart?.componentType).toBe('chart');
+    expect(options?.page).toBe('trips');
+    expect(options?.chartId).toBe('tire-pressure-trips');
+  });
+
   it('persists an explicitly selected default for this component across remounts', () => {
     const instance = {
       ...makeInstance('soc-history', true),
@@ -145,6 +155,25 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(slider).toBeTruthy();
     expect(slider.getAttribute('value')).toBe('0');
     expect(screen.queryByLabelText('Time minimum')).toBeNull();
+  });
+
+  it('keeps the shared chart search field to a single in-bounds focus border', () => {
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    });
+
+    const search = screen.getByLabelText('Search charts');
+    expect(search.className).toContain('focus:border-accent');
+    expect(search.className).toContain('focus-visible:!outline-none');
+    expect(search.className).toContain('focus-visible:!outline-offset-0');
+    expect(search.className).toContain('focus-visible:ring-0');
+    expect(search.className).not.toContain('focus:ring-1');
   });
 
   it('maps saved smoothing values to the chart filter default and preserves a zero value as raw', () => {
