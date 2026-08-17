@@ -111,6 +111,9 @@ describe('Trip detail page', () => {
     expect(screen.getByText('School')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit trip tags' }));
     expect(screen.getByRole('textbox', { name: 'Add tags to this trip' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Edit trip tags')).toHaveClass('w-full');
+    expect(screen.getByRole('button', { name: 'Clear trip tags' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
     await waitFor(() => expect(mockUpdateAssignments).toHaveBeenCalledWith({ trip_ids: ['trip-1'], tag_ids: ['school'], mode: 'replace' }));
