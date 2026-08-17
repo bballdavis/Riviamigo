@@ -27,7 +27,7 @@ import {
 import { resolveTripLocation, TRIP_LOCATION_UNAVAILABLE_COPY } from '@riviamigo/ui/lib/tripPresentation';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 import { parseISO } from 'date-fns';
-import { ArrowLeft, Edit2, Eraser, Save } from 'lucide-react';
+import { ArrowLeft, Eraser, Save, Tag } from 'lucide-react';
 
 const TRIP_PRIMARY_CHART_HEIGHT = 360;
 
@@ -220,8 +220,8 @@ export function TripDetailContent() {
   const editTagsButton = canManageTripTags ? (
     <button
       type="button"
-      aria-label={isEditingTags ? 'Close trip tag editor' : 'Edit trip tags'}
-      title={isEditingTags ? 'Close trip tag editor' : 'Edit trip tags'}
+      aria-label={isEditingTags ? 'Close trip tag editor' : 'Show trip tags'}
+      title={isEditingTags ? 'Close trip tag editor' : 'Show trip tags'}
       aria-expanded={isEditingTags}
       className="inline-flex h-11 w-11 items-center justify-center rounded-md text-fg-tertiary/80 transition-colors hover:bg-bg-elevated hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-page disabled:opacity-50"
       onClick={() => {
@@ -236,7 +236,7 @@ export function TripDetailContent() {
       }}
       disabled={!trip || updateAssignments.isPending}
     >
-      <Edit2 className="h-5 w-5" aria-hidden="true" />
+      <Tag className="h-5 w-5" aria-hidden="true" />
     </button>
   ) : null;
 
@@ -262,6 +262,7 @@ export function TripDetailContent() {
             onChange={setDraftTagIds}
             label="Add tags to this trip"
             mode="inline"
+            inlineClassName="rounded-lg border border-border bg-bg-surface px-2 py-1 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent"
             disabled={updateAssignments.isPending}
           />
         </div>

@@ -73,6 +73,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useChargeCurve: () => ({ data: undefined, isLoading: false }),
   useSavedPlaces: () => ({ data: [], isLoading: false, isFetching: false, isError: false }),
   useUpdateChargeSession: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useUpdateTripTagAssignments: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useTrip: () => ({ data: undefined, isLoading: false }),
   useTripDetailData: () => ({ data: undefined, isLoading: false }),
   useTripTrack: () => ({ data: undefined, isLoading: false }),

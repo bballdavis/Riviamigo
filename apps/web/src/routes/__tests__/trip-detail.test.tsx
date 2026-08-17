@@ -109,8 +109,12 @@ describe('Trip detail page', () => {
     render(<TripDetailContent />);
 
     expect(screen.getByText('School')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit trip tags' }));
-    expect(screen.getByRole('textbox', { name: 'Add tags to this trip' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show trip tags' }));
+    const tagInput = screen.getByRole('textbox', { name: 'Add tags to this trip' });
+    expect(tagInput).toBeInTheDocument();
+    expect(tagInput.parentElement).toHaveClass('rounded-lg', 'border', 'border-border', 'bg-bg-surface', 'px-2', 'py-1');
+    expect(tagInput.parentElement).toHaveClass('focus-within:border-accent', 'focus-within:ring-1');
+    expect(tagInput).toHaveClass('focus-visible:outline-none', 'focus-visible:outline-offset-0');
     expect(screen.getByLabelText('Edit trip tags')).toHaveClass('w-full');
     expect(screen.getByRole('button', { name: 'Clear trip tags' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();

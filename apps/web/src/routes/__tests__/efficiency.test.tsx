@@ -131,10 +131,12 @@ describe('Efficiency dashboard page', () => {
 
     fireEvent.click(filterButton);
     expect(screen.getByRole('button', { name: 'Hide efficiency filters' })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByLabelText('Efficiency tag filters')).toHaveClass('bg-bg-surface');
+    expect(screen.getByLabelText('Efficiency tag filters')).toHaveClass('bg-bg-elevated/40');
+    expect(screen.getByLabelText('Efficiency tag filters')).not.toHaveClass('focus-within:border-accent', 'focus-within:ring-1');
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-mode', 'inline');
     expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-can-manage', 'false');
-    expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('border-0'));
+    expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('border-2'));
+    expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-inline-class-name', expect.stringContaining('focus-within:ring-0'));
     expect(screen.getByRole('textbox', { name: 'Filter efficiency by tags' })).toBeInTheDocument();
   });
 
