@@ -177,7 +177,8 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
             aria-label={mixed ? `${label} (mixed tags across selected trips)` : label}
             aria-autocomplete="list"
             aria-controls="trip-tag-inline-suggestions"
-            className="h-8 min-w-[8rem] flex-1 border-0 bg-transparent px-1 text-base text-fg outline-none placeholder:text-fg-tertiary focus:ring-0 sm:text-sm"
+            className="h-8 min-w-[8rem] flex-1 border-0 bg-transparent px-1 text-base text-fg outline-none placeholder:text-fg-tertiary focus:ring-0 focus-visible:outline-none focus-visible:outline-offset-0 sm:text-sm"
+            style={{ outline: 'none', boxShadow: 'none' }}
           />
         </div>
         {catalogNotice ? <p className="sr-only" role="status" aria-live="polite">{catalogNotice}</p> : null}

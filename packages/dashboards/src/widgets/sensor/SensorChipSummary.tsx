@@ -89,7 +89,21 @@ export function SensorChipSummary({
             </p>
             {subtitle ? <p className="mt-1 truncate text-xs text-fg-tertiary">{subtitle}</p> : null}
           </div>
-          <Icon icon={resolveIconId(icon)} className="h-4 w-4 shrink-0 text-accent" />
+          <Icon
+            icon={resolveIconId(icon)}
+            className={cn(
+              'h-4 w-4 shrink-0',
+              valueTone === 'success'
+                ? 'text-status-positive'
+                : valueTone === 'warning'
+                  ? 'text-status-warning'
+                  : valueTone === 'danger'
+                    ? 'text-status-danger'
+                    : valueTone === 'info'
+                      ? 'text-status-info'
+                      : 'text-accent'
+            )}
+          />
         </div>
 
         <div className="mt-1.5 flex items-baseline gap-1">

@@ -74,6 +74,7 @@ describe('TripTagPicker', () => {
     render(<Harness />);
     const search = screen.getByRole('textbox', { name: /add tags to selected trips/i });
     const field = search.parentElement;
+    expect(search).toHaveStyle({ outline: 'none', boxShadow: 'none' });
     expect(field).toHaveClass('focus-within:border-accent');
     expect(field).toHaveClass('focus-within:ring-1');
     fireEvent.change(search, { target: { value: 'bike' } });
