@@ -14,6 +14,7 @@ import type {
   TripDetailSeriesPoint,
   TripMapResponse,
   TripDetailResponse,
+  TirePressureTimelineResponse,
   ChargeSession,
   ChargeCurvePoint,
   ChargeCurveAnalysisPoint,
@@ -1173,6 +1174,22 @@ export class AuthenticatedTransport {
       vehicle_id: vehicleId,
       ...buildTimeframeParams(from, to, lifetime),
       ...(search.trim() ? { search: search.trim() } : {}),
+      ...(tagIds.length ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' } : {}),
+      ...(filters?.untagged ? { untagged: 1 } : {}),
+    });
+  }
+
+  async getTirePressureTimeline(
+    vehicleId: string,
+    from: string | null,
+    to: string | null,
+    lifetime = false,
+    filters?: { tagIds?: string[]; tagMatch?: 'all' | 'any'; untagged?: boolean },
+  ) {
+    const tagIds = [...new Set(filters?.tagIds ?? [])].sort();
+    return this.request<TirePressureTimelineResponse>('GET', '/v1/trips/tire-pressure-timeline', undefined, {
+      vehicle_id: vehicleId,
+      ...buildTimeframeParams(from, to, lifetime),
       ...(tagIds.length ? { tag_ids: tagIds.join(','), tag_match: filters?.tagMatch ?? 'all' } : {}),
       ...(filters?.untagged ? { untagged: 1 } : {}),
     });

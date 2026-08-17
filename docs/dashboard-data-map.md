@@ -27,7 +27,7 @@ Sources:
 | Battery | current SoC, estimated range, phantom drain, capacity health, SoC/range/drain/degradation charts | latest telemetry plus validated parked periods from the idle-drain route | Phantom Drain rate is duration-weighted from validated parked periods; current SoC/range use latest vehicle status; capacity falls back to latest usable kWh. |
 | Efficiency | avg Wh/mi, best/worst bands, efficiency by mode, trend, temp bins, average outside temperature | completed trips plus route-aware trip weather samples | Outside temperature is a time-weighted vehicle/Open-Meteo summary shared with the trip timeline. |
 | Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; daily totals and stacked session composition share the filled charging-bar visual; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
-| Trips | trip list, route map, synchronized detail charts, speed, elevation, signed net power | completed trip detector, persisted route previews, adaptive telemetry samples, SoC/capacity telemetry | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Drive power uses direct fields when available, otherwise a bounded SoC-derived estimate with provenance and coverage metadata. |
+| Trips | trip list, route map, tire-pressure/trip timeline, synchronized detail charts, speed, elevation, signed net power | completed trip detector, persisted route previews, full-density tire-pressure telemetry, adaptive telemetry samples, SoC/capacity telemetry | Map requests use one bounded route dataset; the tire-pressure timeline uses `GET /v1/trips/tire-pressure-timeline` for raw nullable PSI samples plus every overlapping trip interval. Interval lanes are spatial only and clicking a bar opens the trip. Detail requests use one columnar sample payload and canvas charts. Drive power uses direct fields when available, otherwise a bounded SoC-derived estimate with provenance and coverage metadata. |
 | Settings Raw Data | bounded telemetry lanes, searchable normalized records, per-field coverage, selected-record inspection, and owner/manager-only retained inbound events | bucketed Timescale telemetry for dense views, compatibility raw records for detail, plus short-lived Rivian websocket payload retention | Use lanes for history visualization and the normalized record path for search/detail; original payloads are troubleshooting evidence, not a stable dashboard contract. |
 
 ## Full-density dashboard time-series rule
@@ -44,6 +44,14 @@ Intentional aggregation remains valid when it is the chart's meaning: charging
 and Phantom Drain bars use local days, while drive-mode and temperature charts
 use categories/bins. Trip-detail charts retain their 10-second synchronized
 telemetry contract.
+
+The `tire-pressure-trips` chart is an explicit full-density exception to
+display filtering: it keeps each retained timestamp and each tire value,
+including nulls, so short pressure drops and sensor gaps remain visible. The
+API returns canonical PSI; the renderer converts values and the configured
+target line to the user's PSI/kPa preference. Trip intervals use
+timeframe-overlap filtering and carry route labels, duration, distance, and
+tags.
 
 ## TeslaMate parity targets
 

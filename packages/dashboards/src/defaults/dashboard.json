@@ -31,7 +31,8 @@
           "efficiency-mode",
           "phantom-drain",
           "battery-capacity-mileage",
-          "projected-range-mileage"
+          "projected-range-mileage",
+          "tire-pressure-trips"
         ],
         "showPicker": true
       },

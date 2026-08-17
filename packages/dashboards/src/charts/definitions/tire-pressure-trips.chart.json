@@ -1,0 +1,12 @@
+{
+  "id": "tire-pressure-trips",
+  "title": "Tire Pressure and Trips",
+  "description": "Full-density tire pressure readings aligned with the trips that occurred in the same timeframe.",
+  "pages": ["overview", "trips"],
+  "source": "tire_pressure_trips",
+  "mode": "line",
+  "yUnit": "psi",
+  "defaultSize": { "w": 12, "h": 7 },
+  "minSize": { "w": 6, "h": 5 },
+  "emptyTitle": "No tire pressure or trip data for this period"
+}
