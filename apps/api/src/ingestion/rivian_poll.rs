@@ -743,6 +743,7 @@ struct LiveCurvePoint {
 }
 
 const RECENT_INCREMENTAL_INSERT_LOOKBACK_DAYS: i64 = 30;
+const LIVE_CURVE_OVERLAP_MINUTES: i64 = 5;
 
 async fn record_charge_history_sync_started(pool: &PgPool, vehicle_id: Uuid) {
     let _ = sqlx::query(
@@ -841,34 +842,15 @@ async fn record_charge_payload(
     rivian_vehicle_id: Option<&str>,
     payload: serde_json::Value,
 ) -> Result<()> {
-    let charge_session_id: Option<Uuid> = if let Some(transaction_id) = rivian_transaction_id {
-        sqlx::query_scalar(
-            "SELECT id FROM riviamigo.charge_sessions
-             WHERE vehicle_id=$1 AND rivian_session_id=$2
-             ORDER BY started_at DESC LIMIT 1",
-        )
-        .bind(vehicle_id)
-        .bind(transaction_id)
-        .fetch_optional(pool)
-        .await?
-    } else {
-        None
-    };
-
-    sqlx::query(
-        "INSERT INTO riviamigo.rivian_charge_payloads
-             (vehicle_id, charge_session_id, operation, rivian_transaction_id, rivian_vehicle_id, payload)
-         VALUES ($1,$2,$3,$4,$5,$6)",
+    let _ = record_charge_payload_with_ref(
+        pool,
+        vehicle_id,
+        operation,
+        rivian_transaction_id,
+        rivian_vehicle_id,
+        payload,
     )
-    .bind(vehicle_id)
-    .bind(charge_session_id)
-    .bind(operation)
-    .bind(rivian_transaction_id)
-    .bind(rivian_vehicle_id)
-    .bind(payload)
-    .execute(pool)
     .await?;
-
     Ok(())
 }
 
@@ -958,6 +940,8 @@ async fn fetch_charge_history_locked(
 
     let mut total_processed = 0usize;
     let mut total_linked = 0usize;
+    let mut payloads_reused = 0usize;
+    let mut payloads_inserted = 0usize;
     for summary in &data.get_completed_session_summaries.unwrap_or_default() {
         let payload = serde_json::to_value(summary).unwrap_or_else(|_| serde_json::json!({}));
         let payload_ref = match record_charge_payload_with_ref(
@@ -970,7 +954,14 @@ async fn fetch_charge_history_locked(
         )
         .await
         {
-            Ok(payload_ref) => Some(payload_ref),
+            Ok(payload_ref) => {
+                if payload_ref.unchanged {
+                    payloads_reused += 1;
+                } else {
+                    payloads_inserted += 1;
+                }
+                Some(payload_ref)
+            }
             Err(error) => {
                 tracing::debug!(vehicle_id=%vehicle_id, error=%error, "charge history payload audit failed");
                 None
@@ -998,7 +989,8 @@ async fn fetch_charge_history_locked(
             sqlx::query(
                 "UPDATE riviamigo.rivian_charge_payloads
                  SET charge_session_id = $2
-                 WHERE id = $1",
+                 WHERE id = $1
+                   AND charge_session_id IS DISTINCT FROM $2",
             )
             .bind(payload_ref.payload_id)
             .bind(session_id)
@@ -1018,6 +1010,8 @@ async fn fetch_charge_history_locked(
         vehicle_id=%vehicle_id,
         total_processed,
         total_linked,
+        payloads_inserted,
+        payloads_reused,
         full_backfill,
         "charge history synced"
     );
@@ -1043,40 +1037,22 @@ async fn record_charge_payload_with_ref(
     rivian_vehicle_id: Option<&str>,
     payload: serde_json::Value,
 ) -> Result<ChargeSessionPayloadRef> {
-    let charge_session_id: Option<Uuid> = if let Some(transaction_id) = rivian_transaction_id {
-        sqlx::query_scalar(
-            r#"SELECT cs.id
-               FROM riviamigo.charge_sessions cs
-               LEFT JOIN riviamigo.charge_session_external_aliases alias
-                 ON alias.charge_session_id = cs.id
-               WHERE cs.vehicle_id = $1
-                 AND (
-                     cs.rivian_session_id = $2
-                     OR alias.external_id = $2
-                 )
-               ORDER BY cs.started_at DESC
-               LIMIT 1"#,
-        )
-        .bind(vehicle_id)
-        .bind(transaction_id)
-        .fetch_optional(pool)
-        .await?
-    } else {
-        None
-    };
+    let mut tx = pool.begin().await?;
 
-    if let Some(existing) = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
-        r#"SELECT payload.id, payload.captured_at, session.id
-           FROM riviamigo.rivian_charge_payloads payload
-           LEFT JOIN riviamigo.charge_sessions session
-             ON session.id = payload.charge_session_id
-            AND session.vehicle_id = payload.vehicle_id
-           WHERE payload.vehicle_id = $1
-             AND payload.operation = $2
-             AND payload.rivian_transaction_id IS NOT DISTINCT FROM $3
-             AND payload.rivian_vehicle_id IS NOT DISTINCT FROM $4
-             AND payload.payload = $5
-           ORDER BY (session.id IS NOT NULL) DESC, payload.captured_at ASC, payload.id ASC
+    let existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
+        r#"WITH candidate AS (
+               SELECT digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256') AS fingerprint,
+                      digest(convert_to(concat_ws(
+                          E'\x1f', $1::text, $2, coalesce($3, ''), coalesce($4, ''),
+                          encode(digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256'), 'hex')
+                      ), 'UTF8'), 'sha256') AS identity_key
+           )
+           SELECT payload.id, payload.captured_at, payload.charge_session_id
+           FROM candidate
+           JOIN riviamigo.rivian_charge_payload_identities identity
+             ON identity.identity_key = candidate.identity_key
+           JOIN riviamigo.rivian_charge_payloads payload
+             ON payload.id = identity.canonical_payload_id
            LIMIT 1"#,
     )
     .bind(vehicle_id)
@@ -1084,9 +1060,11 @@ async fn record_charge_payload_with_ref(
     .bind(rivian_transaction_id)
     .bind(rivian_vehicle_id)
     .bind(&payload)
-    .fetch_optional(pool)
-    .await?
-    {
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(existing) = existing {
+        tx.commit().await?;
         return Ok(ChargeSessionPayloadRef {
             payload_id: existing.0,
             captured_at: existing.1,
@@ -1095,24 +1073,115 @@ async fn record_charge_payload_with_ref(
         });
     }
 
-    let (payload_id, captured_at) = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
-        "INSERT INTO riviamigo.rivian_charge_payloads
-             (vehicle_id, charge_session_id, operation, rivian_transaction_id, rivian_vehicle_id, payload)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         RETURNING id, captured_at",
+    let charge_session_id: Option<Uuid> = if let Some(transaction_id) = rivian_transaction_id {
+        sqlx::query_scalar(
+            r#"SELECT cs.id
+               FROM riviamigo.charge_sessions cs
+               LEFT JOIN riviamigo.charge_session_external_aliases alias
+                 ON alias.charge_session_id = cs.id
+               WHERE cs.vehicle_id = $1
+                 AND (cs.rivian_session_id = $2 OR alias.external_id = $2)
+               ORDER BY cs.started_at DESC
+               LIMIT 1"#,
+        )
+        .bind(vehicle_id)
+        .bind(transaction_id)
+        .fetch_optional(&mut *tx)
+        .await?
+    } else {
+        None
+    };
+
+    let candidate_id = Uuid::new_v4();
+    let inserted = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+        r#"WITH candidate AS (
+               SELECT digest(convert_to(riviamigo.semantic_charge_payload($6::jsonb)::text, 'UTF8'), 'sha256') AS fingerprint
+           )
+           INSERT INTO riviamigo.rivian_charge_payloads
+               (id, vehicle_id, charge_session_id, operation, rivian_transaction_id,
+                rivian_vehicle_id, payload_fingerprint, payload)
+           SELECT $1, $2, $3, $4, $5, $7, candidate.fingerprint, $6
+           FROM candidate
+           RETURNING id, captured_at"#,
     )
+    .bind(candidate_id)
     .bind(vehicle_id)
     .bind(charge_session_id)
     .bind(operation)
     .bind(rivian_transaction_id)
+    .bind(&payload)
     .bind(rivian_vehicle_id)
-    .bind(payload)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
+    let canonical = sqlx::query_scalar::<_, Uuid>(
+        r#"WITH candidate AS (
+               SELECT digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256') AS fingerprint,
+                      digest(convert_to(concat_ws(
+                          E'\x1f', $1::text, $2, coalesce($3, ''), coalesce($4, ''),
+                          encode(
+                              digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256'),
+                              'hex'
+                          )
+                      ), 'UTF8'), 'sha256') AS identity_key
+           )
+           INSERT INTO riviamigo.rivian_charge_payload_identities
+               (identity_key, vehicle_id, operation, payload_fingerprint, canonical_payload_id)
+           SELECT candidate.identity_key, $1, $2, candidate.fingerprint, $6
+           FROM candidate
+           ON CONFLICT (identity_key) DO NOTHING
+           RETURNING canonical_payload_id"#,
+    )
+    .bind(vehicle_id)
+    .bind(operation)
+    .bind(rivian_transaction_id)
+    .bind(rivian_vehicle_id)
+    .bind(&payload)
+    .bind(candidate_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if canonical.is_none() {
+        sqlx::query("DELETE FROM riviamigo.rivian_charge_payloads WHERE id = $1")
+            .bind(candidate_id)
+            .execute(&mut *tx)
+            .await?;
+        let existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
+            r#"WITH candidate AS (
+                   SELECT digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256') AS identity_payload,
+                          digest(convert_to(concat_ws(
+                              E'\x1f', $1::text, $2, coalesce($3, ''), coalesce($4, ''),
+                              encode(digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256'), 'hex')
+                          ), 'UTF8'), 'sha256') AS identity_key
+               )
+               SELECT payload.id, payload.captured_at, payload.charge_session_id
+               FROM candidate
+               JOIN riviamigo.rivian_charge_payload_identities identity
+                 ON identity.identity_key = candidate.identity_key
+               JOIN riviamigo.rivian_charge_payloads payload
+                 ON payload.id = identity.canonical_payload_id
+               LIMIT 1"#,
+        )
+        .bind(vehicle_id)
+        .bind(operation)
+        .bind(rivian_transaction_id)
+        .bind(rivian_vehicle_id)
+        .bind(&payload)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(ChargeSessionPayloadRef {
+            payload_id: existing.0,
+            captured_at: existing.1,
+            charge_session_id: existing.2,
+            unchanged: true,
+        });
+    }
+
+    tx.commit().await?;
     Ok(ChargeSessionPayloadRef {
-        payload_id,
-        captured_at,
+        payload_id: inserted.0,
+        captured_at: inserted.1,
         charge_session_id,
         unchanged: false,
     })
@@ -1277,29 +1346,79 @@ pub async fn fetch_live_session_history(
         .get_live_session_history
         .and_then(|history| history.chart_data)
         .unwrap_or_default();
-    let mut inserted = 0usize;
-    for point in points {
-        let Some(ts) = point.time else { continue };
-        let result = sqlx::query(
-            "INSERT INTO riviamigo.rivian_charge_curve_points
-                 (vehicle_id, charge_session_id, ts, power_kw)
-             VALUES ($1,$2,$3,$4)
-             ON CONFLICT (vehicle_id, ts)
-             DO UPDATE SET
-                 charge_session_id = COALESCE(rivian_charge_curve_points.charge_session_id, EXCLUDED.charge_session_id),
-                 power_kw = COALESCE(EXCLUDED.power_kw, rivian_charge_curve_points.power_kw),
-                 captured_at = now()",
-        )
-        .bind(vehicle_id)
-        .bind(active_session_id)
-        .bind(ts)
-        .bind(point.kw)
-        .execute(pool)
-        .await?;
-        inserted += result.rows_affected() as usize;
+    let latest_stored: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT MAX(ts) FROM riviamigo.rivian_charge_curve_points WHERE vehicle_id = $1",
+    )
+    .bind(vehicle_id)
+    .fetch_one(pool)
+    .await?;
+    let cutoff = latest_stored.map(|latest| {
+        latest - chrono::Duration::minutes(LIVE_CURVE_OVERLAP_MINUTES)
+    });
+    let records_received = points.len();
+    let mut selected = points
+        .into_iter()
+        .filter_map(|point| point.time.map(|ts| (ts, point.kw)))
+        .filter(|(ts, _)| cutoff.is_none_or(|cutoff| *ts >= cutoff))
+        .collect::<Vec<_>>();
+    selected.sort_by_key(|(ts, _)| *ts);
+    if selected.is_empty() {
+        tracing::debug!(
+            vehicle_id=%vehicle_id,
+            records_received,
+            records_selected=0,
+            curve_points_changed=0,
+            "live charge curve unchanged"
+        );
+        return Ok(0);
     }
 
-    Ok(inserted)
+    let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
+    let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
+    let actions = sqlx::query_scalar::<_, bool>(
+        r#"INSERT INTO riviamigo.rivian_charge_curve_points
+               (vehicle_id, charge_session_id, ts, power_kw)
+           SELECT $1, $2, incoming.ts, incoming.power_kw
+           FROM unnest($3::timestamptz[], $4::double precision[])
+               AS incoming(ts, power_kw)
+           ON CONFLICT (vehicle_id, ts)
+           DO UPDATE SET
+               charge_session_id = COALESCE(
+                   rivian_charge_curve_points.charge_session_id,
+                   EXCLUDED.charge_session_id
+               ),
+               power_kw = COALESCE(
+                   EXCLUDED.power_kw,
+                   rivian_charge_curve_points.power_kw
+               )
+           WHERE rivian_charge_curve_points.charge_session_id IS DISTINCT FROM
+                     COALESCE(
+                         rivian_charge_curve_points.charge_session_id,
+                         EXCLUDED.charge_session_id
+                     )
+              OR rivian_charge_curve_points.power_kw IS DISTINCT FROM
+                     COALESCE(
+                         EXCLUDED.power_kw,
+                         rivian_charge_curve_points.power_kw
+                     )
+           RETURNING xmax = 0"#,
+    )
+    .bind(vehicle_id)
+    .bind(active_session_id)
+    .bind(&timestamps)
+    .bind(&power)
+    .fetch_all(pool)
+    .await?;
+
+    tracing::debug!(
+        vehicle_id=%vehicle_id,
+        records_received,
+        records_selected=selected.len(),
+        curve_points_changed=actions.len(),
+        "live charge curve synchronized"
+    );
+
+    Ok(actions.len())
 }
 
 pub async fn fetch_live_session_history_for_vehicle(

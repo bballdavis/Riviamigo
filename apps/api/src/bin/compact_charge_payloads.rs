@@ -21,13 +21,24 @@ async fn main() -> Result<()> {
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = create_pool(&database_url).await?;
 
+    let (relation_bytes, payload_bytes): (i64, i64) = sqlx::query_as(
+        r#"SELECT pg_total_relation_size('riviamigo.rivian_charge_payloads')::bigint,
+                  COALESCE(SUM(pg_column_size(payload)), 0)::bigint
+           FROM riviamigo.rivian_charge_payloads
+           WHERE ($1::uuid IS NULL OR vehicle_id = $1)"#,
+    )
+    .bind(args.vehicle_id)
+    .fetch_one(&pool)
+    .await?;
+
     let duplicate_count: i64 = sqlx::query_scalar(
         r#"SELECT COALESCE(SUM(duplicate_count), 0)::bigint
            FROM (
                SELECT COUNT(*) - 1 AS duplicate_count
                FROM riviamigo.rivian_charge_payloads
                WHERE ($1::uuid IS NULL OR vehicle_id = $1)
-               GROUP BY vehicle_id, operation, rivian_transaction_id, rivian_vehicle_id, payload
+               GROUP BY vehicle_id, operation, rivian_transaction_id, rivian_vehicle_id,
+                        payload_fingerprint
                HAVING COUNT(*) > 1
            ) duplicates"#,
     )
@@ -37,9 +48,25 @@ async fn main() -> Result<()> {
 
     if !args.apply {
         println!(
-            "Found {duplicate_count} exact duplicate charge payloads. Re-run with --apply to remove them."
+            "Charge payload storage: {relation_bytes} relation bytes, {payload_bytes} payload bytes."
+        );
+        println!(
+            "Found {duplicate_count} semantically duplicate charge payloads. Re-run with --apply to remove them."
         );
         return Ok(());
+    }
+
+    let mut transaction = pool.begin().await?;
+    let compaction_lock: bool = sqlx::query_scalar(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended('riviamigo-charge-payload-compaction', 0))",
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !compaction_lock {
+        transaction.rollback().await?;
+        return Err(anyhow!(
+            "charge-payload compaction is already running; retry after it finishes"
+        ));
     }
 
     let result = sqlx::query(
@@ -57,7 +84,7 @@ async fn main() -> Result<()> {
                WINDOW duplicate_group AS (
                    PARTITION BY payload.vehicle_id, payload.operation,
                                 payload.rivian_transaction_id,
-                                payload.rivian_vehicle_id, payload.payload
+                                payload.rivian_vehicle_id, payload.payload_fingerprint
                    ORDER BY (session.id IS NOT NULL) DESC,
                             payload.captured_at ASC, payload.id ASC
                )
@@ -70,11 +97,18 @@ async fn main() -> Result<()> {
            ), repointed_aliases AS (
                UPDATE riviamigo.charge_session_external_aliases alias
                SET latest_payload_id = victims.keeper_id,
-                   latest_payload_captured_at = victims.keeper_captured_at,
-                   updated_at = now()
+                   latest_payload_captured_at = victims.keeper_captured_at
                FROM victims
                WHERE alias.latest_payload_id = victims.id
+                 AND (alias.latest_payload_id, alias.latest_payload_captured_at)
+                     IS DISTINCT FROM (victims.keeper_id, victims.keeper_captured_at)
                RETURNING alias.charge_session_id
+           ), repointed_identities AS (
+               UPDATE riviamigo.rivian_charge_payload_identities identities
+               SET canonical_payload_id = victims.keeper_id
+               FROM victims
+               WHERE identities.canonical_payload_id = victims.id
+               RETURNING identities.identity_key
            )
            DELETE FROM riviamigo.rivian_charge_payloads payload
            USING victims
@@ -83,8 +117,17 @@ async fn main() -> Result<()> {
     )
     .bind(args.vehicle_id)
     .bind(args.batch_size)
-    .execute(&pool)
-    .await?;
+    .execute(&mut *transaction)
+    .await;
+
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            transaction.rollback().await?;
+            return Err(error.into());
+        }
+    };
+    transaction.commit().await?;
 
     let removed = result.rows_affected();
     println!(
