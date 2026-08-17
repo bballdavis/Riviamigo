@@ -2,7 +2,12 @@ import React from 'react';
 import { Icon } from '@iconify/react';
 import { cn } from '@riviamigo/ui/lib/utils';
 import { Card } from '@riviamigo/ui/primitives';
-import { CHART_COLORS, MiniSparkline, type MiniSparklineYDomain } from '@riviamigo/ui/charts';
+import {
+  CHART_COLORS,
+  MiniSparkline,
+  type MiniSparklineYDomain,
+  type TimeFilterWindow,
+} from '@riviamigo/ui/charts';
 import { resolveIconId } from '../../editor/iconMigration';
 import type { SensorIconKey, SensorValueColor } from './sensorDefinitions';
 
@@ -23,6 +28,7 @@ export interface SensorChipSummaryProps {
   history?: SensorChipHistoryPoint[];
   historyColor?: string;
   historyDomain?: MiniSparklineYDomain;
+  historyTimeFilter?: TimeFilterWindow;
 }
 
 export function SensorChipSummary({
@@ -39,6 +45,7 @@ export function SensorChipSummary({
   history,
   historyColor = CHART_COLORS.accent,
   historyDomain,
+  historyTimeFilter,
 }: SensorChipSummaryProps) {
   return (
     <Card
@@ -63,6 +70,7 @@ export function SensorChipSummary({
             height={36}
             color={historyColor}
             showFallback
+            timeFilter={historyTimeFilter}
             yDomain={historyDomain}
           />
           <div className="absolute inset-x-0 bottom-[2px] h-px bg-accent/35" aria-hidden="true" />
