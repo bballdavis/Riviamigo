@@ -12,10 +12,11 @@ export type { ChartColorKey } from './ChartProvider';
 export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
-export type { RichSeries, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
+export type { RichSeries, RichTimeInterval, PackedRichTimeInterval, RichReferenceLine, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
+export { packRichTimeIntervals } from './RichTimeSeriesChart';
 export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatAxisDateForSpan, formatChartNumber, getCalendarDateSplits, clampExplorationRange, isZoomedXRange } from './RichTimeSeriesChart';
 export { MiniSparkline, resolveCanvasColor } from './MiniSparkline';
-export type { MiniSparklineProps, MiniSparklineType } from './MiniSparkline';
+export type { MiniSparklineProps, MiniSparklineType, MiniSparklineYDomain } from './MiniSparkline';
 export {
   DEFAULT_CHART_TIME_FILTER,
   DEFAULT_SPRITE_TIME_FILTER,
@@ -84,3 +85,5 @@ export { TripElevationChart } from './TripElevationChart';
 export type { TripElevationChartProps, TripElevationPoint } from './TripElevationChart';
 export { TripTirePressureChart } from './TripTirePressureChart';
 export type { TripTirePressureChartProps, TripTirePressurePoint } from './TripTirePressureChart';
+export { TirePressureTripsChart } from './TirePressureTripsChart';
+export type { TirePressureTripsChartProps } from './TirePressureTripsChart';

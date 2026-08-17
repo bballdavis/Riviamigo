@@ -9,26 +9,29 @@ export interface PageLayoutProps {
   titleAction?: React.ReactNode | undefined;
   /** Position of titleAction relative to the title. */
   titleActionPosition?: 'left' | 'right' | undefined;
+  /** Additional action rendered immediately after the title. */
+  titleActionAfter?: React.ReactNode | undefined;
   subtitle?: React.ReactNode;
   actions?: React.ReactNode | undefined;
   children: React.ReactNode;
   className?: string | undefined;
 }
 
-export function PageLayout({ title, titleAction, titleActionPosition = 'right', subtitle, actions, children, className }: PageLayoutProps) {
+export function PageLayout({ title, titleAction, titleActionPosition = 'right', titleActionAfter, subtitle, actions, children, className }: PageLayoutProps) {
   return (
     <div className={cn('flex flex-col gap-6', className)}>
       <div className="flex flex-wrap items-start justify-between gap-y-2">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             {titleActionPosition === 'left' && titleAction}
             <h1 className="text-2xl font-semibold font-display text-fg tracking-tight">{title}</h1>
             {titleActionPosition !== 'left' && titleAction}
+            {titleActionAfter}
           </div>
           {subtitle ? (
             typeof subtitle === 'string'
               ? <p className="mt-0.5 text-sm text-fg-tertiary">{subtitle}</p>
-              : <div className="mt-0.5">{subtitle}</div>
+              : <div className="mt-0.5 max-w-full min-w-0">{subtitle}</div>
           ) : null}
         </div>
         {actions && <div className="flex items-center gap-2">{actions}</div>}
@@ -78,4 +81,3 @@ export function ChartSection({ title, subtitle, actions, children, className }: 
     </div>
   );
 }
-

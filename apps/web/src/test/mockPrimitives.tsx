@@ -5,15 +5,16 @@
  */
 import React from 'react';
 
-export const PageLayout = ({ children, title, titleAction, subtitle, actions }: {
-  children: React.ReactNode; title: string; titleAction?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode;
+export const PageLayout = ({ children, title, titleAction, titleActionAfter, subtitle, actions }: {
+  children: React.ReactNode; title: string; titleAction?: React.ReactNode; titleActionAfter?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode;
 }) => (
   <div data-testid="page-layout">
     <div>
       {titleAction}
       <h1>{title}</h1>
+      {titleActionAfter}
     </div>
-    {subtitle && <div>{subtitle}</div>}
+    {subtitle && <div className="max-w-full min-w-0">{subtitle}</div>}
     {actions}
     {children}
   </div>

@@ -168,7 +168,7 @@ export function ChartPicker<TValue extends string = string>({
           className={cn(
             'h-9 w-full rounded-lg border border-border bg-bg-surface pl-9 pr-3 text-sm text-fg',
             'placeholder:text-fg-tertiary transition-colors',
-            'hover:border-border-strong focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
+            'hover:border-border-strong focus:border-accent focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
           )}
         />
       </label>
