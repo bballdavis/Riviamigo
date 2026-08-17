@@ -10,6 +10,8 @@ vi.mock('@riviamigo/ui/primitives', async () => {
 const mockNavigate = vi.fn();
 const mockSession = vi.hoisted(() => ({
   cost_usd: 8.75 as number | null,
+  location_name: 'Home Charger' as string,
+  range_added_km: 88.4 as number | null,
   source: 'telemetry+rivian_api' as string,
   telemetry_sample_count: 12 as number,
 }));
@@ -29,6 +31,13 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@riviamigo/dashboards', () => ({
   DashboardChartWidget: () => <div data-testid="charge-curve-chart" />,
+  SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
+    <div data-testid={`sensor-chip-${title.toLowerCase().replace(/\s+/g, '-')}`}>
+      <span>{title}</span>
+      <span>{value}</span>
+      {secondary ? <span>{secondary}</span> : null}
+    </div>
+  ),
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
@@ -43,7 +52,7 @@ vi.mock('@riviamigo/hooks', () => ({
       vehicle_id: 'vehicle-1',
       started_at: '2024-01-01T12:00:00Z',
       ended_at: '2024-01-01T13:15:00Z',
-      location_name: 'Home Charger',
+      location_name: mockSession.location_name,
       charger_type: 'level2',
       energy_added_kwh: 28.5,
       soc_start: 20,
@@ -57,7 +66,7 @@ vi.mock('@riviamigo/hooks', () => ({
       data_confidence: 'telemetry_enriched',
       telemetry_sample_count: mockSession.telemetry_sample_count,
       network_vendor: 'Rivian',
-      range_added_km: 88.4,
+      range_added_km: mockSession.range_added_km,
       rivian_paid_total: 8.75,
       rivian_city: 'Austin',
     },
@@ -70,18 +79,21 @@ vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatKwh: (v: number) => `${v} kWh`,
   formatDuration: (v: number) => `${v} min`,
   formatCurrency: (v: number) => `$${v}`,
+  formatDistanceKm: (v: number) => `${v.toFixed(1)} km`,
   formatPercent: (v: number) => `${v}%`,
   formatEfficiency: (v: number) => `${v} Wh/mi`,
 }));
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
-  Database: () => <svg data-testid="icon-database" />,
+  Info: () => <svg data-testid="icon-info" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
+  Edit2: () => <svg data-testid="icon-edit" />,
   RadioTower: () => <svg data-testid="icon-radio" />,
   Receipt: () => <svg data-testid="icon-receipt" />,
   Route: () => <svg data-testid="icon-route" />,
   Zap: () => <svg data-testid="icon-zap" />,
   RotateCcw: () => <svg data-testid="icon-restore" />,
+  Save: () => <svg data-testid="icon-save" />,
 }));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
@@ -90,6 +102,8 @@ describe('ChargeSessionContent', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
     mockSession.cost_usd = 8.75;
+    mockSession.location_name = 'Home Charger';
+    mockSession.range_added_km = 88.4;
     mockSession.source = 'telemetry+rivian_api';
     mockSession.telemetry_sample_count = 12;
     correctionMutation.role = 'owner';
@@ -106,24 +120,49 @@ describe('ChargeSessionContent', () => {
     expect(screen.getByText('20% -> 80%')).toBeInTheDocument();
     expect(screen.getByText('Duration')).toBeInTheDocument();
     expect(screen.getByText('75 min')).toBeInTheDocument();
-    expect(screen.getByTestId('stat-cost')).toBeInTheDocument();
+    expect(screen.getByTestId('sensor-chip-cost')).toBeInTheDocument();
     expect(screen.getAllByText('$8.75').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Telemetry + Rivian API')).not.toBeInTheDocument();
+    expect(screen.getByText('Range added: 88.4 km')).toBeInTheDocument();
+    const sourceDetailsButton = screen.getByRole('button', { name: 'Show session source details' });
+    expect(sourceDetailsButton).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(sourceDetailsButton);
+    expect(screen.getByRole('button', { name: 'Hide session source details' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('heading', { name: 'Source Information' })).toBeInTheDocument();
     expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
     expect(screen.getByText('Telemetry')).toBeInTheDocument();
     expect(screen.getByText('12 samples matched')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /January 1, 2024/ })).toBeInTheDocument();
-    expect(screen.getByText('88.4 km added')).toBeInTheDocument();
+    expect(screen.queryByText('88.4 km added')).not.toBeInTheDocument();
     expect(screen.getByText('Austin')).toBeInTheDocument();
+    expect(screen.queryByTestId('sensor-chip-range')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide session source details' }));
+    expect(screen.queryByText('Telemetry + Rivian API')).not.toBeInTheDocument();
     // Chart title/subtitle are rendered inside DashboardChartWidget (mocked);
     // assert only on the testid that the mock emits.
     expect(screen.getByTestId('charge-curve-chart')).toBeInTheDocument();
+    expect(screen.queryByText('Corrections')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit charging session' })).toBeInTheDocument();
+  });
+
+  it('opens the correction editor from the page header and separates location and cost summaries', () => {
+    render(<ChargeSessionContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit charging session' }));
+
+    expect(screen.getByText('Corrections')).toBeInTheDocument();
+    expect(screen.getAllByText('Location').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Cost').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Recorded coordinates: Unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Original telemetry')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save charging corrections' })).toBeInTheDocument();
   });
 
   it('renders missing cost as a dash instead of zero dollars', () => {
     mockSession.cost_usd = null;
     render(<ChargeSessionContent />);
 
-    expect(screen.getByTestId('stat-cost')).toHaveTextContent('-');
+    expect(screen.getByTestId('sensor-chip-cost')).toHaveTextContent('-');
     expect(screen.queryByText('$0')).not.toBeInTheDocument();
   });
 
@@ -140,6 +179,7 @@ describe('ChargeSessionContent', () => {
     mockSession.telemetry_sample_count = 6;
     render(<ChargeSessionContent />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Show session source details' }));
     expect(screen.getByText('Telemetry + Rivian API')).toBeInTheDocument();
     expect(screen.queryByText('Rivian API backfill')).not.toBeInTheDocument();
   });
@@ -147,8 +187,9 @@ describe('ChargeSessionContent', () => {
   it('saves a free override and restores automatic cost with partial payloads', () => {
     render(<ChargeSessionContent />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Edit charging session' }));
     fireEvent.click(screen.getByRole('button', { name: 'Free' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save corrections' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save charging corrections' }));
     expect(correctionMutation.mutate).toHaveBeenLastCalledWith(
       { sessionId: 'session-1', location_mode: 'automatic', cost_mode: 'free' },
       expect.any(Object),
@@ -164,13 +205,14 @@ describe('ChargeSessionContent', () => {
   it('blocks empty and negative manual costs with recovery copy', () => {
     render(<ChargeSessionContent />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Edit charging session' }));
     fireEvent.click(screen.getByRole('button', { name: 'Manual' }));
     expect(screen.getByText('Enter a non-negative USD amount.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save corrections' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save charging corrections' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('Manual cost (USD)'), { target: { value: '-1' } });
     expect(screen.getByText('Enter a non-negative USD amount.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save corrections' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save charging corrections' })).toBeDisabled();
     expect(correctionMutation.mutate).not.toHaveBeenCalled();
   });
 
@@ -178,9 +220,22 @@ describe('ChargeSessionContent', () => {
     correctionMutation.role = 'viewer';
     render(<ChargeSessionContent />);
 
-    expect(screen.getByText('Read only')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Free' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Save corrections' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit charging session' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Corrections')).not.toBeInTheDocument();
     expect(correctionMutation.mutate).not.toHaveBeenCalled();
+  });
+
+  it('omits the range secondary value when the session has no range data', () => {
+    mockSession.range_added_km = null;
+    render(<ChargeSessionContent />);
+
+    expect(screen.queryByText(/Range added:/)).not.toBeInTheDocument();
+  });
+
+  it('keeps long charging locations readable instead of truncating them', () => {
+    mockSession.location_name = 'Rogers, AR Supercharger, 4000 West Walnut Street';
+    render(<ChargeSessionContent />);
+
+    expect(screen.getByText('Rogers, AR Supercharger, 4000 West Walnut Street')).toBeInTheDocument();
   });
 });
