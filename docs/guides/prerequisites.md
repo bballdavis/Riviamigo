@@ -26,11 +26,12 @@ The release stack pins PostgreSQL 18.4 with TimescaleDB 2.28.3, Redis 8.8, and i
 - A hostname for the authenticated gateway.
 - A UPS for a home server or NAS.
 
-The database and Redis remain inside the Compose network. The web origin binds
-`127.0.0.1:8080` by default, which is suitable for a reverse proxy on the same
-host. If the proxy is elsewhere, explicitly change `RIVIAMIGO_BIND_ADDRESS` and
-set `ALLOW_PUBLIC_ORIGIN_BIND=true`, then restrict that port to the proxy with
-the host firewall.
+The database and Redis remain inside the Compose network. Standard Compose uses
+normal host publication for the web origin; set `RIVIAMIGO_HOST_BIND_ADDRESS`
+when it must be limited to one host interface. The application's internal
+listener is a separate `RIVIAMIGO_BIND_ADDRESS` setting. In all cases, use an
+authenticated HTTPS gateway and host firewall rather than exposing the origin
+directly.
 
 ## Building from source
 

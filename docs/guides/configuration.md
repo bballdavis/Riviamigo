@@ -51,9 +51,12 @@ for the exact variable contract.
 Weather, geocoding, basemap, and Iconify policies are configured in **Settings > External Connections** and stored in the database. Do not add provider URLs or API keys to `.env`; custom connection secrets are encrypted with the installation age key and remain write-only. See [external connections](./external-connections.md).
 
 - `RIVIAMIGO_ORIGIN_PORT` changes the published app port from `8080`.
-- `RIVIAMIGO_BIND_ADDRESS` defaults to `127.0.0.1`. A non-loopback bind also
-  requires `ALLOW_PUBLIC_ORIGIN_BIND=true`; use it only when the host firewall
-  and authenticated gateway are already in place.
+- `RIVIAMIGO_HOST_BIND_ADDRESS` controls Docker's host-side published address;
+  it defaults to `0.0.0.0` for normal host publication. Set it to a specific
+  interface when required and protect the port with a firewall.
+- `RIVIAMIGO_BIND_ADDRESS` controls the application's internal listener and
+  defaults to `127.0.0.1`; it is not the Docker host publication address. A
+  non-loopback internal listener requires `ALLOW_PUBLIC_ORIGIN_BIND=true`.
 - `IMAGE_TAG` selects a published release and defaults to `latest`.
 - `RIVIAMIGO_IMAGE_REGISTRY` defaults to `ghcr.io/bballdavis`.
 - `BACKUP_DRIVER`, `BACKUP_ARTIFACT_DIR`, and `BACKUP_POLL_INTERVAL_SECONDS` tune recovery packages; normal Compose already uses `/backups`.

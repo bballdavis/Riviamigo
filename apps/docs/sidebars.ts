@@ -26,6 +26,12 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Host-specific installation',
+      collapsed: false,
+      items: ['guides/synology'],
+    },
+    {
+      type: 'category',
       label: 'Connect and verify',
       collapsed: false,
       items: ['guides/rivian-account', 'guides/verify-installation'],
@@ -67,6 +73,7 @@ const sidebars: SidebarsConfig = {
         'runbooks/release-database-cutover',
         'runbooks/vehicle-history-rebuild',
         'runbooks/parallax-capture',
+        'runbooks/charge-payload-cleanup',
       ],
     },
   ],

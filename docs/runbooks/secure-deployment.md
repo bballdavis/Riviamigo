@@ -8,14 +8,15 @@ changes the requirements in this runbook.
 ## Supported exposure model
 
 Riviamigo is not approved for direct Internet exposure. The standard production
-Compose stack publishes its web origin on port `8080` bound to `127.0.0.1` and
+Compose stack publishes its web origin on port `8080` using normal Docker host
+publication; set `RIVIAMIGO_HOST_BIND_ADDRESS` to limit the host interface and
 runs the long-lived app as UID/GID `1001`, with a read-only root filesystem,
 all Linux capabilities dropped, `no-new-privileges`, and a bounded `/tmp`
 tmpfs. Its one-shot initialization service is intentionally the only root
 process. Do not weaken these defaults to make an origin public.
 
 Place an authenticated tunnel or identity-aware reverse proxy and host firewall
-rule in front of that loopback listener. A tunnel that only publishes the port
+rule in front of that origin. A tunnel that only publishes the port
 without an access policy is not sufficient. A non-loopback bind requires both
 `RIVIAMIGO_BIND_ADDRESS` and the explicit
 `ALLOW_PUBLIC_ORIGIN_BIND=true` opt-in; it remains unsupported as a direct
@@ -88,9 +89,9 @@ users, and restore HTTPS as soon as possible.
 ## Verification
 
 1. Run `docker compose --env-file .env -f compose/docker-compose.yml config`
-   and confirm the unified app publishes
-   `127.0.0.1:8080:8080` (or the intentionally selected loopback address) and
-   no database or Redis port.
+   and confirm the unified app publishes the intentionally selected
+   `RIVIAMIGO_HOST_BIND_ADDRESS` and `RIVIAMIGO_ORIGIN_PORT` values, with no
+   database or Redis port.
 2. Start the stack and check `curl http://localhost:8080/health` locally.
 3. Confirm external access is denied by the gateway before reaching Riviamigo,
    then authenticate through the gateway and sign in to Riviamigo.

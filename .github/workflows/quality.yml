@@ -65,6 +65,10 @@ jobs:
           echo "No color-token violations"
       - name: Docs check
         run: pnpm docs:check
+      - name: Compose deployment contracts
+        run: pnpm compose:check
+      - name: Render standard and Synology Compose files
+        run: pnpm compose:render-check
       - name: Detect documentation-site changes
         id: docs-changes
         shell: bash
@@ -75,7 +79,8 @@ jobs:
             docs apps/docs apps/web/public/favicon.svg apps/web/public/logo_color_lighter.svg \
             packages/ui/src/tokens README.md AGENTS.md CLAUDE.md \
             package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json \
-            scripts/check-docs.mjs .github/workflows/publish-docs.yml .github/workflows/quality.yml; then
+            scripts/check-docs.mjs scripts/generate-synology-compose.mjs compose \
+            .github/workflows/publish-docs.yml .github/workflows/quality.yml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
