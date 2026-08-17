@@ -14,6 +14,7 @@ export interface TripTagPickerProps {
   label?: string;
   disabled?: boolean;
   mode?: 'popover' | 'inline';
+  inlineClassName?: string;
   mixed?: boolean;
 }
 
@@ -46,7 +47,7 @@ function useMobilePicker() {
 }
 
 /** Compact multi-select for shared vehicle tags. It is deliberately local-filtered so every keystroke is instant. */
-export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, label = 'Filter tags', disabled, mode, mixed = false }: TripTagPickerProps) {
+export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, label = 'Filter tags', disabled, mode, inlineClassName, mixed = false }: TripTagPickerProps) {
   const inline = mode === 'inline';
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
@@ -141,7 +142,7 @@ export function TripTagPicker({ vehicleId, canManage, selectedIds, onChange, lab
   if (inline) {
     return (
       <div className="relative min-w-0">
-        <div className="flex min-h-11 flex-wrap items-center gap-1 rounded-lg border border-border bg-bg-surface px-2 py-1 transition-colors focus-within:border-accent focus-within:ring-1 focus-within:ring-accent">
+        <div className={`flex min-h-11 flex-wrap items-center gap-1 transition-colors ${inlineClassName ?? 'rounded-lg border border-border bg-bg-surface px-2 py-1 focus-within:border-accent focus-within:ring-1 focus-within:ring-accent'}`}>
           {selected.map((tag) => (
             <button
               type="button"

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Filter, Tag } from 'lucide-react';
+import { Filter, RotateCcw, Tag } from 'lucide-react';
 import { TripTagPicker, type WidgetCtx } from '@riviamigo/dashboards';
 import { Tooltip } from '@riviamigo/ui/primitives';
 import type { DashboardPageProps } from './DashboardPage';
@@ -43,7 +43,6 @@ export function EfficiencyDashboardPage({
         <EfficiencyTagFilterBar
           vehicleId={state.vehicleId}
           filter={filter}
-          canManage={Boolean(widgetCtx?.canManageTripTags)}
         />
       ) : null}
     />
@@ -53,11 +52,9 @@ export function EfficiencyDashboardPage({
 function EfficiencyTagFilterBar({
   vehicleId,
   filter,
-  canManage,
 }: {
   vehicleId: string | null;
   filter: TripTagFilter;
-  canManage: boolean;
 }) {
   const clear = () => filter.setFilter?.({ tagIds: [], tagMatch: 'all', untagged: false });
   const filterSummary = filter.untagged
@@ -77,11 +74,12 @@ function EfficiencyTagFilterBar({
         <div className="min-w-0">
           <TripTagPicker
             vehicleId={vehicleId}
-            canManage={canManage}
+            canManage={false}
             selectedIds={filter.tagIds}
             onChange={(tagIds) => filter.setFilter?.({ tagIds, tagMatch: filter.tagMatch, untagged: false })}
             label="Filter efficiency by tags"
             mode="inline"
+            inlineClassName="border-0 bg-transparent px-0 py-0 focus-within:border-transparent focus-within:ring-0"
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -107,9 +105,17 @@ function EfficiencyTagFilterBar({
             Untagged
           </button>
           {(filter.tagIds.length > 0 || filter.untagged) ? (
-            <button type="button" className="h-11 px-2 text-sm font-medium text-accent hover:underline" onClick={clear}>
-              Clear filters
-            </button>
+            <Tooltip content="Clear filters">
+              <button
+                type="button"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-fg-secondary transition-colors hover:border-border-strong hover:bg-bg-surface hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                onClick={clear}
+                aria-label="Clear filters"
+                title="Clear filters"
+              >
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Tooltip>
           ) : null}
         </div>
       </div>
