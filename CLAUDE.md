@@ -65,7 +65,8 @@ cargo fmt --all --check
 
 ```bash
 pnpm db:migrate
-pnpm db:reset
+$env:RIVIAMIGO_ALLOW_DATABASE_RESET='local-development'
+pnpm db:reset -- --yes
 pnpm db:rebaseline
 ```
 
@@ -73,6 +74,11 @@ pnpm db:rebaseline
 SQLx ledger and fails closed on contradictory bookkeeping. `pnpm db:rebaseline`
 is the explicit, backup-evidenced adoption command for the release baseline;
 it is not a normal migration repair command.
+
+`pnpm db:reset` is destructive and developer-only. It requires both the
+one-shot acknowledgement above and `--yes`, refuses production environments,
+and accepts only a loopback `DATABASE_URL`. Normal startup, Compose updates,
+and release workflows never call it.
 
 ## Architecture Reminders
 
