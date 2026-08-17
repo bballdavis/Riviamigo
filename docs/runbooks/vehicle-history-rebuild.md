@@ -38,7 +38,7 @@ cargo run --bin canonicalize_charge_sessions -- [--vehicle <uuid>]
 cargo run --bin compact_charge_payloads -- [--vehicle <uuid>] [--apply] [--batch-size <count>]
 ```
 
-`compact_charge_payloads` reports semantically identical JSONB Rivian payloads by default and
+`compact_charge_payloads` reports semantically identical Rivian payload fingerprints by default and
 does not change data. After creating a verified backup, add `--apply` to remove
 only equivalent JSON payloads with the same vehicle, operation, transaction,
 and upstream vehicle identity. It retains one payload, preferring a payload that
