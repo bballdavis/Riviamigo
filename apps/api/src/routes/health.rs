@@ -48,6 +48,7 @@ struct ExtendedTelemetry {
 #[derive(Serialize, sqlx::FromRow)]
 struct CollectorHealth {
     status: String,
+    running: bool,
     connected_at: Option<DateTime<Utc>>,
     last_event_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
@@ -201,7 +202,11 @@ async fn fetch_extended_telemetry(
 ) -> Result<ExtendedTelemetry, AppError> {
     let (collector, network, efficiency, mass, cold_weather) = tokio::try_join!(
         sqlx::query_as::<_, CollectorHealth>(
-            r#"SELECT status, connected_at, last_event_at, last_error, updated_at
+            // updated_at is the collector heartbeat; two minutes allows for
+            // transient scheduling delays while making stale connected rows false.
+            r#"SELECT status,
+                      status = 'connected' AND updated_at >= now() - interval '2 minutes' AS running,
+                      connected_at, last_event_at, last_error, updated_at
                FROM riviamigo.parallax_collector_state WHERE vehicle_id = $1"#,
         )
         .bind(vid)

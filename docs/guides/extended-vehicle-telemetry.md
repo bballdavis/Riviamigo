@@ -35,6 +35,11 @@ The Parked Energy card distinguishes the two available perspectives:
 The two sources are displayed separately because their windows and measurement
 methods differ. Riviamigo does not silently substitute one for the other.
 
+The Parked Energy card is shown only while the Parallax collector reports a
+fresh connected heartbeat. When the optional collector is stopped or
+unavailable, Phantom Drain continues to show Riviamigo's derived battery-change
+estimate without the Parked Energy card.
+
 Connectivity collection excludes network names and hardware identifiers.
 Values such as mass and learned efficiency are labeled as Rivian estimates,
 not independently measured specifications.

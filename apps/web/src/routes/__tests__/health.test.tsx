@@ -364,37 +364,68 @@ const mockUseVehicleHealth = vi.fn((vehicleId?: string | null) => ({
   isLoading: false,
 }));
 const mockUseCurrentVehicleStatus = vi.fn((_vehicleId?: string | null) => ({ data: statusBase }));
+const mockUseTelemetryLanes = vi.fn((_vehicleId?: string | null, _query?: unknown) => ({
+  data: undefined,
+  isLoading: false,
+}));
 const mockUseQuery = vi.fn(({ queryKey }: { queryKey: unknown[] }) => ({
   data: healthPageMocks.imagesByVehicleId[String(queryKey[2])] ?? null,
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
   useAuth: () => healthPageMocks.auth,
-  AuthenticatedVehicleArtwork: ({ source, fallbackSource, alt, className }: { source: string | null; fallbackSource?: string | null; alt: string; className?: string }) => (
-    <img src={source ?? fallbackSource ?? undefined} alt={alt} className={className} />
-  ),
+  AuthenticatedVehicleArtwork: ({
+    source,
+    fallbackSource,
+    alt,
+    className,
+  }: {
+    source: string | null;
+    fallbackSource?: string | null;
+    alt: string;
+    className?: string;
+  }) => <img src={source ?? fallbackSource ?? undefined} alt={alt} className={className} />,
   useResolvedVehicleSelection: () => ({
     authReady: true,
     effectiveVehicleId:
-      healthPageMocks.auth.activeVehicleId
-      ?? healthPageMocks.auth.defaultVehicleId
-      ?? healthPageMocks.vehicles[0]?.id
-      ?? null,
+      healthPageMocks.auth.activeVehicleId ??
+      healthPageMocks.auth.defaultVehicleId ??
+      healthPageMocks.vehicles[0]?.id ??
+      null,
     vehicleSelectionReady: true,
     vehicles: healthPageMocks.vehicles,
   }),
   useVehicleHealth: (vehicleId?: string | null) => mockUseVehicleHealth(vehicleId),
   useCurrentVehicleStatus: (vehicleId?: string | null) => mockUseCurrentVehicleStatus(vehicleId),
+  useTelemetryLanes: (vehicleId?: string | null, query?: unknown) =>
+    mockUseTelemetryLanes(vehicleId, query),
   resolveVehicleArtwork: (images: any, model: string | null | undefined) => {
     const normalized = (model ?? '').toLowerCase();
-    const vehicleModel = normalized.includes('r1s') ? 'r1s' : normalized.includes('r1t') ? 'r1t' : normalized.includes('r2s') ? 'r2s' : null;
+    const vehicleModel = normalized.includes('r1s')
+      ? 'r1s'
+      : normalized.includes('r1t')
+        ? 'r1t'
+        : normalized.includes('r2s')
+          ? 'r2s'
+          : null;
     const all = images?.all ?? [];
-    const text = (image: any) => `${image.placement ?? ''} ${image.url ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
-    const hero = all.find((image: any) => text(image).includes('health-hero') && !text(image).includes('health-hero-fallback'))
-      ?? all.find((image: any) => text(image).includes('three-quarter') || text(image).includes('three_quarter'));
+    const text = (image: any) =>
+      `${image.placement ?? ''} ${image.url ?? ''} ${JSON.stringify(image.metadata ?? {})}`.toLowerCase();
+    const hero =
+      all.find(
+        (image: any) =>
+          text(image).includes('health-hero') && !text(image).includes('health-hero-fallback')
+      ) ??
+      all.find(
+        (image: any) =>
+          text(image).includes('three-quarter') || text(image).includes('three_quarter')
+      );
     const side = images?.side?.light
       ? { url: images.side.light }
-      : all.find((image: any) => String(image.placement).toLowerCase() === 'side' && !text(image).includes('charg'));
+      : all.find(
+          (image: any) =>
+            String(image.placement).toLowerCase() === 'side' && !text(image).includes('charg')
+        );
     const taggedFallback = all.find((image: any) => text(image).includes('health-hero-fallback'));
     const front = images?.front?.light
       ? { url: images.front.light }
@@ -455,6 +486,7 @@ describe('/health page cleanup', () => {
     };
     mockUseVehicleHealth.mockClear();
     mockUseCurrentVehicleStatus.mockClear();
+    mockUseTelemetryLanes.mockClear();
     mockUseQuery.mockClear();
   });
 
@@ -521,7 +553,7 @@ describe('/health page cleanup', () => {
 
     expect(screen.getByAltText('Vehicle three-quarter view')).toHaveAttribute(
       'src',
-      '/vehicle-images/fallbacks/r1t/health.webp',
+      '/vehicle-images/fallbacks/r1t/health.webp'
     );
   });
 
@@ -568,6 +600,61 @@ describe('/health page cleanup', () => {
     expect(screen.getByText('Doors & Gates')).toBeInTheDocument();
     expect(screen.getByText('Tailgate')).toBeInTheDocument();
     expect(screen.getAllByText('Closed').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('closure-icon-closure_frunk_closed')).toHaveAttribute(
+      'data-closure-kind',
+      'gate'
+    );
+    expect(screen.getByTestId('closure-icon-door_front_left_closed')).toHaveAttribute(
+      'data-closure-kind',
+      'door'
+    );
+    expect(
+      screen.getByTestId('closure-icon-door_front_left_closed').querySelector('svg')
+    ).not.toHaveStyle({
+      transform: 'scaleX(-1)',
+    });
+    expect(
+      screen.getByTestId('closure-icon-door_front_right_closed').querySelector('svg')
+    ).toHaveStyle({
+      transform: 'scaleX(-1)',
+    });
+  });
+
+  it('renders tire readings as sensor chips with the available pressure history', () => {
+    mockUseTelemetryLanes.mockReturnValueOnce({
+      data: {
+        spine: ['2026-05-29T01:00:00Z', '2026-05-30T01:00:00Z'],
+        lanes: {
+          health: {
+            numeric: {
+              tire_fl_psi: [46, 48],
+              tire_fr_psi: [47, 48],
+              tire_rl_psi: [49, 50],
+              tire_rr_psi: [48, 50],
+            },
+          },
+        },
+      },
+      isLoading: false,
+    } as any);
+
+    render(<HealthContent />);
+
+    expect(screen.getAllByTestId('sensor-chip')).toHaveLength(4);
+    const spriteLayers = screen.getAllByTestId('sensor-sprite-layer');
+    expect(spriteLayers).toHaveLength(4);
+    expect(spriteLayers.every((layer) => layer.querySelector('canvas'))).toBe(true);
+    expect(
+      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-domain-min="40"]'))
+    ).toBe(true);
+    expect(
+      spriteLayers.every((layer) => layer.querySelector('[data-sparkline-domain-max="56"]'))
+    ).toBe(true);
+    expect(screen.getAllByText('48 psi')).toHaveLength(2);
+    expect(mockUseTelemetryLanes).toHaveBeenCalledWith(
+      'veh-1',
+      expect.objectContaining({ lanes: ['health'], resolution: '1h', max_points: 168 })
+    );
   });
 
   it('omits unsupported tailgate telemetry for an R1S health view', () => {
@@ -599,6 +686,7 @@ describe('/health page cleanup', () => {
         extended_telemetry: {
           collector: {
             status: 'connected',
+            running: true,
             connected_at: '2026-05-30T00:00:00Z',
             last_event_at: '2026-05-30T01:00:00Z',
             last_error: null,
