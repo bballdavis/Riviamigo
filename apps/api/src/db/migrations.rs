@@ -251,6 +251,13 @@ async fn database_is_empty(connection: &mut PgConnection) -> anyhow::Result<bool
             AND n.nspname NOT LIKE 'pg_toast%'
             AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
             AND NOT (n.nspname = 'public' AND c.relname = '_sqlx_migrations')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_depend dependency
+              WHERE dependency.classid = 'pg_class'::regclass
+                AND dependency.objid = c.oid
+                AND dependency.deptype = 'e'
+            )
         )
         "#,
     )

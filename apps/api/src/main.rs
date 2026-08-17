@@ -88,6 +88,9 @@ async fn main() -> anyhow::Result<()> {
     let age_key = active_keys.age_key;
     config.age_encryption_key = Some(age_key.clone());
 
+    let charge_identity_backfill_config =
+        services::charge_payload_identity::BackfillConfig::from_env()?;
+
     let supervisor =
         ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone())
             .await?;
@@ -110,6 +113,10 @@ async fn main() -> anyhow::Result<()> {
         services::trip_enrichment::start_reconciliation_worker(pool.clone());
     let _security_audit_retention =
         services::security_audit::start_retention_worker(pool.clone());
+    let _charge_identity_backfill = services::charge_payload_identity::start_worker(
+        pool.clone(),
+        charge_identity_backfill_config,
+    );
 
     let app = routes::build_router(state);
 

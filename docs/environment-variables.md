@@ -66,6 +66,14 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `S3_ACCESS_KEY` | Unset | Optional fallback access key used only when a complete saved credential pair is unavailable. |
 | `S3_SECRET_KEY` | Unset | Optional fallback secret key paired with `S3_ACCESS_KEY`; never returned by the API or stored in recovery packages. |
 
+| `CHARGE_IDENTITY_BACKFILL_BATCH_SIZE` | `1000` | Historical charge payloads processed per transaction. Valid range: `100`-`10000`. |
+| `CHARGE_IDENTITY_BACKFILL_PAUSE_MS` | `100` | Delay between successful backfill batches. Valid range: `0`-`5000` milliseconds. |
+
+The charge identity backfill does not introduce a second container. After the
+schema expansion, the in-process worker uses the existing app runtime and
+persists resumable progress in PostgreSQL; `/health` only proves that the app
+is ready to serve, not that every populated vehicle has finished backfilling.
+
 The setup endpoint reports whether a proof is required and available, but never
 reveals its source or value. An unclaimed production installation without a
 configured proof remains healthy but refuses registration.

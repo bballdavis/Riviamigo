@@ -1073,6 +1073,153 @@ async fn record_charge_payload_with_ref(
         });
     }
 
+    // A historical row may not have reached the background identity worker
+    // yet. Reconcile that row before inserting a new payload so replay
+    // idempotency remains intact while the worker is catching up.
+    let pending_existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
+        r#"SELECT payload.id, payload.captured_at, payload.charge_session_id
+           FROM riviamigo.rivian_charge_payloads payload
+           WHERE payload.vehicle_id = $1
+             AND payload.operation = $2
+             AND payload.rivian_transaction_id IS NOT DISTINCT FROM $3::text
+             AND payload.rivian_vehicle_id IS NOT DISTINCT FROM $4::text
+             AND payload.payload_fingerprint IS NULL
+             AND digest(
+                     convert_to(
+                         riviamigo.semantic_charge_payload(payload.payload)::text,
+                         'UTF8'
+                     ),
+                     'sha256'
+                 ) = digest(
+                     convert_to(
+                         riviamigo.semantic_charge_payload($5::jsonb)::text,
+                         'UTF8'
+                     ),
+                     'sha256'
+                 )
+           ORDER BY payload.captured_at, payload.id
+           LIMIT 1
+           FOR UPDATE"#,
+    )
+    .bind(vehicle_id)
+    .bind(operation)
+    .bind(rivian_transaction_id)
+    .bind(rivian_vehicle_id)
+    .bind(&payload)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(pending_existing) = pending_existing {
+        sqlx::query(
+            r#"UPDATE riviamigo.rivian_charge_payloads
+               SET payload_fingerprint = digest(
+                   convert_to(
+                       riviamigo.semantic_charge_payload(payload)::text,
+                       'UTF8'
+                   ),
+                   'sha256'
+               )
+               WHERE id = $1 AND payload_fingerprint IS NULL"#,
+        )
+        .bind(pending_existing.0)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"WITH candidate AS (
+                   SELECT digest(
+                              convert_to(
+                                  riviamigo.semantic_charge_payload($5::jsonb)::text,
+                                  'UTF8'
+                              ),
+                              'sha256'
+                          ) AS fingerprint
+               )
+               INSERT INTO riviamigo.rivian_charge_payload_identities (
+                   identity_key, vehicle_id, operation, payload_fingerprint,
+                   canonical_payload_id
+               )
+               SELECT digest(
+                          convert_to(
+                              concat_ws(
+                                  E'\\x1f',
+                                  $1::text,
+                                  $2,
+                                  coalesce($3::text, ''),
+                                  coalesce($4::text, ''),
+                                  encode(candidate.fingerprint, 'hex')
+                              ),
+                              'UTF8'
+                          ),
+                          'sha256'
+                      ),
+                      $1,
+                      $2,
+                      candidate.fingerprint,
+                      $6
+               FROM candidate
+               ON CONFLICT (identity_key) DO NOTHING"#,
+        )
+        .bind(vehicle_id)
+        .bind(operation)
+        .bind(rivian_transaction_id)
+        .bind(rivian_vehicle_id)
+        .bind(&payload)
+        .bind(pending_existing.0)
+        .execute(&mut *tx)
+        .await?;
+
+        let canonical = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
+            r#"WITH candidate AS (
+                   SELECT digest(
+                              convert_to(
+                                  concat_ws(
+                                      E'\\x1f',
+                                      $1::text,
+                                      $2,
+                                      coalesce($3::text, ''),
+                                      coalesce($4::text, ''),
+                                      encode(
+                                          digest(
+                                              convert_to(
+                                                  riviamigo.semantic_charge_payload($5::jsonb)::text,
+                                                  'UTF8'
+                                              ),
+                                              'sha256'
+                                          ),
+                                          'hex'
+                                      )
+                                  ),
+                                  'UTF8'
+                              ),
+                              'sha256'
+                          ) AS identity_key
+               )
+               SELECT payload.id, payload.captured_at, payload.charge_session_id
+               FROM candidate
+               JOIN riviamigo.rivian_charge_payload_identities identity
+                 ON identity.identity_key = candidate.identity_key
+               JOIN riviamigo.rivian_charge_payloads payload
+                 ON payload.id = identity.canonical_payload_id
+               LIMIT 1"#,
+        )
+        .bind(vehicle_id)
+        .bind(operation)
+        .bind(rivian_transaction_id)
+        .bind(rivian_vehicle_id)
+        .bind(&payload)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        return Ok(ChargeSessionPayloadRef {
+            payload_id: canonical.0,
+            captured_at: canonical.1,
+            charge_session_id: canonical.2,
+            unchanged: true,
+        });
+    }
+
     let charge_session_id: Option<Uuid> = if let Some(transaction_id) = rivian_transaction_id {
         sqlx::query_scalar(
             r#"SELECT cs.id
