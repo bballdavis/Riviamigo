@@ -31,6 +31,7 @@
     "deps:check": "node ./scripts/check-dependency-policy.mjs && knip --dependencies",
     "deps:catalogs": "node ./scripts/check-dependency-policy.mjs --catalogs-only",
     "verify:fresh-install": "node ./scripts/verify-fresh-install.mjs",
+    "verify:populated-upgrade": "node ./scripts/verify-populated-upgrade.mjs",
     "verify:backup-restore-s3": "node ./scripts/verify-backup-restore-s3.mjs",
     "verify:restore-compatibility": "node ./tools/restore-lab/run.mjs",
     "verify:migration-integrity": "node ./tools/migration-integrity.mjs",

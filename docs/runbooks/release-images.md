@@ -47,3 +47,24 @@ build.
 - Normal self-hosted deployments use `compose/docker-compose.yml` and pull published images.
 - Source candidates use the `compose/docker-compose.build.yml` overlay. Fresh-install acceptance passes `--source-build` so it tests the candidate rather than an older published image.
 - A published release must be checked by pulling its exact Calendar Version and verifying the image digest in the GitHub release asset before announcing it.
+
+## Charge identity upgrade acceptance
+
+The release candidate must preserve the unified app-container topology. The
+charge identity migration is an expand step: the app must become healthy
+without waiting for a full-table rewrite, and the resumable backfill then runs
+in-process in the background. Validate this with a disposable database
+containing synthetic charge payloads, checking that the health probe succeeds
+first, the worker makes progress, retries remain safe, and the final identity
+state is complete and idempotent. Never use real telemetry in the fixture.
+
+The runtime workflow constructs this populated pre-upgrade ledger with the
+CI-only `verify:populated-upgrade` harness. Stable and preview release workflows
+repeat the same check against the published `linux/amd64` and `linux/arm64`
+image variants before creating the GitHub release. A failure blocks release
+creation; do not emulate the check by adding another application container or
+by rewriting immutable migration files in the workflow.
+
+The harness requires an explicit loopback `UPGRADE_DATABASE_URL` whose database
+name starts with `riviamigo_upgrade`; it never falls back to `DATABASE_URL`.
+This database is dropped and recreated, so it must remain disposable.
