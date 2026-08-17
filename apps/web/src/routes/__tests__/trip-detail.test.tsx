@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
 
 vi.mock('@riviamigo/ui/primitives', async () => {
@@ -12,6 +12,7 @@ vi.mock('@riviamigo/ui/hooks', () => ({
 }));
 
 const mockNavigate = vi.fn();
+const mockUpdateAssignments = vi.fn(async () => undefined);
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>();
@@ -37,7 +38,10 @@ vi.mock('@riviamigo/ui/charts', () => ({
 vi.mock('@riviamigo/hooks', () => ({
   useBasemapConfig: () => ({ data: undefined, isLoading: false }),
   useAuth: () => ({ defaultVehicleId: null }),
-  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true }),
+  useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'vehicle-1', vehicleSelectionReady: true, vehicles: [{ id: 'vehicle-1', membership_role: 'owner' }] }),
+  useUpdateTripTagAssignments: () => ({ isPending: false, mutateAsync: mockUpdateAssignments }),
+  useTripTags: () => ({ data: [{ id: 'school', name: 'school', color_token: 'accent' }], isLoading: false, isError: false, isSuccess: true, refetch: vi.fn() }),
+  useCreateTripTag: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useTripDetailData: () => ({
     data: {
       trip: {
@@ -53,6 +57,7 @@ vi.mock('@riviamigo/hooks', () => ({
       soc_start: 80,
       soc_end: 68,
       duration_seconds: 3600,
+      tags: [{ id: 'school', vehicle_id: 'vehicle-1', name: 'school', color_token: 'accent', created_by: 'user-1', created_at: '', updated_at: '' }],
       },
       sample_interval_seconds: 30,
       samples: {
@@ -98,5 +103,16 @@ describe('Trip detail page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to trips' }));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/trips' });
+  });
+
+  it('opens the shared tag editor and saves the selected tags', async () => {
+    render(<TripDetailContent />);
+
+    expect(screen.getByText('School')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit trip tags' }));
+    expect(screen.getByRole('textbox', { name: 'Add tags to this trip' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(mockUpdateAssignments).toHaveBeenCalledWith({ trip_ids: ['trip-1'], tag_ids: ['school'], mode: 'replace' }));
   });
 });

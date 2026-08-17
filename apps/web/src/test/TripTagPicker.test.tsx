@@ -11,9 +11,10 @@ vi.mock('@riviamigo/hooks', () => ({
 
 vi.mock('@riviamigo/ui/tables', () => ({
   TripTagBadge: ({ tag }: { tag: { name: string } }) => <span>{tag.name}</span>,
+  formatTripTagName: (value: string) => value.trim().replace(/\s+/g, ' ').replace(/^./, (first) => first.toUpperCase()),
 }));
 
-import { TripTagPicker } from '../../../../packages/dashboards/src/widgets/table/TripTagPicker';
+import { deriveCommonTagIds, TripTagPicker } from '../../../../packages/dashboards/src/widgets/table/TripTagPicker';
 
 describe('TripTagPicker', () => {
   beforeEach(() => {
@@ -55,4 +56,49 @@ describe('TripTagPicker', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t create this tag');
     expect(search).toHaveValue('Cargo Box');
   });
+
+  it('derives the shared tag intersection without using the union', () => {
+    expect(deriveCommonTagIds([
+      { tags: [{ id: 'shared' }, { id: 'only-a' }] },
+      { tags: [{ id: 'shared' }, { id: 'only-b' }] },
+    ])).toEqual(['shared']);
+  });
+
+  it('supports inline keyboard adds and chip removal for the selected-trip control', () => {
+    const onChange = vi.fn();
+    function Harness() {
+      const [selected, setSelected] = React.useState<string[]>([]);
+      return <TripTagPicker vehicleId="vehicle-1" canManage selectedIds={selected} onChange={(next) => { onChange(next); setSelected(next); }} label="Add tags to selected trips" mode="inline" />;
+    }
+
+    render(<Harness />);
+    const search = screen.getByRole('textbox', { name: /add tags to selected trips/i });
+    const field = search.parentElement;
+    expect(field).toHaveClass('focus-within:border-accent');
+    expect(field).toHaveClass('focus-within:ring-1');
+    fireEvent.change(search, { target: { value: 'bike' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+
+    expect(onChange).toHaveBeenCalledWith(['bike-rack']);
+    expect(search).toHaveValue('');
+    const removeTag = screen.getByRole('button', { name: 'Remove Bike Rack' });
+    expect(removeTag).toBeInTheDocument();
+    expect(removeTag).toHaveClass('focus-visible:ring-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bike Rack' }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+
+    fireEvent.change(search, { target: { value: 'bike' } });
+    fireEvent.keyDown(search, { key: 'Tab' });
+    expect(onChange).toHaveBeenLastCalledWith(['bike-rack']);
+    expect(search).toHaveValue('');
+  });
+
+  it('shows a mixed-state placeholder while preserving common chips', () => {
+    render(<TripTagPicker vehicleId="vehicle-1" canManage selectedIds={['bike-rack']} onChange={vi.fn()} label="Add tags to selected trips" mode="inline" mixed />);
+
+    expect(screen.getByRole('textbox', { name: /add tags to selected trips/i })).toHaveAttribute('placeholder', 'Mixed tags · add or replace');
+    expect(screen.getByRole('button', { name: 'Remove Bike Rack' })).toBeInTheDocument();
+  });
+
 });

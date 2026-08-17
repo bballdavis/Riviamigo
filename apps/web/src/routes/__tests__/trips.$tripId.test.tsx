@@ -35,6 +35,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth:            () => ({ defaultVehicleId: null }),
   useBasemapConfig:   () => ({ style: undefined, attribution: undefined }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: 'v1', vehicleSelectionReady: true }),
+  useUpdateTripTagAssignments: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useTripDetailData:  () => ({
     data: {
       trip: {
