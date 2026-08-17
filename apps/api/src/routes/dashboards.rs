@@ -15,7 +15,7 @@ use crate::{
 
 // Advance this whenever a bundled system dashboard changes so existing
 // installations receive the new baseline on their next startup.
-const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 2;
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 4;
 
 const UPSERT_SYSTEM_DEFAULT_SQL: &str = r#"
     INSERT INTO dashboards
@@ -658,7 +658,7 @@ mod tests {
             .and_then(|widget| widget["options"]["chartIds"].as_array())
             .expect("efficiency chart IDs");
 
-        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 2);
+        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 4);
         assert!(chart_ids.iter().any(|id| id == "efficiency-tags"));
         assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.owner_id IS NULL"));
         assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.is_default = TRUE"));

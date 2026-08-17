@@ -62,6 +62,8 @@ export interface DashboardPageShellProps {
   isEditMode?: boolean;
   onEditModeChange?: (isEditMode: boolean) => void;
   renderTitleAction?: (state: DashboardPageShellRenderState) => React.ReactNode;
+  /** Optional compact action rendered before the vehicle selector. */
+  renderLeadingActions?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderActions?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderBeforeDashboard?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderDashboard?: (state: DashboardPageShellRenderState) => boolean;
@@ -169,6 +171,7 @@ function DashboardPageShellContent({
   isEditMode: controlledEditMode,
   onEditModeChange,
   renderTitleAction,
+  renderLeadingActions,
   renderActions,
   renderBeforeDashboard,
   renderDashboard,
@@ -408,6 +411,7 @@ function DashboardPageShellContent({
     })(shellState)
     : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
+  const pageLeadingActions = currentEditMode ? undefined : renderLeadingActions?.(shellState);
   const defaultTitleAction = !currentEditMode && canEditDashboard && showEditButton ? (
     <button
       type="button"
@@ -419,8 +423,9 @@ function DashboardPageShellContent({
       <Edit2 className="h-4 w-4" />
     </button>
   ) : null;
-  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
-    <div className="flex items-center gap-2">
+  const pageActions = pageLeadingActions || vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {pageLeadingActions}
       {vehicleAction}
       {efficiencyDisplayAction}
       {dateRangeAction}

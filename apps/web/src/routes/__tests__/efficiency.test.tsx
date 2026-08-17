@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
@@ -15,7 +15,10 @@ vi.mock('@riviamigo/hooks', () => ({
     authReady: true,
     effectiveVehicleId: 'v1',
     vehicleSelectionReady: true,
-    vehicles: [{ id: 'v1', display_name: 'Forest R1S' }],
+    vehicles: [
+      { id: 'v1', display_name: 'Forest R1S' },
+      { id: 'v2', display_name: 'Summit R1T' },
+    ],
   }),
   useEfficiencyTrend: () => ({ data: [], isFetching: false }),
   useEfficiencyVsTemp: () => ({ data: [], isFetching: false }),
@@ -49,6 +52,11 @@ const mockConfig = {
 };
 
 vi.mock('@riviamigo/dashboards', () => ({
+  TripTagPicker: ({ label, mode }: { label?: string; mode?: string }) => (
+    <div data-testid="efficiency-tag-picker" data-mode={mode}>
+      <input aria-label={label} />
+    </div>
+  ),
   dashboardKey: (config: { id?: string; slug?: string } | undefined, fallbackSlug: string) =>
     config ? `${config.id}:${config.slug}` : `pending:${fallbackSlug}`,
   findOwnedDashboardBySlug: (dashboards: Array<{ slug: string; ownerId: string | null }> | undefined, slug: string) =>
@@ -96,5 +104,56 @@ describe('Efficiency dashboard page', () => {
     render(<EfficiencyDashboardPage navKey="efficiency" slug="efficiency" title="Efficiency" />);
     expect(screen.getByTestId('dashboard-renderer')).toBeInTheDocument();
     expect(screen.queryByLabelText('Search charts')).not.toBeInTheDocument();
+  });
+
+  it('keeps tag filters collapsed by default and places the icon control before vehicle selection', () => {
+    const filter = {
+      tagIds: [],
+      tagMatch: 'all' as const,
+      untagged: false,
+      setFilter: vi.fn(),
+    };
+
+    render(
+      <EfficiencyDashboardPage
+        navKey="efficiency"
+        slug="efficiency"
+        title="Efficiency"
+        widgetCtx={{ tripTagFilter: filter, canManageTripTags: true }}
+      />,
+    );
+
+    const filterButton = screen.getByRole('button', { name: 'Show efficiency filters' });
+    const vehiclePicker = screen.getByLabelText('Select vehicle');
+    expect(filterButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('Efficiency tag filters')).not.toBeInTheDocument();
+    expect(filterButton.compareDocumentPosition(vehiclePicker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(filterButton);
+    expect(screen.getByRole('button', { name: 'Hide efficiency filters' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText('Efficiency tag filters')).toBeInTheDocument();
+    expect(screen.getByTestId('efficiency-tag-picker')).toHaveAttribute('data-mode', 'inline');
+    expect(screen.getByRole('textbox', { name: 'Filter efficiency by tags' })).toBeInTheDocument();
+  });
+
+  it('opens the tag section when the URL-backed filter is already active', () => {
+    const filter = {
+      tagIds: ['tag-road-trip'],
+      tagMatch: 'all' as const,
+      untagged: false,
+      setFilter: vi.fn(),
+    };
+
+    render(
+      <EfficiencyDashboardPage
+        navKey="efficiency"
+        slug="efficiency"
+        title="Efficiency"
+        widgetCtx={{ tripTagFilter: filter, canManageTripTags: true }}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Hide efficiency filters' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Efficiency tag filters')).toBeInTheDocument();
   });
 });
