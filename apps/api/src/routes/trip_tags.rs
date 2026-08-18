@@ -157,10 +157,15 @@ async fn update_tag(
 ) -> Result<Json<TripTagResponse>, AppError> {
     require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
     if body.name.is_none() && body.color_token.is_none() {
-        return Err(AppError::Validation("at least one tag field is required".into()));
+        return Err(AppError::Validation(
+            "at least one tag field is required".into(),
+        ));
     }
     let named = body.name.as_deref().map(normalize_name).transpose()?;
-    let color_token = body.color_token.map(|token| validate_color_token(Some(token))).transpose()?;
+    let color_token = body
+        .color_token
+        .map(|token| validate_color_token(Some(token)))
+        .transpose()?;
     let tag = sqlx::query_as::<_, TripTagResponse>(
         "UPDATE riviamigo.trip_tags
          SET name=COALESCE($3, name), normalized_name=COALESCE($4, normalized_name),
@@ -175,10 +180,14 @@ async fn update_tag(
     .bind(color_token)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|error| match error.as_database_error().and_then(|db| db.code()) {
-        Some(code) if code == "23505" => AppError::Conflict("a tag with that name already exists".into()),
-        _ => AppError::Database(error),
-    })?
+    .map_err(
+        |error| match error.as_database_error().and_then(|db| db.code()) {
+            Some(code) if code == "23505" => {
+                AppError::Conflict("a tag with that name already exists".into())
+            }
+            _ => AppError::Database(error),
+        },
+    )?
     .ok_or(AppError::NotFound)?;
     Ok(Json(tag))
 }
@@ -250,21 +259,32 @@ async fn update_assignments(
         }
     }
     tx.commit().await?;
-    Ok(Json(AssignmentResponse { updated_trip_count: body.trip_ids.len() }))
+    Ok(Json(AssignmentResponse {
+        updated_trip_count: body.trip_ids.len(),
+    }))
 }
 
 fn validate_assignment_ids(body: &AssignmentBody) -> Result<(), AppError> {
     if body.trip_ids.is_empty() || body.trip_ids.len() > MAX_BATCH_TRIPS {
-        return Err(AppError::Validation(format!("trip_ids must contain 1 to {MAX_BATCH_TRIPS} IDs")));
+        return Err(AppError::Validation(format!(
+            "trip_ids must contain 1 to {MAX_BATCH_TRIPS} IDs"
+        )));
     }
     if body.tag_ids.len() > MAX_BATCH_TAGS {
-        return Err(AppError::Validation(format!("tag_ids may contain at most {MAX_BATCH_TAGS} IDs")));
+        return Err(AppError::Validation(format!(
+            "tag_ids may contain at most {MAX_BATCH_TAGS} IDs"
+        )));
     }
-    if matches!(body.mode, AssignmentMode::Add | AssignmentMode::Remove) && body.tag_ids.is_empty() {
-        return Err(AppError::Validation("tag_ids is required for add and remove".into()));
+    if matches!(body.mode, AssignmentMode::Add | AssignmentMode::Remove) && body.tag_ids.is_empty()
+    {
+        return Err(AppError::Validation(
+            "tag_ids is required for add and remove".into(),
+        ));
     }
     if has_duplicates(&body.trip_ids) || has_duplicates(&body.tag_ids) {
-        return Err(AppError::Validation("trip_ids and tag_ids must not contain duplicates".into()));
+        return Err(AppError::Validation(
+            "trip_ids and tag_ids must not contain duplicates".into(),
+        ));
     }
     Ok(())
 }
@@ -281,16 +301,30 @@ async fn assert_vehicle_ids(
     trip_ids: &[Uuid],
     tag_ids: &[Uuid],
 ) -> Result<(), AppError> {
-    let trip_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.trips WHERE vehicle_id=$1 AND id=ANY($2)")
-        .bind(vehicle_id).bind(trip_ids).fetch_one(pool).await?;
+    let trip_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM riviamigo.trips WHERE vehicle_id=$1 AND id=ANY($2)",
+    )
+    .bind(vehicle_id)
+    .bind(trip_ids)
+    .fetch_one(pool)
+    .await?;
     if trip_count != trip_ids.len() as i64 {
-        return Err(AppError::Validation("every trip_id must belong to this vehicle".into()));
+        return Err(AppError::Validation(
+            "every trip_id must belong to this vehicle".into(),
+        ));
     }
     if !tag_ids.is_empty() {
-        let tag_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.trip_tags WHERE vehicle_id=$1 AND id=ANY($2)")
-            .bind(vehicle_id).bind(tag_ids).fetch_one(pool).await?;
+        let tag_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM riviamigo.trip_tags WHERE vehicle_id=$1 AND id=ANY($2)",
+        )
+        .bind(vehicle_id)
+        .bind(tag_ids)
+        .fetch_one(pool)
+        .await?;
         if tag_count != tag_ids.len() as i64 {
-            return Err(AppError::Validation("every tag_id must belong to this vehicle".into()));
+            return Err(AppError::Validation(
+                "every tag_id must belong to this vehicle".into(),
+            ));
         }
     }
     Ok(())

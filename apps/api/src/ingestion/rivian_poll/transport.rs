@@ -45,7 +45,10 @@ pub struct AuthError;
 
 fn errors_indicate_auth(errors: &[GqlError]) -> bool {
     errors.iter().any(|error| {
-        error.extensions.as_ref().and_then(|value| value.code.as_deref())
+        error
+            .extensions
+            .as_ref()
+            .and_then(|value| value.code.as_deref())
             == Some("UNAUTHENTICATED")
     })
 }

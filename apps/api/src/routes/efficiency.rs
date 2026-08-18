@@ -13,7 +13,9 @@ use crate::{
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
-    routes::trip_tag_filter::{parse_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagMatch},
+    routes::trip_tag_filter::{
+        parse_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagMatch,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -221,14 +223,14 @@ async fn get_summary(
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.distance_miles > 0{}", sql_predicate("t", 4, 5, 6));
     let row = sqlx::query_as::<_, SummaryRow>(sqlx::AssertSqlSafe(sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(tag_filter.tag_ids)
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_one(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_one(&state.pool)
+        .await?;
 
     let avg_wh_per_mi =
         weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi);
@@ -272,14 +274,14 @@ async fn get_by_mode(
            AND t.drive_mode IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 0{}
          GROUP BY t.drive_mode ORDER BY avg_wh_per_mi", sql_predicate("t", 4, 5, 6));
     let rows = sqlx::query_as::<_, ModeRow>(sqlx::AssertSqlSafe(sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(tag_filter.tag_ids)
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(serde_json::json!(rows
         .iter()
@@ -320,14 +322,14 @@ async fn get_vs_temp_binned(
            AND t.distance_miles > 0
          {} GROUP BY 1, 2 ORDER BY 1", sql_predicate("t", 4, 5, 6));
     let rows = sqlx::query_as::<_, VsTempPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(tag_filter.tag_ids)
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(rows))
 }
@@ -345,7 +347,8 @@ async fn get_trend(
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
-    let sql = format!("SELECT
+    let sql = format!(
+        "SELECT
              t.started_at AS ts,
              t.efficiency_wh_per_mile AS trip_efficiency_wh_mi,
              t.distance_miles
@@ -353,16 +356,18 @@ async fn get_trend(
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.efficiency_wh_per_mile IS NOT NULL
            AND t.distance_miles > 0
-         {} ORDER BY t.started_at", sql_predicate("t", 4, 5, 6));
+         {} ORDER BY t.started_at",
+        sql_predicate("t", 4, 5, 6)
+    );
     let samples = sqlx::query_as::<_, TrendSample>(sqlx::AssertSqlSafe(sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(tag_filter.tag_ids)
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(with_rolling_24h(samples)))
 }
@@ -380,7 +385,8 @@ async fn get_range_vs_temp(
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let sql = format!("SELECT t.id,
+    let sql = format!(
+        "SELECT t.id,
                 t.distance_miles,
                 t.efficiency_wh_per_mile,
                 t.outside_temp_c AS avg_temp_c
@@ -388,16 +394,18 @@ async fn get_range_vs_temp(
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0
            AND t.outside_temp_c IS NOT NULL
-         {} ORDER BY t.started_at DESC LIMIT 500", sql_predicate("t", 4, 5, 6));
+         {} ORDER BY t.started_at DESC LIMIT 500",
+        sql_predicate("t", 4, 5, 6)
+    );
     let rows = sqlx::query_as::<_, RangeVsTempRow>(sqlx::AssertSqlSafe(sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(tag_filter.tag_ids)
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(serde_json::json!(rows
         .iter()
@@ -415,7 +423,9 @@ async fn get_by_tag(
     auth: AuthUser,
     Query(p): Query<Params>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    let vid = p.vehicle_id.ok_or(AppError::Validation("vehicle_id required".into()))?;
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
     require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
@@ -445,9 +455,14 @@ async fn get_by_tag(
          ORDER BY tag_id IS NULL, lower(tag_name), tag_id"
     );
     let rows = sqlx::query_as::<_, ByTagRow>(sqlx::AssertSqlSafe(sql.as_str()))
-    .bind(vid).bind(from).bind(to)
-    .bind(tag_filter.tag_ids).bind(tag_filter.match_all).bind(tag_filter.untagged)
-    .fetch_all(&state.pool).await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(rows.into_iter().map(|row| {
         let average = (row.efficiency_miles > 0.0)

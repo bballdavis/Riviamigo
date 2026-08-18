@@ -290,13 +290,13 @@ impl Config {
     /// Hard-rejects insecure configurations when `RIVIAMIGO_ENV=production`.
     pub fn validate(&self) -> anyhow::Result<()> {
         let is_production = self.is_production();
-        let bind_address: IpAddr = self
-            .origin_bind
-            .riviamigo_bind_address
-            .parse()
-            .map_err(|_| {
-                anyhow::anyhow!("RIVIAMIGO_BIND_ADDRESS must be an IPv4 or IPv6 address")
-            })?;
+        let bind_address: IpAddr =
+            self.origin_bind
+                .riviamigo_bind_address
+                .parse()
+                .map_err(|_| {
+                    anyhow::anyhow!("RIVIAMIGO_BIND_ADDRESS must be an IPv4 or IPv6 address")
+                })?;
 
         // Resolve the proof during startup so an invalid or unreadable secret
         // fails explicitly instead of leaving first-owner setup mysteriously
@@ -875,7 +875,9 @@ mod tests {
         assert!(is_lan_client_address("192.168.1.20".parse().unwrap()));
         assert!(is_lan_client_address("fd00::20".parse().unwrap()));
         assert!(!is_lan_client_address("8.8.8.8".parse().unwrap()));
-        assert!(!is_lan_client_address("2001:4860:4860::8888".parse().unwrap()));
+        assert!(!is_lan_client_address(
+            "2001:4860:4860::8888".parse().unwrap()
+        ));
     }
 
     #[test]

@@ -13,14 +13,20 @@ use crate::{
     db::vehicles::{require_vehicle_membership, require_vehicle_read_access},
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    routes::trip_tag_filter::{
+        parse_tag_filter as parse_shared_tag_filter, require_known_vehicle_tags, sql_predicate,
+        TripTagFilter, TripTagMatch,
+    },
     services::trip_routes::build_route_preview,
-    routes::trip_tag_filter::{parse_tag_filter as parse_shared_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagFilter, TripTagMatch},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/trips", get(list_trips))
-        .route("/trips/tire-pressure-timeline", get(get_tire_pressure_timeline))
+        .route(
+            "/trips/tire-pressure-timeline",
+            get(get_tire_pressure_timeline),
+        )
         .route("/trips/{id}", get(get_trip))
         .route("/trips/{id}/detail", get(get_trip_detail))
         .route("/trips/{id}/track", get(get_track))
@@ -657,18 +663,18 @@ async fn list_trips(
         sql_predicate("t", 8, 9, 10),
     );
     let rows = sqlx::query_as::<_, TripRow>(sqlx::AssertSqlSafe(rows_sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(limit)
-    .bind(offset)
-    .bind(search.as_deref())
-    .bind(auth.user_id)
-    .bind(tag_filter.tag_ids.clone())
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_all(&mut *tx)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(limit)
+        .bind(offset)
+        .bind(search.as_deref())
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids.clone())
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&mut *tx)
+        .await?;
 
     let total_sql = format!(
         "SELECT COUNT(*) \
@@ -691,16 +697,16 @@ async fn list_trips(
         sql_predicate("t", 6, 7, 8),
     );
     let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(total_sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(search.as_deref())
-    .bind(auth.user_id)
-    .bind(tag_filter.tag_ids.clone())
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_one(&mut *tx)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(search.as_deref())
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids.clone())
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_one(&mut *tx)
+        .await?;
 
     tx.rollback().await?;
 
@@ -767,16 +773,17 @@ async fn get_tire_pressure_timeline(
              {} ORDER BY t.started_at"#,
         sql_predicate("t", 5, 6, 7),
     );
-    let trips = sqlx::query_as::<_, TirePressureTimelineTrip>(sqlx::AssertSqlSafe(trips_sql.as_str()))
-        .bind(vid)
-        .bind(from)
-        .bind(to)
-        .bind(auth.user_id)
-        .bind(tag_filter.tag_ids)
-        .bind(tag_filter.match_all)
-        .bind(tag_filter.untagged)
-        .fetch_all(&state.pool)
-        .await?;
+    let trips =
+        sqlx::query_as::<_, TirePressureTimelineTrip>(sqlx::AssertSqlSafe(trips_sql.as_str()))
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .bind(auth.user_id)
+            .bind(tag_filter.tag_ids)
+            .bind(tag_filter.match_all)
+            .bind(tag_filter.untagged)
+            .fetch_all(&state.pool)
+            .await?;
 
     Ok(Json(TirePressureTimelineResponse {
         vehicle_id: vid,
@@ -863,16 +870,16 @@ async fn get_trip_map(
         sql_predicate("t", 6, 7, 8),
     );
     let rows = sqlx::query_as::<_, TripMapRow>(sqlx::AssertSqlSafe(map_sql.as_str()))
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(search.as_deref())
-    .bind(auth.user_id)
-    .bind(tag_filter.tag_ids.clone())
-    .bind(tag_filter.match_all)
-    .bind(tag_filter.untagged)
-    .fetch_all(&state.pool)
-    .await?;
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(search.as_deref())
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids.clone())
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     let mut route_by_id = std::collections::HashMap::<Uuid, Vec<[f64; 2]>>::new();
     let mut missing = Vec::new();
