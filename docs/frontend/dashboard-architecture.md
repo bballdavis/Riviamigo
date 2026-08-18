@@ -132,7 +132,9 @@ The shared chart widget owns reusable chart display controls.
 
 - Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
 - Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
+- The shared settings panel groups display filtering, curve shaping, and supported axis ranges into collapsible sections. Display filtering and smoothing apply to every compatible curve in the active chart; a series may opt out only when its data semantics require it.
 - Treat dashboard edit mode as the only persistent write seam. In edit mode, widget-level settings changes should flow back through the dashboard shell's local config update path. In view mode, the same UI can preview changes locally, but those changes should not autosave.
+- Saved chart display settings remain part of the account-owned dashboard configuration; do not add browser-storage persistence for them.
 - Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. The favorite is stored in the authenticated account's database-backed preferences per dashboard/widget instance, so it survives browser changes and remains available when a managed catalog gains new chart definitions. `DashboardChartWidget` owns the preference interaction; the account preferences API owns persistence.
 - Keep the settings UI inside the shared chart widget and shared chart primitives. Do not recreate chart-settings popovers in route files or page components.
 - Rich time-series charts may expose manual `y` and `y2` ranges broadly, but `x` range controls are only valid when the chart owns its own non-dashboard domain.
