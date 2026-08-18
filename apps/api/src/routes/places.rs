@@ -19,8 +19,7 @@ use crate::{
     services::cost::recompute_charge_session_cost,
 };
 
-const SYNC_LINKED_SESSION_COST_PROFILE_SQL: &str =
-    "UPDATE riviamigo.charge_sessions
+const SYNC_LINKED_SESSION_COST_PROFILE_SQL: &str = "UPDATE riviamigo.charge_sessions
         SET cost_profile_id=$2
       WHERE geofence_id=$1 AND cost_override_mode='automatic'
       RETURNING id";
@@ -374,10 +373,10 @@ async fn update_place(
     // Keep each linked automatic session's explicit profile synchronized with
     // the place before recomputing. This also clears a removed place profile.
     let sessions = sqlx::query_scalar::<_, Uuid>(SYNC_LINKED_SESSION_COST_PROFILE_SQL)
-    .bind(id)
-    .bind(cost_profile_id)
-    .fetch_all(&mut *tx)
-    .await?;
+        .bind(id)
+        .bind(cost_profile_id)
+        .fetch_all(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
@@ -773,8 +772,7 @@ mod tests {
     fn place_pricing_edits_replace_or_clear_linked_automatic_session_profiles() {
         assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("SET cost_profile_id=$2"));
         assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("geofence_id=$1"));
-        assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL
-            .contains("cost_override_mode='automatic'"));
+        assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("cost_override_mode='automatic'"));
         assert!(SYNC_LINKED_SESSION_COST_PROFILE_SQL.contains("RETURNING id"));
     }
 }

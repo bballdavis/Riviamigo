@@ -114,11 +114,13 @@ mod tests {
         drop(rx);
         let handle = SupervisorHandle { tx };
 
-        assert!(!handle
-            .send(SupervisorCommand::StartWorker {
-                vehicle_id: Uuid::new_v4(),
-            })
-            .await);
+        assert!(
+            !handle
+                .send(SupervisorCommand::StartWorker {
+                    vehicle_id: Uuid::new_v4(),
+                })
+                .await
+        );
     }
 
     // ── StopWorker sends shutdown signal ─────────────────────────────────────

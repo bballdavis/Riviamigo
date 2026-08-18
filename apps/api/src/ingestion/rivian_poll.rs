@@ -1499,9 +1499,8 @@ pub async fn fetch_live_session_history(
     .bind(vehicle_id)
     .fetch_one(pool)
     .await?;
-    let cutoff = latest_stored.map(|latest| {
-        latest - chrono::Duration::minutes(LIVE_CURVE_OVERLAP_MINUTES)
-    });
+    let cutoff =
+        latest_stored.map(|latest| latest - chrono::Duration::minutes(LIVE_CURVE_OVERLAP_MINUTES));
     let records_received = points.len();
     let mut selected = points
         .into_iter()

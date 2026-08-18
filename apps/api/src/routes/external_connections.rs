@@ -1268,7 +1268,9 @@ fn is_forbidden_ip(ip: IpAddr) -> bool {
                 || is_ipv6_unicast_link_local(ip)
                 || (segments[0] & 0xffc0) == 0xfec0
                 || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || ip.to_ipv4_mapped().is_some_and(|mapped| is_forbidden_ip(IpAddr::V4(mapped)))
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| is_forbidden_ip(IpAddr::V4(mapped)))
         }
     }
 }

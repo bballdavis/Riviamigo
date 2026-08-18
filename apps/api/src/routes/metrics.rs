@@ -12,7 +12,9 @@ use crate::{
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
-    routes::trip_tag_filter::{parse_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagFilter, TripTagMatch},
+    routes::trip_tag_filter::{
+        parse_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagFilter, TripTagMatch,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -497,7 +499,16 @@ async fn get_series(
 
     let points = match metric.source {
         MetricSource::Summary => {
-            summary_series(&state.pool, vid, metric.id, from, to, bucket, &TripTagFilter::default()).await?
+            summary_series(
+                &state.pool,
+                vid,
+                metric.id,
+                from,
+                to,
+                bucket,
+                &TripTagFilter::default(),
+            )
+            .await?
         }
         MetricSource::Telemetry(column) => {
             telemetry_daily_series(
@@ -566,7 +577,8 @@ async fn get_batch(
     let mut series = Vec::new();
     for (metric, include_latest, include_series) in requested {
         if include_latest {
-            let (value, ts) = metric_value(&state.pool, p.vehicle_id, metric, from, to, &tag_filter).await?;
+            let (value, ts) =
+                metric_value(&state.pool, p.vehicle_id, metric, from, to, &tag_filter).await?;
             values.push(MetricValueResponse {
                 metric: metric.id.to_string(),
                 value,
@@ -576,7 +588,16 @@ async fn get_batch(
             });
         }
         if include_series {
-            let points = metric_series(&state.pool, p.vehicle_id, metric, from, to, bucket, &tag_filter).await?;
+            let points = metric_series(
+                &state.pool,
+                p.vehicle_id,
+                metric,
+                from,
+                to,
+                bucket,
+                &tag_filter,
+            )
+            .await?;
             series.push(MetricBatchSeriesResponse {
                 metric: metric.id.to_string(),
                 points: max_points.map_or(points.clone(), |limit| cap_metric_points(points, limit)),
@@ -602,7 +623,9 @@ async fn metric_value(
     tag_filter: &TripTagFilter,
 ) -> Result<(Option<f64>, Option<DateTime<Utc>>), AppError> {
     match metric.source {
-        MetricSource::Summary => summary_value(pool, vehicle_id, metric.id, from, to, tag_filter).await,
+        MetricSource::Summary => {
+            summary_value(pool, vehicle_id, metric.id, from, to, tag_filter).await
+        }
         MetricSource::Telemetry(column) => latest_telemetry_value(pool, vehicle_id, column).await,
     }
 }
@@ -1093,15 +1116,25 @@ async fn filtered_summary_value(
 
     let value = if metric == "avg_efficiency" {
         let row = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid).bind(from).bind(to)
-            .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
-            .fetch_one(pool).await?;
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .bind(filter.tag_ids.clone())
+            .bind(filter.match_all)
+            .bind(filter.untagged)
+            .fetch_one(pool)
+            .await?;
         weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi)
     } else {
         sqlx::query_scalar::<_, Option<f64>>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid).bind(from).bind(to)
-            .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
-            .fetch_optional(pool).await?
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .bind(filter.tag_ids.clone())
+            .bind(filter.match_all)
+            .bind(filter.untagged)
+            .fetch_optional(pool)
+            .await?
             .flatten()
     };
     Ok((value, Some(to)))
@@ -1134,7 +1167,11 @@ async fn filtered_summary_series(
         "avg_trip_duration" => ("AVG(duration_seconds / 60.0)::float8", "duration_seconds IS NOT NULL", true),
         _ => return Ok(Vec::new()),
     };
-    let group = if aggregate { " GROUP BY 1 ORDER BY 1" } else { " ORDER BY 1" };
+    let group = if aggregate {
+        " GROUP BY 1 ORDER BY 1"
+    } else {
+        " ORDER BY 1"
+    };
     let sql = format!(
         "{scope} SELECT {bucket_expr} AS ts, {value_expr} AS value \
          FROM filtered_trips WHERE {where_clause}{group}"
@@ -1150,19 +1187,35 @@ async fn filtered_summary_series(
              GROUP BY 1 ORDER BY 1"
         );
         let rows = sqlx::query_as::<_, WeightedEfficiencyRow>(sqlx::AssertSqlSafe(sql.as_str()))
-            .bind(vid).bind(from).bind(to)
-            .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
-            .fetch_all(pool).await?;
-        return Ok(rows.into_iter().map(|row| MetricSeriesPoint {
-            ts: row.ts,
-            value: weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi),
-        }).collect());
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .bind(filter.tag_ids.clone())
+            .bind(filter.match_all)
+            .bind(filter.untagged)
+            .fetch_all(pool)
+            .await?;
+        return Ok(rows
+            .into_iter()
+            .map(|row| MetricSeriesPoint {
+                ts: row.ts,
+                value: weighted_average_from_totals(
+                    row.total_distance_miles,
+                    row.weighted_efficiency_wh_mi,
+                ),
+            })
+            .collect());
     }
 
     sqlx::query_as::<_, MetricSeriesPoint>(sqlx::AssertSqlSafe(sql.as_str()))
-        .bind(vid).bind(from).bind(to)
-        .bind(filter.tag_ids.clone()).bind(filter.match_all).bind(filter.untagged)
-        .fetch_all(pool).await
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(filter.tag_ids.clone())
+        .bind(filter.match_all)
+        .bind(filter.untagged)
+        .fetch_all(pool)
+        .await
         .map_err(AppError::from)
 }
 

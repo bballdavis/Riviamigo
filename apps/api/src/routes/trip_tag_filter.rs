@@ -47,7 +47,9 @@ pub fn parse_tag_filter(
                 .filter(|part| !part.trim().is_empty())
                 .map(|part| {
                     Uuid::parse_str(part.trim()).map_err(|_| {
-                        AppError::Validation("tag_ids must be a comma-separated list of UUIDs".into())
+                        AppError::Validation(
+                            "tag_ids must be a comma-separated list of UUIDs".into(),
+                        )
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -58,16 +60,22 @@ pub fn parse_tag_filter(
     if let Some(ids) = tag_ids.as_mut() {
         ids.sort_unstable();
         if ids.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(AppError::Validation("tag_ids must not contain duplicates".into()));
+            return Err(AppError::Validation(
+                "tag_ids must not contain duplicates".into(),
+            ));
         }
         if ids.len() > 50 {
-            return Err(AppError::Validation("tag_ids may contain at most 50 IDs".into()));
+            return Err(AppError::Validation(
+                "tag_ids may contain at most 50 IDs".into(),
+            ));
         }
     }
 
     let untagged = raw_untagged.unwrap_or(false);
     if untagged && tag_ids.is_some() {
-        return Err(AppError::Validation("untagged cannot be combined with tag_ids".into()));
+        return Err(AppError::Validation(
+            "untagged cannot be combined with tag_ids".into(),
+        ));
     }
 
     Ok(TripTagFilter {
@@ -93,7 +101,9 @@ pub async fn require_known_vehicle_tags(
     .fetch_one(pool)
     .await?;
     if count != tag_ids.len() as i64 {
-        return Err(AppError::Validation("tag_ids must belong to the selected vehicle".into()));
+        return Err(AppError::Validation(
+            "tag_ids must belong to the selected vehicle".into(),
+        ));
     }
     Ok(())
 }

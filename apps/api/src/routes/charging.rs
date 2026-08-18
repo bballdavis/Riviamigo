@@ -94,7 +94,9 @@ enum PatchField<T> {
 }
 
 impl<T> Default for PatchField<T> {
-    fn default() -> Self { Self::Absent }
+    fn default() -> Self {
+        Self::Absent
+    }
 }
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for PatchField<T> {
@@ -571,15 +573,23 @@ async fn update_charge_session(
         PatchField::Absent | PatchField::Null => None,
     };
     if location_mode == Some(LocationOverrideMode::SavedPlace) && requested_place_id.is_none() {
-        return Err(AppError::Validation("place_id required when location_mode is saved_place".into()));
+        return Err(AppError::Validation(
+            "place_id required when location_mode is saved_place".into(),
+        ));
     }
     if payload.cost_mode == Some(CostOverrideMode::Manual)
-        && !payload.cost_usd.is_some_and(|value| value.is_finite() && value >= 0.0)
+        && !payload
+            .cost_usd
+            .is_some_and(|value| value.is_finite() && value >= 0.0)
     {
-        return Err(AppError::Validation("cost_usd must be a non-negative number when cost_mode is manual".into()));
+        return Err(AppError::Validation(
+            "cost_usd must be a non-negative number when cost_mode is manual".into(),
+        ));
     }
     if payload.cost_mode != Some(CostOverrideMode::Manual) && payload.cost_usd.is_some() {
-        return Err(AppError::Validation("cost_usd is only valid when cost_mode is manual".into()));
+        return Err(AppError::Validation(
+            "cost_usd is only valid when cost_mode is manual".into(),
+        ));
     }
 
     let updated_session_id = if location_mode == Some(LocationOverrideMode::SavedPlace) {
@@ -688,7 +698,11 @@ async fn update_charge_session(
               WHERE id=$3 AND vehicle_id=$4",
         )
         .bind(cost_mode.as_str())
-        .bind(if cost_mode == CostOverrideMode::Manual { payload.cost_usd } else { None })
+        .bind(if cost_mode == CostOverrideMode::Manual {
+            payload.cost_usd
+        } else {
+            None
+        })
         .bind(session_id)
         .bind(vehicle_id)
         .execute(pool)
@@ -751,7 +765,9 @@ async fn update_network_preference(
     .bind(&normalized)
     .fetch_one(&state.pool)
     .await?;
-    let Some(observed) = observed else { return Err(AppError::NotFound); };
+    let Some(observed) = observed else {
+        return Err(AppError::NotFound);
+    };
 
     sqlx::query(
         r#"INSERT INTO riviamigo.vehicle_charging_network_preferences
@@ -779,7 +795,9 @@ async fn update_network_preference(
     for id in sessions {
         recompute_charge_session_cost(&state.pool, id).await?;
     }
-    Ok(Json(serde_json::json!({ "network_vendor": observed, "cost_mode": payload.cost_mode.as_str() })))
+    Ok(Json(
+        serde_json::json!({ "network_vendor": observed, "cost_mode": payload.cost_mode.as_str() }),
+    ))
 }
 
 async fn list_sessions_path(
