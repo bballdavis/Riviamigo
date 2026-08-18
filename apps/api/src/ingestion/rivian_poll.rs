@@ -440,66 +440,6 @@ pub async fn fetch_vehicle_enrichment(
     Ok(())
 }
 
-// ── Battery static fields ─────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VehicleStateData {
-    vehicle_state: Option<VehicleStaticFields>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VehicleStaticFields {
-    battery_cell_type: Option<StringValue>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StringValue {
-    value: Option<String>,
-}
-
-/// Fetch battery cell type (NMC / LFP) and upsert into `vehicles`.
-pub async fn fetch_battery_static(
-    rivian_vehicle_id: &str,
-    vehicle_id: Uuid,
-    pool: &PgPool,
-    client: &reqwest::Client,
-    tokens: &RivianTokenBundle,
-) -> Result<()> {
-    const Q: &str = r#"
-        query GetVehicleState($vehicleID: String!) {
-          vehicleState(id: $vehicleID) {
-            batteryCellType { value }
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({ "vehicleID": rivian_vehicle_id });
-    let data: VehicleStateData =
-        gql_request(client, GATEWAY_URL, tokens, "GetVehicleState", Q, vars).await?;
-
-    let battery_cell_type = data
-        .vehicle_state
-        .and_then(|s| s.battery_cell_type)
-        .and_then(|v| v.value);
-
-    sqlx::query(
-        "UPDATE riviamigo.vehicles
-         SET battery_cell_type = COALESCE($2, battery_cell_type),
-             updated_at        = now()
-         WHERE id = $1",
-    )
-    .bind(vehicle_id)
-    .bind(battery_cell_type)
-    .execute(pool)
-    .await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-    tracing::debug!(vehicle_id=%vehicle_id, "battery static upserted");
-    Ok(())
-}
-
 // ── Wallboxes ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -618,27 +558,6 @@ pub async fn fetch_vehicle_enrichment_for_vehicle(
     .await
 }
 
-pub async fn fetch_battery_static_for_vehicle(
-    vehicle_id: Uuid,
-    pool: &PgPool,
-    client: &reqwest::Client,
-    age_key: &str,
-) -> Result<()> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_battery_static",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_battery_static(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
-            })
-        },
-    )
-    .await
-}
-
 pub async fn fetch_wallboxes_for_vehicle(
     user_id: Uuid,
     vehicle_id: Uuid,
@@ -696,31 +615,6 @@ struct CompletedSessionItem {
     /// SoC at session end (0–100)
     is_roaming_network: Option<bool>,
     meta: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveChargeSessionData {
-    get_live_session_data: Option<LiveChargeSessionItem>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveChargeSessionItem {
-    soc: Option<LiveValue<f64>>,
-    power: Option<LiveValue<f64>>,
-    total_charged_energy: Option<LiveValue<f64>>,
-    range_added_this_session: Option<LiveValue<f64>>,
-    time_remaining: Option<LiveValue<f64>>,
-    kilometers_charged_per_hour: Option<LiveValue<f64>>,
-    vehicle_charger_state: Option<LiveValue<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveValue<T> {
-    value: Option<T>,
-    updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -832,26 +726,6 @@ pub async fn fetch_charge_history_full(
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
     fetch_charge_history_inner_v2(rivian_vehicle_id, vehicle_id, true, pool, client, tokens).await
-}
-
-async fn record_charge_payload(
-    pool: &PgPool,
-    vehicle_id: Uuid,
-    operation: &str,
-    rivian_transaction_id: Option<&str>,
-    rivian_vehicle_id: Option<&str>,
-    payload: serde_json::Value,
-) -> Result<()> {
-    let _ = record_charge_payload_with_ref(
-        pool,
-        vehicle_id,
-        operation,
-        rivian_transaction_id,
-        rivian_vehicle_id,
-        payload,
-    )
-    .await?;
-    Ok(())
 }
 
 async fn fetch_charge_history_inner_v2(
@@ -1334,133 +1208,13 @@ async fn record_charge_payload_with_ref(
     })
 }
 
-/// Decide whether a charge session belongs to a paid public network ("Rivian
-/// Adventure" or a roaming partner) based on the vendor string only.
-///
-/// We deliberately do *not* infer this from absence-of-evidence: if Rivian
-/// returns `vendor=null` we leave the value `None`, not `Some(false)` and
-/// definitely not `Some(true)`.  An earlier version inferred `Some(true)` when
-/// `isRoamingNetwork=false` AND `isHomeCharger` was null/false, which turned
-/// home AC sessions into "Rivian network" rows and let the cost service treat
-/// `rivian_paid_total` as authoritative — producing wildly inflated home
-/// charging costs.
-pub async fn fetch_live_charge_session(
-    rivian_vehicle_id: &str,
-    vehicle_id: Uuid,
-    active_session_id: Option<Uuid>,
-    pool: &PgPool,
-    client: &reqwest::Client,
-    tokens: &RivianTokenBundle,
-) -> Result<()> {
-    // Fields confirmed by rivian-python-client LIVE_SESSION_PROPERTIES.
-    // Type must be ID! (not String!) per Rivian's schema.
-    const Q: &str = r#"
-        query getLiveSessionData($vehicleId: ID!) {
-          getLiveSessionData(vehicleId: $vehicleId) {
-            __typename
-            soc { value updatedAt }
-            power { value updatedAt }
-            totalChargedEnergy { value updatedAt }
-            rangeAddedThisSession { value updatedAt }
-            timeRemaining { value updatedAt }
-            kilometersChargedPerHour { value updatedAt }
-            vehicleChargerState { value updatedAt }
-          }
-        }
-    "#;
-
-    let data: LiveChargeSessionData = gql_request(
-        client,
-        CHRG_URL,
-        tokens,
-        "getLiveSessionData",
-        Q,
-        serde_json::json!({ "vehicleId": rivian_vehicle_id }),
-    )
-    .await?;
-    increment_poll_counter(pool, vehicle_id).await;
-
-    let Some(live) = data.get_live_session_data else {
-        return Ok(());
-    };
-
-    if let Some(session_id) = active_session_id {
-        let updated_session_id = sqlx::query_scalar::<_, Uuid>(
-            "UPDATE riviamigo.charge_sessions SET
-                 live_total_charged_kwh = COALESCE($2, live_total_charged_kwh),
-                 live_range_added_km    = COALESCE($3, live_range_added_km),
-                 live_power_kw          = COALESCE($4, live_power_kw),
-                 live_charge_rate_kph   = COALESCE($5, live_charge_rate_kph),
-                 kwh_added              = COALESCE(kwh_added, $2),
-                 range_added_km         = COALESCE(range_added_km, $3),
-                 source = CASE WHEN source = 'rivian_api'
-                               THEN 'telemetry+rivian_api'
-                               ELSE COALESCE(source, 'telemetry') END,
-                 data_confidence = CASE WHEN source = 'rivian_api'
-                                        THEN 'telemetry_enriched'
-                                        ELSE COALESCE(data_confidence, 'telemetry') END
-             WHERE id = $1
-             RETURNING id",
-        )
-        .bind(session_id)
-        .bind(live.total_charged_energy.as_ref().and_then(|v| v.value))
-        .bind(live.range_added_this_session.as_ref().and_then(|v| v.value))
-        .bind(live.power.as_ref().and_then(|v| v.value))
-        .bind(
-            live.kilometers_charged_per_hour
-                .as_ref()
-                .and_then(|v| v.value),
-        )
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some(session_id) = updated_session_id {
-            let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
-        }
+const LIVE_SESSION_HISTORY_QUERY: &str = r#"
+    query getLiveSessionHistory($vehicleId: ID!) {
+      getLiveSessionHistory(vehicleId: $vehicleId) {
+        chartData { kw time }
+      }
     }
-
-    record_charge_payload(
-        pool,
-        vehicle_id,
-        "getLiveSessionData",
-        None,
-        Some(rivian_vehicle_id),
-        serde_json::to_value(&live).unwrap_or_else(|_| serde_json::json!({})),
-    )
-    .await?;
-
-    Ok(())
-}
-
-pub async fn fetch_live_charge_session_for_vehicle(
-    vehicle_id: Uuid,
-    active_session_id: Option<Uuid>,
-    pool: &PgPool,
-    client: &reqwest::Client,
-    age_key: &str,
-) -> Result<()> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_live_charge_session",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_live_charge_session(
-                    rivian_vehicle_id,
-                    vehicle_id,
-                    active_session_id,
-                    pool,
-                    client,
-                    tokens,
-                )
-                .await
-            })
-        },
-    )
-    .await
-}
+"#;
 
 pub async fn fetch_live_session_history(
     rivian_vehicle_id: &str,
@@ -1470,20 +1224,12 @@ pub async fn fetch_live_session_history(
     client: &reqwest::Client,
     tokens: &RivianTokenBundle,
 ) -> Result<usize> {
-    const Q: &str = r#"
-        query getLiveSessionHistory($vehicleId: String!) {
-          getLiveSessionHistory(vehicleId: $vehicleId) {
-            chartData { kw time }
-          }
-        }
-    "#;
-
     let data: LiveSessionHistoryData = gql_request(
         client,
         CHRG_URL,
         tokens,
         "getLiveSessionHistory",
-        Q,
+        LIVE_SESSION_HISTORY_QUERY,
         serde_json::json!({ "vehicleId": rivian_vehicle_id }),
     )
     .await?;
@@ -1597,7 +1343,7 @@ pub async fn fetch_live_session_history_for_vehicle(
     .await
 }
 
-// ── Live session data (Redis only, not persisted) ─────────────────────────────
+// ── Live session data (WebSocket chargingSession subscription) ──────────────
 
 /// Serialized to Redis and served by GET /v1/vehicles/:id/live-session.
 /// Field names must match the frontend LiveSession TypeScript interface.
@@ -1610,6 +1356,20 @@ pub struct LiveSessionData {
     pub time_remaining_min: Option<f64>,
     pub charger_type: Option<String>,
     pub ts: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_rate_kph: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_elapsed_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_free_session: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vehicle_charger_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) const LIVE_SESSION_TTL_SECONDS: u64 = 120;
@@ -1618,93 +1378,163 @@ pub(crate) fn live_session_redis_key(vehicle_id: Uuid) -> String {
     format!("vehicle:{vehicle_id}:live_session")
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveSessionApiData {
-    get_live_session_data: Option<LiveSessionApiPayload>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveSessionApiPayload {
-    soc: Option<LiveValue<f64>>,
-    power: Option<LiveValue<f64>>,
-    total_charged_energy: Option<LiveValue<f64>>,
-    range_added_this_session: Option<LiveValue<f64>>,
-    time_remaining: Option<LiveValue<f64>>,
-    vehicle_charger_state: Option<LiveValue<String>>,
-}
-
-fn normalize_live_session(payload: LiveSessionApiPayload, ts: DateTime<Utc>) -> LiveSessionData {
-    LiveSessionData {
-        soc_pct: payload.soc.and_then(|v| v.value),
-        power_kw: payload.power.and_then(|v| v.value),
-        energy_kwh: payload.total_charged_energy.and_then(|v| v.value),
-        range_added_km: payload.range_added_this_session.and_then(|v| v.value),
-        time_remaining_min: payload.time_remaining.and_then(|v| v.value),
-        charger_type: payload.vehicle_charger_state.and_then(|v| v.value),
-        ts,
+/// Convert the documented `chargingSession` payload into the existing live
+/// Redis contract. `timeRemaining` and `timeElapsed` are seconds in Rivian's
+/// charging payload; the public live-session field remains minutes.
+pub fn normalize_charging_session(
+    event: &crate::ingestion::parser::ChargingSessionEvent,
+    received_at: DateTime<Utc>,
+) -> Option<LiveSessionData> {
+    let live = event.live_data.as_ref()?;
+    let has_live_value = live.power_kw.is_some()
+        || live.kilometers_charged_per_hour.is_some()
+        || live.range_added_this_session.is_some()
+        || live.total_charged_energy.is_some()
+        || live.time_elapsed_seconds.is_some()
+        || live.time_remaining_seconds.is_some()
+        || live.price.is_some()
+        || live.currency.is_some()
+        || live.is_free_session.is_some()
+        || live.vehicle_charger_state.is_some()
+        || live.start_time.is_some();
+    let has_chart_value = event.chart_data.iter().any(|point| {
+        point.soc.is_some()
+            || point.power_kw.is_some()
+            || point.start_time.is_some()
+            || point.end_time.is_some()
+            || point.time_estimation_validity_status.is_some()
+            || point.vehicle_charger_state.is_some()
+    });
+    if !has_live_value && !has_chart_value {
+        return None;
     }
+    Some(LiveSessionData {
+        soc_pct: event.chart_data.iter().rev().find_map(|point| point.soc),
+        power_kw: live.power_kw,
+        energy_kwh: live.total_charged_energy,
+        range_added_km: live.range_added_this_session,
+        time_remaining_min: live.time_remaining_seconds.map(|seconds| seconds / 60.0),
+        charger_type: live.vehicle_charger_state.clone(),
+        ts: received_at,
+        charge_rate_kph: live.kilometers_charged_per_hour,
+        time_elapsed_seconds: live.time_elapsed_seconds,
+        price: live.price,
+        currency: live.currency.clone(),
+        is_free_session: live.is_free_session,
+        vehicle_charger_state: live.vehicle_charger_state.clone(),
+        started_at: live.start_time,
+    })
 }
 
-/// Fetch live charging session data from Rivian's charging endpoint.
-/// Returns `None` if no session is currently active.
-/// This data is NOT persisted to the database — published to Redis instead.
-pub async fn fetch_live_session(
-    rivian_vehicle_id: &str,
-    vehicle_id: Uuid,
+/// Persist the fields that belong to the active canonical charge session.
+/// The WebSocket worker owns when this is called; this helper owns the SQL
+/// shape so HTTP history and live-stream enrichment share one seam.
+pub async fn persist_live_session_data(
     pool: &PgPool,
-    client: &reqwest::Client,
-    tokens: &RivianTokenBundle,
-) -> Result<Option<LiveSessionData>> {
-    // Type must be ID! (not String!) per Rivian's schema.
-    const Q: &str = r#"
-        query getLiveSessionData($vehicleId: ID!) {
-          getLiveSessionData(vehicleId: $vehicleId) {
-            __typename
-            soc { value updatedAt }
-            power { value updatedAt }
-            totalChargedEnergy { value updatedAt }
-            rangeAddedThisSession { value updatedAt }
-            timeRemaining { value updatedAt }
-            vehicleChargerState { value updatedAt }
-          }
-        }
-    "#;
-
-    let vars = serde_json::json!({ "vehicleId": rivian_vehicle_id });
-    let data: LiveSessionApiData =
-        gql_request(client, CHRG_URL, tokens, "getLiveSessionData", Q, vars).await?;
-
-    increment_poll_counter(pool, vehicle_id).await;
-
-    let payload = match data.get_live_session_data {
-        Some(p) => p,
-        None => return Ok(None),
+    active_session_id: Option<Uuid>,
+    live: &LiveSessionData,
+) -> Result<()> {
+    let Some(session_id) = active_session_id else {
+        return Ok(());
     };
 
-    Ok(Some(normalize_live_session(payload, Utc::now())))
+    let updated = sqlx::query(
+        "UPDATE riviamigo.charge_sessions SET
+             live_current_price       = COALESCE($2, live_current_price),
+             live_current_currency    = COALESCE($3, live_current_currency),
+             live_total_charged_kwh   = COALESCE($4, live_total_charged_kwh),
+             live_range_added_km      = COALESCE($5, live_range_added_km),
+             live_power_kw            = COALESCE($6, live_power_kw),
+             live_charge_rate_kph     = COALESCE($7, live_charge_rate_kph),
+             live_time_elapsed_seconds = COALESCE($8, live_time_elapsed_seconds),
+             live_session_started_at  = COALESCE($9, live_session_started_at),
+             is_free_session          = COALESCE($10, is_free_session),
+             kwh_added                = COALESCE(kwh_added, $4),
+             range_added_km           = COALESCE(range_added_km, $5),
+             source = CASE WHEN source = 'rivian_api'
+                           THEN 'telemetry+rivian_api'
+                           ELSE COALESCE(source, 'telemetry') END,
+             data_confidence = CASE WHEN source = 'rivian_api'
+                                    THEN 'telemetry_enriched'
+                                    ELSE COALESCE(data_confidence, 'telemetry') END
+         WHERE id = $1",
+    )
+    .bind(session_id)
+    .bind(live.price)
+    .bind(&live.currency)
+    .bind(live.energy_kwh)
+    .bind(live.range_added_km)
+    .bind(live.power_kw)
+    .bind(live.charge_rate_kph)
+    .bind(
+        live.time_elapsed_seconds
+            .map(|seconds| seconds.round() as i32),
+    )
+    .bind(live.started_at)
+    .bind(live.is_free_session)
+    .execute(pool)
+    .await?;
+
+    if updated.rows_affected() > 0 {
+        let _ = crate::services::cost::recompute_charge_session_cost(pool, session_id).await?;
+    }
+    Ok(())
 }
 
-pub async fn fetch_live_session_for_vehicle(
-    vehicle_id: Uuid,
+/// Persist chart power points emitted by `chargingSession`. The existing
+/// curve table deliberately stores only observed power; absent or malformed
+/// timestamps are ignored instead of inventing samples.
+pub async fn persist_charging_session_chart(
     pool: &PgPool,
-    client: &reqwest::Client,
-    age_key: &str,
-) -> Result<Option<LiveSessionData>> {
-    with_vehicle_auth_retry(
-        vehicle_id,
-        pool,
-        client,
-        age_key,
-        "fetch_live_session",
-        move |rivian_vehicle_id, tokens, pool, client| {
-            Box::pin(async move {
-                fetch_live_session(rivian_vehicle_id, vehicle_id, pool, client, tokens).await
-            })
-        },
+    vehicle_id: Uuid,
+    active_session_id: Option<Uuid>,
+    points: &[crate::ingestion::parser::ChargingSessionChartPoint],
+) -> Result<usize> {
+    let selected = points
+        .iter()
+        .filter_map(|point| point.start_time.map(|ts| (ts, point.power_kw)))
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok(0);
+    }
+
+    let timestamps = selected.iter().map(|(ts, _)| *ts).collect::<Vec<_>>();
+    let power = selected.iter().map(|(_, power)| *power).collect::<Vec<_>>();
+    let actions = sqlx::query_scalar::<_, bool>(
+        r#"INSERT INTO riviamigo.rivian_charge_curve_points
+               (vehicle_id, charge_session_id, ts, power_kw)
+           SELECT $1, $2, incoming.ts, incoming.power_kw
+           FROM unnest($3::timestamptz[], $4::double precision[])
+               AS incoming(ts, power_kw)
+           ON CONFLICT (vehicle_id, ts)
+           DO UPDATE SET
+               charge_session_id = COALESCE(
+                   rivian_charge_curve_points.charge_session_id,
+                   EXCLUDED.charge_session_id
+               ),
+               power_kw = COALESCE(
+                   EXCLUDED.power_kw,
+                   rivian_charge_curve_points.power_kw
+               )
+           WHERE rivian_charge_curve_points.charge_session_id IS DISTINCT FROM
+                     COALESCE(
+                         rivian_charge_curve_points.charge_session_id,
+                         EXCLUDED.charge_session_id
+                     )
+              OR rivian_charge_curve_points.power_kw IS DISTINCT FROM
+                     COALESCE(
+                         EXCLUDED.power_kw,
+                         rivian_charge_curve_points.power_kw
+                     )
+           RETURNING xmax = 0"#,
     )
-    .await
+    .bind(vehicle_id)
+    .bind(active_session_id)
+    .bind(&timestamps)
+    .bind(&power)
+    .fetch_all(pool)
+    .await?;
+    Ok(actions.len())
 }
 
 // ── Charging schedule ─────────────────────────────────────────────────────────
@@ -2427,14 +2257,6 @@ pub async fn run_startup_polls(
         }
     }
 
-    if let Err(e) = fetch_battery_static_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-        if is_auth_error(&e) {
-            tracing::info!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static skipped: authentication required");
-        } else {
-            tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_battery_static failed");
-        }
-    }
-
     if let Err(e) = fetch_wallboxes_for_vehicle(user_id, vehicle_id, &pool, &client, &age_key).await
     {
         tracing::warn!(vehicle_id=%vehicle_id, err=%e, "fetch_wallboxes failed");
@@ -2525,7 +2347,7 @@ pub(crate) async fn run_poll_loop(
     client: reqwest::Client,
     age_key: String,
     signals: PollLoopSignals,
-    redis: redis::Client,
+    _redis: redis::Client,
 ) {
     let PollLoopSignals {
         mut power_state_rx,
@@ -2534,10 +2356,6 @@ pub(crate) async fn run_poll_loop(
     } = signals;
 
     use crate::ingestion::poller::poll_interval;
-    use redis::AsyncCommands;
-
-    let live_key = live_session_redis_key(vehicle_id);
-
     tracing::info!(vehicle_id=%vehicle_id, "poll loop started");
     let mut last_charge_history_sync = tokio::time::Instant::now();
 
@@ -2566,59 +2384,10 @@ pub(crate) async fn run_poll_loop(
         }
 
         let current_power = power_state_rx.borrow().clone();
-        let actively_charging = *charging_rx.borrow();
 
-        if actively_charging {
-            match fetch_live_session_for_vehicle(vehicle_id, &pool, &client, &age_key).await {
-                Ok(Some(live)) => match serde_json::to_string(&live) {
-                    Ok(json) => match redis.get_multiplexed_async_connection().await {
-                        Ok(mut conn) => {
-                            if let Err(error) = conn
-                                .set_ex::<_, _, ()>(&live_key, json, LIVE_SESSION_TTL_SECONDS)
-                                .await
-                            {
-                                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis write failed");
-                            }
-                        }
-                        Err(error) => {
-                            tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis connection failed");
-                        }
-                    },
-                    Err(error) => {
-                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session serialization failed");
-                    }
-                },
-                Ok(None) => {
-                    if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
-                        let _: Result<(), _> = conn.del(&live_key).await;
-                    }
-                }
-                Err(error) if is_auth_error(&error) => {
-                    if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
-                        let _: Result<(), _> = conn.del(&live_key).await;
-                    }
-                    tracing::info!(vehicle_id=%vehicle_id, err=%error, "live session polling stopped: authentication required");
-                }
-                Err(error) => {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session polling failed; retaining existing Redis value until TTL");
-                }
-            }
-        } else if let Ok(mut conn) = redis.get_multiplexed_async_connection().await {
-            let _: Result<(), _> = conn.del(&live_key).await;
-        }
-
-        if actively_charging {
-            if let Err(error) =
-                fetch_live_session_history_for_vehicle(vehicle_id, None, &pool, &client, &age_key)
-                    .await
-            {
-                if is_auth_error(&error) {
-                    tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session history skipped: authentication required");
-                } else {
-                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session history sync failed");
-                }
-            }
-        }
+        // Live charging data is pushed by the chargingSession WebSocket
+        // subscription. REST history is intentionally limited to post-session
+        // reconciliation below; it is not a live-telemetry replacement.
 
         let charge_history_interval = match current_power {
             Some(crate::models::telemetry::PowerState::Charging)
@@ -2649,9 +2418,10 @@ pub(crate) async fn run_poll_loop(
 #[cfg(test)]
 mod tests {
     use super::{
-        live_session_redis_key, unchanged_linked_session, LiveSessionApiData,
+        live_session_redis_key, unchanged_linked_session, LIVE_SESSION_HISTORY_QUERY,
         LIVE_SESSION_TTL_SECONDS,
     };
+    use crate::ingestion::parser::parse_charging_session_message;
     use crate::services::charge_sessions::{
         infer_is_rivian_network, normalize_api_charger_type, ChargeSessionPayloadRef,
     };
@@ -2665,6 +2435,43 @@ mod tests {
             "vehicle:76d88de5-f6fa-41cb-b560-126defb7885b:live_session"
         );
         assert_eq!(LIVE_SESSION_TTL_SECONDS, 120);
+    }
+
+    #[test]
+    fn charging_session_normalization_keeps_observed_values_and_converts_seconds() {
+        let event = parse_charging_session_message(
+            r#"{"type":"next","payload":{"data":{"chargingSession":{"chartData":[{"soc":66.0,"powerKW":9.5,"startTime":"2026-08-18T12:00:00Z"}],"liveData":{"powerKW":9.5,"totalChargedEnergy":12.5,"rangeAddedThisSession":44.0,"timeRemaining":120,"vehicleChargerState":"charging_active","startTime":"2026-08-18T12:00:00Z"}}}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        let live = super::normalize_charging_session(&event, Utc::now()).unwrap();
+        assert_eq!(live.soc_pct, Some(66.0));
+        assert_eq!(live.power_kw, Some(9.5));
+        assert_eq!(live.energy_kwh, Some(12.5));
+        assert_eq!(live.range_added_km, Some(44.0));
+        assert_eq!(live.time_remaining_min, Some(2.0));
+        assert_eq!(
+            live.vehicle_charger_state.as_deref(),
+            Some("charging_active")
+        );
+    }
+
+    #[test]
+    fn empty_charging_session_frame_does_not_publish_null_snapshot() {
+        let event = parse_charging_session_message(
+            r#"{"type":"next","payload":{"data":{"chargingSession":{"liveData":{"powerKW":null,"kilometersChargedPerHour":null,"rangeAddedThisSession":null,"totalChargedEnergy":null,"timeElapsed":null,"timeRemaining":null,"price":null,"currency":null,"isFreeSession":null,"vehicleChargerState":null,"startTime":null},"chartData":[]}}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(super::normalize_charging_session(&event, Utc::now()).is_none());
+    }
+
+    #[test]
+    fn live_history_query_uses_the_current_id_variable_contract() {
+        assert!(LIVE_SESSION_HISTORY_QUERY.contains("$vehicleId: ID!"));
+        assert!(!LIVE_SESSION_HISTORY_QUERY.contains("$vehicleId: String!"));
     }
 
     #[test]
@@ -2692,39 +2499,6 @@ mod tests {
             })),
             None
         );
-    }
-
-    #[test]
-    fn live_session_fixture_normalizes_to_dashboard_contract() {
-        let data: LiveSessionApiData = serde_json::from_str(
-            r#"{
-              "getLiveSessionData": {
-                "soc": {"value": 67.7},
-                "power": {"value": 9.6},
-                "totalChargedEnergy": {"value": 12.34},
-                "rangeAddedThisSession": {"value": 42.0},
-                "timeRemaining": {"value": 95.0},
-                "vehicleChargerState": {"value": "wallbox"}
-              }
-            }"#,
-        )
-        .expect("live-session fixture should match the GraphQL response contract");
-
-        let payload = data.get_live_session_data.expect("active payload");
-        let normalized = super::normalize_live_session(payload, Utc::now());
-        assert_eq!(normalized.soc_pct, Some(67.7));
-        assert_eq!(normalized.power_kw, Some(9.6));
-        assert_eq!(normalized.energy_kwh, Some(12.34));
-        assert_eq!(normalized.range_added_km, Some(42.0));
-        assert_eq!(normalized.time_remaining_min, Some(95.0));
-        assert_eq!(normalized.charger_type.as_deref(), Some("wallbox"));
-    }
-
-    #[test]
-    fn live_session_fixture_without_payload_is_inactive() {
-        let data: LiveSessionApiData = serde_json::from_str(r#"{"getLiveSessionData":null}"#)
-            .expect("inactive fixture should match the GraphQL response contract");
-        assert!(data.get_live_session_data.is_none());
     }
 
     #[test]

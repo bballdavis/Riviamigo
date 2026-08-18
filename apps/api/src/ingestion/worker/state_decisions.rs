@@ -106,6 +106,8 @@ mod tests {
             raw: raw.to_string(),
             message_type: Some(message_type.into()),
             telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
         }
     }
 

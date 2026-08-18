@@ -37,8 +37,17 @@ Authenticated GraphQL requests generally use:
 - `U-Sess: <userSessionToken>`
 - `Authorization: Bearer <accessToken>`
 
-The GraphQL WebSocket uses the `graphql-transport-ws` subprotocol and sends
-`u-sess` in the `connection_init` payload.
+The GraphQL WebSocket uses the `graphql-transport-ws` subprotocol. Its
+handshake carries `A-Sess`, `U-Sess`, and `Csrf-Token`; `connection_init` also
+sends `u-sess` in the payload.
+
+The worker starts two subscriptions on the same authenticated socket: the
+partial `vehicleState($vehicleID: String!)` stream and
+`chargingSession($vehicleID: String!)`. The latter is the live charging source;
+its `liveData` contains power, energy, range, elapsed/remaining seconds, price,
+currency, and charger state, while `chartData` contains observed SoC/power
+points. `getLiveSessionHistory($vehicleId: ID!)` remains a REST reconciliation
+query after a session, not a replacement for the live stream.
 
 ## Login Flow
 
