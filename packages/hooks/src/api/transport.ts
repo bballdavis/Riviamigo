@@ -163,6 +163,13 @@ export interface LiveSession {
   time_remaining_min: number | null;
   charger_type: string | null;
   ts: string;
+  charge_rate_kph?: number | null;
+  time_elapsed_seconds?: number | null;
+  price?: number | null;
+  currency?: string | null;
+  is_free_session?: boolean | null;
+  vehicle_charger_state?: string | null;
+  started_at?: string | null;
 }
 
 export interface BackfillStatus {

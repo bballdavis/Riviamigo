@@ -84,7 +84,12 @@ routes.
 `GET /v1/vehicles/{id}/live-session` returns `200` with the latest ephemeral
 charging snapshot while the vehicle is actively charging. It returns `204` when
 no Redis snapshot exists; live snapshots are refreshed by the ingestion worker
-and expire after 120 seconds without a successful refresh.
+from Rivian's `chargingSession` WebSocket subscription and expire after 120
+seconds without a successful refresh. Existing nullable fields remain stable;
+newer snapshots may also include `charge_rate_kph`, `time_elapsed_seconds`,
+`price`, `currency`, `is_free_session`, `vehicle_charger_state`, and
+`started_at`. Missing upstream values remain `null` rather than being replaced
+with zeroes.
 
 Trip detail responses include a `power` metadata object. Its `source` is
 `direct`, `estimated_soc`, or `unavailable`; estimated samples are signed net

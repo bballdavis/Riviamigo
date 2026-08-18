@@ -11,7 +11,7 @@ use crate::{
     db::vehicles::get_vehicle_owner_id,
     ingestion::{
         charge_detector::{ActiveChargeSessionSnapshot, ChargeDetectorState, ChargeEvent},
-        rivian_poll,
+        parser, rivian_poll,
         session_store::{decrypt_tokens, RivianTokenBundle},
         trip_detector::{
             compute_distance_odometer_or_gps, compute_trip_energy, TripDetectorState, TripEvent,
@@ -423,6 +423,25 @@ pub async fn run_vehicle_worker(
             counter_batch.flush(&pool).await;
         }
 
+        if let Some(battery_cell_type) = inbound.battery_cell_type.as_deref() {
+            if let Err(error) = upsert_battery_cell_type(&pool, vehicle_id, battery_cell_type).await
+            {
+                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "battery cell type upsert failed");
+            }
+        }
+
+        if let Some(charging_session) = inbound.charging_session.as_ref() {
+            apply_charging_session_update(
+                &pool,
+                &mut redis_conn,
+                vehicle_id,
+                charging_session,
+                inbound.received_at,
+                charge_det.active_session_id(),
+            )
+            .await;
+        }
+
         let Some(event) = inbound.telemetry else {
             continue;
         };
@@ -446,6 +465,14 @@ pub async fn run_vehicle_worker(
             ChargeEvent::SessionEnded(session) => Some(session.session_id),
             _ => charge_det.active_session_id(),
         };
+
+        if let Some(session_id) = session_id {
+            if let Err(error) =
+                ensure_active_charge_session(&pool, vehicle_id, session_id, &event).await
+            {
+                tracing::warn!(vehicle_id=%vehicle_id, charge_session_id=%session_id, err=%error, "active charge session materialization failed");
+            }
+        }
 
         // Publish live snapshot to Redis
         let snapshot = build_snapshot(&event);
@@ -586,6 +613,107 @@ pub async fn run_vehicle_worker(
     ws_handle.abort();
     let _ = (&mut ws_handle).await;
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+}
+
+async fn upsert_battery_cell_type(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    battery_cell_type: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE riviamigo.vehicles
+         SET battery_cell_type = COALESCE($2, battery_cell_type),
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(vehicle_id)
+    .bind(battery_cell_type)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn ensure_active_charge_session(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    session_id: Uuid,
+    event: &TelemetryEvent,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"INSERT INTO riviamigo.charge_sessions
+           (id, vehicle_id, started_at, soc_start, charge_limit, source, data_confidence)
+           SELECT $1, $2,
+                  COALESCE(MIN(t.ts), $3),
+                  COALESCE(
+                      (ARRAY_AGG(t.battery_level ORDER BY t.ts)
+                       FILTER (WHERE t.battery_level IS NOT NULL))[1],
+                      $4
+                  ),
+                  COALESCE(MAX(t.battery_limit), $5),
+                  'telemetry',
+                  'telemetry'
+           FROM timeseries.telemetry t
+           WHERE t.vehicle_id = $2
+             AND t.charge_session_id = $1
+           ON CONFLICT (id) DO NOTHING"#,
+    )
+    .bind(session_id)
+    .bind(vehicle_id)
+    .bind(event.ts)
+    .bind(event.battery_level)
+    .bind(event.battery_limit)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn apply_charging_session_update(
+    pool: &PgPool,
+    redis_conn: &mut redis::aio::MultiplexedConnection,
+    vehicle_id: Uuid,
+    event: &parser::ChargingSessionEvent,
+    received_at: DateTime<Utc>,
+    active_session_id: Option<Uuid>,
+) {
+    let live_key = rivian_poll::live_session_redis_key(vehicle_id);
+    let live = rivian_poll::normalize_charging_session(event, received_at);
+
+    match live {
+        Some(live) => {
+            if let Ok(json) = serde_json::to_string(&live) {
+                if let Err(error) = redis_conn
+                    .set_ex::<_, _, ()>(&live_key, json, rivian_poll::LIVE_SESSION_TTL_SECONDS)
+                    .await
+                {
+                    tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session Redis write failed");
+                }
+            }
+            if let Err(error) =
+                rivian_poll::persist_live_session_data(pool, active_session_id, &live).await
+            {
+                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session database update failed");
+            }
+        }
+        None if event.live_data_present && event.live_data.is_none() => {
+            if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
+                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session Redis delete failed");
+            }
+        }
+        None => {
+            tracing::debug!(vehicle_id=%vehicle_id, "empty chargingSession payload; retaining live session snapshot until TTL");
+        }
+    }
+
+    if let Err(error) = rivian_poll::persist_charging_session_chart(
+        pool,
+        vehicle_id,
+        active_session_id,
+        &event.chart_data,
+    )
+    .await
+    {
+        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live charge curve update failed");
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1232,6 +1360,9 @@ async fn handle_inbound_accounting(
                 batch.increment("ws_heartbeats_received");
             }
             WsInboundKind::Telemetry => {
+                batch.increment("ws_payload_messages_received");
+            }
+            WsInboundKind::ChargingSession => {
                 batch.increment("ws_payload_messages_received");
             }
         }
@@ -2425,7 +2556,30 @@ async fn persist_charge_session(
             avg_charge_rate_kw, peak_voltage,
             geofence_id, address_id, cost_profile_id, cost_method,
             charger_type, source, data_confidence)
-              VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry','telemetry')"#,
+              VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'telemetry','telemetry')
+              ON CONFLICT (id) DO UPDATE SET
+                  started_at = LEAST(charge_sessions.started_at, EXCLUDED.started_at),
+                  ended_at = EXCLUDED.ended_at,
+                  location_lat = COALESCE(EXCLUDED.location_lat, charge_sessions.location_lat),
+                  location_lng = COALESCE(EXCLUDED.location_lng, charge_sessions.location_lng),
+                  source_location_lat = COALESCE(EXCLUDED.source_location_lat, charge_sessions.source_location_lat),
+                  source_location_lng = COALESCE(EXCLUDED.source_location_lng, charge_sessions.source_location_lng),
+                  is_home = COALESCE(EXCLUDED.is_home, charge_sessions.is_home),
+                  soc_start = COALESCE(charge_sessions.soc_start, EXCLUDED.soc_start),
+                  soc_end = EXCLUDED.soc_end,
+                  charge_limit = COALESCE(EXCLUDED.charge_limit, charge_sessions.charge_limit),
+                  duration_minutes = EXCLUDED.duration_minutes,
+                  kwh_added = COALESCE(EXCLUDED.kwh_added, charge_sessions.kwh_added),
+                  max_charge_rate_kw = COALESCE(EXCLUDED.max_charge_rate_kw, charge_sessions.max_charge_rate_kw),
+                  energy_added_wh = COALESCE(EXCLUDED.energy_added_wh, charge_sessions.energy_added_wh),
+                  energy_used_wh = COALESCE(EXCLUDED.energy_used_wh, charge_sessions.energy_used_wh),
+                  avg_charge_rate_kw = COALESCE(EXCLUDED.avg_charge_rate_kw, charge_sessions.avg_charge_rate_kw),
+                  peak_voltage = COALESCE(EXCLUDED.peak_voltage, charge_sessions.peak_voltage),
+                  geofence_id = COALESCE(EXCLUDED.geofence_id, charge_sessions.geofence_id),
+                  address_id = COALESCE(EXCLUDED.address_id, charge_sessions.address_id),
+                  charger_type = COALESCE(EXCLUDED.charger_type, charge_sessions.charger_type),
+                  source = COALESCE(charge_sessions.source, EXCLUDED.source),
+                  data_confidence = COALESCE(charge_sessions.data_confidence, EXCLUDED.data_confidence)"#,
     )
     .bind(session.session_id)
     .bind(session.vehicle_id)
@@ -3110,6 +3264,8 @@ mod stewardship_tests {
             .to_string(),
             message_type: Some("ws_schema_rejected".into()),
             telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
         };
 
         let update = runtime_health_update_for_ws_control(&inbound).expect("update");
@@ -3131,6 +3287,8 @@ mod stewardship_tests {
             .to_string(),
             message_type: Some("ws_no_active_subscriptions".into()),
             telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
         };
 
         let update = runtime_health_update_for_ws_control(&inbound).expect("update");
