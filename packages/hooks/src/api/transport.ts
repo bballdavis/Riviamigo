@@ -60,6 +60,7 @@ import type {
   UpdateBackupSettingsBody,
   RunBackupResponse,
   UnitPreferences,
+  DashboardChartFavorites,
   AppTimezone,
   CreateBackupRestoreRequestBody,
   BackupRestoreRequest,
@@ -566,6 +567,17 @@ export class AuthenticatedTransport {
 
   async updateUnitPreferences(units: UnitPreferences): Promise<{ units: UnitPreferences }> {
     return this.request('PUT', '/v1/auth/preferences', { units });
+  }
+
+  async getDashboardChartFavorites(): Promise<{ chart_favorites: DashboardChartFavorites }> {
+    return this.request('GET', '/v1/auth/preferences/chart-favorites');
+  }
+
+  async updateDashboardChartFavorite(key: string, chartId: string): Promise<{ chart_favorites: DashboardChartFavorites }> {
+    return this.request('PUT', '/v1/auth/preferences/chart-favorites', {
+      key,
+      chart_id: chartId,
+    });
   }
 
   async getAppTimezone(): Promise<AppTimezone> {

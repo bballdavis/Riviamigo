@@ -136,28 +136,30 @@ function DashboardEditOverlay({
         </div>
       ) : null}
 
-      <div
-        data-testid={`widget-overlay-right-${instance.id}`}
-        data-widget-edit-control="true"
-        data-widget-resizable={resizable ? 'true' : 'false'}
-        className="rgl-widget-control absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur"
-      >
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleEdit?.();
-          }}
-          title={isEditing ? 'Close editor' : 'Edit widget settings'}
-          aria-label={isEditing ? 'Close editor' : 'Edit widget settings'}
-          className={[
-            'rgl-action rounded-md',
-            isEditing ? 'border-status-positive/60 text-status-positive' : '',
-          ].join(' ')}
+      {onToggleEdit ? (
+        <div
+          data-testid={`widget-overlay-right-${instance.id}`}
+          data-widget-edit-control="true"
+          data-widget-resizable={resizable ? 'true' : 'false'}
+          className="rgl-widget-control absolute right-2 top-2 flex items-center gap-1 rounded-lg border border-border bg-bg-elevated/90 p-1 shadow-lg backdrop-blur"
         >
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleEdit();
+            }}
+            title={isEditing ? 'Close editor' : 'Edit widget settings'}
+            aria-label={isEditing ? 'Close editor' : 'Edit widget settings'}
+            className={[
+              'rgl-action rounded-md',
+              isEditing ? 'border-status-positive/60 text-status-positive' : '',
+            ].join(' ')}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
     </>
   );
 }

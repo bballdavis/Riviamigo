@@ -38,6 +38,10 @@ function setMatchMedia(mobile = false, portrait = false) {
 beforeEach(() => {
   setMatchMedia(false);
   localStorage.clear();
+  for (const key of Object.keys(mockFavoriteState.chart_favorites)) {
+    delete mockFavoriteState.chart_favorites[key];
+  }
+  mockUpdateDashboardChartFavorite.mockClear();
 });
 
 afterEach(() => {
@@ -99,12 +103,56 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByRole('button', { name: 'State of Charge is the default chart' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' }));
     expect(screen.getByRole('button', { name: 'Projected Range by Mileage is the default chart' })).toBeDisabled();
+    expect(mockUpdateDashboardChartFavorite).toHaveBeenCalledWith({
+      key: 'dashboard:test-soc-history',
+      chartId: 'projected-range-mileage',
+    });
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
 
     firstRender.unmount();
     renderWidget(instance, ctx);
 
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+  });
+
+  it('does not use the legacy browser storage value for chart defaults', () => {
+    localStorage.setItem('rm-dashboard-chart-defaults', JSON.stringify({
+      'dashboard:test-soc-history': 'projected-range-mileage',
+    }));
+
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    }, { ...CTX, dashboardSlug: 'dashboard' });
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+  });
+
+  it('keeps a saved favorite when a managed catalog gains a new chart', () => {
+    mockFavoriteState.chart_favorites['dashboard:dashboard-a:test-soc-history'] = 'projected-range-mileage';
+    renderWidget(
+      {
+        ...makeInstance('soc-history', true),
+        managed: true,
+        managedKey: 'overview.chart-catalog',
+        options: {
+          chartId: 'soc-history',
+          chartIds: ['soc-history'],
+          page: 'overview' as const,
+          showPicker: true,
+        },
+      },
+      { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-a' },
+    );
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    expect(screen.getByRole('option', { name: 'Tire Pressure and Trips' })).toBeInTheDocument();
   });
 
   it('isolates chart defaults across dashboard config IDs', () => {
@@ -541,6 +589,11 @@ const mockBatteryMileage = vi.fn(() => ({
   data: [{ ts: '2024-01-01T00:00:00Z', odometer_mi: 5000, usable_kwh: 120, range_mi: 320 }],
   isLoading: false,
 }));
+const mockFavoriteState = { chart_favorites: {} as Record<string, string> };
+const mockDashboardChartFavorites = vi.fn(() => ({ data: mockFavoriteState, isSuccess: true }));
+const mockUpdateDashboardChartFavorite = vi.fn(({ key, chartId }: { key: string; chartId: string }) => {
+  mockFavoriteState.chart_favorites[key] = chartId;
+});
 
 vi.mock('@riviamigo/hooks', () => ({
   useSocHistory: () => mockSoc(),
@@ -556,6 +609,8 @@ vi.mock('@riviamigo/hooks', () => ({
   usePhantomDrainPeriods: () => mockPhantomDrainPeriods(),
   useDegradation: () => mockDegradation(),
   useBatteryMileage: () => mockBatteryMileage(),
+  useDashboardChartFavorites: () => mockDashboardChartFavorites(),
+  useUpdateDashboardChartFavorite: () => ({ mutate: mockUpdateDashboardChartFavorite }),
 }));
 
 vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {

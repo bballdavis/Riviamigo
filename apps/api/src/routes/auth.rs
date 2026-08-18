@@ -44,6 +44,10 @@ pub fn metadata_router() -> Router<AppState> {
             "/auth/preferences",
             axum::routing::get(get_preferences).put(update_preferences),
         )
+        .route(
+            "/auth/preferences/chart-favorites",
+            axum::routing::get(get_chart_favorites).put(update_chart_favorite),
+        )
 }
 
 pub fn protected_router() -> Router<AppState> {
@@ -126,6 +130,17 @@ struct PreferencesResponse {
 #[derive(Deserialize)]
 struct PreferencesUpdateBody {
     units: UnitPreferencesPayload,
+}
+
+#[derive(Serialize)]
+struct DashboardChartFavoritesResponse {
+    chart_favorites: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct DashboardChartFavoriteUpdateBody {
+    key: String,
+    chart_id: String,
 }
 
 async fn register(
@@ -438,11 +453,7 @@ async fn bootstrap(
         return Ok(response);
     }
 
-    let clear_cookie = refresh_cookie(
-        "",
-        0,
-        state.config.allows_insecure_refresh_cookies(),
-    );
+    let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
@@ -521,11 +532,7 @@ async fn logout(
             .await;
         }
     }
-    let clear_cookie = refresh_cookie(
-        "",
-        0,
-        state.config.allows_insecure_refresh_cookies(),
-    );
+    let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([("Set-Cookie", clear_cookie)], StatusCode::NO_CONTENT))
 }
 
@@ -572,11 +579,7 @@ async fn change_password(
         .await?;
     tx.commit().await?;
 
-    let clear_cookie = refresh_cookie(
-        "",
-        0,
-        state.config.allows_insecure_refresh_cookies(),
-    );
+    let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
@@ -727,6 +730,48 @@ async fn update_preferences(
     Ok(Json(PreferencesResponse { units }))
 }
 
+async fn get_chart_favorites(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<DashboardChartFavoritesResponse>, AppError> {
+    let favorites = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT COALESCE(dashboard_chart_favorites, '{}'::jsonb) FROM riviamigo.user_preferences WHERE user_id = $1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or_else(|| serde_json::json!({}));
+
+    Ok(Json(DashboardChartFavoritesResponse {
+        chart_favorites: favorites,
+    }))
+}
+
+async fn update_chart_favorite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<DashboardChartFavoriteUpdateBody>,
+) -> Result<Json<DashboardChartFavoritesResponse>, AppError> {
+    if body.key.is_empty() || body.key.len() > 200 || body.chart_id.is_empty() || body.chart_id.len() > 120 {
+        return Err(AppError::Validation("invalid dashboard chart favorite".into()));
+    }
+
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, dashboard_chart_favorites, updated_at)
+         VALUES ($1, jsonb_build_object($2, $3), now())
+         ON CONFLICT (user_id) DO UPDATE SET
+           dashboard_chart_favorites = COALESCE(riviamigo.user_preferences.dashboard_chart_favorites, '{}'::jsonb) || EXCLUDED.dashboard_chart_favorites,
+           updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(&body.key)
+    .bind(&body.chart_id)
+    .execute(&state.pool)
+    .await?;
+
+    get_chart_favorites(State(state), auth).await
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolved_units_payload(
     mode: &str,
@@ -856,11 +901,7 @@ fn sha2_hash(token: &str) -> Vec<u8> {
 }
 
 fn refresh_cookie(value: &str, max_age: u64, allow_insecure: bool) -> String {
-    let secure = if allow_insecure {
-        ""
-    } else {
-        "; Secure"
-    };
+    let secure = if allow_insecure { "" } else { "; Secure" };
     format!(
         "refresh_token={value}; HttpOnly{secure}; SameSite=Lax; Path=/v1/auth; Max-Age={max_age}"
     )

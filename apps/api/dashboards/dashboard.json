@@ -17,6 +17,8 @@
       "id": "d1000001-0000-0000-0000-000000000006",
       "componentType": "chart",
       "definitionId": "catalog",
+      "managed": true,
+      "managedKey": "overview.chart-catalog",
       "title": "Overview Charts",
       "options": {
         "page": "overview",
