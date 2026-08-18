@@ -10,8 +10,8 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, readdirSync, readFileSy
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const DEFAULT_TEST_ROOT = '<production-root>-test';
 export const PRODUCTION_ROOT = '<production-root>';
+export const DEFAULT_TEST_ROOT = `${PRODUCTION_ROOT}/testing`;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const IMAGE_DIGEST = /@sha256:([a-f0-9]{64})$/i;
 const PACKAGE_NAME = /\.rma\.tar\.gz$/i;
@@ -77,10 +77,22 @@ function imageInfo(ref) { return { ref, digest: ref.match(IMAGE_DIGEST)[1].toLow
 function assertTestRoot(root) {
   const resolved = resolve(root);
   const canonical = resolve(DEFAULT_TEST_ROOT);
-  if (under(resolved, resolve(PRODUCTION_ROOT))) throw new HarnessError('Production path is not an allowed test target.');
+  if (under(resolved, resolve(PRODUCTION_ROOT))) {
+    if (resolved.toLowerCase() !== canonical.toLowerCase()) throw new HarnessError(`Production path is not an allowed test target; use ${DEFAULT_TEST_ROOT}.`);
+    return resolved;
+  }
   const labelled = resolved.toLowerCase().split(/[\\/]/).some((part) => /^(test|tests|tmp|temp|dev|harness)$/.test(part) || /(?:^|[-_])(test|dev|harness)(?:[-_]|$)/.test(part));
   if (!under(resolved, canonical) && !labelled) throw new HarnessError('Target root must be under the test root or explicitly test-labelled.');
   return resolved;
+}
+
+function containsDisallowedProductionPath(text) {
+  const normalized = text.replaceAll('\\', '/').toLowerCase();
+  const testRoot = DEFAULT_TEST_ROOT.toLowerCase();
+  for (const match of normalized.matchAll(/\/share\/containers\/riviamigo-prod(?:\/[a-z0-9._-]+)*/gi)) {
+    if (!match[0].startsWith(`${testRoot}/`)) return true;
+  }
+  return false;
 }
 
 function assertProject(project) {
@@ -198,11 +210,12 @@ export function buildPlan(raw, cwd = process.cwd()) {
   assertImage(raw.devImage, 'Dev image');
   const envFile = resolve(cwd, raw.envFile);
   if (!existsSync(envFile) || !lstatSync(envFile).isFile()) throw new HarnessError(`Environment file does not exist: ${envFile}`);
-  if (under(envFile, resolve(PRODUCTION_ROOT))) throw new HarnessError('Production env files may not be copied into the test harness.');
+  const testSecretsRoot = resolve(join(DEFAULT_TEST_ROOT, 'secrets'));
+  if (under(envFile, resolve(PRODUCTION_ROOT)) && !under(envFile, testSecretsRoot)) throw new HarnessError('Production env files may not be copied into the test harness.');
   const composeFile = resolve(cwd, raw.composeFile);
   if (!existsSync(composeFile) || !lstatSync(composeFile).isFile()) throw new HarnessError(`Compose file does not exist: ${composeFile}`);
   const composeText = readFileSync(composeFile, 'utf8');
-  if (/\blatest\b/i.test(composeText) || /\/share\/Containers\/Riviamigo-prod(?:[\\/\s]|$)/i.test(composeText) || /(?:^|\D)8066(?:\D|$)/.test(composeText) || /t3_proxy|traefik|riviamigo-prod-internal/i.test(composeText)) {
+  if (/\blatest\b/i.test(composeText) || containsDisallowedProductionPath(composeText) || /(?:^|\D)8066(?:\D|$)/.test(composeText) || /t3_proxy|traefik|riviamigo-prod-internal/i.test(composeText)) {
     throw new HarnessError('Compose file contains production or mutable-image configuration.');
   }
   const pkg = inspectPackage(packagePath, raw.suppliedSha, { requireChecksum: true });
