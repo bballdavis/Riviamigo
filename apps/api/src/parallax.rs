@@ -258,6 +258,32 @@ async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result
     request
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
+    request.headers_mut().insert(
+        "A-Sess",
+        session
+            .tokens
+            .app_session_token
+            .parse()
+            .context("invalid Rivian app session header")?,
+    );
+    request.headers_mut().insert(
+        "U-Sess",
+        session
+            .tokens
+            .user_session_token
+            .parse()
+            .context("invalid Rivian user session header")?,
+    );
+    if !session.tokens.csrf_token.is_empty() {
+        request.headers_mut().insert(
+            "Csrf-Token",
+            session
+                .tokens
+                .csrf_token
+                .parse()
+                .context("invalid Rivian CSRF header")?,
+        );
+    }
     let (mut websocket, _) = tokio_tungstenite::connect_async(request).await?;
     websocket
         .send(Message::Text(
