@@ -332,6 +332,12 @@ export function BackupSection() {
     queryKey: ['backup-overview', recentRunsPage, recentRunsPerPage],
     queryFn: () => api.getBackupOverview({ page: recentRunsPage, perPage: recentRunsPerPage }),
     placeholderData: keepPreviousData,
+    refetchInterval: (query) => {
+      const latestRun = query.state.data?.recent_runs[0];
+      return latestRun && (latestRun.status === 'pending' || latestRun.status === 'running')
+        ? 2000
+        : false;
+    },
   });
   const [draft, setDraft] = React.useState<BackupDraft | null>(null);
   const [secretKey, setSecretKey] = React.useState('');
@@ -589,6 +595,11 @@ export function BackupSection() {
   const recentRunsPageCount = Math.max(1, Math.ceil(recentRunsTotal / recentRunsPerPage));
   const runNowAllowed = overview.data.runtime_readiness?.run_now_allowed ?? true;
   const runNowReason = overview.data.runtime_readiness?.reason;
+  const latestRun = overview.data.recent_runs[0] ?? null;
+  const activeBackupRun =
+    latestRun && (latestRun.status === 'pending' || latestRun.status === 'running')
+      ? latestRun
+      : null;
   const restoreArtifact =
     overview.data.artifacts.find((artifact) => artifact.id === restoreArtifactId) ?? null;
   const restoreArtifactOptions = overview.data.artifacts.map((artifact) => ({
@@ -644,10 +655,10 @@ export function BackupSection() {
               size="sm"
               iconLeft={<Play className="h-3.5 w-3.5" />}
               loading={runBackupNow.isPending}
-              disabled={!runNowAllowed}
+              disabled={!runNowAllowed || Boolean(activeBackupRun)}
               onClick={() => runBackupNow.mutate()}
             >
-              Run now
+              {activeBackupRun ? 'Backup running' : 'Run now'}
             </Button>
             <Button
               size="sm"
@@ -664,6 +675,40 @@ export function BackupSection() {
           {!runNowAllowed && runNowReason && (
             <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
               Manual backup unavailable: {runNowReason}
+            </div>
+          )}
+
+          {activeBackupRun && (
+            <div
+              className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-3"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium text-fg">
+                  Backup {capitalizeFirstLetter(activeBackupRun.phase.replaceAll('_', ' '))}
+                </span>
+                <span className="font-mono text-xs text-fg-secondary">
+                  {activeBackupRun.progress_percent}%
+                </span>
+              </div>
+              <div
+                className="mt-2 h-2 overflow-hidden rounded-full bg-bg-elevated"
+                role="progressbar"
+                aria-label="Backup progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={activeBackupRun.progress_percent}
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-300"
+                  style={{ width: `${activeBackupRun.progress_percent}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-fg-tertiary">
+                Started {activeBackupRun.started_at ? formatAppDateTime(activeBackupRun.started_at) : 'just now'}.
+                This page refreshes automatically while the backup is active.
+              </p>
             </div>
           )}
 
@@ -984,6 +1029,11 @@ export function BackupSection() {
                             title={run.error_message}
                           >
                             {run.error_message}
+                          </span>
+                        )}
+                        {(run.status === 'pending' || run.status === 'running') && (
+                          <span className="text-xs text-accent">
+                            {capitalizeFirstLetter(run.phase.replaceAll('_', ' '))} · {run.progress_percent}%
                           </span>
                         )}
                       </div>

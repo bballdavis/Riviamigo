@@ -196,6 +196,8 @@ vi.mock('@riviamigo/hooks', () => ({
           id: 'run-1',
           trigger: 'manual',
           status: 'succeeded',
+          phase: 'completed',
+          progress_percent: 100,
           artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
           started_at: '2026-05-04T12:00:00Z',
           completed_at: '2026-05-04T12:01:00Z',
@@ -225,6 +227,8 @@ vi.mock('@riviamigo/hooks', () => ({
         id: 'run-1',
         trigger: 'manual',
         status: 'succeeded',
+        phase: 'completed',
+        progress_percent: 100,
         artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
         started_at: '2026-05-04T12:00:00Z',
         completed_at: '2026-05-04T12:01:00Z',
@@ -1287,6 +1291,50 @@ describe('Settings page', () => {
     expect(screen.getAllByText(/active|connected/i).length).toBeGreaterThan(0);
   });
 
+  it('shows durable backup phase and progress while a run is active', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    const getBackupOverview = vi.mocked(hooks.api.getBackupOverview);
+    const baseline = await getBackupOverview({ page: 1, perPage: 10 });
+    const baselineRun = baseline.recent_runs[0];
+    if (!baselineRun) throw new Error('backup fixture is missing a recent run');
+    const activeOverview = {
+      ...baseline,
+      recent_runs: [
+        {
+          ...baselineRun,
+          status: 'running' as const,
+          phase: 'packaging' as const,
+          progress_percent: 65,
+          completed_at: null,
+        },
+      ],
+      latest_successful_run: null,
+    };
+    getBackupOverview.mockReset();
+    getBackupOverview.mockResolvedValue(activeOverview);
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Backups'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Backup Packaging');
+      expect(screen.getByRole('progressbar', { name: 'Backup progress' })).toHaveAttribute(
+        'aria-valuenow',
+        '65'
+      );
+      expect(screen.getByRole('button', { name: 'Backup running' })).toBeDisabled();
+    });
+
+    getBackupOverview.mockReset();
+    getBackupOverview.mockResolvedValue(baseline);
+  });
+
   it('calls logout and navigates on Sign Out click', async () => {
     const logoutFn = vi.fn().mockResolvedValue(undefined);
     vi.doMock('@riviamigo/hooks', () => ({
@@ -1333,4 +1381,5 @@ describe('Settings page', () => {
     expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
   });
+
 });

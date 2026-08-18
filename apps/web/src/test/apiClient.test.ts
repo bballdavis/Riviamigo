@@ -298,11 +298,17 @@ describe('api client dashboard contracts', () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
-          run: { id: 'run-1' },
+          run: {
+            id: 'run-1',
+            trigger: 'manual',
+            status: 'running',
+            phase: 'queued',
+            progress_percent: 0,
+          },
           artifacts: [{ id: 'artifact-1' }],
         }),
         {
-          status: 201,
+          status: 202,
           headers: { 'Content-Type': 'application/json' },
         }
       ) as Response

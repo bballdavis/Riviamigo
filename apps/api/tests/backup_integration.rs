@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::{to_bytes, Body},
@@ -100,6 +101,8 @@ impl TestApp {
                 backup_poll_interval_seconds: 60,
                 restore_agent_url: "http://127.0.0.1:3002".into(),
                 restore_agent_key_file: "/backups/.restore-agent-key".into(),
+                recovery: riviamigo_api::config::RecoveryConfig::default(),
+                origin_bind: riviamigo_api::config::OriginBindConfig::default(),
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
@@ -219,6 +222,23 @@ impl TestApp {
             body,
         }
     }
+}
+
+async fn wait_for_backup(app: &TestApp, token: &str) -> Value {
+    for _ in 0..200 {
+        let overview = app
+            .request(Method::GET, "/v1/admin/backups", None, Some(token), None)
+            .await;
+        let status = overview.body["recent_runs"]
+            .as_array()
+            .and_then(|runs| runs.first())
+            .and_then(|run| run["status"].as_str());
+        if matches!(status, Some("succeeded" | "failed" | "canceled")) {
+            return overview.body;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("backup did not reach a terminal status");
 }
 
 fn replace_database_name(database_url: &str, database_name: &str) -> String {
@@ -559,10 +579,21 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
         )
         .await;
 
-    assert_eq!(response.status, StatusCode::CREATED, "{}", response.body);
-    assert_eq!(response.body["run"]["status"], "succeeded");
-    assert_eq!(response.body["artifacts"][0]["storage_type"], "local");
-    assert!(response.body["artifacts"][0]["storage_path"].is_string());
+    assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.body);
+    assert!(matches!(
+        response.body["run"]["status"].as_str(),
+        Some("running" | "pending")
+    ));
+    assert!(response.body["artifacts"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
+
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(completed["recent_runs"][0]["status"], "succeeded");
+    assert_eq!(completed["recent_runs"][0]["phase"], "completed");
+    assert_eq!(completed["recent_runs"][0]["progress_percent"], 100);
+    assert_eq!(completed["artifacts"][0]["storage_type"], "local");
+    assert!(completed["artifacts"][0]["storage_path"].is_string());
 
     let overview = app
         .request(Method::GET, "/v1/admin/backups", None, Some(&token), None)
@@ -641,7 +672,9 @@ async fn admin_can_create_restore_request_for_artifact() {
             None,
         )
         .await;
-    let artifact_id = run.body["artifacts"][0]["id"]
+    assert_eq!(run.status, StatusCode::ACCEPTED, "{}", run.body);
+    let completed = wait_for_backup(&app, &token).await;
+    let artifact_id = completed["artifacts"][0]["id"]
         .as_str()
         .expect("artifact id");
 
@@ -690,9 +723,14 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
             None,
         )
         .await;
-    assert_eq!(run.status, StatusCode::CREATED, "{}", run.body);
-    assert_eq!(run.body["run"]["status"], "succeeded", "{}", run.body);
-    let artifact_id = run.body["artifacts"][0]["id"]
+    assert_eq!(run.status, StatusCode::ACCEPTED, "{}", run.body);
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(
+        completed["recent_runs"][0]["status"], "succeeded",
+        "{}",
+        completed
+    );
+    let artifact_id = completed["artifacts"][0]["id"]
         .as_str()
         .expect("artifact id");
 
@@ -745,11 +783,11 @@ async fn backup_creation_refuses_a_drifted_live_migration_ledger() {
             None,
         )
         .await;
-    assert_eq!(
-        response.status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "{}",
-        response.body
-    );
-    assert!(response.body.to_string().contains("migration ledger"));
+    assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.body);
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(completed["recent_runs"][0]["status"], "failed");
+    assert_eq!(completed["recent_runs"][0]["phase"], "failed");
+    assert!(completed["recent_runs"][0]["error_message"]
+        .as_str()
+        .is_some_and(|message| message.contains("migration ledger")));
 }

@@ -67,6 +67,10 @@ For an in-app restore:
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the short swap window. Public `/health` remains available during candidate preparation and unavailable only while the API is intentionally stopped for swap or rollback.
 
+### Backup run diagnostics
+
+Manual and scheduled backups are detached from the HTTP request. The start endpoint returns `202 Accepted`; use `GET /v1/admin/backups` and inspect the newest run's `status`, `phase`, `progress_percent`, `started_at`, and `error_message`. The Settings page performs this polling automatically while a run is pending or running. A stale `running` row after an API restart is reconciled to `failed` during startup; it does not represent active work. A second start returning `409 Conflict` means the existing backup worker still owns the PostgreSQL advisory lock.
+
 For disposable fault-injection drills, set `RIVIAMIGO_RESTORE_FAULT_PHASE` to one of `package_validated`, `timescale_pre_restore`, `dump_restored`, `compatibility_transform`, `target_migrations`, `candidate_validated`, `safety_backup`, `history_merged`, `database_swapped`, `artwork_activated`, or `health_verification`. Never enable this variable on a production installation. Pre-swap faults must leave the live database untouched; post-swap faults must report a successful rollback and restore health.
 
 The package does not restore Redis live state, browser state, refresh sessions, provider credentials, installation keys, or S3 secrets. In-app restores preserve the existing host's backup catalog and operational history through the restore journal. Remote packages are downloaded beneath `/backups/.remote-staging`, fully validated before the safety backup begins, and removed by the restore supervisor when the job completes or fails.

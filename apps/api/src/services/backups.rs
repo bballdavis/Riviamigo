@@ -72,6 +72,51 @@ pub struct BackupExecutionResult {
     pub artifact_ids: Vec<Uuid>,
 }
 
+struct BackupLock {
+    connection: Option<PoolConnection<Postgres>>,
+}
+
+impl BackupLock {
+    async fn acquire(pool: &PgPool) -> Result<Self, AppError> {
+        let mut connection = pool.acquire().await.map_err(AppError::from)?;
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(BACKUP_ADVISORY_LOCK_ID)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(AppError::from)?;
+        if !locked {
+            return Err(AppError::Conflict(
+                "A backup job is already running.".into(),
+            ));
+        }
+        Ok(Self {
+            connection: Some(connection),
+        })
+    }
+
+    async fn release(mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            match sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+                .bind(BACKUP_ADVISORY_LOCK_ID)
+                .fetch_one(&mut *connection)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => tracing::error!("backup.lock.release_not_owned"),
+                Err(error) => tracing::error!(error = %error, "backup.lock.release_failed"),
+            }
+        }
+    }
+}
+
+impl Drop for BackupLock {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            drop(connection.detach());
+        }
+    }
+}
+
 /// Session-scoped recovery lock. It deliberately owns the PostgreSQL
 /// connection because advisory locks are tied to a backend session, not a
 /// pool. Call `release` on every normal path; dropping a failed connection is
@@ -241,37 +286,37 @@ pub async fn run_backup_now(
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
     ensure_backup_runtime_available(config).await?;
-
-    // Acquire a dedicated connection so the advisory lock and its matching
-    // unlock always run on the exact same PostgreSQL backend session.
-    // Using different pool connections for lock vs unlock causes the unlock to
-    // silently no-op (pg_advisory_unlock returns false for a session that never
-    // held the lock), permanently leaking the lock until the connection is closed.
-    let mut lock_conn = pool.acquire().await.map_err(AppError::from)?;
-
-    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(BACKUP_ADVISORY_LOCK_ID)
-        .fetch_one(&mut *lock_conn)
-        .await
-        .map_err(AppError::from)?;
-
-    if !locked {
-        return Err(AppError::Conflict(
-            "A backup job is already running.".into(),
-        ));
-    }
-
+    let lock = BackupLock::acquire(pool).await?;
     let result = run_backup_inner(pool, config, requested_by, trigger).await;
-
-    let unlock_result: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-        .bind(BACKUP_ADVISORY_LOCK_ID)
-        .fetch_one(&mut *lock_conn)
-        .await;
-    if let Err(unlock_error) = unlock_result {
-        tracing::error!(error = %unlock_error, "backup.lock.release_failed");
-    }
-
+    lock.release().await;
     result
+}
+
+/// Starts a backup without holding the HTTP request open. The advisory lock is
+/// owned by the detached task so a second request still receives a fast 409
+/// while the durable run record exposes the actual progress through the
+/// overview endpoint.
+pub async fn start_backup_now(
+    pool: &PgPool,
+    config: &Config,
+    requested_by: Option<Uuid>,
+    trigger: BackupRunTrigger,
+) -> Result<Uuid, AppError> {
+    ensure_backup_runtime_available(config).await?;
+    let lock = BackupLock::acquire(pool).await?;
+    let run_id = insert_running_backup(pool, requested_by, trigger).await?;
+    let pool = pool.clone();
+    let config = config.clone();
+
+    tokio::spawn(async move {
+        let result = run_backup_inner_for_run(&pool, &config, run_id, trigger).await;
+        if let Err(error) = result {
+            tracing::error!(run_id = %run_id, error = ?error, "backup.async_job_failed");
+        }
+        lock.release().await;
+    });
+
+    Ok(run_id)
 }
 
 pub async fn create_restore_request(
@@ -345,18 +390,67 @@ async fn run_backup_inner(
     requested_by: Option<Uuid>,
     trigger: BackupRunTrigger,
 ) -> Result<BackupExecutionResult, AppError> {
-    let settings = load_settings(pool, config).await?;
-    let run_id = sqlx::query_scalar(
+    let run_id = insert_running_backup(pool, requested_by, trigger).await?;
+    run_backup_inner_for_run(pool, config, run_id, trigger).await
+}
+
+async fn insert_running_backup(
+    pool: &PgPool,
+    requested_by: Option<Uuid>,
+    trigger: BackupRunTrigger,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar(
         r#"
-        INSERT INTO riviamigo.backup_runs (trigger, status, requested_by, started_at, updated_at)
-        VALUES ($1, 'running', $2, now(), now())
+        INSERT INTO riviamigo.backup_runs (
+            trigger, status, phase, progress_percent, requested_by, started_at, updated_at
+        )
+        VALUES ($1, 'running', 'queued', 0, $2, now(), now())
         RETURNING id
         "#,
     )
     .bind(trigger.as_str())
     .bind(requested_by)
     .fetch_one(pool)
-    .await?;
+    .await
+    .map_err(AppError::from)
+}
+
+async fn update_backup_progress(
+    pool: &PgPool,
+    run_id: Uuid,
+    phase: &str,
+    progress_percent: i16,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE riviamigo.backup_runs
+        SET phase = $2, progress_percent = $3, updated_at = now()
+        WHERE id = $1 AND status = 'running'
+        "#,
+    )
+    .bind(run_id)
+    .bind(phase)
+    .bind(progress_percent)
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(AppError::from)
+}
+
+async fn run_backup_inner_for_run(
+    pool: &PgPool,
+    config: &Config,
+    run_id: Uuid,
+    trigger: BackupRunTrigger,
+) -> Result<BackupExecutionResult, AppError> {
+    let settings = match load_settings(pool, config).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            let _ = mark_backup_run_failed(pool, run_id, &error).await;
+            return Err(error);
+        }
+    };
+    update_backup_progress(pool, run_id, "preparing", 5).await?;
 
     let driver = BackupDriver::from_config(&config.backup_driver);
     let created_at = Utc::now();
@@ -367,7 +461,15 @@ async fn run_backup_inner(
             fs::create_dir_all(parent).await?;
         }
 
-        let package_manifest = execute_recovery_package(pool, config, &artifact_path, trigger, created_at).await?;
+        let package_manifest = execute_recovery_package(
+            pool,
+            config,
+            run_id,
+            &artifact_path,
+            trigger,
+            created_at,
+        )
+        .await?;
 
         let storage_path = artifact_path.to_string_lossy().into_owned();
         let file_name = artifact_path
@@ -414,6 +516,7 @@ async fn run_backup_inner(
 
         let mut published_key = retain_local.then_some(storage_path.clone());
         if settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore) {
+            update_backup_progress(pool, run_id, "uploading", 92).await?;
             let s3 = settings.s3.as_ref().ok_or_else(|| AppError::Validation("S3 is enabled but its credentials are incomplete".into()))?;
             let key = s3_backups::object_key(&settings.prefix, created_at, run_id);
             if let Err(error) = s3_backups::upload(s3, &key, &artifact_path, &checksum_sha256, run_id, created_at).await {
@@ -455,10 +558,12 @@ async fn run_backup_inner(
             published_key = Some(remote_locator);
         }
 
+        update_backup_progress(pool, run_id, "finalizing", 98).await?;
         sqlx::query(
             r#"
             UPDATE riviamigo.backup_runs
-            SET status = 'succeeded', artifact_key = $2, completed_at = now(), updated_at = now(), error_message = NULL
+            SET status = 'succeeded', phase = 'completed', progress_percent = 100,
+                artifact_key = $2, completed_at = now(), updated_at = now(), error_message = NULL
             WHERE id = $1
             "#,
         )
@@ -507,17 +612,7 @@ async fn run_backup_inner(
     .await;
 
     if let Err(error) = &execution {
-        sqlx::query(
-            r#"
-            UPDATE riviamigo.backup_runs
-            SET status = 'failed', completed_at = now(), updated_at = now(), error_message = $2
-            WHERE id = $1
-            "#,
-        )
-        .bind(run_id)
-        .bind(error.to_string())
-        .execute(pool)
-        .await?;
+        mark_backup_run_failed(pool, run_id, error).await?;
 
         let package_is_cataloged_locally: bool = sqlx::query_scalar(
             r#"
@@ -537,6 +632,26 @@ async fn run_backup_inner(
     }
 
     execution
+}
+
+async fn mark_backup_run_failed(
+    pool: &PgPool,
+    run_id: Uuid,
+    error: &AppError,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE riviamigo.backup_runs
+        SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(run_id)
+    .bind(error.to_string())
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(AppError::from)
 }
 
 async fn maybe_run_scheduled_backup(
@@ -585,8 +700,8 @@ async fn maybe_run_scheduled_backup(
         return Ok(None);
     }
 
-    let result = run_backup_now(pool, config, None, BackupRunTrigger::Scheduled).await?;
-    Ok(Some(result.run_id))
+    let run_id = start_backup_now(pool, config, None, BackupRunTrigger::Scheduled).await?;
+    Ok(Some(run_id))
 }
 
 async fn load_settings(pool: &PgPool, config: &Config) -> Result<BackupSettings, AppError> {
@@ -716,6 +831,7 @@ fn build_artifact_path(
 async fn execute_recovery_package(
     pool: &PgPool,
     config: &Config,
+    run_id: Uuid,
     artifact_path: &Path,
     trigger: BackupRunTrigger,
     created_at: DateTime<Utc>,
@@ -728,9 +844,12 @@ async fn execute_recovery_package(
     let cache_root = PathBuf::from(&config.vehicle_image_cache_dir);
 
     let result = async {
+        update_backup_progress(pool, run_id, "dumping", 10).await?;
         execute_pg_dump(config, &dump_path).await?;
+        update_backup_progress(pool, run_id, "snapshotting", 45).await?;
         write_sanitized_backup_settings(pool, &settings_path).await?;
         write_operational_history(pool, &history_path).await?;
+        update_backup_progress(pool, run_id, "packaging", 65).await?;
         let manifest = build_recovery_manifest(
             pool,
             &dump_path,
@@ -752,6 +871,7 @@ async fn execute_recovery_package(
             &manifest_bytes,
         )
         .await?;
+        update_backup_progress(pool, run_id, "validating", 90).await?;
         validate_recovery_package(artifact_path).await?;
         Ok::<serde_json::Value, AppError>(manifest)
     }
@@ -810,6 +930,26 @@ fn classify_recovery_error(error: AppError) -> AppError {
         AppError::Conflict(message) => AppError::RecoveryConflict(message),
         error => error,
     }
+}
+
+/// Mark jobs from a previous API process as failed before new work is allowed
+/// to start. Backup workers are intentionally detached from HTTP requests, so
+/// a process restart cannot resume an in-memory task safely.
+pub async fn reconcile_running_runs(pool: &PgPool) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        r#"
+        UPDATE riviamigo.backup_runs
+        SET status = 'failed',
+            phase = 'failed',
+            completed_at = COALESCE(completed_at, now()),
+            updated_at = now(),
+            error_message = COALESCE(NULLIF(error_message, ''), 'Backup worker stopped before completion.')
+        WHERE status = 'running'
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 /// Rebuild missing local catalog rows from the persistent backup directory.
@@ -2237,7 +2377,9 @@ mod tests {
     #[test]
     fn classifies_recovery_validation_failures_into_stable_errors() {
         assert!(matches!(
-            classify_recovery_error(AppError::Validation("Recovery package exceeds the limit".into())),
+            classify_recovery_error(AppError::Validation(
+                "Recovery package exceeds the limit".into()
+            )),
             AppError::RecoveryTooLarge(_)
         ));
         assert!(matches!(
@@ -2300,7 +2442,10 @@ mod tests {
 
         let expansion_bomb = root.join("expansion-ratio.rma.tar.gz");
         let repeated_bytes = vec![0_u8; 256 * 1024];
-        write_test_archive(&expansion_bomb, &[("database.dump", repeated_bytes.as_slice())]);
+        write_test_archive(
+            &expansion_bomb,
+            &[("database.dump", repeated_bytes.as_slice())],
+        );
         assert!(
             matches!(validate_recovery_package_sync(&expansion_bomb), Err(AppError::Validation(message)) if message.contains("expansion ratio"))
         );

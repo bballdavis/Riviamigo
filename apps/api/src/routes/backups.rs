@@ -214,6 +214,8 @@ struct BackupRunResponse {
     id: Uuid,
     trigger: BackupRunTrigger,
     status: BackupRunStatus,
+    phase: String,
+    progress_percent: i16,
     artifact_key: Option<String>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
@@ -337,6 +339,8 @@ struct BackupRunRow {
     id: Uuid,
     trigger: String,
     status: String,
+    phase: String,
+    progress_percent: i16,
     artifact_key: Option<String>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
@@ -505,10 +509,16 @@ async fn upload_backup_artifact(
     let recovery_lock = backup_service::acquire_recovery_mutation_lock(&state.pool).await?;
     let upload_result = async {
         sqlx::query(
-            "INSERT INTO riviamigo.backup_runs (id, trigger, status, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', $2, now(), now())",
+            "INSERT INTO riviamigo.backup_runs (id, trigger, status, phase, progress_percent, requested_by, started_at, updated_at) VALUES ($1, 'upload', 'running', 'queued', 0, $2, now(), now())",
         )
         .bind(run_id)
         .bind(auth.user_id)
+        .execute(&state.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE riviamigo.backup_runs SET phase = 'uploading', progress_percent = 10, updated_at = now() WHERE id = $1",
+        )
+        .bind(run_id)
         .execute(&state.pool)
         .await?;
         let mut output = fs::File::create(&temporary_path).await?;
@@ -539,6 +549,12 @@ async fn upload_backup_artifact(
         output.flush().await?;
         drop(output);
 
+        sqlx::query(
+            "UPDATE riviamigo.backup_runs SET phase = 'validating', progress_percent = 90, updated_at = now() WHERE id = $1",
+        )
+        .bind(run_id)
+        .execute(&state.pool)
+        .await?;
         let validated = backup_service::validate_recovery_package(&temporary_path).await?;
         fs::rename(&temporary_path, &final_path).await?;
         let storage_path = final_path.to_string_lossy().into_owned();
@@ -565,7 +581,7 @@ async fn upload_backup_artifact(
         .fetch_one(&state.pool)
         .await?;
         sqlx::query(
-            "UPDATE riviamigo.backup_runs SET status = 'succeeded', artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1",
+            "UPDATE riviamigo.backup_runs SET status = 'succeeded', phase = 'completed', progress_percent = 100, artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1",
         )
         .bind(run_id)
         .bind(&storage_path)
@@ -581,7 +597,7 @@ async fn upload_backup_artifact(
             let _ = fs::remove_file(&temporary_path).await;
             let _ = fs::remove_file(&final_path).await;
             let _ = sqlx::query(
-                "UPDATE riviamigo.backup_runs SET status = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1",
+                "UPDATE riviamigo.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1",
             )
             .bind(run_id)
             .bind(error.to_string())
@@ -1131,7 +1147,7 @@ async fn run_backup_now(
 ) -> Result<(StatusCode, Json<BackupRunExecutionResponse>), AppError> {
     require_admin(&state, auth.user_id).await?;
 
-    let result = backup_service::run_backup_now(
+    let run_id = backup_service::start_backup_now(
         &state.pool,
         &state.config,
         Some(auth.user_id),
@@ -1139,15 +1155,14 @@ async fn run_backup_now(
     )
     .await?;
 
-    let run = load_run_by_id(&state, result.run_id).await?;
-    let mut artifacts = Vec::new();
-    for artifact_id in result.artifact_ids {
-        artifacts.push(load_artifact_by_id(&state, artifact_id).await?);
-    }
+    let run = load_run_by_id(&state, run_id).await?;
 
     Ok((
-        StatusCode::CREATED,
-        Json(BackupRunExecutionResponse { run, artifacts }),
+        StatusCode::ACCEPTED,
+        Json(BackupRunExecutionResponse {
+            run,
+            artifacts: Vec::new(),
+        }),
     ))
 }
 
@@ -1221,7 +1236,7 @@ async fn load_recent_runs(
     let offset = i64::from(page.saturating_sub(1)) * i64::from(per_page);
     let rows = sqlx::query_as::<_, BackupRunRow>(
         r#"
-        SELECT id, trigger, status, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
         FROM riviamigo.backup_runs
         ORDER BY created_at DESC
         LIMIT $1 OFFSET $2
@@ -1238,7 +1253,7 @@ async fn load_recent_runs(
 async fn load_run_by_id(state: &AppState, run_id: Uuid) -> Result<BackupRunResponse, AppError> {
     let row = sqlx::query_as::<_, BackupRunRow>(
         r#"
-        SELECT id, trigger, status, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
         FROM riviamigo.backup_runs
         WHERE id = $1
         "#,
@@ -1332,7 +1347,7 @@ async fn load_latest_successful_run(
 ) -> Result<Option<BackupRunResponse>, AppError> {
     let row = sqlx::query_as::<_, BackupRunRow>(
         r#"
-        SELECT id, trigger, status, artifact_key, started_at, completed_at, error_message, created_at, updated_at
+        SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at
         FROM riviamigo.backup_runs
         WHERE status = 'succeeded'
         ORDER BY completed_at DESC NULLS LAST, created_at DESC
@@ -1375,6 +1390,8 @@ fn map_run_row(row: BackupRunRow) -> Result<BackupRunResponse, AppError> {
         id: row.id,
         trigger: BackupRunTrigger::try_from(row.trigger.as_str())?,
         status: BackupRunStatus::try_from(row.status.as_str())?,
+        phase: row.phase,
+        progress_percent: row.progress_percent,
         artifact_key: row.artifact_key,
         started_at: row.started_at,
         completed_at: row.completed_at,

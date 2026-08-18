@@ -16,6 +16,8 @@ Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma
 
 If S3 is an enabled destination and its upload fails, the run is marked failed and Riviamigo retains the valid package locally even when Local retention was disabled. This prevents a remote-storage outage from silently appearing as a protected backup.
 
+Selecting **Run now** starts the backup asynchronously and returns immediately. The Backups page polls the durable run record while the worker reports queued, dump, snapshot, packaging, validation, upload, and completion phases with progress. A second manual start is rejected while the existing run holds the backup lock. If the API restarts before a detached worker finishes, startup marks that run failed instead of leaving an indefinitely running history row.
+
 The cutover release uses the `riviamigo-recovery-v3` contract and contains:
 
 - `manifest.json` with the source release/build, PostgreSQL and TimescaleDB versions, migration chain identifier, complete ordered migration ledger and raw-byte SHA-384 checksums, compiled catalog digest, versioned canonical schema-contract digest, component policies, redactions, sizes, and checksums.
@@ -88,3 +90,5 @@ The former five-migration pre-release chain remains a rollback path when a match
 Matching migration numbers or visibly matching tables do not prove migration identity. The raw migration bytes, ordered catalog, chain identifier, and schema contract must all agree.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.
+
+For a repeatable production-data development check, use the [production-test dev harness](../runbooks/dev-harness.md). It restores a verified package into fresh test-only storage before starting the candidate image; it never reads PostgreSQL's live data directory and never downgrades a migrated test database in place.

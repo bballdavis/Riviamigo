@@ -100,6 +100,10 @@ pub struct BackupRunSnapshot {
     pub id: Uuid,
     pub trigger: String,
     pub status: String,
+    #[serde(default)]
+    pub phase: String,
+    #[serde(default)]
+    pub progress_percent: i16,
     pub artifact_key: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -209,13 +213,25 @@ pub async fn create(
 }
 
 pub async fn snapshot_catalog(pool: &PgPool) -> Result<BackupCatalogSnapshot, AppError> {
-    let runs = sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
-        "SELECT id, trigger, status, artifact_key, started_at, completed_at, error_message, created_at, updated_at FROM riviamigo.backup_runs ORDER BY created_at",
+    let runs = sqlx::query_as::<_, (Uuid, String, String, String, i16, Option<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
+        "SELECT id, trigger, status, phase, progress_percent, artifact_key, started_at, completed_at, error_message, created_at, updated_at FROM riviamigo.backup_runs ORDER BY created_at",
     )
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|row| BackupRunSnapshot { id: row.0, trigger: row.1, status: row.2, artifact_key: row.3, started_at: row.4, completed_at: row.5, error_message: row.6, created_at: row.7, updated_at: row.8 })
+    .map(|row| BackupRunSnapshot {
+        id: row.0,
+        trigger: row.1,
+        status: row.2,
+        phase: row.3,
+        progress_percent: row.4,
+        artifact_key: row.5,
+        started_at: row.6,
+        completed_at: row.7,
+        error_message: row.8,
+        created_at: row.9,
+        updated_at: row.10,
+    })
     .collect();
     let artifacts = sqlx::query_as::<_, (Uuid, Option<Uuid>, String, String, String, i64, String, Value, DateTime<Utc>)>(
         "SELECT id, run_id, storage_type, file_name, storage_path, size_bytes, checksum_sha256, manifest, created_at FROM riviamigo.backup_artifacts ORDER BY created_at",
@@ -432,16 +448,19 @@ pub async fn merge_catalog_snapshot(
     snapshot: &BackupCatalogSnapshot,
 ) -> Result<(), AppError> {
     for run in &snapshot.runs {
+        let (phase, progress_percent) = normalized_backup_run_progress(run);
         sqlx::query(r#"
-            INSERT INTO riviamigo.backup_runs (id, trigger, status, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
-            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9)
+            INSERT INTO riviamigo.backup_runs (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (id) DO UPDATE SET trigger = EXCLUDED.trigger, status = EXCLUDED.status,
+                phase = EXCLUDED.phase, progress_percent = EXCLUDED.progress_percent,
                 artifact_key = EXCLUDED.artifact_key, started_at = EXCLUDED.started_at,
                 completed_at = EXCLUDED.completed_at, error_message = EXCLUDED.error_message,
                 created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
-        "#).bind(run.id).bind(&run.trigger).bind(&run.status).bind(&run.artifact_key)
-            .bind(run.started_at).bind(run.completed_at).bind(&run.error_message)
-            .bind(run.created_at).bind(run.updated_at).execute(pool).await?;
+        "#).bind(run.id).bind(&run.trigger).bind(&run.status).bind(phase)
+            .bind(progress_percent).bind(&run.artifact_key).bind(run.started_at)
+            .bind(run.completed_at).bind(&run.error_message).bind(run.created_at)
+            .bind(run.updated_at).execute(pool).await?;
     }
     for artifact in &snapshot.artifacts {
         sqlx::query(r#"
@@ -469,6 +488,18 @@ pub async fn merge_catalog_snapshot(
             .bind(request.requested_at).bind(request.updated_at).execute(pool).await?;
     }
     Ok(())
+}
+
+fn normalized_backup_run_progress(run: &BackupRunSnapshot) -> (&str, i16) {
+    if !run.phase.is_empty() {
+        return (run.phase.as_str(), run.progress_percent.clamp(0, 100));
+    }
+
+    match run.status.as_str() {
+        "succeeded" => ("completed", 100),
+        "failed" | "canceled" => ("failed", run.progress_percent.clamp(0, 99)),
+        _ => ("queued", run.progress_percent.clamp(0, 99)),
+    }
 }
 
 pub fn mark_source_artifact_availability(
@@ -539,8 +570,8 @@ async fn insert_reconciled_artifact(
     sqlx::query(
         r#"
         INSERT INTO riviamigo.backup_runs (
-            id, trigger, status, requested_by, artifact_key, started_at, completed_at, created_at, updated_at
-        ) VALUES ($1, $2, 'succeeded', NULL, $3, now(), now(), now(), now())
+            id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, created_at, updated_at
+        ) VALUES ($1, $2, 'succeeded', 'completed', 100, NULL, $3, now(), now(), now(), now())
         ON CONFLICT (id) DO NOTHING
         "#,
     )

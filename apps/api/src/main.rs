@@ -42,6 +42,14 @@ async fn main() -> anyhow::Result<()> {
         "database schema is current"
     );
 
+    match services::backups::reconcile_running_runs(&pool).await {
+        Ok(reconciled) if reconciled > 0 => tracing::warn!(
+            reconciled,
+            "backup running jobs reconciled after API startup"
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::error!(error = ?error, "backup running-job reconciliation failed"),
+    }
     match services::restore_jobs::reconcile_completed_jobs(&pool, &config).await {
         Ok(()) => tracing::info!("restore job journal reconciled"),
         Err(error) => tracing::error!(error = ?error, "restore job journal reconciliation failed"),
@@ -111,8 +119,7 @@ async fn main() -> anyhow::Result<()> {
         services::weather_enrichment::start_worker(pool.clone(), age_key.clone());
     let _trip_enrichment_reconciler =
         services::trip_enrichment::start_reconciliation_worker(pool.clone());
-    let _security_audit_retention =
-        services::security_audit::start_retention_worker(pool.clone());
+    let _security_audit_retention = services::security_audit::start_retention_worker(pool.clone());
     let _charge_identity_backfill = services::charge_payload_identity::start_worker(
         pool.clone(),
         charge_identity_backfill_config,
