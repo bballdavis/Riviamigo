@@ -12,6 +12,8 @@
     "dev": "turbo dev",
     "dev:stack": "node ./scripts/dev.mjs",
     "dev:stack:parallax": "node ./scripts/dev.mjs --parallax",
+    "dev:harness": "node ./scripts/dev-harness.mjs",
+    "dev:harness:procedure": "node ./scripts/dev-harness-procedure.mjs",
     "dev:parallax": "cargo run --manifest-path apps/api/Cargo.toml --bin riviamigo-parallax-collector",
     "build": "turbo build",
     "test": "pnpm test:packages && pnpm test:scripts",

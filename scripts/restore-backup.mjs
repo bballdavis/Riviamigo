@@ -25,17 +25,19 @@ const requiredArgument = (name) => {
 
 const packagePath = resolve(requiredArgument('--package'));
 const envFile = resolve(argument('--env-file', '.env'));
+const composeFile = resolve(root, argument('--compose-file', 'compose/docker-compose.yml'));
 const project = argument('--project', `riviamigo-restore-${Date.now().toString(36)}`);
 const force = args.includes('--force');
 const sourceBuild = args.includes('--source-build');
 const skipBuild = args.includes('--skip-build');
 if (!existsSync(packagePath)) throw new Error(`Recovery package does not exist: ${packagePath}`);
 if (!existsSync(envFile)) throw new Error(`Compose env file does not exist: ${envFile}`);
+if (!existsSync(composeFile)) throw new Error(`Compose file does not exist: ${composeFile}`);
 
 const environment = { ...process.env, RIVIAMIGO_ENV_FILE: envFile };
 const compose = [
   'compose', '-p', project, '--env-file', envFile,
-  '-f', 'compose/docker-compose.yml',
+  '-f', composeFile,
   ...(sourceBuild ? ['-f', 'compose/docker-compose.build.yml'] : []),
 ];
 const run = (command, commandArgs, options = {}) => execFileSync(command, commandArgs, {
@@ -105,7 +107,8 @@ try {
 
   run('docker', [...compose, 'up', '-d', 'riviamigo']);
   const port = readEnvValue('RIVIAMIGO_ORIGIN_PORT') ?? '8080';
-  const origin = `http://localhost:${port}`;
+  const healthHost = readEnvValue('RIVIAMIGO_HEALTH_HOST') ?? 'localhost';
+  const origin = `http://${healthHost}:${port}`;
   await waitForHealth(`${origin}/health`);
   const setup = await fetch(`${origin}/v1/auth/setup`).then((response) => response.json());
   if (setup.setup_required) throw new Error('Restored application unexpectedly requires setup.');
