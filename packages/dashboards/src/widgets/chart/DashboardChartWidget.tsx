@@ -8,6 +8,7 @@ import {
   useChargeCurveAnalysis,
   useChargingChartSeries,
   useDegradation,
+  useDashboardChartFavorites,
   useEfficiencyByMode,
   useEfficiencyByTag,
   useEfficiencyTrend,
@@ -17,6 +18,7 @@ import {
   useSocHistory,
   useTirePressureTimeline,
   useTripTags,
+  useUpdateDashboardChartFavorite,
   useVehicles,
 } from '@riviamigo/hooks';
 import {
@@ -79,6 +81,8 @@ interface DashboardChartOptions {
   chartIds?: string[];
   page?: DashboardChartPage;
   showPicker?: boolean;
+  /** The widget keeps its layout, but its available charts come from the page catalog. */
+  managed?: boolean;
   timeFilter?: TimeFilterWindow;
   smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
@@ -120,8 +124,6 @@ const LEGACY_CHART_ID_ALIASES: Record<string, string> = {
   'range-history': 'soc-history',
 };
 
-const CHART_DEFAULTS_STORAGE_KEY = 'rm-dashboard-chart-defaults';
-
 function normalizeChartId(chartId: string) {
   return LEGACY_CHART_ID_ALIASES[chartId] ?? chartId;
 }
@@ -132,56 +134,15 @@ function chartDefaultStorageKey(ctx: WidgetCtx, instance: WidgetInstance) {
   return dashboardId ? `${slug}:${dashboardId}:${instance.id}` : `${slug}:${instance.id}`;
 }
 
-function readStoredChartDefault(
-  storageKey: string,
-  validIds: readonly string[],
-  fallback: string,
-  legacyStorageKey?: string,
-) {
-  if (typeof window === 'undefined') return fallback;
-
-  try {
-    const raw = window.localStorage.getItem(CHART_DEFAULTS_STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return fallback;
-    const keys = legacyStorageKey
-      ? [storageKey, legacyStorageKey]
-      : [storageKey];
-    for (const key of keys) {
-      const value = (parsed as Record<string, unknown>)[key];
-      if (typeof value === 'string' && validIds.includes(value)) {
-        return value;
-      }
-    }
-    return fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveStoredChartDefault(storageKey: string, chartId: string) {
-  if (typeof window === 'undefined') return;
-
-  try {
-    const raw = window.localStorage.getItem(CHART_DEFAULTS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : {};
-    const stored = parsed && typeof parsed === 'object'
-      ? { ...(parsed as Record<string, unknown>) }
-      : {};
-    stored[storageKey] = chartId;
-    window.localStorage.setItem(CHART_DEFAULTS_STORAGE_KEY, JSON.stringify(stored));
-  } catch {
-    // Preferences are best-effort when storage is unavailable or full.
-  }
-}
-
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
   const options = (instance.options ?? {}) as DashboardChartOptions;
+  const managed = instance.managed === true || options.managed === true;
   const page = isDashboardChartPage(options.page) ? options.page : undefined;
   const pageDefinitions = getChartDefinitions(page);
   const validIds = new Set(pageDefinitions.map((definition) => definition.id));
-  const chartIds = Array.isArray(options.chartIds)
+  const chartIds = managed
+    ? pageDefinitions.map((definition) => definition.id)
+    : Array.isArray(options.chartIds)
     ? [...new Set(options.chartIds
       .filter((id): id is string => typeof id === 'string')
       .map(normalizeChartId)
@@ -220,15 +181,16 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const options = readOptions(instance);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
-  const legacyStorageKey = `${ctx.dashboardSlug ?? 'dashboard'}:${instance.id}`;
+  const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
+  const updateFavorite = useUpdateDashboardChartFavorite();
   const chartIdsSignature = options.chartIds.join('|');
-  const [chartId, setChartId] = React.useState(() => (
-    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId, legacyStorageKey)
-  ));
-  const [defaultChartId, setDefaultChartId] = React.useState(() => (
-    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId, legacyStorageKey)
-  ));
-  const previousDefaultStorageKeyRef = React.useRef(defaultStorageKey);
+  const serverFavorite = favoriteResponse?.chart_favorites?.[defaultStorageKey];
+  const resolvedFavorite = typeof serverFavorite === 'string' && options.chartIds.includes(serverFavorite)
+    ? serverFavorite
+    : options.chartId;
+  const [chartId, setChartId] = React.useState(options.chartId);
+  const [defaultChartId, setDefaultChartId] = React.useState(options.chartId);
+  const favoriteInitializationRef = React.useRef<string | null>(null);
   const [search, setSearch] = React.useState('');
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -240,19 +202,14 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
-    const storedDefault = readStoredChartDefault(
-      defaultStorageKey,
-      options.chartIds,
-      options.chartId,
-      legacyStorageKey,
-    );
-    setDefaultChartId(storedDefault);
-    setChartId((current) => {
-      if (previousDefaultStorageKeyRef.current !== defaultStorageKey) return storedDefault;
-      return options.chartIds.includes(current) ? current : storedDefault;
-    });
-    previousDefaultStorageKeyRef.current = defaultStorageKey;
-  }, [defaultStorageKey, options.chartId, chartIdsSignature]);
+    if (!favoritesLoaded) return;
+    const initializationKey = `${defaultStorageKey}|${chartIdsSignature}|${options.chartId}`;
+    setDefaultChartId(resolvedFavorite);
+    if (favoriteInitializationRef.current !== initializationKey) {
+      setChartId(resolvedFavorite);
+      favoriteInitializationRef.current = initializationKey;
+    }
+  }, [defaultStorageKey, options.chartId, chartIdsSignature, favoritesLoaded, resolvedFavorite]);
 
   React.useEffect(() => {
     setDraftChartSettings(options.chartSettings);
@@ -282,8 +239,8 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   }
 
   function setChartAsDefault(nextChartId: string) {
-    saveStoredChartDefault(defaultStorageKey, nextChartId);
     setDefaultChartId(nextChartId);
+    updateFavorite.mutate({ key: defaultStorageKey, chartId: nextChartId });
   }
 
   const settingsButton = (

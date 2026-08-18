@@ -791,6 +791,18 @@ export type BackupTargetType = 's3';
 
 export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
+export type BackupRunPhase =
+  | 'queued'
+  | 'preparing'
+  | 'dumping'
+  | 'snapshotting'
+  | 'packaging'
+  | 'validating'
+  | 'uploading'
+  | 'finalizing'
+  | 'completed'
+  | 'failed';
+
 export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore' | 'upload' | 'pre_restore';
 
 export type BackupArtifactStorageType = 'local' | 'uploaded' | 'safety' | 's3';
@@ -845,6 +857,8 @@ export interface BackupRun {
   id: string;
   trigger: BackupRunTrigger;
   status: BackupRunStatus;
+  phase: BackupRunPhase;
+  progress_percent: number;
   artifact_key: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -1159,6 +1173,8 @@ export interface UnitPreferences {
   place_radius_unit: PlaceRadiusUnit;
   efficiency_display: EfficiencyDisplay;
 }
+
+export type DashboardChartFavorites = Record<string, string>;
 
 export interface AppTimezone {
   timezone: string;

@@ -53,6 +53,17 @@ target line to the user's PSI/kPa preference. Trip intervals use
 timeframe-overlap filtering and carry route labels, duration, distance, and
 tags.
 
+## Account-scoped dashboard preferences
+
+Chart-picker favorites are account data, not browser state. The authenticated
+`GET`/`PUT /v1/auth/preferences/chart-favorites` endpoints read and update the
+`user_preferences.dashboard_chart_favorites` JSON object. Each entry is keyed
+by dashboard slug, dashboard config ID when present, and widget ID, so a user
+can choose different defaults for different dashboard copies while retaining
+the choice across browsers and sessions. Managed chart catalogs may gain new
+definitions during an upgrade; a saved favorite remains the initial chart when
+it is still present in the catalog.
+
 ## TeslaMate parity targets
 
 ### Charging chart semantics

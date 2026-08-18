@@ -204,9 +204,13 @@ CI.
 Startup creates a missing system dashboard but does not overwrite an existing
 admin-managed layout. The explicit admin restore action is the only path that
 applies the bundled baseline to an existing system dashboard. User-owned
-dashboard copies are never changed by seed updates. Do not add client-side
-widget injection to redefine a saved dashboard at render time; use an explicit
-compatibility migration only when an older saved config must be supported.
+dashboard copies retain their saved widgets, positions, titles, visibility, and
+settings; the only upgrade exception is an additive compatibility patch for
+widgets explicitly marked `managed` with a stable `managedKey`. That patch may
+add a missing fixed-composition widget or mark a canonical legacy instance, but
+it never replaces the personal layout. Do not add client-side widget injection
+to redefine a saved dashboard at render time; keep persistence in the explicit
+server-side compatibility migration.
 
 If you need to change one of those flows, change the shared shell or the shared action wiring. Do not add a second implementation for one route family.
 
@@ -253,7 +257,7 @@ Use Settings > Dashboards for durable dashboard management:
 - delete standalone personal dashboards
 - admin/super-user lock, unlock, and restore bundled defaults
 
-Normal routing selects a same-slug personal dashboard before the system default. Settings marks that row Active for you. System defaults remain installation-wide and admin-managed; Restore bundled is distinct from personal Reset to default.
+Normal routing selects a same-slug personal dashboard before the system default. Settings marks that row Active for you. System defaults remain installation-wide and admin-managed; Restore bundled is distinct from personal Reset to default. Managed page-composition additions do not require users to reset a personal dashboard.
 
 ## Data and Adapter Rules
 

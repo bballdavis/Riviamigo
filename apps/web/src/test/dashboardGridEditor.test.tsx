@@ -204,6 +204,31 @@ describe('GridEditor overlays', () => {
     expect(getEditorStyles()).toContain('.rgl-editor .react-grid-item.react-resizable-hide .react-resizable-handle');
   });
 
+  it('keeps managed composition movable but removes content editing controls', () => {
+    const managedWidget = {
+      ...BASE_CONFIG.widgets[0]!,
+      id: '44444444-4444-4444-4444-444444444444',
+      componentType: 'chart' as const,
+      definitionId: 'catalog',
+      managed: true,
+      managedKey: 'trips.tire-pressure-timeline',
+      layout: { x: 0, y: 2, w: 12, h: 7 },
+    };
+
+    render(
+      <GridEditor
+        config={{ ...BASE_CONFIG, widgets: [managedWidget] }}
+        ctx={BASE_CTX}
+        onConfigChange={() => undefined}
+      />
+    );
+
+    expect(screen.getByTestId('widget-overlay-left-44444444-4444-4444-4444-444444444444'))
+      .toHaveTextContent('');
+    expect(screen.getByRole('button', { name: 'Drag to move' })).toBeInTheDocument();
+    expect(screen.queryByTestId('widget-overlay-right-44444444-4444-4444-4444-444444444444')).toBeNull();
+  });
+
   it('keeps edit controls actionable in edit mode and uses interaction states only for emphasis', () => {
     render(
       <GridEditor

@@ -103,7 +103,7 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 - YAML import and export
 - bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
 
-Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and user-owned dashboards are never changed by seeding. Personal same-slug dashboards continue to win normal route resolution.
+Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and personal layout/widget settings remain untouched. Explicitly managed page-composition widgets are the narrow exception: startup may add a missing managed widget or mark a canonical legacy instance, preserving its saved layout, title, visibility, and unrelated options. Personal same-slug dashboards continue to win normal route resolution.
 
 This package should stay framework-focused. It should not accumulate page-specific business rules.
 
@@ -133,7 +133,7 @@ The shared chart widget owns reusable chart display controls.
 - Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
 - Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
 - Treat dashboard edit mode as the only persistent write seam. In edit mode, widget-level settings changes should flow back through the dashboard shell's local config update path. In view mode, the same UI can preview changes locally, but those changes should not autosave.
-- Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. That preference is stored in browser storage per dashboard/widget instance and survives reloads; it is owned by `DashboardChartWidget`, not by a route.
+- Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. The favorite is stored in the authenticated account's database-backed preferences per dashboard/widget instance, so it survives browser changes and remains available when a managed catalog gains new chart definitions. `DashboardChartWidget` owns the preference interaction; the account preferences API owns persistence.
 - Keep the settings UI inside the shared chart widget and shared chart primitives. Do not recreate chart-settings popovers in route files or page components.
 - Rich time-series charts may expose manual `y` and `y2` ranges broadly, but `x` range controls are only valid when the chart owns its own non-dashboard domain.
 - When a chart follows the shared dashboard timeframe, the page shell remains the source of truth for the X domain. Do not expose per-widget time-range overrides that conflict with `DashboardPageShell`.
@@ -153,6 +153,17 @@ Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/
 - `DashboardChartWidget` owns the mobile-only expand trigger and the portal-based fullscreen viewer for catalog-rendered dashboard charts. The viewer can switch only among that widget's configured `chartIds`; selection and exploration remain local view state and must not mutate the dashboard or URL.
 - `DashboardChartRenderer` accepts `presentation="embedded" | "mobile-viewer"`. It keeps data ownership unchanged while opting rich time/numeric charts into touch exploration. Browser fullscreen and orientation APIs are progressive enhancements; the fixed-viewport viewer and rotate prompt remain the reliable fallback.
 - `RichTimeSeriesChart` owns pinch zoom, horizontal pan, double-tap/reset, and data-domain clamping for the mobile-viewer presentation. Categorical renderers stay readable and tappable rather than inventing a continuous zoom model.
+
+### Managed page composition
+
+Some built-in widgets are layout-bearing anchors for page composition rather than
+user-configurable widget definitions. Their `managed` and `managedKey` fields
+identify the composition contract; the user can still move or resize the widget,
+but the editor does not expose controls to replace its content or remove it.
+Managed catalog charts derive their available chart definitions from the current
+page catalog instead of persisting a second chart-membership list in each user
+copy. Startup applies an additive, idempotent compatibility patch for existing
+personal copies so new fixed content appears without replacing saved layouts.
 
 ### 6. Hooks and Data Layer
 

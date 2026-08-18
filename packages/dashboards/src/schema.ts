@@ -27,6 +27,9 @@ export const WidgetInstanceSchema = z.object({
   id: z.guid(),
   componentType: ComponentTypeSchema,
   definitionId: z.string().min(1),
+  /** Composition is owned by the bundled dashboard, while layout remains user-editable. */
+  managed: z.boolean().optional(),
+  managedKey: z.string().min(1).optional(),
   title: z.string().optional(),
   layout: LayoutSchema,
   options: z.record(z.string(), z.unknown()).optional(),
