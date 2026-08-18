@@ -11,7 +11,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
-import { getDefaultBySlug } from '@riviamigo/dashboards';
+import { getDefaultBySlug, getWidget } from '@riviamigo/dashboards';
 import {
   getBatteryCapacityMileageYRange,
   getProjectedRangeMileageYRange,
@@ -74,6 +74,15 @@ describe('DashboardChartWidget - smoothing controls', () => {
     const chart = overview?.widgets.find((widget) => widget.definitionId === 'catalog');
 
     expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('projected-range-mileage');
+  });
+
+  it('uses projected range by mileage for new overview chart widgets', () => {
+    const chart = getWidget('chart', 'catalog');
+
+    expect(chart?.defaultOptions).toMatchObject({
+      page: 'overview',
+      chartId: 'projected-range-mileage',
+    });
   });
 
   it('registers the tire-pressure timeline through the shared catalog widget on Trips', () => {

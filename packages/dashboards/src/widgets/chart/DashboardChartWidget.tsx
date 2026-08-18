@@ -2056,7 +2056,7 @@ registerWidget({
   minSize: { w: 4, h: 6 },
   defaultOptions: {
     page: 'overview',
-    chartId: 'soc-history',
+    chartId: 'projected-range-mileage',
     showPicker: true,
     timeFilter: DEFAULT_CHART_TIME_FILTER,
   },
