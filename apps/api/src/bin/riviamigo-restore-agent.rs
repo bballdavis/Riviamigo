@@ -409,9 +409,10 @@ async fn record_host_restore_history(
     sqlx::query(
         r#"
         INSERT INTO riviamigo.backup_runs
-          (id, trigger, status, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
-        VALUES ($1, 'restore', $2, NULL, $3, now(), now(), $4, now(), now())
+          (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
+        VALUES ($1, 'restore', $2, $5, $6, NULL, $3, now(), now(), $4, now(), now())
         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,
+          phase = EXCLUDED.phase, progress_percent = EXCLUDED.progress_percent,
           completed_at = EXCLUDED.completed_at, error_message = EXCLUDED.error_message, updated_at = now()
         "#,
     )
@@ -419,6 +420,8 @@ async fn record_host_restore_history(
     .bind(if status == "completed" { "succeeded" } else { "failed" })
     .bind(format!("restore:{}", state.plan.package_checksum_sha256))
     .bind(error)
+    .bind(if status == "completed" { "completed" } else { "failed" })
+    .bind(if status == "completed" { 100_i16 } else { 0_i16 })
     .execute(&pool)
     .await?;
     sqlx::query(
