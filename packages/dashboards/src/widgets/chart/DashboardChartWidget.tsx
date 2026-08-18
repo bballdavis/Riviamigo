@@ -1,6 +1,6 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, Maximize2, SlidersHorizontal, X } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
 import {
   useBatteryMileage,
@@ -629,10 +629,10 @@ function BatteryMileageSource({ definition, ctx, height, timeFilter, settings, p
   return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
 }
 
-function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
+function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
-  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
+  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} smoothness={smoothness} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
 }
 
 function TirePressureTripsSource({ definition, ctx, height, presentation }: ActiveDashboardChartSourceProps) {
@@ -1519,6 +1519,7 @@ function ProjectedRangeMileageChart({
   loading,
   height,
   timeFilter,
+  smoothness,
   yRange: manualYRange,
   yRightRange,
   interactionMode,
@@ -1529,6 +1530,7 @@ function ProjectedRangeMileageChart({
   loading: boolean;
   height: number;
   timeFilter: TimeFilterWindow;
+  smoothness: CurveSmoothness;
   yRange?: [number, number];
   yRightRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
@@ -1562,7 +1564,6 @@ function ProjectedRangeMileageChart({
           color: CHART_COLORS.emerald,
           mode: 'line',
           yScale: 'y2',
-          filterable: false,
         },
       ]}
       loading={loading}
@@ -1574,6 +1575,7 @@ function ProjectedRangeMileageChart({
       yRightRange={yRightRange}
       mode={definition.mode}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       connectGaps
       interactionMode={interactionMode}
       onResolvedAxisRanges={onResolvedAxisRanges}
@@ -1854,61 +1856,78 @@ function ChartSettingsPanel({
           </button>
         </div>
         <div className="grid gap-3 p-4">
-          {capabilities.timeFilter ? (
-            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display filter</p>
-                <p className="text-sm text-fg">Time window</p>
+          {capabilities.timeFilter || capabilities.smoothness ? (
+            <details open className="group overflow-hidden rounded-xl border border-border bg-bg-elevated/50">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium text-fg marker:hidden">
+                <span>
+                  <span className="block text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display</span>
+                  <span>Filter &amp; curve</span>
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="grid gap-3 border-t border-border p-3">
+                {capabilities.timeFilter ? (
+                  <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display filter</p>
+                      <p className="text-sm text-fg">Time window</p>
+                    </div>
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                        <span>All compatible curves keep their recorded timestamps.</span>
+                        <span>{timeFilterLabel(settings.timeFilter)}</span>
+                      </div>
+                      <input
+                        aria-label="Display filter"
+                        type="range"
+                        min={0}
+                        max={TIME_FILTER_OPTIONS.length - 1}
+                        step={1}
+                        value={timeFilterIndex}
+                        onChange={(event) => onTimeFilterChange(TIME_FILTER_OPTIONS[Number(event.target.value)]!.value)}
+                        className="rm-accent-range w-full"
+                      />
+                    </div>
+                  </section>
+                ) : null}
+                {capabilities.smoothness ? (
+                  <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve smoothness</p>
+                      <p className="text-sm text-fg">Path between recorded points</p>
+                    </div>
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                        <span>Values and timestamps stay unchanged.</span>
+                        <span>{curveSmoothnessLabel(settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
+                        step={1}
+                        value={smoothnessIndex}
+                        onChange={(event) => onSmoothnessChange(CURVE_SMOOTHNESS_OPTIONS[Number(event.target.value)]!.value)}
+                        className="rm-accent-range w-full"
+                        aria-label="Curve smoothness"
+                      />
+                    </div>
+                  </section>
+                ) : null}
               </div>
-              <div>
-                <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                  <span>Raw points stay at their recorded timestamps.</span>
-                  <span>{timeFilterLabel(settings.timeFilter)}</span>
-                </div>
-                <input
-                  aria-label="Display filter"
-                  type="range"
-                  min={0}
-                  max={TIME_FILTER_OPTIONS.length - 1}
-                  step={1}
-                  value={timeFilterIndex}
-                  onChange={(event) => onTimeFilterChange(TIME_FILTER_OPTIONS[Number(event.target.value)]!.value)}
-                  className="rm-accent-range w-full"
-                />
-              </div>
-            </section>
-          ) : null}
-          {capabilities.smoothness ? (
-            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve smoothness</p>
-                <p className="text-sm text-fg">Path between recorded points</p>
-              </div>
-              <div>
-                <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                  <span>Values and timestamps stay unchanged.</span>
-                  <span>{curveSmoothnessLabel(settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)}</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
-                  step={1}
-                  value={smoothnessIndex}
-                  onChange={(event) => onSmoothnessChange(CURVE_SMOOTHNESS_OPTIONS[Number(event.target.value)]!.value)}
-                  className="rm-accent-range w-full"
-                  aria-label="Curve smoothness"
-                />
-              </div>
-            </section>
+            </details>
           ) : null}
           {axisEntries.length > 0 ? (
-            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Axes</p>
-                <p className="text-sm text-fg">Auto or manual range per supported axis.</p>
-              </div>
-              <div className="grid gap-2">
+            <details open className="group overflow-hidden rounded-xl border border-border bg-bg-elevated/50">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium text-fg marker:hidden">
+                <span>
+                  <span className="block text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Scale controls</span>
+                  <span>Axes</span>
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="grid gap-2 border-t border-border p-3">
+                <p className="text-xs text-fg-tertiary">Auto or manual range for each supported axis.</p>
                 {axisEntries.map(([axisId, capability]) => (
                   <ChartAxisRangeField
                     key={axisId}
@@ -1921,7 +1940,7 @@ function ChartSettingsPanel({
                   />
                 ))}
               </div>
-            </section>
+            </details>
           ) : null}
           {!hasControls ? (
             <div className="rounded-xl border border-border bg-bg-elevated/50 px-3 py-4 text-sm text-fg-secondary">

@@ -294,6 +294,43 @@ describe('DashboardChartWidget - smoothing controls', () => {
     );
   });
 
+  it('applies the display filter and curve smoothness to both projected-range curves', () => {
+    renderChart('projected-range-mileage');
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', '1h');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute(
+      'data-series-filterable',
+      'Projected Max Range:true|Mileage:true',
+    );
+
+    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-chart-smoothness', 'smooth');
+  });
+
+  it('persists projected-range display controls through the account dashboard save seam', () => {
+    const updateWidgetOptions = vi.fn();
+    renderWidget(makeInstance('projected-range-mileage'), { ...CTX, updateWidgetOptions });
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
+
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-projected-range-mileage',
+      expect.objectContaining({
+        chartSettings: {
+          'projected-range-mileage': {
+            timeFilter: '1h',
+            smoothness: 'smooth',
+          },
+        },
+      }),
+    );
+    expect(localStorage.getItem('rm-dashboard-chart-defaults')).toBeNull();
+  });
+
   it('uses the same centered dialog layout on mobile viewports', () => {
     setMatchMedia(true);
     renderChart('soc-history');
@@ -675,6 +712,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       series,
       emptyTitle,
       timeFilter,
+      smoothness,
       xRange,
       yRange,
       yRightRange,
@@ -687,9 +725,10 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       yUnit,
     }: {
       points: Array<{ ts: string | number | Date }>;
-      series: Array<{ label: string; color?: string; mode?: string; tooltipOnly?: boolean; values?: Array<number | null>; tooltipDetails?: Array<string | null | undefined>; pointSize?: number }>;
+      series: Array<{ label: string; color?: string; mode?: string; tooltipOnly?: boolean; filterable?: boolean; values?: Array<number | null>; tooltipDetails?: Array<string | null | undefined>; pointSize?: number }>;
       emptyTitle: string;
       timeFilter?: string;
+      smoothness?: string;
       xRange?: [number, number];
       yRange?: [number, number];
       yRightRange?: [number, number];
@@ -707,7 +746,9 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
         <div
           data-testid="rich-chart"
           data-time-filter={timeFilter ?? 'raw'}
+          data-chart-smoothness={smoothness ?? 'gentle'}
           data-series={series.map((item) => item.label).join('|')}
+          data-series-filterable={series.map((item) => `${item.label}:${item.filterable === false ? 'false' : 'true'}`).join('|')}
           data-series-colors={series.map((item) => `${item.label}:${item.color ?? ''}`).join('|')}
           data-series-modes={series.map((item) => `${item.label}:${item.mode ?? ''}`).join('|')}
           data-series-values={series.map((item) => `${item.label}:${item.values?.map((value) => value ?? '').join(',') ?? ''}`).join('|')}
