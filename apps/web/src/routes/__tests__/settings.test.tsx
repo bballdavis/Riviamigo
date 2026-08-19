@@ -397,6 +397,9 @@ vi.mock('@riviamigo/hooks', () => ({
 
 vi.mock('@riviamigo/dashboards', () => ({
   downloadDashboardYaml: dashboardMocks.downloadDashboardYaml,
+  getDefaultBySlug: (slug: string) => slug === 'dashboard'
+    ? { id: '00000000-0000-0000-0000-000000000001' }
+    : undefined,
   materializeUserDashboardDraft: (dashboard: Record<string, unknown>) => ({
     ...dashboard,
     id: 'personal-draft',
@@ -649,7 +652,7 @@ describe('Settings page', () => {
     dashboardMocks.dashboards = [
       {
         id: 'default-overview',
-        slug: 'overview',
+        slug: 'dashboard',
         name: 'Overview',
         description: null,
         isDefault: true,
@@ -658,7 +661,7 @@ describe('Settings page', () => {
         widgets: [{ id: 'w1' }],
       },
       {
-        id: 'user-charging',
+        id: '22222222-2222-2222-2222-222222222222',
         slug: 'my-charging',
         name: 'My Charging',
         description: null,
@@ -669,8 +672,8 @@ describe('Settings page', () => {
       },
     ];
     dashboardMocks.cloneMutateAsync.mockResolvedValue({
-      id: 'clone-1',
-      slug: 'overview-copy',
+      id: '33333333-3333-3333-3333-333333333333',
+      slug: 'dashboard-copy',
       name: 'Overview Copy',
       description: null,
       isDefault: false,
@@ -679,8 +682,8 @@ describe('Settings page', () => {
       widgets: [],
     });
     dashboardMocks.createMutateAsync.mockResolvedValue({
-      id: 'personal-overview',
-      slug: 'overview',
+      id: '44444444-4444-4444-4444-444444444444',
+      slug: 'dashboard',
       name: 'Overview',
       description: null,
       isDefault: false,
@@ -710,15 +713,15 @@ describe('Settings page', () => {
     fireEvent.click(openDefaultButton);
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
-      params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview' },
+      params: { slug: 'dashboard' },
+      search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit default' }));
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
-      params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview', edit: 1 },
+      params: { slug: 'dashboard' },
+      search: { dashboardId: '00000000-0000-0000-0000-000000000001', edit: 1 },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
@@ -726,7 +729,7 @@ describe('Settings page', () => {
       expect(dashboardMocks.createMutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'personal-draft',
-          slug: 'overview',
+          slug: 'dashboard',
           isDefault: false,
         })
       );
@@ -734,8 +737,8 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/d/$slug',
-        params: { slug: 'overview' },
-        search: { dashboardId: 'personal-overview', edit: 1 },
+        params: { slug: 'dashboard' },
+        search: { dashboardId: '44444444-4444-4444-4444-444444444444', edit: 1 },
       });
     });
 
@@ -744,15 +747,15 @@ describe('Settings page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({
-      id: 'default-overview',
+      id: '00000000-0000-0000-0000-000000000001',
       locked: false,
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
-    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('default-overview');
+    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('user-charging');
+    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
 
     const showEditButton = screen.getByRole('switch', {
       name: 'Show edit button on dashboard pages',
@@ -768,7 +771,7 @@ describe('Settings page', () => {
     dashboardMocks.dashboards = [
       {
         id: 'default-overview',
-        slug: 'overview',
+        slug: 'dashboard',
         name: 'Overview',
         description: null,
         isDefault: true,
@@ -777,8 +780,8 @@ describe('Settings page', () => {
         widgets: [{ id: 'w1' }],
       },
       {
-        id: 'personal-overview',
-        slug: 'overview',
+        id: '55555555-5555-5555-5555-555555555555',
+        slug: 'dashboard',
         name: 'Overview',
         description: null,
         isDefault: false,
@@ -798,12 +801,12 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open default' }));
     expect(mockNavigate).toHaveBeenLastCalledWith({
       to: '/d/$slug',
-      params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview' },
+      params: { slug: 'dashboard' },
+      search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('personal-overview');
+    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
     confirmSpy.mockRestore();
   });
 
