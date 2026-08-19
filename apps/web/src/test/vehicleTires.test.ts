@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatTireLabel, getTireHealthTone } from '@riviamigo/ui/lib/vehicleTires';
+import {
+  formatTireLabel,
+  getTireHealthTone,
+  normalizeTireWheels,
+  summarizeTireHealth,
+} from '@riviamigo/ui/lib/vehicleTires';
 
 describe('vehicle tire helpers', () => {
   it('matches the configured low-pressure health bands', () => {
@@ -14,6 +19,22 @@ describe('vehicle tire helpers', () => {
     expect(getTireHealthTone({ targetPsi: 48, psi: null, status: 'invalid_sensor' })).toBe('neutral');
     expect(getTireHealthTone({ targetPsi: 48, psi: null, status: null })).toBe('neutral');
     expect(formatTireLabel(null, 'invalid_sensor')).toBe('Invalid Sensor');
+  });
+
+  it('uses status only when PSI is unavailable and aggregates mixed wheel tones', () => {
+    expect(getTireHealthTone({ targetPsi: 48, psi: null, status: 'low' })).toBe('warning');
+    const wheels = normalizeTireWheels(
+      { tire_fl_psi: 40, tire_fr_psi: 48, tire_rl_psi: null, tire_rr_psi: null },
+      { tire_rl_status: 'high', tire_rr_status: null }
+    );
+    expect(summarizeTireHealth(wheels, 48).tone).toBe('danger');
+    expect(summarizeTireHealth(normalizeTireWheels(null, null), 48).tone).toBe('neutral');
+    expect(
+      summarizeTireHealth(
+        normalizeTireWheels({ tire_fl_valid: false }, null),
+        48
+      ).hasInvalidSensor
+    ).toBe(true);
   });
 
   it('prefers numeric psi over wheel status when a real reading exists', () => {
