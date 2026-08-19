@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import type { VehicleStatus } from '@riviamigo/types';
 import { api } from './api';
 import { useAuthReady } from './useAuthState';
+import { queryKeys } from './queryKeys';
 
 interface LiveStatusStore {
   status: Record<string, VehicleStatus>;
@@ -416,7 +417,7 @@ export function useCurrentVehicleStatus(vehicleId: string | null) {
   const authReady = useAuthReady();
 
   const query = useQuery({
-    queryKey: ['vehicles', 'status', vehicleId],
+    queryKey: queryKeys.vehicles.status(vehicleId),
     queryFn: () => api.vehicleStatus(vehicleId!),
     enabled: authReady && !!vehicleId,
     staleTime: 30 * 1000,

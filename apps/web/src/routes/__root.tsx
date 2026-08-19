@@ -2,7 +2,7 @@ import React from 'react';
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { api, useAuth, useAuthReady } from '@riviamigo/hooks';
+import { api, queryKeys, useAuth, useAuthReady } from '@riviamigo/hooks';
 import { ThemeModeSync } from '@riviamigo/ui/lib/theme';
 import { APP_TIMEZONE_CHANGE_EVENT, setAppTimezone } from '@riviamigo/ui/lib/dateTime';
 
@@ -19,7 +19,7 @@ function Root() {
   const authReady = useAuthReady();
   const accessToken = useAuth((state) => state.accessToken);
   const appTimezone = useQuery({
-    queryKey: ['app-timezone'],
+    queryKey: queryKeys.appTimezone.current,
     queryFn: () => api.getAppTimezone(),
     enabled: authReady && !!accessToken,
   });

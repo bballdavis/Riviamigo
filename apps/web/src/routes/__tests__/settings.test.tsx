@@ -61,6 +61,31 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/hooks', () => ({
+  queryKeys: {
+    apiKeys: { all: ['api-keys'] },
+    apiCatalog: { all: ['api-catalog'] },
+    appTimezone: { current: ['app-timezone'] },
+    backups: {
+      all: ['backup-overview'],
+      overview: (page: number, perPage: number) => ['backup-overview', page, perPage],
+    },
+    me: { all: ['me'] },
+    unitPreferences: { current: ['unit-preferences'] },
+    vehicle: {
+      health: (vehicleId: string) => ['vehicles', 'health', vehicleId],
+      images: (vehicleId: string) => ['vehicles', 'images', vehicleId],
+    },
+    vehicleInvites: {
+      byVehicle: (vehicleId: string) => ['vehicle-invites', vehicleId],
+    },
+    vehicleMembers: {
+      byVehicle: (vehicleId: string) => ['vehicle-members', vehicleId],
+    },
+    vehicles: {
+      all: ['vehicles'],
+      status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
+    },
+  },
   api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
     changePassword: hooksMocks.changePassword,

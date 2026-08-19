@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 import { useAuth } from './useAuth';
+import { queryKeys } from './queryKeys';
 
 export function useVehicles() {
   const accessToken = useAuth((state) => state.accessToken);
@@ -8,7 +9,7 @@ export function useVehicles() {
   const isBootstrapping = useAuth((state) => state.isBootstrapping);
   const authReady = !isBootstrapping && isAuthenticated && !!accessToken;
   return useQuery({
-    queryKey: ['vehicles'],
+    queryKey: queryKeys.vehicles.all,
     queryFn: () => api.listVehicles(),
     enabled: authReady,
     staleTime: 5 * 60 * 1000,
