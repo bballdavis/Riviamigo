@@ -159,8 +159,10 @@ log events named `charge_payload_identity_backfill_started`,
 `charge_payload_identity_backfill_progress`,
 `charge_payload_identity_backfill_complete`, or
 `charge_payload_identity_backfill_failed` before treating a populated upgrade
-as complete. Never add a second migration/backfill container or remove the
-data directory during an update.
+as complete. Never add a second backfill container or remove the data
+directory during an update. The additive charge-identity helper
+migration only centralizes the SQL functions used by the existing worker and
+runtime; it does not create another backfill container.
 
 Before updating, verify a recovery package and a raw `pg_dump`. If rollback is
 needed after the migration ledger advances, restore that pre-upgrade dump with

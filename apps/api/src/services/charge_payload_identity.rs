@@ -155,21 +155,27 @@ async fn run_until_complete(pool: &PgPool, config: BackfillConfig) -> Result<Wor
 }
 
 async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResult> {
-    let pending = pending_count(pool).await?;
-    if pending == 0 {
+    let initial_pending = pending_count(pool).await?;
+    if initial_pending == 0 {
         mark_complete(pool).await?;
         return Ok(WorkerResult::Complete);
     }
 
     ensure_pending_index(pool).await?;
     mark_started(pool).await?;
-    tracing::info!(pending, "charge_payload_identity_backfill_started");
+    let mut remaining_estimate = initial_pending;
+    tracing::info!(
+        pending = initial_pending,
+        "charge_payload_identity_backfill_started"
+    );
 
     loop {
         let (rows_filled, identities_inserted) = process_batch(pool, config.batch_size).await?;
         if rows_filled == 0 {
-            let pending = pending_count(pool).await?;
-            if pending == 0 {
+            // Confirm completion exactly once at the boundary. A concurrent
+            // writer may have claimed part of the original snapshot, so an
+            // estimate alone must never mark the job complete.
+            if pending_count(pool).await? == 0 {
                 mark_complete(pool).await?;
                 tracing::info!("charge_payload_identity_backfill_complete");
                 return Ok(WorkerResult::Complete);
@@ -181,14 +187,25 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
             continue;
         }
 
-        let remaining = pending_count(pool).await?;
+        remaining_estimate = remaining_estimate.saturating_sub(rows_filled);
         tracing::info!(
             rows_filled,
             identities_inserted,
-            remaining,
+            remaining_estimate,
             "charge_payload_identity_backfill_progress"
         );
         tokio::time::sleep(config.pause).await;
+
+        if rows_filled < config.batch_size {
+            // A short batch is the other normal completion boundary. Confirm
+            // it exactly once, while still retrying if SKIP LOCKED observed
+            // rows held by another writer.
+            if pending_count(pool).await? == 0 {
+                mark_complete(pool).await?;
+                tracing::info!("charge_payload_identity_backfill_complete");
+                return Ok(WorkerResult::Complete);
+            }
+        }
     }
 }
 
@@ -250,13 +267,7 @@ async fn process_batch(pool: &PgPool, batch_size: i64) -> Result<(i64, i64)> {
                LIMIT $1
            ), hashed AS MATERIALIZED (
                SELECT pending.*,
-                      digest(
-                          convert_to(
-                              riviamigo.semantic_charge_payload(pending.payload)::text,
-                              'UTF8'
-                          ),
-                          'sha256'
-                      ) AS fingerprint
+                      riviamigo.charge_payload_fingerprint(pending.payload) AS fingerprint
                FROM pending
            ), updated AS (
                UPDATE riviamigo.rivian_charge_payloads payload
@@ -275,19 +286,12 @@ async fn process_batch(pool: &PgPool, batch_size: i64) -> Result<(i64, i64)> {
                    payload_fingerprint,
                    canonical_payload_id
                )
-               SELECT digest(
-                          convert_to(
-                              concat_ws(
-                                  E'\\x1f',
-                                  updated.vehicle_id::text,
-                                  updated.operation,
-                                  coalesce(updated.rivian_transaction_id, ''),
-                                  coalesce(updated.rivian_vehicle_id, ''),
-                                  encode(updated.payload_fingerprint, 'hex')
-                              ),
-                              'UTF8'
-                          ),
-                          'sha256'
+               SELECT riviamigo.charge_payload_identity_key(
+                          updated.vehicle_id,
+                          updated.operation,
+                          updated.rivian_transaction_id,
+                          updated.rivian_vehicle_id,
+                          updated.payload_fingerprint
                       ),
                       updated.vehicle_id,
                       updated.operation,

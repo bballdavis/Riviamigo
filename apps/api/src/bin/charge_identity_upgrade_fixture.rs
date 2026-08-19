@@ -170,7 +170,17 @@ async fn check_complete(pool: &sqlx::PgPool) -> Result<()> {
                  AND duplicate.operation = canonical.operation
                  AND duplicate.rivian_transaction_id = canonical.rivian_transaction_id
                  AND duplicate.rivian_vehicle_id = canonical.rivian_vehicle_id
-                 AND duplicate.payload_fingerprint = canonical.payload_fingerprint
+                 AND riviamigo.charge_payload_identity_key(
+                         duplicate.vehicle_id, duplicate.operation,
+                         duplicate.rivian_transaction_id,
+                         duplicate.rivian_vehicle_id,
+                         duplicate.payload_fingerprint
+                     ) = riviamigo.charge_payload_identity_key(
+                         canonical.vehicle_id, canonical.operation,
+                         canonical.rivian_transaction_id,
+                         canonical.rivian_vehicle_id,
+                         canonical.payload_fingerprint
+                     )
                ORDER BY duplicate.captured_at, duplicate.id
                LIMIT 1
            )",

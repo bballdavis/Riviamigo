@@ -84,7 +84,10 @@ complete. Monitor the structured `charge_payload_identity_backfill_started`,
 upgrade finished. The PostgreSQL
 `riviamigo.charge_payload_identity_backfill_status` row is the durable
 checkpoint; a restart resumes rows whose `payload_fingerprint` is still null.
-Do not add a second migration or backfill container.
+The later charge-identity helper migration only installs the canonical
+fingerprint and identity-key functions used by ingestion, backfill, and
+compaction; it does not start another backfill. Do not add a second backfill
+container.
 
 Before an upgrade, verify a recovery package and a raw `pg_dump`. If rollback
 is required after the migration ledger advances, restore that pre-upgrade dump
