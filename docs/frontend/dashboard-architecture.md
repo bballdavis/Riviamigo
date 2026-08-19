@@ -144,9 +144,11 @@ Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx`
 
 Interval charts use the same filled-bar palette, opacity, radius, and full-bar
 hit target. The tire-pressure timeline places overlapping trip intervals into
-spatial lanes on the secondary `Trips` axis; lanes never add durations
-together. Each interval is a keyboard-activatable button with route details
-and opens the owning trip.
+spatial lanes in a compact bottom band on the secondary `Trips` lane; the
+horizontal span remains the interval's actual start/end time, and lanes never
+add durations together. The band is capped at roughly 30% of the plot so the
+primary pressure trend remains legible. Each interval is a keyboard-activatable
+button with route details and opens the owning trip.
 
 Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/chartLabelLayout.ts`. Dense custom SVG categorical charts must keep every data mark and interaction target, then select only a collision-safe subset of axis and value labels using the shared chart font. Axis labels remain evenly distributed with first/last retention when space permits and 12 px minimum spacing; value labels prioritize larger values and use 6 px bounding-box padding. Recalculate from the currently visible domain so labels return after zoom. Recharts categorical/time axes use the centralized `preserveStartEnd` and 40 px minimum-gap defaults, with explicit exceptions only for specialized layouts such as the rotated Speed Histogram. uPlot time axes keep their bounded calendar-date split policy.
 

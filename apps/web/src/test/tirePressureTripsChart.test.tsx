@@ -1,8 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, waitFor } from '@testing-library/react';
-import { packRichTimeIntervals, RichTimeSeriesChart } from '@riviamigo/ui/charts';
+import { getRichTimeIntervalBandGeometry, packRichTimeIntervals, RichTimeSeriesChart } from '@riviamigo/ui/charts';
 
 describe('tire pressure trip interval lanes', () => {
+  it('keeps interval marks in a compact bottom band while preserving separate lanes', () => {
+    const first = getRichTimeIntervalBandGeometry(0, 1, 20, 300);
+    const second = getRichTimeIntervalBandGeometry(1, 2, 20, 300);
+
+    expect(first.bandTop).toBe(230);
+    expect(first.bandHeight).toBe(90);
+    expect(first.top).toBeGreaterThanOrEqual(first.bandTop);
+    expect(first.top + first.height).toBeLessThanOrEqual(20 + 300);
+    expect(second.laneTop).toBeGreaterThan(first.laneTop);
+    expect(second.top).toBeGreaterThan(first.top);
+  });
+
   it('spatially stacks only overlapping intervals and preserves source order for ties', () => {
     const packed = packRichTimeIntervals([
       { id: 'a', start: '2026-01-01T00:00:00Z', end: '2026-01-01T01:00:00Z', label: 'A' },
@@ -38,7 +50,7 @@ describe('tire pressure trip interval lanes', () => {
     );
 
     await waitFor(() => expect(container.querySelector('.uplot')).toBeTruthy());
-    const interval = getByRole('button', { name: /Home → Work: 45 min/ });
+    const interval = await waitFor(() => getByRole('button', { name: /Home → Work: 45 min/ }));
     expect(interval).toHaveAttribute('title', expect.stringContaining('12 mi'));
     fireEvent.click(interval);
     expect(onTripClick).toHaveBeenCalledWith('trip-1');
