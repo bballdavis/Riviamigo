@@ -90,7 +90,7 @@ and pre-release images from an approved `dev` candidate.
 
 PRs run deterministic quality, typecheck, unit-test, SQLx, route-security, and
 source-scan checks. Coverage and Storybook run from the scheduled/manual
-frontend workflow. Browser E2E is scheduled/manual only; it is not a required
+frontend workflow. Browser E2E is manual-only; it is not a required
 PR gate. Runtime migration/health, populated-upgrade, deployable-image, and
 full dependency/image security audits are scheduled/manual release evidence.
 Restore and vehicle-artwork contracts remain path-targeted PR checks, while

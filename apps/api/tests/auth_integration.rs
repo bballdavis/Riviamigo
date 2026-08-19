@@ -247,6 +247,8 @@ impl TestApp {
 
 fn deterministic_rate_limit_config() -> RateLimitConfig {
     RateLimitConfig {
+        auth_public_per_minute: 1,
+        auth_public_burst: 1,
         auth_metadata_per_minute: 1,
         auth_metadata_burst: 1,
         heavy_read_per_minute: 1,
@@ -1714,7 +1716,7 @@ async fn charging_curve_analysis_uses_elapsed_time_and_strict_dc_sessions() {
 
 #[tokio::test]
 async fn auth_public_limit_uses_forwarded_ip_and_sets_api_source_header() {
-    let app = TestApp::new().await;
+    let app = TestApp::new_with_rate_limit(deterministic_rate_limit_config()).await;
 
     let mut first_ip_limited = false;
     for i in 0..20 {
