@@ -103,6 +103,7 @@ jobs:
           sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=release-smoke-password|' "$smoke_env"
           sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=release-smoke-redis-password|' "$smoke_env"
           sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://release-smoke.example.test|' "$smoke_env"
+          echo "RIVIAMIGO_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
           echo "RELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
       - name: Exercise published image-only stack
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$RELEASE_SMOKE_ENV" --image-tag "${{ needs.validate-tag.outputs.version }}"
