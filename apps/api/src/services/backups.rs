@@ -450,13 +450,13 @@ async fn run_backup_inner_for_run(
             return Err(error);
         }
     };
-    update_backup_progress(pool, run_id, "preparing", 5).await?;
-
     let driver = BackupDriver::from_config(&config.backup_driver);
     let created_at = Utc::now();
     let artifact_path = build_artifact_path(config, &settings.prefix, created_at, run_id);
 
     let execution = async {
+        update_backup_progress(pool, run_id, "preparing", 5).await?;
+
         if let Some(parent) = artifact_path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -559,19 +559,6 @@ async fn run_backup_inner_for_run(
         }
 
         update_backup_progress(pool, run_id, "finalizing", 98).await?;
-        sqlx::query(
-            r#"
-            UPDATE riviamigo.backup_runs
-            SET status = 'succeeded', phase = 'completed', progress_percent = 100,
-                artifact_key = $2, completed_at = now(), updated_at = now(), error_message = NULL
-            WHERE id = $1
-            "#,
-        )
-        .bind(run_id)
-        .bind(published_key)
-        .execute(pool)
-        .await?;
-
         prune_retained_artifacts(pool, settings.retention_count).await?;
         if let Some(s3) = settings.s3.as_ref().filter(|_| settings.s3_enabled && !matches!(trigger, BackupRunTrigger::PreRestore)) {
             if let Err(error) = prune_remote_artifacts(pool, s3, settings.retention_count).await {
@@ -606,6 +593,19 @@ async fn run_backup_inner_for_run(
                 );
             }
         }
+
+        sqlx::query(
+            r#"
+            UPDATE riviamigo.backup_runs
+            SET status = 'succeeded', phase = 'completed', progress_percent = 100,
+                artifact_key = $2, completed_at = now(), updated_at = now(), error_message = NULL
+            WHERE id = $1 AND status = 'running'
+            "#,
+        )
+        .bind(run_id)
+        .bind(published_key)
+        .execute(pool)
+        .await?;
 
         Ok::<BackupExecutionResult, AppError>(BackupExecutionResult { run_id, artifact_ids })
     }
@@ -643,7 +643,7 @@ async fn mark_backup_run_failed(
         r#"
         UPDATE riviamigo.backup_runs
         SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2
-        WHERE id = $1
+        WHERE id = $1 AND status = 'running'
         "#,
     )
     .bind(run_id)

@@ -608,6 +608,54 @@ async fn admin_can_run_backup_and_get_catalog_entry() {
 }
 
 #[tokio::test]
+async fn backup_progress_failure_is_finalized_as_failed() {
+    let app = TestApp::new().await;
+    let email = "backup-progress-failure-admin@example.com";
+    let token = register_and_login(&app, email).await;
+    let user_id = lookup_user_id(&app.pool, email).await;
+    promote_admin(&app.pool, user_id).await;
+
+    sqlx::query(
+        r#"
+        CREATE FUNCTION public.reject_backup_dumping_progress() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.phase = 'dumping' THEN
+                RAISE EXCEPTION 'intentional backup progress failure';
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+        "#,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install backup progress failure function");
+    sqlx::query(
+        "CREATE TRIGGER reject_backup_dumping_progress BEFORE UPDATE ON riviamigo.backup_runs FOR EACH ROW EXECUTE FUNCTION public.reject_backup_dumping_progress()",
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install backup progress failure trigger");
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/admin/backups/run",
+            None,
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::ACCEPTED, "{}", response.body);
+
+    let completed = wait_for_backup(&app, &token).await;
+    assert_eq!(completed["recent_runs"][0]["status"], "failed");
+    assert_eq!(completed["recent_runs"][0]["phase"], "failed");
+    assert_ne!(completed["recent_runs"][0]["status"], "running");
+}
+
+#[tokio::test]
 async fn admin_can_import_external_recovery_package() {
     let app = TestApp::new().await;
     let email = "backup-import-admin@example.com";
