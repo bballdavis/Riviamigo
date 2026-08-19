@@ -68,7 +68,10 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
           sudo apt-get update
           sudo apt-get install --yes postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/18/bin:$PATH"
           pg_dump --version
+          pg_restore --version
       - name: Verify migration integrity
         working-directory: .
         run: node tools/migration-integrity.mjs --base-ref "$BASE_SHA"
