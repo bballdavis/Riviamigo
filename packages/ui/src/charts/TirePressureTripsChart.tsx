@@ -85,6 +85,7 @@ export function TirePressureTripsChart({
     key: tire.key,
     label: tire.label,
     color: tire.color,
+    strokeWidth: 2.5,
     values: points.map((point) => convertedPressure(samplesByTimestamp.get(point.ts)?.[tire.key] ?? null, pressureFactor)),
     tooltipFormatter: (value: number | null | undefined) => value == null ? '—' : `${formatNumber(value, 0)} ${pressureUnit}`,
   }));
@@ -102,8 +103,9 @@ export function TirePressureTripsChart({
       mode="line"
       timeFilter="raw"
       smoothness="straight"
-      connectGaps={false}
+      connectGaps
       yRightUnit="Trips"
+      intervalBandRatio={0.3}
       yRightAxisValueFormatter={(value) => value == null ? '' : `${Math.round(value)}`}
       intervals={intervals}
       referenceLines={[{ value: targetPressure * pressureFactor, label: 'Target', color: CHART_COLORS.muted }]}

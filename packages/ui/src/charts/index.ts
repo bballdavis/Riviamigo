@@ -12,9 +12,9 @@ export type { ChartColorKey } from './ChartProvider';
 export { ChartTooltip } from './ChartTooltip';
 export type { ChartTooltipProps } from './ChartTooltip';
 export { RichTimeSeriesChart } from './RichTimeSeriesChart';
-export type { RichSeries, RichTimeInterval, PackedRichTimeInterval, RichReferenceLine, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
+export type { RichSeries, RichTimeInterval, PackedRichTimeInterval, RichReferenceLine, RichTimeIntervalBandGeometry, RichTimeSeriesChartProps } from './RichTimeSeriesChart';
 export { packRichTimeIntervals } from './RichTimeSeriesChart';
-export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatAxisDateForSpan, formatChartNumber, getCalendarDateSplits, clampExplorationRange, isZoomedXRange } from './RichTimeSeriesChart';
+export { carryForwardTooltipValues, getAdaptiveDecimalPrecision, formatAxisDateForSpan, formatChartNumber, getCalendarDateSplits, clampExplorationRange, getRichTimeIntervalBandGeometry, isZoomedXRange } from './RichTimeSeriesChart';
 export { MiniSparkline, resolveCanvasColor } from './MiniSparkline';
 export type { MiniSparklineProps, MiniSparklineType, MiniSparklineYDomain } from './MiniSparkline';
 export {
