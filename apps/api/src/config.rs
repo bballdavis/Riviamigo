@@ -53,9 +53,9 @@ pub struct Config {
     /// Defaults to production; set to development only for local development.
     #[serde(default = "default_riviamigo_env")]
     pub riviamigo_env: Option<String>,
-    /// Set to any value to allow insecure (non-Secure) cookies. Must NOT be
-    /// set when `RIVIAMIGO_ENV=production`.
-    pub cookie_insecure: Option<String>,
+    /// Set to `true` to allow insecure (non-Secure) cookies in development.
+    /// Must NOT be set when `RIVIAMIGO_ENV=production`.
+    pub cookie_insecure: Option<bool>,
     /// Explicit, LAN-only production exception for browser clients that cannot
     /// use HTTPS. This is deliberately a boolean so values such as `false`
     /// never make refresh cookies insecure.
@@ -455,7 +455,7 @@ impl Config {
     /// LAN opt-in. The legacy development switch remains development-only.
     pub fn allows_insecure_refresh_cookies(&self) -> bool {
         self.allow_insecure_lan_http_auth
-            || (self.is_development() && self.cookie_insecure.is_some())
+            || (self.is_development() && self.cookie_insecure == Some(true))
     }
 
     /// Effective source for JWT signing and age encryption roots. This is safe
@@ -850,7 +850,7 @@ mod tests {
         assert!(config.allows_insecure_refresh_cookies());
 
         config.allow_insecure_lan_http_auth = false;
-        config.cookie_insecure = Some("false".into());
+        config.cookie_insecure = Some(false);
         assert!(
             !config.allows_insecure_refresh_cookies(),
             "the legacy environment value must not weaken production cookies"
@@ -861,10 +861,14 @@ mod tests {
     fn cookie_insecure_remains_available_only_in_explicit_development_mode() {
         let mut config = production_config();
         config.riviamigo_env = Some("staging".into());
-        config.cookie_insecure = Some("1".into());
+        config.cookie_insecure = Some(true);
         assert!(!config.allows_insecure_refresh_cookies());
 
         config.riviamigo_env = Some("development".into());
+        config.cookie_insecure = Some(false);
+        assert!(!config.allows_insecure_refresh_cookies());
+
+        config.cookie_insecure = Some(true);
         assert!(config.allows_insecure_refresh_cookies());
     }
 
@@ -907,6 +911,39 @@ mod tests {
         assert!(
             envy::from_iter::<_, Config>(invalid).is_err(),
             "presence-like values must not enable insecure LAN cookies"
+        );
+    }
+
+    #[test]
+    fn cookie_insecure_environment_value_is_a_strict_boolean() {
+        let base = vec![
+            (
+                "DATABASE_URL".to_owned(),
+                "postgresql://riviamigo:password@localhost/riviamigo".to_owned(),
+            ),
+            (
+                "REDIS_URL".to_owned(),
+                "redis://:password@localhost/".to_owned(),
+            ),
+        ];
+
+        let mut explicitly_true = base.clone();
+        explicitly_true.push(("COOKIE_INSECURE".to_owned(), "true".to_owned()));
+        let config = envy::from_iter::<_, Config>(explicitly_true)
+            .expect("true is a valid explicit boolean");
+        assert_eq!(config.cookie_insecure, Some(true));
+
+        let mut explicitly_false = base.clone();
+        explicitly_false.push(("COOKIE_INSECURE".to_owned(), "false".to_owned()));
+        let config = envy::from_iter::<_, Config>(explicitly_false)
+            .expect("false is a valid explicit boolean");
+        assert_eq!(config.cookie_insecure, Some(false));
+
+        let mut invalid = base;
+        invalid.push(("COOKIE_INSECURE".to_owned(), "1".to_owned()));
+        assert!(
+            envy::from_iter::<_, Config>(invalid).is_err(),
+            "numeric values must not be accepted for COOKIE_INSECURE"
         );
     }
 
