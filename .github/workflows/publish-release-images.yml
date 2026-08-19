@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - '[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Calendar Version tag to publish
+        required: true
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -21,9 +27,11 @@ jobs:
           fetch-depth: 0
       - id: version
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME}"
+          version="$RELEASE_VERSION"
           if [[ ! "$version" =~ ^[0-9]{4}\.(0[1-9]|1[0-2])\.[0-9]+$ ]]; then
             echo "Release tags must use YYYY.MM.PATCH; received $version" >&2
             exit 1
