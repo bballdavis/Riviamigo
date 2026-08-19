@@ -137,24 +137,28 @@ describe('TripMapChart', () => {
     );
   });
 
-  it('authenticates only Riviamigo basemap proxy requests', async () => {
+  it('authenticates only Riviamigo basemap proxy requests without fetching configuration', async () => {
     const mockMap = new MockMap();
     const mapConstructor = vi.fn(function Map(_options: unknown) { return mockMap; });
     const mapLoader = vi.fn(async () => ({ Map: mapConstructor }));
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      enabled: true,
-      light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
-      dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
-      attribution: null,
-      attribution_url: null,
-    })));
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
 
-    render(<TripMapChart routes={buildRoutes(1)} track={[]} accessToken="first-party-token" mapLoader={mapLoader as never} />);
+    render(<TripMapChart
+      routes={buildRoutes(1)}
+      track={[]}
+      accessToken="first-party-token"
+      basemapConfig={{
+        enabled: true,
+        light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
+        dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+        attribution: null,
+        attribution_url: null,
+      }}
+      mapLoader={mapLoader as never}
+    />);
 
     await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
-    expect(fetchMock).toHaveBeenCalledWith('/v1/external/basemap/config', expect.objectContaining({
-      headers: { Authorization: 'Bearer first-party-token' },
-    }));
+    expect(fetchMock).not.toHaveBeenCalled();
 
     const mapOptions = mapConstructor.mock.calls[0]?.[0] as unknown as { transformRequest: (url: string) => { headers?: Record<string, string> } };
     expect(mapOptions.transformRequest('/v1/external/basemap/light/1/2/3.png').headers).toEqual({ Authorization: 'Bearer first-party-token' });

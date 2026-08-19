@@ -10,7 +10,12 @@ if [ ! -s /backups/.restore-agent-key ]; then
 fi
 chown 1001:1001 /backups/.restore-agent-key
 
-# Keep the supervisor and nginx master privileged enough to open their log
-# streams. production-services.sh drops only the API process to riviamigo;
-# nginx drops its workers using the `user` directive in nginx.conf.
-exec /app/production-services.sh
+bind_address=${RIVIAMIGO_BIND_ADDRESS:-127.0.0.1}
+if [ "$bind_address" != "127.0.0.1" ] && [ "$bind_address" != "::1" ] \
+  && [ "${ALLOW_PUBLIC_ORIGIN_BIND:-false}" != "true" ]; then
+  echo "Refusing non-loopback Riviamigo origin binding without ALLOW_PUBLIC_ORIGIN_BIND=true" >&2
+  exit 1
+fi
+
+# This one-shot service is the only root process. The long-lived application,
+# restore agent, and nginx supervisor run as UID/GID 1001.

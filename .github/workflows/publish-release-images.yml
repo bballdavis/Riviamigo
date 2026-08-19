@@ -99,9 +99,72 @@ jobs:
       - name: Exercise published image-only stack
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$RELEASE_SMOKE_ENV" --image-tag "${{ needs.validate-tag.outputs.version }}"
 
+  populated-upgrade:
+    name: Populated upgrade (${{ matrix.platform }})
+    needs: [validate-tag, image]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: riviamigo
+          POSTGRES_PASSWORD: devpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U riviamigo -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade_${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
+      REDIS_URL: redis://127.0.0.1:6379
+      UPGRADE_IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:${{ needs.validate-tag.outputs.version }}
+      UPGRADE_PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.18.0'
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          workspaces: apps/api
+      - name: Install sqlx-cli
+        working-directory: apps/api
+        run: cargo install sqlx-cli --no-default-features --features postgres --locked
+      - name: Verify populated upgrade on the release image
+        run: node scripts/verify-populated-upgrade.mjs
+
   create-release:
     name: Create release
-    needs: [validate-tag, image, release-smoke]
+    needs: [validate-tag, image, release-smoke, populated-upgrade]
     runs-on: ubuntu-latest
     permissions:
       contents: write

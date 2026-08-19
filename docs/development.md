@@ -42,6 +42,13 @@ credentials or restore data in Git.
 Vite proxies restore-runtime status requests directly to that supervisor so
 the status poll can survive the API process restart.
 
+The local stack is HTTP-only, so `compose/docker-compose.dev.yml` and the
+launcher set `RIVIAMIGO_ENV=development` and `COOKIE_INSECURE=true`. The latter
+omits the cookie `Secure` attribute; without it, a browser will discard the
+refresh cookie on an HTTP origin and a page reload will look like a logout.
+This setting is intentionally absent from the standard production Compose
+file. Production must use HTTPS and leave `COOKIE_INSECURE` unset.
+
 The launcher builds only the API and restore-supervisor binaries that it runs;
 maintenance binaries remain available through their explicit Cargo commands.
 On Windows it limits that build to four concurrent Cargo jobs to keep the host

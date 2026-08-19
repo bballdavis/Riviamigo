@@ -16,6 +16,8 @@ Open **Settings > Backups** and enable Local, S3, or both. Local retains a `.rma
 
 If S3 is an enabled destination and its upload fails, the run is marked failed and Riviamigo retains the valid package locally even when Local retention was disabled. This prevents a remote-storage outage from silently appearing as a protected backup.
 
+Selecting **Run now** starts the backup asynchronously and returns immediately. The Backups page polls the durable run record while the worker reports queued, dump, snapshot, packaging, validation, upload, and completion phases with progress. A second manual start is rejected while the existing run holds the backup lock. If the API restarts before a detached worker finishes, startup marks that run failed instead of leaving an indefinitely running history row.
+
 The cutover release uses the `riviamigo-recovery-v3` contract and contains:
 
 - `manifest.json` with the source release/build, PostgreSQL and TimescaleDB versions, migration chain identifier, complete ordered migration ledger and raw-byte SHA-384 checksums, compiled catalog digest, versioned canonical schema-contract digest, component policies, redactions, sizes, and checksums.
@@ -28,7 +30,9 @@ The API must have `pg_dump` available. `BACKUP_DRIVER=json` is no longer a valid
 
 ## Import and restore in the app
 
-On the target installation, sign in as an administrator and open **Settings > Backups**. In **Restore from backup**, choose a package from the local catalog or select **Import recovery package** to upload a `.rma.tar.gz` file from another Riviamigo server. Wait for upload and package validation to finish. Uploaded packages have no artificial size limit, but the backup filesystem must have enough space for the package, validation staging, and the required safety backup. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
+On the target installation, sign in as an administrator and open **Settings > Backups**. In **Restore from backup**, choose a package from the local catalog or select **Import recovery package** to upload a `.rma.tar.gz` file from another Riviamigo server. Wait for upload and package validation to finish. The default upload limit is 16 GiB; validation also limits expanded archive and individual-member size to 64 GiB, member count to 10,000, and compression ratio to 200:1. The artifact volume must retain at least 2 GiB free before and during import. Any tunnel or reverse proxy in front of Riviamigo must also permit streaming uploads of the package size you use.
+
+Upload and restore share one recovery-mutation lock. A 30-minute upload deadline and four-hour restore deadline prevent an interrupted operation from holding it indefinitely. The service returns explicit too-large, insufficient-storage, validation, and deadline errors; repair the package or capacity and retry only after the active operation clears. Imported archives are streamed to a temporary file, fully validated before cataloging, and rejected for traversal/duplicate paths, unsupported members, unexpected content, or a resource-envelope breach. Operators can tighten these `RECOVERY_*` limits in the [environment reference](../environment-variables.md).
 
 Select **Restore selected backup**. Riviamigo first performs an authenticated compatibility preflight and shows the source and target chain identities, schema heads, pending migrations, warnings, or a stable blocking reason. A source with an exact ledger prefix is upgraded normally. A v3 archive with historical SQLx bookkeeping may also proceed, but only after its isolated candidate matches both the archive's declared schema fingerprint and the immutable public baseline contract. Starting the restore requires that exact plan ID and package checksum. Review the replacement warning and type `RESTORE`. Riviamigo then:
 
@@ -86,3 +90,5 @@ The former five-migration pre-release chain remains a rollback path when a match
 Matching migration numbers or visibly matching tables do not prove migration identity. The raw migration bytes, ordered catalog, chain identifier, and schema contract must all agree.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.
+
+For a repeatable production-data development check, use the [production-test dev harness](../runbooks/dev-harness.md). It restores a verified package into fresh test-only storage before starting the candidate image; it never reads PostgreSQL's live data directory and never downgrades a migrated test database in place.

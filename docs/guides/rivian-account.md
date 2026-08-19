@@ -10,11 +10,18 @@ After you create your Riviamigo owner account, open **Settings → Vehicles** an
 
 1. Enter the email address and password for your Rivian account.
 2. Complete the one-time passcode (OTP) Rivian sends through its normal authentication flow.
-3. Riviamigo encrypts the credentials at rest and begins collecting data for the selected vehicle.
+3. Riviamigo encrypts the credentials at rest, saves the vehicle, and starts its
+   telemetry collector. The completion screen distinguishes that durable save
+   from telemetry readiness.
 
 If Rivian rejects the email, password, or verification code, Riviamigo shows that specific correction beside the form. If the secure sign-in handoff expires before the vehicle is added, start again from the account step.
 
-The first update can take a little while, especially if the vehicle is asleep. Riviamigo uses Rivian's unofficial API and WebSocket behavior, so upstream changes can occasionally require a project update.
+The first update can take a little while, especially if the vehicle is asleep.
+You can open the dashboard while the collector starts. If startup reports that
+it needs attention, use the vehicle health details and app logs; successfully
+saving a vehicle does not require a container restart. Riviamigo uses Rivian's
+unofficial API and WebSocket behavior, so upstream changes can occasionally
+require a project update.
 
 ## Troubleshooting
 

@@ -7,16 +7,17 @@ sidebar_label: Deployment and updates
 
 # Deployment and updates
 
-The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is bound to the host, on port `8080` by default.
+The standard self-hosted stack runs TimescaleDB, Redis, and one unified Riviamigo container containing the API, web app, nginx origin, and backup tools. Only the unified app is published to the host, on port `8080` by default. Set `RIVIAMIGO_HOST_BIND_ADDRESS` when a specific host interface is required.
 
 Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of the app and restrict direct port `8080` access with your host firewall. Never publish the API listener, database, or Redis directly.
 
 ## Initial deployment
 
 1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords plus your exact public HTTPS `ALLOWED_ORIGINS` value. Internal service URLs and persistent application keys are generated automatically.
-2. Start the stack:
+2. Create the bind-mount directories, then start the stack:
 
    ```bash
+   ./compose/prepare-data.sh
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
@@ -43,6 +44,19 @@ The standard stack keeps operator-visible files under `./data`:
 
 Do not delete `data` during updates. Copy recovery packages off-host for disaster recovery.
 
+Some NAS container managers do not create bind-mount source directories or grant
+container access automatically. On those systems, create all four directories
+before the first deployment and grant the Container Manager service read/write
+access to them. `compose/prepare-data.sh` creates the directories; NAS ACLs may
+still need to be assigned through the host's administration UI.
+
+## Synology DSM
+
+Use the dedicated [Synology DSM installation guide](./synology.md). It uses a
+generated standalone Compose file with the same services and images, a
+loopback-only host publication for DSM Reverse Proxy, absolute data paths, and
+no CPU quota fields. Do not edit the standard Compose file to accommodate DSM.
+
 ## Logs and updates
 
 ```bash
@@ -58,6 +72,26 @@ pre-release installations must complete the one-time explicit baseline
 adoption in the [release database cutover runbook](../runbooks/release-database-cutover.md)
 before starting the flattened public release; startup never edits migration
 bookkeeping automatically.
+
+The charge identity upgrade is health-first: the schema expansion completes
+before the app binds, then the unified app container reports `/health` while a
+resumable in-process worker backfills existing charge history in the
+background. A healthy response does not mean that every vehicle's backfill is
+complete. Monitor the structured `charge_payload_identity_backfill_started`,
+`charge_payload_identity_backfill_progress`,
+`charge_payload_identity_backfill_complete`, and
+`charge_payload_identity_backfill_failed` events before declaring a populated
+upgrade finished. The PostgreSQL
+`riviamigo.charge_payload_identity_backfill_status` row is the durable
+checkpoint; a restart resumes rows whose `payload_fingerprint` is still null.
+The later charge-identity helper migration only installs the canonical
+fingerprint and identity-key functions used by ingestion, backfill, and
+compaction; it does not start another backfill. Do not add a second backfill
+container.
+
+Before an upgrade, verify a recovery package and a raw `pg_dump`. If rollback
+is required after the migration ledger advances, restore that pre-upgrade dump
+using the previous image; reverting the image alone is not a safe rollback.
 
 The PostgreSQL 18 image cannot reuse a PostgreSQL 16 data directory. Before upgrading an existing PostgreSQL 16 installation, create and verify a recovery package plus a raw `pg_dump`, stop the old stack, move its data directory aside, and restore into a newly initialized PostgreSQL 18 volume. Never point PostgreSQL 18 at the former PG16 directory. Follow the [backup and restore runbook](../runbooks/backup-restore.md) for the validation sequence.
 

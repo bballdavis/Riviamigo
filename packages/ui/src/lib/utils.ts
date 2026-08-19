@@ -176,6 +176,13 @@ export function formatMiles(value: number | null | undefined): string {
   return `${formatNumber(value, 0)} mi`;
 }
 
+export function formatDistanceKm(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  const prefs = getUnitPreferences();
+  if (prefs.distance_unit === 'kilometers') return `${formatNumber(value, 1)} km`;
+  return `${formatNumber(value / MILES_TO_KM, 0)} mi`;
+}
+
 export function formatPercent(value: number, decimals = 0): string {
   return `${formatNumber(value, decimals)}%`;
 }

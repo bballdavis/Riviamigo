@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use axum::{
 };
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -82,7 +83,11 @@ struct ConnectionResponse {
     attribution_url: Option<String>,
     request_identifier: Option<String>,
     custom_autocomplete: bool,
+    /// Deprecated compatibility field. New clients should use
+    /// `private_network_allowlist` and `private_network_policy_state`.
     allow_private_network: bool,
+    private_network_allowlist: Vec<String>,
+    private_network_policy_state: String,
     has_api_key: bool,
     has_bearer_token: bool,
     updated_at: DateTime<Utc>,
@@ -190,6 +195,8 @@ async fn build_response(
             request_identifier: settings.request_identifier,
             custom_autocomplete: settings.custom_autocomplete,
             allow_private_network: settings.allow_private_network,
+            private_network_allowlist: settings.private_network_allowlist,
+            private_network_policy_state: settings.private_network_policy_state,
             has_api_key: settings.api_key_encrypted.is_some(),
             has_bearer_token: settings.bearer_token_encrypted.is_some(),
             updated_at: settings.updated_at,
@@ -373,6 +380,7 @@ struct UpdateConnectionBody {
     request_identifier: Option<String>,
     custom_autocomplete: Option<bool>,
     allow_private_network: Option<bool>,
+    private_network_allowlist: Option<Vec<String>>,
     api_key: Option<String>,
     clear_api_key: Option<bool>,
     bearer_token: Option<String>,
@@ -393,7 +401,7 @@ async fn update_connection(
     if !definition.editable {
         return Err(AppError::Forbidden);
     }
-    validate_update(&id, &body).await?;
+    let private_network_allowlist = validate_update(&id, &body).await?;
 
     let api_key_encrypted = encrypt_secret(&state.age_key, body.api_key.as_deref())?;
     let bearer_token_encrypted = encrypt_secret(&state.age_key, body.bearer_token.as_deref())?;
@@ -456,10 +464,12 @@ async fn update_connection(
              dark_url_template = $9, attribution = COALESCE($10, attribution),
              attribution_url = $11, request_identifier = $12,
              custom_autocomplete = COALESCE($13, custom_autocomplete),
-             allow_private_network = COALESCE($14, allow_private_network),
-             api_key_encrypted = CASE WHEN $15 THEN NULL WHEN $16 IS NOT NULL THEN $16 ELSE api_key_encrypted END,
-             bearer_token_encrypted = CASE WHEN $17 THEN NULL WHEN $18 IS NOT NULL THEN $18 ELSE bearer_token_encrypted END,
-             updated_at = now(), updated_by = $19
+             allow_private_network = CASE WHEN $15 THEN cardinality(ARRAY(SELECT unnest($16::text[])::cidr)) > 0 ELSE COALESCE($14, allow_private_network) END,
+             private_network_allowlist = CASE WHEN $15 THEN ARRAY(SELECT unnest($16::text[])::cidr) ELSE private_network_allowlist END,
+             private_network_policy_state = CASE WHEN $15 THEN $17 WHEN $14 THEN 'migration_required' ELSE private_network_policy_state END,
+             api_key_encrypted = CASE WHEN $18 THEN NULL WHEN $19 IS NOT NULL THEN $19 ELSE api_key_encrypted END,
+             bearer_token_encrypted = CASE WHEN $20 THEN NULL WHEN $21 IS NOT NULL THEN $21 ELSE bearer_token_encrypted END,
+             updated_at = now(), updated_by = $22
            WHERE id = $1"#,
     )
     .bind(&id)
@@ -476,6 +486,18 @@ async fn update_connection(
     .bind(normalize(body.request_identifier))
     .bind(body.custom_autocomplete)
     .bind(body.allow_private_network)
+    .bind(private_network_allowlist.is_some())
+    .bind(private_network_allowlist.clone())
+    .bind(
+        if private_network_allowlist
+            .as_ref()
+            .is_some_and(|allowlist| !allowlist.is_empty())
+        {
+            "configured"
+        } else {
+            "restricted"
+        },
+    )
     .bind(body.clear_api_key.unwrap_or(false))
     .bind(api_key_encrypted)
     .bind(body.clear_bearer_token.unwrap_or(false))
@@ -564,9 +586,12 @@ async fn test_connection(
     if !body.enabled || body.mode == "disabled" {
         return Err(AppError::ExternalConnectionDisabled(id));
     }
-    validate_update(&id, &body).await?;
+    let private_network_allowlist = validate_update(&id, &body)
+        .await?
+        .map(|allowlist| parse_private_network_allowlist(&allowlist))
+        .transpose()?
+        .unwrap_or_default();
     let settings = connections::load(&state.pool, &id).await?;
-    let client = outbound_client()?;
     connections::record_attempt(&state.pool, &id).await;
     let result = match id.as_str() {
         connections::OPEN_METEO => {
@@ -576,12 +601,17 @@ async fn test_connection(
                 Some("https://api.open-meteo.com/v1/forecast")
             }
             .ok_or_else(|| AppError::Validation("forecast URL required".into()))?;
-            let mut request = client.get(endpoint).query(&[
-                ("latitude", "39.0"),
-                ("longitude", "-98.0"),
-                ("hourly", "temperature_2m"),
-                ("forecast_days", "1"),
-            ]);
+            let endpoint = Url::parse(endpoint)
+                .map_err(|_| AppError::Validation("forecast URL required".into()))?;
+            let mut request = outbound_client_for_url(&endpoint, &private_network_allowlist)
+                .await?
+                .get(endpoint)
+                .query(&[
+                    ("latitude", "39.0"),
+                    ("longitude", "-98.0"),
+                    ("hourly", "temperature_2m"),
+                    ("forecast_days", "1"),
+                ]);
             let api_key = body
                 .api_key
                 .as_deref()
@@ -610,7 +640,8 @@ async fn test_connection(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or("Riviamigo (+https://github.com/bretterer/rivian-telemetry)");
-            client
+            outbound_client_for_url(&endpoint, &private_network_allowlist)
+                .await?
                 .get(endpoint)
                 .header(header::USER_AGENT, user_agent)
                 .query(&[("format", "jsonv2"), ("q", "Kansas"), ("limit", "1")])
@@ -625,7 +656,11 @@ async fn test_connection(
             }
             .ok_or_else(|| AppError::Validation("light tile template required".into()))?;
             // z6/14/24 is a generic central-US tile and never uses trip data.
-            let mut request = client.get(expand_tile_template(template, 6, 14, 24));
+            let endpoint = Url::parse(&expand_tile_template(template, 6, 14, 24))
+                .map_err(|_| AppError::Validation("light tile template required".into()))?;
+            let mut request = outbound_client_for_url(&endpoint, &private_network_allowlist)
+                .await?
+                .get(endpoint);
             let bearer_token = body
                 .bearer_token
                 .as_deref()
@@ -643,7 +678,8 @@ async fn test_connection(
         }
         connections::ICONIFY => {
             let endpoint = endpoint_join(Some("https://api.iconify.design"), "search")?;
-            client
+            outbound_client_for_url(&endpoint, &private_network_allowlist)
+                .await?
                 .get(endpoint)
                 .query(&[("query", "thermometer"), ("limit", "1")])
                 .send()
@@ -674,14 +710,8 @@ async fn test_connection(
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("image/png")
                     .to_string();
-                let bytes = response.bytes().await.map_err(|_| {
-                    AppError::DependencyUnavailable("Basemap preview response failed".into())
-                })?;
-                if bytes.len() > 5 * 1024 * 1024 {
-                    return Err(AppError::DependencyUnavailable(
-                        "Basemap preview exceeded the response limit".into(),
-                    ));
-                }
+                let bytes =
+                    read_response_limited(response, 5 * 1024 * 1024, "Basemap preview").await?;
                 Some(format!(
                     "data:{content_type};base64,{}",
                     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -782,7 +812,9 @@ async fn proxy_basemap_tile(
     }
     let url = expand_tile_template(template, z, x, y);
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
-    let mut request = outbound_client()?.get(url);
+    let url = Url::parse(&url).map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
+    let allowlist = configured_private_network_allowlist(&settings)?;
+    let mut request = outbound_client_for_url(&url, &allowlist).await?.get(url);
     if let Some(token) = decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
     {
         request = request.bearer_auth(token);
@@ -824,18 +856,7 @@ async fn proxy_basemap_tile(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("image/png")
         .to_string();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| {
-            AppError::DependencyUnavailable(format!("Basemap response failed: {error}"))
-        })?
-        .to_vec();
-    if bytes.len() > 5 * 1024 * 1024 {
-        return Err(AppError::DependencyUnavailable(
-            "Basemap tile exceeded the response limit".into(),
-        ));
-    }
+    let bytes = read_response_limited(response, 5 * 1024 * 1024, "Basemap tile").await?;
     // The server-side copy is persistent and keyed by the provider/style
     // configuration. Upstream cache-control still governs browser re-use, but
     // repeated viewers never cause another upstream tile request until an
@@ -862,18 +883,19 @@ async fn proxy_iconify_search(
     Query(params): Query<IconifySearchParams>,
 ) -> Result<Response<Body>, AppError> {
     let settings = connections::require_enabled(&state.pool, connections::ICONIFY).await?;
-    let endpoint = endpoint_join(settings.base_url.as_deref(), "search")?;
-    let mut request = outbound_client()?.get(endpoint).query(&[
-        ("query", params.query.as_str()),
-        (
+    let mut endpoint = endpoint_join(settings.base_url.as_deref(), "search")?;
+    if let Some(prefix) = params.prefix.as_deref().filter(|value| !value.is_empty()) {
+        endpoint.query_pairs_mut().append_pair("prefix", prefix);
+    }
+    endpoint
+        .query_pairs_mut()
+        .append_pair("query", &params.query)
+        .append_pair(
             "limit",
             &params.limit.unwrap_or(40).clamp(1, 40).to_string(),
-        ),
-    ]);
-    if let Some(prefix) = params.prefix.as_deref().filter(|value| !value.is_empty()) {
-        request = request.query(&[("prefix", prefix)]);
-    }
-    proxy_json(&state, connections::ICONIFY, request).await
+        );
+    let allowlist = configured_private_network_allowlist(&settings)?;
+    proxy_json(&state, connections::ICONIFY, endpoint, &allowlist).await
 }
 
 async fn proxy_iconify_resource(
@@ -890,21 +912,20 @@ async fn proxy_iconify_resource(
     if let Some(query) = uri.query() {
         endpoint.set_query(Some(query));
     }
-    proxy_json(
-        &state,
-        connections::ICONIFY,
-        outbound_client()?.get(endpoint),
-    )
-    .await
+    let allowlist = configured_private_network_allowlist(&settings)?;
+    proxy_json(&state, connections::ICONIFY, endpoint, &allowlist).await
 }
 
 async fn proxy_json(
     state: &AppState,
     id: &str,
-    request: reqwest::RequestBuilder,
+    endpoint: Url,
+    allowlist: &[IpNet],
 ) -> Result<Response<Body>, AppError> {
     connections::record_attempt(&state.pool, id).await;
-    let upstream = request
+    let upstream = outbound_client_for_url(&endpoint, allowlist)
+        .await?
+        .get(endpoint)
         .send()
         .await
         .map_err(|_| AppError::DependencyUnavailable(format!("{id} request failed")))?;
@@ -915,15 +936,7 @@ async fn proxy_json(
             "{id} provider returned an error"
         )));
     }
-    let bytes = upstream
-        .bytes()
-        .await
-        .map_err(|_| AppError::DependencyUnavailable(format!("{id} response failed")))?;
-    if bytes.len() > 2 * 1024 * 1024 {
-        return Err(AppError::DependencyUnavailable(format!(
-            "{id} response exceeded the limit"
-        )));
-    }
+    let bytes = read_response_limited(upstream, 10 * 1024 * 1024, id).await?;
     connections::record_success(&state.pool, id).await;
     Response::builder()
         .status(StatusCode::OK)
@@ -931,6 +944,35 @@ async fn proxy_json(
         .header(header::CACHE_CONTROL, "private, max-age=3600")
         .body(Body::from(bytes))
         .map_err(|error| AppError::Internal(error.into()))
+}
+
+async fn read_response_limited(
+    mut response: reqwest::Response,
+    limit: usize,
+    label: &str,
+) -> Result<Vec<u8>, AppError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(AppError::DependencyUnavailable(format!(
+            "{label} response exceeded the limit"
+        )));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AppError::DependencyUnavailable(format!("{label} response failed")))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > limit {
+            return Err(AppError::DependencyUnavailable(format!(
+                "{label} response exceeded the limit"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 fn tile_response(
@@ -968,7 +1010,10 @@ fn upstream_cache_ttl(headers: &axum::http::HeaderMap) -> u64 {
         .min(86_400)
 }
 
-async fn validate_update(id: &str, body: &UpdateConnectionBody) -> Result<(), AppError> {
+async fn validate_update(
+    id: &str,
+    body: &UpdateConnectionBody,
+) -> Result<Option<Vec<String>>, AppError> {
     if !matches!(
         body.mode.as_str(),
         "remote" | "hosted" | "custom" | "disabled"
@@ -994,25 +1039,30 @@ async fn validate_update(id: &str, body: &UpdateConnectionBody) -> Result<(), Ap
             ));
         }
     }
+    let parsed_allowlist = body
+        .private_network_allowlist
+        .as_ref()
+        .map(|allowlist| parse_private_network_allowlist(allowlist))
+        .transpose()?;
     if body.mode != "custom" || !body.enabled {
-        return Ok(());
+        return Ok(parsed_allowlist.map(canonical_allowlist));
     }
-    let allow_private = body.allow_private_network.unwrap_or(false);
+    let allowlist = parsed_allowlist.as_deref().unwrap_or_default();
     match id {
         connections::OPEN_METEO => {
-            validate_endpoint(body.forecast_url.as_deref(), allow_private).await?;
-            validate_endpoint(body.archive_url.as_deref(), allow_private).await?;
+            validate_endpoint(body.forecast_url.as_deref(), allowlist).await?;
+            validate_endpoint(body.archive_url.as_deref(), allowlist).await?;
         }
         connections::NOMINATIM => {
-            validate_endpoint(body.base_url.as_deref(), allow_private).await?;
+            validate_endpoint(body.base_url.as_deref(), allowlist).await?;
         }
         connections::BASEMAP => {
             let light = body.light_url_template.as_deref().ok_or_else(|| {
                 AppError::Validation("custom basemap requires a light URL template".into())
             })?;
-            validate_tile_template(light, allow_private).await?;
+            validate_tile_template(light, allowlist).await?;
             if let Some(dark) = body.dark_url_template.as_deref() {
-                validate_tile_template(dark, allow_private).await?;
+                validate_tile_template(dark, allowlist).await?;
             }
             if body
                 .attribution
@@ -1028,10 +1078,10 @@ async fn validate_update(id: &str, body: &UpdateConnectionBody) -> Result<(), Ap
         }
         _ => {}
     }
-    Ok(())
+    Ok(parsed_allowlist.map(canonical_allowlist))
 }
 
-async fn validate_tile_template(value: &str, allow_private: bool) -> Result<(), AppError> {
+async fn validate_tile_template(value: &str, allowlist: &[IpNet]) -> Result<(), AppError> {
     for token in ["{z}", "{x}", "{y}"] {
         if !value.contains(token) {
             return Err(AppError::Validation(format!(
@@ -1046,12 +1096,12 @@ async fn validate_tile_template(value: &str, allow_private: bool) -> Result<(), 
                 .replace("{x}", "0")
                 .replace("{y}", "0"),
         ),
-        allow_private,
+        allowlist,
     )
     .await
 }
 
-async fn validate_endpoint(value: Option<&str>, allow_private: bool) -> Result<(), AppError> {
+async fn validate_endpoint(value: Option<&str>, allowlist: &[IpNet]) -> Result<(), AppError> {
     let value = value
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1085,6 +1135,7 @@ async fn validate_endpoint(value: Option<&str>, allow_private: bool) -> Result<(
         .await
         .map_err(|_| AppError::Validation("endpoint host could not be resolved".into()))?;
     let mut private = endpoint_is_private(value);
+    let mut public = false;
     for address in addresses {
         let ip = address.ip();
         if is_forbidden_ip(ip) {
@@ -1092,22 +1143,75 @@ async fn validate_endpoint(value: Option<&str>, allow_private: bool) -> Result<(
                 "link-local and cloud metadata endpoints are not allowed".into(),
             ));
         }
-        private |= match ip {
-            IpAddr::V4(ip) => ip.is_private() || ip.is_loopback(),
-            IpAddr::V6(ip) => ip.is_loopback() || is_ipv6_unique_local(ip),
-        };
+        if is_private_ip(ip) {
+            private = true;
+            if !allowlist.iter().any(|network| network.contains(&ip)) {
+                return Err(AppError::Validation(
+                    "endpoint resolved to a private address outside its configured CIDR allowlist"
+                        .into(),
+                ));
+            }
+        } else {
+            public = true;
+        }
     }
-    if private && !allow_private {
+    if private && public {
         return Err(AppError::Validation(
-            "confirm private-network access for this endpoint".into(),
+            "endpoint DNS returned mixed public and private addresses".into(),
         ));
     }
-    if url.scheme() == "http" && (!private || !allow_private) {
+    if private && allowlist.is_empty() {
+        return Err(AppError::Validation(
+            "private-network endpoints require an explicit CIDR allowlist".into(),
+        ));
+    }
+    if url.scheme() == "http" && !private {
         return Err(AppError::Validation(
             "HTTP is permitted only for a confirmed local/private endpoint".into(),
         ));
     }
     Ok(())
+}
+
+fn canonical_allowlist(allowlist: Vec<IpNet>) -> Vec<String> {
+    allowlist
+        .into_iter()
+        .map(|network| network.to_string())
+        .collect()
+}
+
+fn parse_private_network_allowlist(values: &[String]) -> Result<Vec<IpNet>, AppError> {
+    let mut parsed = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value.parse::<IpNet>().map_err(|_| {
+                AppError::Validation(format!("invalid private-network CIDR `{value}`"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    parsed.sort_by_key(ToString::to_string);
+    parsed.dedup();
+    for network in &parsed {
+        if !is_private_ip(network.network()) || !is_private_ip(network.broadcast()) {
+            return Err(AppError::Validation(format!(
+                "private-network CIDR `{network}` must be contained entirely in RFC1918 or IPv6 ULA space"
+            )));
+        }
+    }
+    Ok(parsed)
+}
+
+fn configured_private_network_allowlist(
+    settings: &ConnectionSettingsRow,
+) -> Result<Vec<IpNet>, AppError> {
+    if settings.private_network_policy_state == "migration_required" {
+        return Err(AppError::Validation(
+            "private-network access is disabled until an administrator confirms explicit CIDR allowlists".into(),
+        ));
+    }
+    parse_private_network_allowlist(&settings.private_network_allowlist)
 }
 
 fn endpoint_is_private(value: &str) -> bool {
@@ -1137,8 +1241,44 @@ fn is_link_local_or_metadata(host: &str) -> bool {
 
 fn is_forbidden_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => ip.is_link_local() || ip.octets() == [169, 254, 169, 254],
-        IpAddr::V6(ip) => is_ipv6_unicast_link_local(ip),
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || octets[0] == 0
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || octets == [169, 254, 169, 254]
+                || octets == [192, 0, 0, 0]
+                || octets[..3] == [192, 0, 2]
+                || octets[..3] == [192, 88, 99]
+                || octets[..3] == [192, 175, 48]
+                || (octets[0] == 198 && matches!(octets[1], 18 | 19))
+                || octets[..3] == [198, 51, 100]
+                || octets[..3] == [203, 0, 113]
+                || octets[0] >= 240
+        }
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                || is_ipv6_unicast_link_local(ip)
+                || (segments[0] & 0xffc0) == 0xfec0
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| is_forbidden_ip(IpAddr::V4(mapped)))
+        }
+    }
+}
+
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_private(),
+        IpAddr::V6(ip) => is_ipv6_unique_local(ip),
     }
 }
 
@@ -1178,10 +1318,68 @@ fn normalize(value: Option<String>) -> Option<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
-fn outbound_client() -> Result<reqwest::Client, AppError> {
+/// Resolve and pin the target for one outbound request.  Resolving at request
+/// time closes the save-time DNS rebinding gap; passing the approved addresses
+/// to reqwest keeps the URL hostname for Host and TLS SNI while preventing a
+/// second resolver result from changing the TCP destination.
+async fn outbound_client_for_url(
+    url: &Url,
+    allowlist: &[IpNet],
+) -> Result<reqwest::Client, AppError> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| AppError::Validation("connection endpoint host is required".into()))?;
+    if is_link_local_or_metadata(host) {
+        return Err(AppError::Validation(
+            "link-local and cloud metadata endpoints are not allowed".into(),
+        ));
+    }
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| AppError::Validation("connection endpoint port is required".into()))?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| {
+            AppError::DependencyUnavailable("connection endpoint could not be resolved".into())
+        })?
+        .collect::<Vec<SocketAddr>>();
+    if addresses.is_empty() {
+        return Err(AppError::DependencyUnavailable(
+            "connection endpoint could not be resolved".into(),
+        ));
+    }
+    let mut private = false;
+    let mut public = false;
+    for address in &addresses {
+        if is_forbidden_ip(address.ip()) {
+            return Err(AppError::Validation(
+                "connection endpoint resolved to a forbidden address".into(),
+            ));
+        }
+        if is_private_ip(address.ip()) {
+            private = true;
+            if !allowlist
+                .iter()
+                .any(|network| network.contains(&address.ip()))
+            {
+                return Err(AppError::Validation(
+                    "connection endpoint resolved outside its private CIDR allowlist".into(),
+                ));
+            }
+        } else {
+            public = true;
+        }
+    }
+    if private && public {
+        return Err(AppError::Validation(
+            "connection endpoint DNS returned mixed public and private addresses".into(),
+        ));
+    }
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(12))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(host, &addresses)
         .build()
         .map_err(|error| AppError::Internal(error.into()))
 }
@@ -1214,30 +1412,57 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{endpoint_is_private, validate_tile_template};
+    use super::{
+        endpoint_is_private, is_forbidden_ip, is_private_ip, parse_private_network_allowlist,
+        validate_tile_template,
+    };
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[tokio::test]
-    async fn validates_xyz_template_and_private_confirmation() {
+    async fn validates_xyz_template_and_requires_cidr_migration_for_private_targets() {
+        let private_allowlist = parse_private_network_allowlist(&["127.0.0.0/8".into()])
+            .expect_err("loopback is never allowlistable");
+        assert!(matches!(private_allowlist, super::AppError::Validation(_)));
         assert!(
-            validate_tile_template("https://127.0.0.1/{z}/{x}/{y}.png", true)
-                .await
-                .is_ok()
-        );
-        assert!(
-            validate_tile_template("http://127.0.0.1/{z}/{x}/{y}.png", false)
+            validate_tile_template("https://127.0.0.1/{z}/{x}/{y}.png", &[])
                 .await
                 .is_err()
         );
         assert!(
-            validate_tile_template("http://127.0.0.1/{z}/{x}/{y}.png", true)
-                .await
-                .is_ok()
-        );
-        assert!(
-            validate_tile_template("https://127.0.0.1/{z}/{x}.png", true)
+            validate_tile_template("http://127.0.0.1/{z}/{x}/{y}.png", &[])
                 .await
                 .is_err()
         );
+        assert!(validate_tile_template("https://127.0.0.1/{z}/{x}.png", &[])
+            .await
+            .is_err());
         assert!(endpoint_is_private("http://localhost:8080"));
+    }
+
+    #[test]
+    fn accepts_only_private_cidr_ranges() {
+        let allowlist = parse_private_network_allowlist(&[
+            "10.0.0.0/8".into(),
+            "fd00::/8".into(),
+            "10.0.0.0/8".into(),
+        ])
+        .expect("private CIDRs");
+        assert_eq!(allowlist.len(), 2);
+        assert!(parse_private_network_allowlist(&["0.0.0.0/0".into()]).is_err());
+        assert!(parse_private_network_allowlist(&["172.0.0.0/8".into()]).is_err());
+    }
+
+    #[test]
+    fn blocks_metadata_and_non_public_address_classes() {
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(is_private_ip(IpAddr::V6("fd00::1".parse().expect("ULA"))));
+        assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
     }
 }

@@ -9,16 +9,20 @@ use std::collections::VecDeque;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::efficiency_math::weighted_average_from_totals,
+    routes::trip_tag_filter::{
+        parse_tag_filter, require_known_vehicle_tags, sql_predicate, TripTagMatch,
+    },
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/efficiency/summary", get(get_summary))
         .route("/efficiency/by-mode", get(get_by_mode))
+        .route("/efficiency/by-tag", get(get_by_tag))
         .route("/efficiency/range-vs-temp", get(get_range_vs_temp))
         .route("/efficiency/vs-temp", get(get_vs_temp_binned))
         .route("/efficiency/trend", get(get_trend))
@@ -30,6 +34,9 @@ struct Params {
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
     lifetime: Option<bool>,
+    tag_ids: Option<String>,
+    tag_match: Option<TripTagMatch>,
+    untagged: Option<bool>,
 }
 
 #[cfg(test)]
@@ -165,6 +172,34 @@ struct SummaryRow {
     p90: Option<f64>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ByTagRow {
+    tag_id: Option<Uuid>,
+    tag_name: String,
+    trip_count: i64,
+    total_miles: f64,
+    efficiency_miles: f64,
+    weighted_efficiency_wh_mi: f64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct RangeVsTempRow {
+    id: Uuid,
+    distance_miles: f64,
+    efficiency_wh_per_mile: f64,
+    avg_temp_c: f64,
+}
+
+async fn resolve_tag_filter(
+    state: &AppState,
+    vehicle_id: Uuid,
+    p: &Params,
+) -> Result<crate::routes::trip_tag_filter::TripTagFilter, AppError> {
+    let filter = parse_tag_filter(p.tag_ids.as_deref(), p.tag_match, p.untagged)?;
+    require_known_vehicle_tags(&state.pool, vehicle_id, &filter).await?;
+    Ok(filter)
+}
+
 async fn get_summary(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -174,25 +209,28 @@ async fn get_summary(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
-    let row = sqlx::query_as::<_, SummaryRow>(
-        "SELECT COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS total_distance_miles,
+    let sql = format!("SELECT COALESCE(SUM(t.distance_miles) FILTER (WHERE t.efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS total_distance_miles,
                 COALESCE(SUM(distance_miles * efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS weighted_efficiency_wh_mi,
                 COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
                 COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS efficiency_miles,
                 PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL) AS p10,
                 PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL) AS p90
-         FROM riviamigo.trips
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND distance_miles > 0"
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_one(&state.pool)
-    .await?;
+         FROM riviamigo.trips t
+         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
+           AND t.distance_miles > 0{}", sql_predicate("t", 4, 5, 6));
+    let row = sqlx::query_as::<_, SummaryRow>(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_one(&state.pool)
+        .await?;
 
     let avg_wh_per_mi =
         weighted_average_from_totals(row.total_distance_miles, row.weighted_efficiency_wh_mi);
@@ -216,7 +254,8 @@ async fn get_by_mode(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 180);
 
     #[derive(sqlx::FromRow)]
@@ -227,20 +266,22 @@ async fn get_by_mode(
         avg_wh_per_mi: Option<f64>,
     }
 
-    let rows = sqlx::query_as::<_, ModeRow>(
-        "SELECT drive_mode, COUNT(*) AS trip_count,
+    let sql = format!("SELECT t.drive_mode, COUNT(*) AS trip_count,
                 COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
                 (SUM(distance_miles * efficiency_wh_per_mile) / NULLIF(SUM(distance_miles), 0))::float8 AS avg_wh_per_mi
-         FROM riviamigo.trips
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND drive_mode IS NOT NULL AND efficiency_wh_per_mile IS NOT NULL AND distance_miles > 0
-         GROUP BY drive_mode ORDER BY avg_wh_per_mi",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
+         FROM riviamigo.trips t
+         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
+           AND t.drive_mode IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 0{}
+         GROUP BY t.drive_mode ORDER BY avg_wh_per_mi", sql_predicate("t", 4, 5, 6));
+    let rows = sqlx::query_as::<_, ModeRow>(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(serde_json::json!(rows
         .iter()
@@ -262,11 +303,11 @@ async fn get_vs_temp_binned(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let rows = sqlx::query_as::<_, VsTempPoint>(
-        "SELECT
+    let sql = format!("SELECT
            (floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) * 10 - 32) * 5.0/9.0        AS temp_c_low,
            ((floor((t.outside_temp_c * 9.0/5.0 + 32) / 10.0) + 1) * 10 - 32) * 5.0/9.0  AS temp_c_high,
            (sum(t.distance_miles * t.efficiency_wh_per_mile) / nullif(sum(t.distance_miles), 0)) AS avg_efficiency_wh_mi,
@@ -279,13 +320,16 @@ async fn get_vs_temp_binned(
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.outside_temp_c IS NOT NULL AND t.efficiency_wh_per_mile IS NOT NULL
            AND t.distance_miles > 0
-         GROUP BY 1, 2 ORDER BY 1",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
+         {} GROUP BY 1, 2 ORDER BY 1", sql_predicate("t", 4, 5, 6));
+    let rows = sqlx::query_as::<_, VsTempPoint>(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(rows))
 }
@@ -299,25 +343,31 @@ async fn get_trend(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
-    let samples = sqlx::query_as::<_, TrendSample>(
+    let sql = format!(
         "SELECT
-             started_at AS ts,
-             efficiency_wh_per_mile AS trip_efficiency_wh_mi,
-             distance_miles
-         FROM riviamigo.trips
-         WHERE vehicle_id=$1 AND started_at>=$2 AND started_at<=$3
-           AND efficiency_wh_per_mile IS NOT NULL
-           AND distance_miles > 0
-         ORDER BY started_at",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .fetch_all(&state.pool)
-    .await?;
+             t.started_at AS ts,
+             t.efficiency_wh_per_mile AS trip_efficiency_wh_mi,
+             t.distance_miles
+         FROM riviamigo.trips t
+         WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
+           AND t.efficiency_wh_per_mile IS NOT NULL
+           AND t.distance_miles > 0
+         {} ORDER BY t.started_at",
+        sql_predicate("t", 4, 5, 6)
+    );
+    let samples = sqlx::query_as::<_, TrendSample>(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(with_rolling_24h(samples)))
 }
@@ -331,10 +381,11 @@ async fn get_range_vs_temp(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
-    let rows = sqlx::query!(
+    let sql = format!(
         "SELECT t.id,
                 t.distance_miles,
                 t.efficiency_wh_per_mile,
@@ -343,13 +394,18 @@ async fn get_range_vs_temp(
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
            AND t.efficiency_wh_per_mile IS NOT NULL AND t.distance_miles > 1.0
            AND t.outside_temp_c IS NOT NULL
-         ORDER BY t.started_at DESC LIMIT 500",
-        vid,
-        from,
-        to
-    )
-    .fetch_all(&state.pool)
-    .await?;
+         {} ORDER BY t.started_at DESC LIMIT 500",
+        sql_predicate("t", 4, 5, 6)
+    );
+    let rows = sqlx::query_as::<_, RangeVsTempRow>(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(serde_json::json!(rows
         .iter()
@@ -360,6 +416,67 @@ async fn get_range_vs_temp(
             "avg_temp_c":           r.avg_temp_c,
         }))
         .collect::<Vec<_>>())))
+}
+
+async fn get_by_tag(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(p): Query<Params>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = resolve_tag_filter(&state, vid, &p).await?;
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
+    let predicate = sql_predicate("t", 4, 5, 6);
+    let sql = format!(
+        "WITH cohort AS (
+           SELECT t.* FROM riviamigo.trips t
+           WHERE t.vehicle_id=$1 AND t.started_at >= $2 AND t.started_at <= $3
+             AND t.distance_miles > 0 {predicate}
+         ), grouped AS (
+           SELECT tt.id AS tag_id, tt.name AS tag_name, c.id AS trip_id,
+                  c.distance_miles, c.efficiency_wh_per_mile
+           FROM cohort c
+           JOIN riviamigo.trip_tag_assignments tta ON tta.trip_id=c.id
+           JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id
+           UNION ALL
+           SELECT NULL::uuid, 'Untagged'::text, c.id, c.distance_miles, c.efficiency_wh_per_mile
+           FROM cohort c
+           WHERE NOT EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta WHERE tta.trip_id=c.id)
+         )
+         SELECT tag_id, tag_name, COUNT(*)::bigint AS trip_count,
+                COALESCE(SUM(distance_miles), 0)::float8 AS total_miles,
+                COALESCE(SUM(distance_miles) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS efficiency_miles,
+                COALESCE(SUM(distance_miles * efficiency_wh_per_mile) FILTER (WHERE efficiency_wh_per_mile IS NOT NULL), 0)::float8 AS weighted_efficiency_wh_mi
+         FROM grouped GROUP BY tag_id, tag_name
+         ORDER BY tag_id IS NULL, lower(tag_name), tag_id"
+    );
+    let rows = sqlx::query_as::<_, ByTagRow>(sqlx::AssertSqlSafe(sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(tag_filter.tag_ids)
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
+
+    Ok(Json(rows.into_iter().map(|row| {
+        let average = (row.efficiency_miles > 0.0)
+            .then_some(row.weighted_efficiency_wh_mi / row.efficiency_miles);
+        serde_json::json!({
+            "tag_id": row.tag_id,
+            "tag_name": row.tag_name,
+            "trip_count": row.trip_count,
+            "total_miles": row.total_miles,
+            "efficiency_miles": row.efficiency_miles,
+            "avg_efficiency_wh_mi": average,
+            "coverage": if row.total_miles > 0.0 { row.efficiency_miles / row.total_miles } else { 0.0 },
+        })
+    }).collect()))
 }
 
 #[cfg(test)]
@@ -410,6 +527,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -417,6 +536,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 

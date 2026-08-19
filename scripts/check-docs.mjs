@@ -93,6 +93,7 @@ const requiredGuides = [
   "verify-installation.md",
   "dashboard-customization.md",
   "external-connections.md",
+  "synology.md",
 ];
 
 function fail(message) {
@@ -109,7 +110,11 @@ function fileExists(relativePath) {
 }
 
 function collectEnvVars() {
-  const envFiles = ["compose/.env.example", "compose/.env.full.example"];
+  const envFiles = [
+    "compose/.env.example",
+    "compose/.env.full.example",
+    "compose/.env.synology.example",
+  ];
   const names = new Set();
 
   for (const relativePath of envFiles) {
@@ -336,15 +341,33 @@ function checkEnvironmentReferenceCoverage() {
   );
   const runtimeFields = [...configBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
     .map((match) => match[1].toUpperCase())
-    .filter((name) => name !== "RATE_LIMIT");
+    .filter((name) => !["RATE_LIMIT", "RECOVERY", "ORIGIN_BIND"].includes(name));
   const rateBlock = configContent.slice(
     configContent.indexOf("pub struct RateLimitConfig"),
-    configContent.indexOf("fn default_port"),
+    configContent.indexOf("pub struct RecoveryConfig"),
   );
   const rateFields = [...rateBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
     .map((match) => `RATE_LIMIT_${match[1].toUpperCase()}`);
+  const recoveryBlock = configContent.slice(
+    configContent.indexOf("pub struct RecoveryConfig"),
+    configContent.indexOf("pub struct OriginBindConfig"),
+  );
+  const recoveryFields = [...recoveryBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => `RECOVERY_${match[1].toUpperCase()}`);
+  const originBlock = configContent.slice(
+    configContent.indexOf("pub struct OriginBindConfig"),
+    configContent.indexOf("fn default_port"),
+  );
+  const originFields = [...originBlock.matchAll(/pub ([a-z][a-z0-9_]+):/g)]
+    .map((match) => match[1].toUpperCase());
   const directRuntimeVars = ["RIVIAN_GRAPHQL_GATEWAY_URL", "RUST_LOG"];
-  for (const name of [...runtimeFields, ...rateFields, ...directRuntimeVars]) {
+  for (const name of [
+    ...runtimeFields,
+    ...rateFields,
+    ...recoveryFields,
+    ...originFields,
+    ...directRuntimeVars,
+  ]) {
     if (!supported.has(name)) {
       fail(`compose/.env.full.example is missing runtime variable: ${name}`);
     }
@@ -364,7 +387,7 @@ function checkProductionDeploymentContract() {
   const nginxConfig = readFile("compose/nginx/nginx.conf");
 
   for (const requiredSnippet of [
-    '"${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
+    '"${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
     "${RIVIAMIGO_DATA_DIR:-../data}/db:/db",
     "${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups",
@@ -392,9 +415,33 @@ function checkProductionDeploymentContract() {
     fail("standard Compose must pull published images instead of defining build contexts");
   }
 
+  if (!productionCompose.includes("cpus: '1.00'") || !productionCompose.includes("cpus: '2.00'")) {
+    fail("standard Compose must retain general CPU controls");
+  }
+
   for (const requiredSnippet of ["http://127.0.0.1:3001", "listen 8080;"]) {
     if (!nginxConfig.includes(requiredSnippet)) {
       fail(`nginx must use the internal secure-deployment topology: ${requiredSnippet}`);
+    }
+  }
+}
+
+function checkSynologyDeploymentContract() {
+  const synologyCompose = readFile("compose/docker-compose.synology.yml");
+  for (const requiredSnippet of [
+    "# GENERATED FILE — DO NOT EDIT DIRECTLY.",
+    "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080",
+    "${RIVIAMIGO_DATA_DIR:?Set RIVIAMIGO_DATA_DIR to an absolute Synology path}",
+    "${RIVIAMIGO_ENV_FILE:-.env.synology}",
+  ]) {
+    if (!synologyCompose.includes(requiredSnippet)) {
+      fail(`Synology Compose is missing required deployment contract: ${requiredSnippet}`);
+    }
+  }
+
+  for (const forbiddenSnippet of ["cpus:", "cpu_period:", "cpu_quota:"]) {
+    if (synologyCompose.includes(forbiddenSnippet)) {
+      fail(`Synology Compose must not include CPU quota setting: ${forbiddenSnippet}`);
     }
   }
 }
@@ -409,6 +456,7 @@ checkApiContracts();
 checkEnvVarReferences();
 checkEnvironmentReferenceCoverage();
 checkProductionDeploymentContract();
+checkSynologyDeploymentContract();
 
 if (process.exitCode) {
   process.exit(process.exitCode);

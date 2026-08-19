@@ -15,6 +15,11 @@ async fn main() -> anyhow::Result<()> {
     logging::init();
 
     let mut config = Config::from_env()?;
+    if config.is_production() && config.allow_insecure_lan_http_auth {
+        tracing::warn!(
+            "ALLOW_INSECURE_LAN_HTTP_AUTH is enabled: browser credentials and telemetry may be intercepted on this LAN; use HTTPS behind an authenticated gateway whenever possible"
+        );
+    }
     let pool = create_pool(&config.database_url).await?;
 
     let migration_pool = PgPoolOptions::new()
@@ -29,10 +34,22 @@ async fn main() -> anyhow::Result<()> {
         })
         .connect(&config.database_url)
         .await?;
-    db::migrations::MIGRATOR.run(&migration_pool).await?;
+    let migration = db::migrations::run_current_migrations(&migration_pool).await?;
     migration_pool.close().await;
-    tracing::info!("database schema is current");
+    tracing::info!(
+        latest_version = migration.latest_version,
+        ledger_action = ?migration.ledger_action,
+        "database schema is current"
+    );
 
+    match services::backups::reconcile_running_runs(&pool).await {
+        Ok(reconciled) if reconciled > 0 => tracing::warn!(
+            reconciled,
+            "backup running jobs reconciled after API startup"
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::error!(error = ?error, "backup running-job reconciliation failed"),
+    }
     match services::restore_jobs::reconcile_completed_jobs(&pool, &config).await {
         Ok(()) => tracing::info!("restore job journal reconciled"),
         Err(error) => tracing::error!(error = ?error, "restore job journal reconciliation failed"),
@@ -58,6 +75,11 @@ async fn main() -> anyhow::Result<()> {
         config.age_encryption_key.clone(),
     )
     .await?;
+    tracing::info!(
+        cryptographic_key_source = config.cryptographic_key_source(),
+        database_key_shared_fate = config.cryptographic_key_source() == "database",
+        "application cryptographic keys ready"
+    );
 
     let jwt_keys = Arc::new(JwtKeys::new(
         &active_keys.jwt_private_pem,
@@ -73,6 +95,9 @@ async fn main() -> anyhow::Result<()> {
 
     let age_key = active_keys.age_key;
     config.age_encryption_key = Some(age_key.clone());
+
+    let charge_identity_backfill_config =
+        services::charge_payload_identity::BackfillConfig::from_env()?;
 
     let supervisor =
         ingestion::start_workers(pool.clone(), redis.clone(), age_key.clone(), config.clone())
@@ -94,10 +119,19 @@ async fn main() -> anyhow::Result<()> {
         services::weather_enrichment::start_worker(pool.clone(), age_key.clone());
     let _trip_enrichment_reconciler =
         services::trip_enrichment::start_reconciliation_worker(pool.clone());
+    let _security_audit_retention = services::security_audit::start_retention_worker(pool.clone());
+    let _charge_identity_backfill = services::charge_payload_identity::start_worker(
+        pool.clone(),
+        charge_identity_backfill_config,
+    );
 
     let app = routes::build_router(state);
 
-    let addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;
+    let addr: SocketAddr = format!(
+        "{}:{}",
+        config.origin_bind.riviamigo_bind_address, config.port
+    )
+    .parse()?;
     tracing::info!("listening on {addr}");
     let listener = TcpListener::bind(addr).await?;
     axum::serve(

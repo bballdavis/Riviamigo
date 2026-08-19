@@ -14,6 +14,7 @@ jwt_private.pem
 jwt_public.pem
 age_key.txt
 target/
+apps/api/target-ci-local/
 **/target-tests/
 **/target-tests-regression/
 **/target-codex-*/
@@ -32,9 +33,11 @@ playwright-report/
 test-results/
 .playwright-cli/
 output/
+/vehicle-artwork-build/
 *.log
 *.tmp
 *.tsbuildinfo
+test_output.txt
 compose/resolv.conf
 .codex_tmp/
 

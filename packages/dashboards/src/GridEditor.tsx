@@ -279,7 +279,9 @@ export default function GridEditor({
                     mode="edit"
                     editor={editor}
                     isEditing={isEditing}
-                    onToggleEdit={() => setEditingId(isEditing ? null : widget.id)}
+                    {...(widget.managed
+                      ? {}
+                      : { onToggleEdit: () => setEditingId(isEditing ? null : widget.id) })}
                     updateWidgetOptions={patchWidgetOptions}
                   />
                 );

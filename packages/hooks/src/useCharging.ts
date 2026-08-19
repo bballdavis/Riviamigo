@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { DepartureScheduleInput, ChargingScheduleInput } from './api';
-import type { ChargeSession, Place } from '@riviamigo/types';
+import type { ChargeSession, ChargeSessionUpdate, ChargingNetworkPreference, Place } from '@riviamigo/types';
 import { useAuthReady } from './useAuthState';
 
 type PlaceQueryKey = readonly ['places'];
@@ -11,6 +11,8 @@ type UpdateChargeSessionLocationPayload = {
   placeId: string | null;
   placeName: string | null;
 };
+
+export type UpdateChargeSessionPayload = ChargeSessionUpdate & { sessionId: string };
 
 type UpdateChargeSessionLocationResponse = {
   session?: {
@@ -22,6 +24,17 @@ type UpdateChargeSessionLocationContext = {
   previousSession: ChargeSession | undefined;
   queryKey: readonly ['charging', 'detail', string, string | null];
 };
+
+/**
+ * Invalidate all data that can change when a saved place or charge-session
+ * location changes. Keep this seam shared by charging mutations and the
+ * Settings > Places mutations so stale derived data cannot survive a save.
+ */
+export function invalidateChargingData(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ['charging'] });
+  void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch'] });
+  void queryClient.invalidateQueries({ queryKey: ['trips'] });
+}
 
 export function useChargeSessions(
   vehicleId: string | null,
@@ -51,7 +64,7 @@ export function useChargeSessions(
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -65,7 +78,7 @@ export function useChargeSession(sessionId: string | null, vehicleId: string | n
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -79,53 +92,76 @@ export function useSavedPlaces() {
     staleTime: 60 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
   });
 }
 
 export function useUpdateChargeSessionLocation(vehicleId: string | null) {
   const queryClient = useQueryClient();
   return useMutation<UpdateChargeSessionLocationResponse, Error, UpdateChargeSessionLocationPayload, UpdateChargeSessionLocationContext>({
-    mutationFn: ({ sessionId, placeId }: { sessionId: string; placeId: string | null }) => {
+    mutationFn: async ({ sessionId, placeId }) => {
       if (!vehicleId) throw new Error('vehicle_id is required');
-      return api.apiFetch<unknown>(
-        'PATCH',
-        `/v1/charging/${sessionId}?vehicle_id=${vehicleId}`,
-        { place_id: placeId },
-      ) as Promise<UpdateChargeSessionLocationResponse>;
+      const session = await api.updateChargeSession(vehicleId, sessionId, { place_id: placeId });
+      return { session };
     },
     onMutate: async ({ sessionId, placeName }) => {
       const queryKey: UpdateChargeSessionLocationContext['queryKey'] = ['charging', 'detail', sessionId, vehicleId];
-      await queryClient.cancelQueries({ queryKey: ['charging', 'detail', sessionId, vehicleId] });
+      await queryClient.cancelQueries({ queryKey });
       const previousSession = queryClient.getQueryData<ChargeSession>(queryKey);
-      queryClient.setQueryData<ChargeSession>(queryKey, (current) => {
-        if (!current) return current;
-        return { ...current, location_name: placeName };
-      });
+      queryClient.setQueryData<ChargeSession>(queryKey, (current) => current ? { ...current, location_name: placeName } : current);
       return { previousSession, queryKey };
     },
     onError: (_error, _variables, context) => {
-      if (!context) return;
-      queryClient.setQueryData(context.queryKey, context.previousSession);
+      if (context) queryClient.setQueryData(context.queryKey, context.previousSession);
     },
     onSuccess: (_data, variables) => {
-      const updatedSession = _data?.session;
-      if (updatedSession && typeof updatedSession.location_name !== 'undefined') {
-        const updatedLocationName = typeof updatedSession.location_name === 'string' ? updatedSession.location_name : null;
-        queryClient.setQueryData(
-          ['charging', 'detail', variables.sessionId, vehicleId],
-          (current: ChargeSession | undefined) => {
-            if (!current) return current;
-            return { ...current, location_name: updatedLocationName };
-          },
-        );
-      }
+      const updatedLocationName = _data.session?.location_name ?? null;
+      queryClient.setQueryData(
+        ['charging', 'detail', variables.sessionId, vehicleId],
+        (current: ChargeSession | undefined) => current ? { ...current, location_name: updatedLocationName } : current,
+      );
+      invalidateChargingData(queryClient);
+    },
+  });
+}
 
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'detail', variables.sessionId, vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'list', vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'summary', vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['charging', 'chart-series', vehicleId] });
-      void queryClient.invalidateQueries({ queryKey: ['metrics', 'batch', vehicleId] });
+export function useUpdateChargeSession(vehicleId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation<ChargeSession, Error, UpdateChargeSessionPayload>({
+    mutationFn: ({ sessionId, ...body }) => {
+      if (!vehicleId) throw new Error('vehicle_id is required');
+      return api.updateChargeSession(vehicleId, sessionId, body);
+    },
+    onSuccess: (session, variables) => {
+      queryClient.setQueryData(['charging', 'detail', variables.sessionId, vehicleId], session);
+      invalidateChargingData(queryClient);
+    },
+  });
+}
+
+export function useChargingNetworkPreferences(vehicleId: string | null) {
+  const authReady = useAuthReady();
+  return useQuery<ChargingNetworkPreference[]>({
+    queryKey: ['charging', 'network-preferences', vehicleId],
+    queryFn: () => api.listChargingNetworkPreferences(vehicleId!),
+    enabled: authReady && !!vehicleId,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: 'always',
+  });
+}
+
+export function useUpdateChargingNetworkPreference(vehicleId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation<Pick<ChargingNetworkPreference, 'network_vendor' | 'cost_mode'>, Error, { networkVendor: string; costMode: ChargingNetworkPreference['cost_mode'] }>({
+    mutationFn: ({ networkVendor, costMode }) => {
+      if (!vehicleId) throw new Error('vehicle_id is required');
+      return api.updateChargingNetworkPreference(vehicleId, networkVendor, costMode);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['charging', 'network-preferences', vehicleId] });
+      invalidateChargingData(queryClient);
     },
   });
 }
@@ -139,7 +175,7 @@ export function useChargeCurve(sessionId: string | null, vehicleId: string | nul
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -154,7 +190,7 @@ export function useChargeCurveAnalysis(vehicleId: string | null, from: string | 
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -169,7 +205,7 @@ export function useChargingSummary(vehicleId: string | null, from: string | null
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -184,7 +220,7 @@ export function useChargingChartSeries(vehicleId: string | null, from: string | 
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnMount: 'always',
     placeholderData: (previous) => previous,
   });
 }
@@ -260,4 +296,3 @@ export function useLiveSession(vehicleId: string | null, active = true) {
     staleTime: 0,
   });
 }
-

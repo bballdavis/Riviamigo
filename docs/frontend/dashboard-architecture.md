@@ -27,6 +27,25 @@ This document defines the approved layering for dashboard work and the package b
 - Widget registry: `packages/dashboards/src/registry.tsx`
 - Dashboard defaults and persistence helpers: `packages/dashboards/src/api.ts`, `packages/dashboards/src/defaults/`
 
+## Canonical shared frontend ownership
+
+- `packages/ui` owns reusable primitives, tables, charts, tokens, and the
+  document-theme hook. Routes and widgets consume `useDocumentTheme` from
+  `@riviamigo/ui/hooks`; do not duplicate theme/media-query listeners in
+  app-local code. `ThemeToggle` remains the shared control.
+- `packages/dashboards` owns dashboard framework, widget registry, grid editor,
+  and the responsive editor drawer. The drawer is a full-height right panel on
+  desktop and a bounded bottom panel on mobile; page code must not create a
+  competing route-local editor panel.
+- `packages/hooks` owns typed API hooks and cache contracts, including
+  `useBasemapConfig`. `TripMapChart` in `packages/ui` owns map rendering and
+  receives the authenticated same-origin basemap configuration from its caller.
+  Browser map traffic must use Riviamigo's `/v1/external/basemap/...` proxy;
+  direct browser-to-provider map requests are not a supported transport.
+- `apps/web` owns route composition and page-specific integrations of these
+  seams. A trip-detail route and the Trips widget may compose the shared map,
+  but neither owns a second map client, theme source, or provider URL policy.
+
 ## Approved Layering
 
 ### 1. Route Layer
@@ -84,7 +103,7 @@ Use explicit composition slots such as `renderBeforeDashboard` or a page-local w
 - YAML import and export
 - bundled default dashboard configs, authored once in `packages/dashboards/src/defaults/` and generated into API seed files with `pnpm dashboards:sync-defaults`
 
-Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and user-owned dashboards are never changed by seeding. Personal same-slug dashboards continue to win normal route resolution.
+Bundled system dashboards carry an internal baseline revision in the database. Startup inserts missing rows and applies a bundled config only when its revision is newer than the stored system row. The revision makes upgrades idempotent: administrator edits survive ordinary restarts, a deliberately newer release baseline can replace the installation-wide system row once, and personal layout/widget settings remain untouched. Explicitly managed page-composition widgets are the narrow exception: startup may add a missing managed widget or mark a canonical legacy instance, preserving its saved layout, title, visibility, and unrelated options. Personal same-slug dashboards continue to win normal route resolution.
 
 This package should stay framework-focused. It should not accumulate page-specific business rules.
 
@@ -113,13 +132,23 @@ The shared chart widget owns reusable chart display controls.
 
 - Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
 - Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
+- The shared settings panel groups display filtering, curve shaping, and supported axis ranges into collapsible sections. Display filtering and smoothing apply to every compatible curve in the active chart; a series may opt out only when its data semantics require it.
 - Treat dashboard edit mode as the only persistent write seam. In edit mode, widget-level settings changes should flow back through the dashboard shell's local config update path. In view mode, the same UI can preview changes locally, but those changes should not autosave.
-- Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. That preference is stored in browser storage per dashboard/widget instance and survives reloads; it is owned by `DashboardChartWidget`, not by a route.
+- Saved chart display settings remain part of the account-owned dashboard configuration; do not add browser-storage persistence for them.
+- Chart selection remains local view state until the user explicitly chooses the favorite star for a chart row. The favorite is stored in the authenticated account's database-backed preferences per dashboard/widget instance, so it survives browser changes and remains available when a managed catalog gains new chart definitions. `DashboardChartWidget` owns the preference interaction; the account preferences API owns persistence.
 - Keep the settings UI inside the shared chart widget and shared chart primitives. Do not recreate chart-settings popovers in route files or page components.
 - Rich time-series charts may expose manual `y` and `y2` ranges broadly, but `x` range controls are only valid when the chart owns its own non-dashboard domain.
 - When a chart follows the shared dashboard timeframe, the page shell remains the source of truth for the X domain. Do not expose per-widget time-range overrides that conflict with `DashboardPageShell`.
 
 Shared bar-chart visual rules live in `packages/ui/src/charts/ChartProvider.tsx` as `CHART_BAR_STYLE`. Use the filled mark treatment for ordinary quantitative bars and preserve renderer-specific semantics for stacked, histogram, efficiency, and segmented pill views. Interactive bars must provide date/category and value details on hover; stacked views additionally require a legend and a full-bar hit target.
+
+Interval charts use the same filled-bar palette, opacity, radius, and full-bar
+hit target. The tire-pressure timeline places overlapping trip intervals into
+spatial lanes in a compact bottom band on the secondary `Trips` lane; the
+horizontal span remains the interval's actual start/end time, and lanes never
+add durations together. The band is capped at roughly 30% of the plot so the
+primary pressure trend remains legible. Each interval is a keyboard-activatable
+button with route details and opens the owning trip.
 
 Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/chartLabelLayout.ts`. Dense custom SVG categorical charts must keep every data mark and interaction target, then select only a collision-safe subset of axis and value labels using the shared chart font. Axis labels remain evenly distributed with first/last retention when space permits and 12 px minimum spacing; value labels prioritize larger values and use 6 px bounding-box padding. Recalculate from the currently visible domain so labels return after zoom. Recharts categorical/time axes use the centralized `preserveStartEnd` and 40 px minimum-gap defaults, with explicit exceptions only for specialized layouts such as the rotated Speed Histogram. uPlot time axes keep their bounded calendar-date split policy.
 
@@ -128,6 +157,17 @@ Shared label layout is renderer-agnostic and belongs in `packages/ui/src/charts/
 - `DashboardChartWidget` owns the mobile-only expand trigger and the portal-based fullscreen viewer for catalog-rendered dashboard charts. The viewer can switch only among that widget's configured `chartIds`; selection and exploration remain local view state and must not mutate the dashboard or URL.
 - `DashboardChartRenderer` accepts `presentation="embedded" | "mobile-viewer"`. It keeps data ownership unchanged while opting rich time/numeric charts into touch exploration. Browser fullscreen and orientation APIs are progressive enhancements; the fixed-viewport viewer and rotate prompt remain the reliable fallback.
 - `RichTimeSeriesChart` owns pinch zoom, horizontal pan, double-tap/reset, and data-domain clamping for the mobile-viewer presentation. Categorical renderers stay readable and tappable rather than inventing a continuous zoom model.
+
+### Managed page composition
+
+Some built-in widgets are layout-bearing anchors for page composition rather than
+user-configurable widget definitions. Their `managed` and `managedKey` fields
+identify the composition contract; the user can still move or resize the widget,
+but the editor does not expose controls to replace its content or remove it.
+Managed catalog charts derive their available chart definitions from the current
+page catalog instead of persisting a second chart-membership list in each user
+copy. Startup applies an additive, idempotent compatibility patch for existing
+personal copies so new fixed content appears without replacing saved layouts.
 
 ### 6. Hooks and Data Layer
 

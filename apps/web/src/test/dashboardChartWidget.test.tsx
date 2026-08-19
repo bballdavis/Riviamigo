@@ -11,7 +11,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
-import { getDefaultBySlug } from '@riviamigo/dashboards';
+import { getDefaultBySlug, getWidget } from '@riviamigo/dashboards';
 import {
   getBatteryCapacityMileageYRange,
   getProjectedRangeMileageYRange,
@@ -38,6 +38,10 @@ function setMatchMedia(mobile = false, portrait = false) {
 beforeEach(() => {
   setMatchMedia(false);
   localStorage.clear();
+  for (const key of Object.keys(mockFavoriteState.chart_favorites)) {
+    delete mockFavoriteState.chart_favorites[key];
+  }
+  mockUpdateDashboardChartFavorite.mockClear();
 });
 
 afterEach(() => {
@@ -65,11 +69,43 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('uses projected range by mileage as the Overview app default', () => {
+  it('uses battery capacity by mileage as the Overview app default', () => {
     const overview = getDefaultBySlug('dashboard');
     const chart = overview?.widgets.find((widget) => widget.definitionId === 'catalog');
 
-    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('projected-range-mileage');
+    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('battery-capacity-mileage');
+  });
+
+  it('uses battery capacity by mileage for new overview chart widgets', () => {
+    const chart = getWidget('chart', 'catalog');
+
+    expect(chart?.defaultOptions).toMatchObject({
+      page: 'overview',
+      chartId: 'battery-capacity-mileage',
+    });
+  });
+
+  it('falls back to battery capacity by mileage when an overview chart has no saved chart ID', () => {
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartIds: ['soc-history', 'battery-capacity-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    });
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Capacity by Mileage');
+  });
+
+  it('registers the tire-pressure timeline through the shared catalog widget on Trips', () => {
+    const trips = getDefaultBySlug('trips');
+    const chart = trips?.widgets.find((widget) => widget.definitionId === 'catalog');
+    const options = chart?.options as Record<string, unknown> | undefined;
+
+    expect(chart?.componentType).toBe('chart');
+    expect(options?.page).toBe('trips');
+    expect(options?.chartId).toBe('tire-pressure-trips');
   });
 
   it('persists an explicitly selected default for this component across remounts', () => {
@@ -89,12 +125,56 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(screen.getByRole('button', { name: 'State of Charge is the default chart' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Set Projected Range by Mileage as default' }));
     expect(screen.getByRole('button', { name: 'Projected Range by Mileage is the default chart' })).toBeDisabled();
+    expect(mockUpdateDashboardChartFavorite).toHaveBeenCalledWith({
+      key: 'dashboard:test-soc-history',
+      chartId: 'projected-range-mileage',
+    });
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
 
     firstRender.unmount();
     renderWidget(instance, ctx);
 
     expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+  });
+
+  it('does not use the legacy browser storage value for chart defaults', () => {
+    localStorage.setItem('rm-dashboard-chart-defaults', JSON.stringify({
+      'dashboard:test-soc-history': 'projected-range-mileage',
+    }));
+
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    }, { ...CTX, dashboardSlug: 'dashboard' });
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+  });
+
+  it('keeps a saved favorite when a managed catalog gains a new chart', () => {
+    mockFavoriteState.chart_favorites['dashboard:dashboard-a:test-soc-history'] = 'projected-range-mileage';
+    renderWidget(
+      {
+        ...makeInstance('soc-history', true),
+        managed: true,
+        managedKey: 'overview.chart-catalog',
+        options: {
+          chartId: 'soc-history',
+          chartIds: ['soc-history'],
+          page: 'overview' as const,
+          showPicker: true,
+        },
+      },
+      { ...CTX, dashboardSlug: 'dashboard', dashboardConfigId: 'dashboard-a' },
+    );
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    expect(screen.getByRole('option', { name: 'Tire Pressure and Trips' })).toBeInTheDocument();
   });
 
   it('isolates chart defaults across dashboard config IDs', () => {
@@ -145,6 +225,33 @@ describe('DashboardChartWidget - smoothing controls', () => {
     expect(slider).toBeTruthy();
     expect(slider.getAttribute('value')).toBe('0');
     expect(screen.queryByLabelText('Time minimum')).toBeNull();
+  });
+
+  it('keeps the shared chart search field to a single in-bounds focus border', () => {
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartId: 'soc-history',
+        chartIds: ['soc-history', 'projected-range-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    });
+
+    const search = screen.getByLabelText('Search charts');
+    expect(search.className).toContain('focus:border-accent');
+    expect(search.className).toContain('focus-visible:!outline-none');
+    expect(search.className).toContain('focus-visible:!outline-offset-0');
+    expect(search.className).toContain('focus-visible:ring-0');
+    expect(search.className).not.toContain('focus:ring-1');
+
+    const chartSelector = screen.getByRole('button', { name: 'Chart' });
+    expect(chartSelector.className).toContain('focus-visible:!outline-none');
+    expect(chartSelector.className).toContain('focus-visible:ring-0');
+
+    const settings = screen.getByRole('button', { name: 'Chart settings' });
+    expect(settings.className).toContain('focus-visible:!outline-none');
+    expect(settings.className).toContain('focus-visible:ring-0');
   });
 
   it('maps saved smoothing values to the chart filter default and preserves a zero value as raw', () => {
@@ -207,6 +314,43 @@ describe('DashboardChartWidget - smoothing controls', () => {
       'test-soc-history',
       expect.objectContaining({ chartSettings: { 'soc-history': { smoothness: 'smooth', timeFilter: '1h' } } }),
     );
+  });
+
+  it('applies the display filter and curve smoothness to both projected-range curves', () => {
+    renderChart('projected-range-mileage');
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-time-filter', '1h');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute(
+      'data-series-filterable',
+      'Projected Max Range:true|Mileage:true',
+    );
+
+    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-chart-smoothness', 'smooth');
+  });
+
+  it('persists projected-range display controls through the account dashboard save seam', () => {
+    const updateWidgetOptions = vi.fn();
+    renderWidget(makeInstance('projected-range-mileage'), { ...CTX, updateWidgetOptions });
+    fireEvent.click(screen.getByRole('button', { name: /chart settings/i }));
+
+    fireEvent.change(screen.getByLabelText('Display filter'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Curve smoothness'), { target: { value: '2' } });
+
+    expect(updateWidgetOptions).toHaveBeenLastCalledWith(
+      'test-projected-range-mileage',
+      expect.objectContaining({
+        chartSettings: {
+          'projected-range-mileage': {
+            timeFilter: '1h',
+            smoothness: 'smooth',
+          },
+        },
+      }),
+    );
+    expect(localStorage.getItem('rm-dashboard-chart-defaults')).toBeNull();
   });
 
   it('uses the same centered dialog layout on mobile viewports', () => {
@@ -437,6 +581,20 @@ const mockEfficiencyByMode = vi.fn(() => ({
   data: [{ drive_mode: 'all_purpose', avg_efficiency: 318, p10_efficiency: 0, p90_efficiency: 0, trip_count: 5 }],
   isLoading: false,
 }));
+type MockEfficiencyByTagResponse = {
+  data: Array<{ tag_id: string | null; tag_name: string; trip_count: number; total_miles: number; efficiency_miles: number; avg_efficiency_wh_mi: number | null; coverage: number }>;
+  isLoading: boolean;
+};
+const mockEfficiencyByTag = vi.fn<(...args: unknown[]) => MockEfficiencyByTagResponse>((..._args) => ({
+  data: [{ tag_id: 'tag-rack', tag_name: 'Bike rack', trip_count: 4, total_miles: 68, efficiency_miles: 51, avg_efficiency_wh_mi: 325, coverage: 0.75 }],
+  isLoading: false,
+}));
+const mockTripTags = vi.fn<(...args: unknown[]) => { data: Array<{ id: string; vehicle_id: string; name: string }>; isLoading: boolean; isError: boolean; refetch: () => Promise<unknown> }>((..._args) => ({
+  data: [{ id: 'tag-rack', vehicle_id: 'vehicle-1', name: 'Bike rack' }],
+  isLoading: false,
+  isError: false,
+  refetch: async () => undefined,
+}));
 type MockEfficiencyVsTempPoint = {
   temp_c_low: number;
   temp_c_high: number;
@@ -490,6 +648,11 @@ const mockBatteryMileage = vi.fn(() => ({
   data: [{ ts: '2024-01-01T00:00:00Z', odometer_mi: 5000, usable_kwh: 120, range_mi: 320 }],
   isLoading: false,
 }));
+const mockFavoriteState = { chart_favorites: {} as Record<string, string> };
+const mockDashboardChartFavorites = vi.fn(() => ({ data: mockFavoriteState, isSuccess: true }));
+const mockUpdateDashboardChartFavorite = vi.fn(({ key, chartId }: { key: string; chartId: string }) => {
+  mockFavoriteState.chart_favorites[key] = chartId;
+});
 
 vi.mock('@riviamigo/hooks', () => ({
   useSocHistory: () => mockSoc(),
@@ -499,10 +662,14 @@ vi.mock('@riviamigo/hooks', () => ({
   useChargeCurveAnalysis: () => mockChargeCurveAnalysis(),
   useEfficiencyTrend: () => mockEfficiencyTrend(),
   useEfficiencyByMode: () => mockEfficiencyByMode(),
+  useEfficiencyByTag: (...args: unknown[]) => mockEfficiencyByTag(...args),
   useEfficiencyVsTemp: () => mockEfficiencyVsTemp(),
+  useTripTags: (...args: unknown[]) => mockTripTags(...args),
   usePhantomDrainPeriods: () => mockPhantomDrainPeriods(),
   useDegradation: () => mockDegradation(),
   useBatteryMileage: () => mockBatteryMileage(),
+  useDashboardChartFavorites: () => mockDashboardChartFavorites(),
+  useUpdateDashboardChartFavorite: () => ({ mutate: mockUpdateDashboardChartFavorite }),
 }));
 
 vi.mock('@riviamigo/ui/lib/utils', async (importOriginal) => {
@@ -542,7 +709,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       data,
       emptyTitle,
     }: {
-      data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null }>;
+      data: Array<{ label: string; value: number; distance?: number | null; speed?: number | null; coverage?: number | null }>;
       emptyTitle: string;
     }) =>
       data.length === 0 ? (
@@ -555,6 +722,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
               data-testid="efficiency-pill-label"
               data-distance={point.distance == null ? '' : String(point.distance)}
               data-speed={point.speed == null ? '' : String(point.speed)}
+              data-coverage={point.coverage == null ? '' : String(point.coverage)}
             >
               {point.label}
             </div>
@@ -566,6 +734,7 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       series,
       emptyTitle,
       timeFilter,
+      smoothness,
       xRange,
       yRange,
       yRightRange,
@@ -578,9 +747,10 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
       yUnit,
     }: {
       points: Array<{ ts: string | number | Date }>;
-      series: Array<{ label: string; color?: string; mode?: string; tooltipOnly?: boolean; values?: Array<number | null>; tooltipDetails?: Array<string | null | undefined>; pointSize?: number }>;
+      series: Array<{ label: string; color?: string; mode?: string; tooltipOnly?: boolean; filterable?: boolean; values?: Array<number | null>; tooltipDetails?: Array<string | null | undefined>; pointSize?: number }>;
       emptyTitle: string;
       timeFilter?: string;
+      smoothness?: string;
       xRange?: [number, number];
       yRange?: [number, number];
       yRightRange?: [number, number];
@@ -598,7 +768,9 @@ vi.mock('@riviamigo/ui/charts', async (importOriginal) => {
         <div
           data-testid="rich-chart"
           data-time-filter={timeFilter ?? 'raw'}
+          data-chart-smoothness={smoothness ?? 'gentle'}
           data-series={series.map((item) => item.label).join('|')}
+          data-series-filterable={series.map((item) => `${item.label}:${item.filterable === false ? 'false' : 'true'}`).join('|')}
           data-series-colors={series.map((item) => `${item.label}:${item.color ?? ''}`).join('|')}
           data-series-modes={series.map((item) => `${item.label}:${item.mode ?? ''}`).join('|')}
           data-series-values={series.map((item) => `${item.label}:${item.values?.map((value) => value ?? '').join(',') ?? ''}`).join('|')}
@@ -906,6 +1078,59 @@ describe('DashboardChartWidget — efficiency_mode', () => {
     mockEfficiencyByMode.mockReturnValueOnce({ data: [], isLoading: false });
     renderChart('efficiency-mode');
     expectChartEmpty('No drive mode efficiency data for this period');
+  });
+});
+
+describe('DashboardChartWidget — efficiency_tags', () => {
+  it('renders tag labels with trip distance and efficiency coverage', () => {
+    renderChart('efficiency-tags');
+
+    const row = screen.getByTestId('efficiency-pill-label');
+    expect(row).toHaveTextContent('Bike rack');
+    expect(row).toHaveAttribute('data-distance', '68');
+    expect(row).toHaveAttribute('data-coverage', '0.75');
+  });
+
+  it('keeps the untagged cohort visible when tags exist', () => {
+    mockEfficiencyByTag.mockReturnValueOnce({
+      data: [{ tag_id: null, tag_name: 'Untagged', trip_count: 2, total_miles: 30, efficiency_miles: 30, avg_efficiency_wh_mi: 310, coverage: 1 }],
+      isLoading: false,
+    });
+    renderChart('efficiency-tags');
+    expect(screen.getByTestId('efficiency-pill-label')).toHaveTextContent('Untagged');
+  });
+
+  it('uses the same selected tag cohort for the by-tag chart hook', () => {
+    const filter = { tagIds: ['tag-bike', 'tag-rack'], tagMatch: 'any' as const, untagged: false };
+    renderWidget(makeInstance('efficiency-tags'), { ...CTX, tripTagFilter: filter });
+    expect(mockEfficiencyByTag).toHaveBeenLastCalledWith(CTX.vehicleId, CTX.from, CTX.to, filter);
+  });
+
+  it('keeps no-tag onboarding ahead of a synthetic untagged API row', () => {
+    mockTripTags.mockReturnValueOnce({ data: [], isLoading: false, isError: false, refetch: async () => undefined });
+    mockEfficiencyByTag.mockReturnValueOnce({
+      data: [{ tag_id: null, tag_name: 'Untagged', trip_count: 2, total_miles: 30, efficiency_miles: 30, avg_efficiency_wh_mi: 310, coverage: 1 }],
+      isLoading: false,
+    });
+    renderWidget(makeInstance('efficiency-tags'), { ...CTX, canManageTripTags: true });
+    expect(screen.getByText(/Create one with the Tags filter above/i)).toBeTruthy();
+    expect(screen.queryByTestId('efficiency-pill-chart')).toBeNull();
+  });
+
+  it('offers recovery when the shared tag catalog cannot be loaded', () => {
+    mockTripTags.mockReturnValueOnce({ data: [], isLoading: false, isError: true, refetch: async () => undefined });
+    renderChart('efficiency-tags');
+    expect(screen.getByRole('alert')).toHaveTextContent(/Couldn’t load shared tags/i);
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('explains a filtered empty cohort without discarding the selected filters', () => {
+    mockEfficiencyByTag.mockReturnValueOnce({ data: [], isLoading: false });
+    renderWidget(makeInstance('efficiency-tags'), {
+      ...CTX,
+      tripTagFilter: { tagIds: ['tag-rack'], tagMatch: 'all', untagged: false },
+    });
+    expect(screen.getByText(/No trips match these tag filters/i)).toBeTruthy();
   });
 });
 

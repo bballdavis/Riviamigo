@@ -62,11 +62,15 @@ export interface DashboardPageShellProps {
   isEditMode?: boolean;
   onEditModeChange?: (isEditMode: boolean) => void;
   renderTitleAction?: (state: DashboardPageShellRenderState) => React.ReactNode;
+  /** Optional compact action rendered before the vehicle selector. */
+  renderLeadingActions?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderActions?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderBeforeDashboard?: (state: DashboardPageShellRenderState) => React.ReactNode;
   renderDashboard?: (state: DashboardPageShellRenderState) => boolean;
   enableDashboardEditing?: boolean | undefined;
   showEfficiencyDisplayToggle?: boolean;
+  /** Page-scoped values consumed by a subset of widgets. */
+  widgetCtx?: Pick<WidgetCtx, 'tripTagFilter' | 'canManageTripTags'>;
 }
 
 export interface DashboardEditMutations {
@@ -167,11 +171,13 @@ function DashboardPageShellContent({
   isEditMode: controlledEditMode,
   onEditModeChange,
   renderTitleAction,
+  renderLeadingActions,
   renderActions,
   renderBeforeDashboard,
   renderDashboard,
   enableDashboardEditing = true,
   showEfficiencyDisplayToggle = false,
+  widgetCtx,
 }: DashboardPageShellProps) {
   const { setActiveVehicleId } = useAuth();
   const setSessionVehicleId = setActiveVehicleId ?? (() => {});
@@ -297,6 +303,7 @@ function DashboardPageShellContent({
       chargeSessionDayLocal,
       setChargeSessionDayLocal: setChargeSessionDayFilter,
       updateWidgetLayout,
+      ...widgetCtx,
     }),
     [
       effectiveVehicleId,
@@ -310,6 +317,7 @@ function DashboardPageShellContent({
       chargeSessionDayLocal,
       setChargeSessionDayFilter,
       updateWidgetLayout,
+      widgetCtx,
     ],
   );
 
@@ -403,6 +411,7 @@ function DashboardPageShellContent({
     })(shellState)
     : undefined;
   const pageExtraActions = currentEditMode ? undefined : renderActions?.(shellState);
+  const pageLeadingActions = currentEditMode ? undefined : renderLeadingActions?.(shellState);
   const defaultTitleAction = !currentEditMode && canEditDashboard && showEditButton ? (
     <button
       type="button"
@@ -414,8 +423,9 @@ function DashboardPageShellContent({
       <Edit2 className="h-4 w-4" />
     </button>
   ) : null;
-  const pageActions = vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
-    <div className="flex items-center gap-2">
+  const pageActions = pageLeadingActions || vehicleAction || efficiencyDisplayAction || dateRangeAction || pageExtraActions ? (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {pageLeadingActions}
       {vehicleAction}
       {efficiencyDisplayAction}
       {dateRangeAction}

@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{Executor, Postgres, Row};
 use uuid::Uuid;
 
 use crate::{
@@ -14,6 +14,7 @@ use crate::{
     errors::AppError,
     middleware::auth::{issue_access_token, AppState, AuthUser},
     routes::users_support::hash_password,
+    services::security_audit::SecurityAuditEvent,
 };
 
 const MIN_PASSWORD_LEN: usize = 12;
@@ -43,6 +44,10 @@ pub fn metadata_router() -> Router<AppState> {
             "/auth/preferences",
             axum::routing::get(get_preferences).put(update_preferences),
         )
+        .route(
+            "/auth/preferences/chart-favorites",
+            axum::routing::get(get_chart_favorites).put(update_chart_favorite),
+        )
 }
 
 pub fn protected_router() -> Router<AppState> {
@@ -53,6 +58,7 @@ pub fn protected_router() -> Router<AppState> {
 struct RegisterBody {
     email: String,
     password: String,
+    setup_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,14 +94,19 @@ struct AccessTokenResponse {
 #[derive(Serialize)]
 struct SetupResponse {
     setup_required: bool,
+    setup_proof_required: bool,
+    setup_proof_available: bool,
 }
 
 async fn setup(State(state): State<AppState>) -> Result<Json<SetupResponse>, AppError> {
     let has_users: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM riviamigo.users)")
         .fetch_one(&state.pool)
         .await?;
+    let setup_required = !has_users;
     Ok(Json(SetupResponse {
-        setup_required: !has_users,
+        setup_required,
+        setup_proof_required: setup_required && state.config.is_production(),
+        setup_proof_available: state.config.setup_proof_available(),
     }))
 }
 
@@ -121,8 +132,20 @@ struct PreferencesUpdateBody {
     units: UnitPreferencesPayload,
 }
 
+#[derive(Serialize)]
+struct DashboardChartFavoritesResponse {
+    chart_favorites: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct DashboardChartFavoriteUpdateBody {
+    key: String,
+    chart_id: String,
+}
+
 async fn register(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<RegisterBody>,
 ) -> Result<Response, AppError> {
     if body.email.len() > 254 {
@@ -149,6 +172,12 @@ async fn register(
     if user_count != 0 {
         return Err(AppError::Forbidden);
     }
+    if state.config.is_production() {
+        let setup_token = body.setup_token.as_deref().ok_or(AppError::Forbidden)?;
+        if !state.config.verify_setup_token(setup_token)? {
+            return Err(AppError::Forbidden);
+        }
+    }
     let role = "super_user";
 
     let user_id: Uuid = sqlx::query_scalar!(
@@ -174,12 +203,23 @@ async fn register(
     .execute(&mut *tx)
     .await;
 
+    SecurityAuditEvent::success("setup_claimed", Some(user_id))
+        .target(format!("user:{user_id}"))
+        .metadata(serde_json::json!({ "role": role }))
+        .request_id_from_headers(&headers)
+        .record_tx(&mut tx)
+        .await?;
+
     tx.commit().await?;
 
     // auto-login: issue tokens so the client is immediately authenticated
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
-    let cookie = refresh_cookie(&refresh, 2_592_000);
+    let cookie = refresh_cookie(
+        &refresh,
+        2_592_000,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok((
         StatusCode::CREATED,
         [(SET_COOKIE, cookie)],
@@ -214,6 +254,7 @@ async fn preview_account_invitation(
 
 async fn accept_account_invitation(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<AcceptAccountInvitationBody>,
 ) -> Result<Response, AppError> {
     if !password_meets_minimum(&body.password) {
@@ -276,16 +317,19 @@ async fn accept_account_invitation(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    SecurityAuditEvent::success("account_invitation_accepted", Some(user_id))
+        .target(format!("account_invitation:{invitation_id}"))
+        .request_id_from_headers(&headers)
+        .record_tx(&mut tx)
+        .await?;
     tx.commit().await?;
-    audit_log(
-        state.pool.clone(),
-        "account_invitation_accepted",
-        Some(user_id),
-        "account invitation accepted".to_string(),
-    );
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
-    let cookie = refresh_cookie(&refresh, 2_592_000);
+    let cookie = refresh_cookie(
+        &refresh,
+        2_592_000,
+        state.config.allows_insecure_refresh_cookies(),
+    );
     Ok((
         StatusCode::CREATED,
         [(SET_COOKIE, cookie)],
@@ -329,6 +373,7 @@ const DUMMY_HASH: &str =
 
 async fn login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, AppError> {
     let email = body.email.trim().to_lowercase();
@@ -344,12 +389,14 @@ async fn login(
     if let Err(e) = verify_password(&body.password, hash) {
         tracing::warn!(email = %email, reason = "invalid_credentials", "auth.login_failed");
         if row.is_some() {
-            audit_log(
-                state.pool.clone(),
-                "login_failure",
-                None,
-                format!("failed login for {email}"),
-            );
+            let audit_result = SecurityAuditEvent::failure("login_failure", None)
+                .metadata(serde_json::json!({ "known_account": true }))
+                .request_id_from_headers(&headers)
+                .record(&state.pool)
+                .await;
+            if let Err(audit_error) = audit_result {
+                tracing::error!(error = ?audit_error, "auth.login_failure_audit_failed");
+            }
         }
         return Err(e);
     }
@@ -368,16 +415,21 @@ async fn login(
     let user_id: Uuid = row.get("id");
     let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
     let token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
-    let refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let mut tx = state.pool.begin().await?;
+    let refresh = issue_refresh_token(&mut *tx, user_id).await?;
 
-    audit_log(
-        state.pool.clone(),
-        "login_success",
-        Some(user_id),
-        "user logged in".to_string(),
+    SecurityAuditEvent::success("login_success", Some(user_id))
+        .target(format!("user:{user_id}"))
+        .request_id_from_headers(&headers)
+        .record_tx(&mut tx)
+        .await?;
+    tx.commit().await?;
+
+    let cookie = refresh_cookie(
+        &refresh,
+        2_592_000,
+        state.config.allows_insecure_refresh_cookies(),
     );
-
-    let cookie = refresh_cookie(&refresh, 2_592_000);
     Ok((
         [(SET_COOKIE, cookie)],
         Json(AccessTokenResponse {
@@ -406,7 +458,7 @@ async fn bootstrap(
         return Ok(response);
     }
 
-    let clear_cookie = refresh_cookie("", 0);
+    let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
@@ -448,7 +500,11 @@ async fn refresh_from_cookie(
     let access_token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
 
     let max_age = 30 * 24 * 3600;
-    let cookie = refresh_cookie(&new_refresh, max_age);
+    let cookie = refresh_cookie(
+        &new_refresh,
+        max_age,
+        state.config.allows_insecure_refresh_cookies(),
+    );
 
     Ok(Some(
         (
@@ -481,13 +537,14 @@ async fn logout(
             .await;
         }
     }
-    let clear_cookie = refresh_cookie("", 0);
+    let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([("Set-Cookie", clear_cookie)], StatusCode::NO_CONTENT))
 }
 
 async fn change_password(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ChangePasswordBody>,
 ) -> Result<Response, AppError> {
     if !password_meets_minimum(&body.new_password) {
@@ -519,18 +576,15 @@ async fn change_password(
     .bind(auth.user_id)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at)
-         VALUES ($1, $2, $3, now())",
-    )
-    .bind("password_changed")
-    .bind(auth.user_id)
-    .bind("user changed password and revoked active refresh sessions")
-    .execute(&mut *tx)
-    .await?;
+    SecurityAuditEvent::success("password_changed", Some(auth.user_id))
+        .target(format!("user:{}", auth.user_id))
+        .metadata(serde_json::json!({ "refresh_sessions_revoked": true }))
+        .request_id_from_headers(&headers)
+        .record_tx(&mut tx)
+        .await?;
     tx.commit().await?;
 
-    let clear_cookie = refresh_cookie("", 0);
+    let clear_cookie = refresh_cookie("", 0, state.config.allows_insecure_refresh_cookies());
     Ok(([(SET_COOKIE, clear_cookie)], StatusCode::NO_CONTENT).into_response())
 }
 
@@ -681,6 +735,54 @@ async fn update_preferences(
     Ok(Json(PreferencesResponse { units }))
 }
 
+async fn get_chart_favorites(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<DashboardChartFavoritesResponse>, AppError> {
+    let favorites = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT COALESCE(dashboard_chart_favorites, '{}'::jsonb) FROM riviamigo.user_preferences WHERE user_id = $1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or_else(|| serde_json::json!({}));
+
+    Ok(Json(DashboardChartFavoritesResponse {
+        chart_favorites: favorites,
+    }))
+}
+
+async fn update_chart_favorite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<DashboardChartFavoriteUpdateBody>,
+) -> Result<Json<DashboardChartFavoritesResponse>, AppError> {
+    if body.key.is_empty()
+        || body.key.len() > 200
+        || body.chart_id.is_empty()
+        || body.chart_id.len() > 120
+    {
+        return Err(AppError::Validation(
+            "invalid dashboard chart favorite".into(),
+        ));
+    }
+
+    sqlx::query(
+        "INSERT INTO riviamigo.user_preferences (user_id, dashboard_chart_favorites, updated_at)
+         VALUES ($1, jsonb_build_object($2, $3), now())
+         ON CONFLICT (user_id) DO UPDATE SET
+           dashboard_chart_favorites = COALESCE(riviamigo.user_preferences.dashboard_chart_favorites, '{}'::jsonb) || EXCLUDED.dashboard_chart_favorites,
+           updated_at = now()",
+    )
+    .bind(auth.user_id)
+    .bind(&body.key)
+    .bind(&body.chart_id)
+    .execute(&state.pool)
+    .await?;
+
+    get_chart_favorites(State(state), auth).await
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolved_units_payload(
     mode: &str,
@@ -809,48 +911,30 @@ fn sha2_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-fn refresh_cookie(value: &str, max_age: u64) -> String {
-    let secure = if std::env::var("COOKIE_INSECURE").is_ok() {
-        ""
-    } else {
-        "; Secure"
-    };
+fn refresh_cookie(value: &str, max_age: u64, allow_insecure: bool) -> String {
+    let secure = if allow_insecure { "" } else { "; Secure" };
     format!(
         "refresh_token={value}; HttpOnly{secure}; SameSite=Lax; Path=/v1/auth; Max-Age={max_age}"
     )
 }
 
-fn audit_log(pool: sqlx::PgPool, event: &'static str, user_id: Option<uuid::Uuid>, detail: String) {
-    tokio::spawn(async move {
-        if let Err(e) = sqlx::query(
-            "INSERT INTO riviamigo.security_events (event_type, user_id, detail, created_at) \
-             VALUES ($1, $2, $3, now())",
-        )
-        .bind(event)
-        .bind(user_id)
-        .bind(detail)
-        .execute(&pool)
-        .await
-        {
-            tracing::warn!(error = %e, event, "audit_log insert failed");
-        }
-    });
-}
-
-async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<String, AppError> {
+async fn issue_refresh_token<'e, E>(executor: E, user_id: Uuid) -> Result<String, AppError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     use rand::Rng;
     let raw: String = (0..32)
         .map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char)
         .collect();
     let hash = sha2_hash(&raw);
     let expires_at = chrono::Utc::now() + chrono::Duration::days(30);
-    sqlx::query!(
+    sqlx::query(
         "INSERT INTO riviamigo.refresh_tokens (token_hash, user_id, expires_at) VALUES ($1,$2,$3)",
-        hash.as_slice(),
-        user_id,
-        expires_at
     )
-    .execute(pool)
+    .bind(hash.as_slice())
+    .bind(user_id)
+    .bind(expires_at)
+    .execute(executor)
     .await?;
     Ok(raw)
 }
@@ -861,6 +945,37 @@ mod tests {
     use axum::body::Body;
     use http::{Request, StatusCode};
     use tower::ServiceExt; // for `oneshot`
+
+    #[test]
+    fn register_body_keeps_setup_token_additive() {
+        let legacy: RegisterBody = serde_json::from_value(serde_json::json!({
+            "email": "owner@example.test",
+            "password": "correct-password"
+        }))
+        .expect("legacy registration body");
+        assert!(legacy.setup_token.is_none());
+
+        let protected: RegisterBody = serde_json::from_value(serde_json::json!({
+            "email": "owner@example.test",
+            "password": "correct-password",
+            "setup_token": "not-an-actual-secret"
+        }))
+        .expect("protected registration body");
+        assert!(protected.setup_token.is_some());
+    }
+
+    #[test]
+    fn setup_response_serializes_additive_proof_flags() {
+        let value = serde_json::to_value(SetupResponse {
+            setup_required: true,
+            setup_proof_required: true,
+            setup_proof_available: false,
+        })
+        .expect("setup response serializes");
+        assert_eq!(value["setup_required"], true);
+        assert_eq!(value["setup_proof_required"], true);
+        assert_eq!(value["setup_proof_available"], false);
+    }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -904,6 +1019,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -911,6 +1028,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 
@@ -1031,7 +1149,7 @@ mod tests {
 
     #[test]
     fn refresh_cookie_format_contains_httponly() {
-        let cookie = refresh_cookie("mytoken", 3600);
+        let cookie = refresh_cookie("mytoken", 3600, false);
         assert!(cookie.contains("HttpOnly"), "cookie must be HttpOnly");
         assert!(
             cookie.contains("SameSite=Lax"),
@@ -1042,11 +1160,20 @@ mod tests {
             "cookie must contain token value"
         );
         assert!(cookie.contains("Max-Age=3600"), "cookie must set Max-Age");
+        assert!(cookie.contains("Secure"), "cookies are secure by default");
+    }
+
+    #[test]
+    fn refresh_cookie_omits_secure_only_for_explicitly_allowed_lan_http_auth() {
+        let cookie = refresh_cookie("mytoken", 3600, true);
+        assert!(!cookie.contains("Secure"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Lax"));
     }
 
     #[test]
     fn refresh_cookie_clear_sets_zero_max_age() {
-        let cookie = refresh_cookie("", 0);
+        let cookie = refresh_cookie("", 0, false);
         assert!(
             cookie.contains("Max-Age=0"),
             "clearing cookie must set Max-Age=0"

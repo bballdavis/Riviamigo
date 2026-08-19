@@ -52,6 +52,10 @@ export interface MetricBatchRequest {
   /** `full` returns every retained source point in the requested range. */
   density?: 'compact' | 'full';
   max_points?: number;
+  /** Canonical comma-separated shared trip-tag IDs for trip-derived metrics. */
+  tag_ids?: string;
+  tag_match?: 'all' | 'any';
+  untagged?: boolean;
 }
 
 export interface MetricBatchSeriesResponse {
@@ -168,6 +172,28 @@ export interface Trip {
   end_place?: string | null;
   outside_temp_c?: number | null;
   outside_temp_source?: OutsideTemperatureSource | null;
+  /** Additive server field; older API versions return no tag collection. */
+  tags?: TripTag[];
+}
+
+export type TripTagColorToken = 'accent' | 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+
+export interface TripTag {
+  id: string;
+  vehicle_id: string;
+  name: string;
+  color_token: TripTagColorToken;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TripTagMatch = 'all' | 'any';
+
+export interface TripTagAssignmentRequest {
+  trip_ids: string[];
+  tag_ids: string[];
+  mode: 'add' | 'remove' | 'replace';
 }
 
 export interface TrackPoint {
@@ -221,6 +247,7 @@ export type TripRouteCoordinate = [lng: number, lat: number];
 export interface TripMapRoute {
   trip_id: string;
   coordinates: TripRouteCoordinate[];
+  tags: TripTag[];
 }
 
 export interface TripMapResponse {
@@ -258,6 +285,37 @@ export interface TripDetailResponse {
   samples: TripDetailSamples;
   power?: TripPowerMetadata;
   outside_temperature: OutsideTemperatureSeries;
+}
+
+export interface TirePressureTimelineSample {
+  ts: string;
+  tire_fl_psi: number | null;
+  tire_fr_psi: number | null;
+  tire_rl_psi: number | null;
+  tire_rr_psi: number | null;
+}
+
+export interface TirePressureTimelineTrip {
+  id: string;
+  vehicle_id: string;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number | null;
+  duration_min: number | null;
+  distance_miles: number | null;
+  start_place: string | null;
+  end_place: string | null;
+  start_address: string | null;
+  end_address: string | null;
+  tags: TripTag[];
+}
+
+export interface TirePressureTimelineResponse {
+  vehicle_id: string;
+  from: string;
+  to: string;
+  samples: TirePressureTimelineSample[];
+  trips: TirePressureTimelineTrip[];
 }
 
 export type OutsideTemperatureSource = 'vehicle' | 'open_meteo' | 'mixed' | 'unavailable';
@@ -397,6 +455,29 @@ export interface ChargeSession {
   live_range_added_km?: number | null;
   live_power_kw?: number | null;
   live_charge_rate_kph?: number | null;
+  /** Effective coordinates after a user location correction. */
+  location_lat?: number | null;
+  location_lng?: number | null;
+  /** Immutable telemetry/API coordinates, retained when a location is overridden. */
+  source_location_lat?: number | null;
+  source_location_lng?: number | null;
+  location_override_mode?: 'automatic' | 'saved_place' | 'none' | null;
+  cost_override_mode?: 'automatic' | 'free' | 'manual' | null;
+  cost_override_usd?: number | null;
+}
+
+export interface ChargeSessionUpdate {
+  /** Backward-compatible saved place update. Null clears the effective location. */
+  place_id?: string | null;
+  location_mode?: 'automatic' | 'saved_place' | 'none';
+  cost_mode?: 'automatic' | 'free' | 'manual';
+  cost_usd?: number;
+}
+
+export interface ChargingNetworkPreference {
+  network_vendor: string;
+  cost_mode: 'automatic' | 'free';
+  session_count: number;
 }
 
 export interface ChargeCurvePoint {
@@ -464,6 +545,17 @@ export interface EfficiencySummary {
   total_miles: number;
   efficiency_miles: number;
   coverage_percent: number;
+}
+
+export interface EfficiencyByTag {
+  tag_id: string | null;
+  tag_name: string;
+  trip_count: number;
+  total_miles: number;
+  efficiency_miles: number;
+  avg_efficiency_wh_mi: number | null;
+  /** Fraction of miles with an efficiency measurement, in the range 0–1. */
+  coverage: number;
 }
 
 export interface ChargingSummary {
@@ -593,6 +685,7 @@ export interface VehicleHealth {
   extended_telemetry: {
     collector: {
       status: 'starting' | 'connected' | 'disconnected' | 'error';
+      running: boolean;
       connected_at: string | null;
       last_event_at: string | null;
       last_error: string | null;
@@ -698,6 +791,18 @@ export type BackupTargetType = 's3';
 
 export type BackupRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
+export type BackupRunPhase =
+  | 'queued'
+  | 'preparing'
+  | 'dumping'
+  | 'snapshotting'
+  | 'packaging'
+  | 'validating'
+  | 'uploading'
+  | 'finalizing'
+  | 'completed'
+  | 'failed';
+
 export type BackupRunTrigger = 'manual' | 'scheduled' | 'restore' | 'upload' | 'pre_restore';
 
 export type BackupArtifactStorageType = 'local' | 'uploaded' | 'safety' | 's3';
@@ -752,6 +857,8 @@ export interface BackupRun {
   id: string;
   trigger: BackupRunTrigger;
   status: BackupRunStatus;
+  phase: BackupRunPhase;
+  progress_percent: number;
   artifact_key: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -992,6 +1099,9 @@ export interface AddVehicleBody {
 
 export interface AddVehicleResult {
   vehicle_id: string;
+  vehicle_saved?: boolean;
+  telemetry_status?: 'starting' | 'delayed';
+  telemetry_error?: string | null;
 }
 
 export interface CreateDemoVehicleResult {
@@ -1063,6 +1173,8 @@ export interface UnitPreferences {
   place_radius_unit: PlaceRadiusUnit;
   efficiency_display: EfficiencyDisplay;
 }
+
+export type DashboardChartFavorites = Record<string, string>;
 
 export interface AppTimezone {
   timezone: string;

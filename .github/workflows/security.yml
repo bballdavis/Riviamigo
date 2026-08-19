@@ -3,6 +3,7 @@ name: PR Security
 on:
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
   schedule:
     - cron: '0 8 * * 1'
 
@@ -11,26 +12,34 @@ permissions:
 
 env:
   NODE_VERSION: '24.18.0'
+  RUST_VERSION: '1.97.1'
 
 jobs:
   security:
-    name: Checks
+    name: Security checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        if: github.event_name != 'pull_request'
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Verify API route security inventory
         run: pnpm security:routes
       - name: Install cargo-audit
+        if: github.event_name != 'pull_request'
         run: cargo install cargo-audit --locked
       - name: Cargo audit
+        if: github.event_name != 'pull_request'
         working-directory: apps/api
         shell: bash
         run: |
@@ -50,6 +59,7 @@ jobs:
           fi
           cargo audit --deny warnings --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104
       - name: pnpm audit
+        if: github.event_name != 'pull_request'
         run: pnpm audit --prod --audit-level=high
       - name: Secret scan
         uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
@@ -78,8 +88,10 @@ jobs:
             p/owasp-top-ten
             config/security/semgrep-rules.yml
       - name: Build production image
+        if: github.event_name != 'pull_request'
         run: docker build -f compose/Dockerfile -t riviamigo:${{ github.sha }} .
       - name: Trivy vulnerability scan
+        if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: riviamigo:${{ github.sha }}
@@ -87,4 +99,3 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '1'
-

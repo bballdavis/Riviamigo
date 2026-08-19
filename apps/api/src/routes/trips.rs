@@ -10,15 +10,23 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{require_vehicle_membership, require_vehicle_read_access},
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
+    routes::trip_tag_filter::{
+        parse_tag_filter as parse_shared_tag_filter, require_known_vehicle_tags, sql_predicate,
+        TripTagFilter, TripTagMatch,
+    },
     services::trip_routes::build_route_preview,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/trips", get(list_trips))
+        .route(
+            "/trips/tire-pressure-timeline",
+            get(get_tire_pressure_timeline),
+        )
         .route("/trips/{id}", get(get_trip))
         .route("/trips/{id}/detail", get(get_trip_detail))
         .route("/trips/{id}/track", get(get_track))
@@ -44,11 +52,36 @@ struct TripListParams {
     page: Option<i64>,
     per_page: Option<i64>,
     search: Option<String>,
+    /// Canonical comma-separated UUID list. Repeated query keys are not
+    /// portable across all clients/proxies, so the URL form stays stable.
+    tag_ids: Option<String>,
+    tag_match: Option<TripTagMatch>,
+    untagged: Option<bool>,
+}
+
+fn parse_tag_filter(params: &TripListParams) -> Result<TripTagFilter, AppError> {
+    parse_shared_tag_filter(params.tag_ids.as_deref(), params.tag_match, params.untagged)
+}
+
+fn trip_search_predicate(param: usize) -> String {
+    format!(
+        r#" AND (${param}::text IS NULL OR
+                  COALESCE(sg.name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(eg.name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(sa.display_name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(ea.display_name, '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || ${param} || '%' ESCAPE '\' OR
+                  EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta
+                          JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id
+                          WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || ${param} || '%' ESCAPE '\'))"#
+    )
 }
 
 #[cfg(test)]
 mod timeframe_tests {
     use chrono::{TimeZone, Utc};
+    use uuid::Uuid;
 
     #[test]
     fn lifetime_time_bounds_use_epoch_instead_of_default_window() {
@@ -57,6 +90,54 @@ mod timeframe_tests {
 
         assert_eq!(resolved_to, to);
         assert_eq!(from, chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    }
+
+    #[test]
+    fn tag_filter_defaults_to_all_and_rejects_untagged_combination() {
+        let tag = Uuid::new_v4();
+        let params = super::TripListParams {
+            vehicle_id: None,
+            from: None,
+            to: None,
+            lifetime: None,
+            limit: None,
+            offset: None,
+            page: None,
+            per_page: None,
+            search: None,
+            tag_ids: Some(tag.to_string()),
+            tag_match: None,
+            untagged: None,
+        };
+        let filter = super::parse_tag_filter(&params).unwrap();
+        assert!(filter.match_all);
+        assert_eq!(filter.tag_ids, Some(vec![tag]));
+
+        let invalid = super::TripListParams {
+            untagged: Some(true),
+            ..params
+        };
+        assert!(super::parse_tag_filter(&invalid).is_err());
+    }
+
+    #[test]
+    fn trip_search_predicate_is_balanced() {
+        let predicate = super::trip_search_predicate(4);
+
+        assert!(predicate.contains("$4::text IS NULL"));
+        assert!(predicate.contains("EXISTS"));
+        assert!(predicate.ends_with("))"));
+
+        let mut depth = 0;
+        for character in predicate.chars() {
+            match character {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "predicate closed before it opened");
+        }
+        assert_eq!(depth, 0);
     }
 }
 
@@ -102,6 +183,7 @@ struct TripRow {
     end_address: Option<String>,
     outside_temp_c: Option<f64>,
     outside_temp_source: Option<String>,
+    tags: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -111,6 +193,7 @@ struct TripMapRow {
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
     route_preview: Option<serde_json::Value>,
+    tags: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize, sqlx::FromRow)]
@@ -290,6 +373,7 @@ struct TripWeatherRow {
 struct TripMapRoute {
     trip_id: Uuid,
     coordinates: Vec<[f64; 2]>,
+    tags: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -300,6 +384,40 @@ struct TripMapResponse {
     total_trips: usize,
     missing_route_count: usize,
     routes: Vec<TripMapRoute>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TirePressureTimelineSample {
+    ts: DateTime<Utc>,
+    tire_fl_psi: Option<f64>,
+    tire_fr_psi: Option<f64>,
+    tire_rl_psi: Option<f64>,
+    tire_rr_psi: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct TirePressureTimelineTrip {
+    id: Uuid,
+    vehicle_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    duration_seconds: Option<i32>,
+    duration_min: Option<f64>,
+    distance_miles: Option<f64>,
+    start_place: Option<String>,
+    end_place: Option<String>,
+    start_address: Option<String>,
+    end_address: Option<String>,
+    tags: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct TirePressureTimelineResponse {
+    vehicle_id: Uuid,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    samples: Vec<TirePressureTimelineSample>,
+    trips: Vec<TirePressureTimelineTrip>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -504,7 +622,9 @@ async fn list_trips(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = parse_tag_filter(&p)?;
+    require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let limit = p.per_page.or(p.limit).unwrap_or(50).clamp(1, 200);
     let page = p.page.unwrap_or(1).max(1);
@@ -521,14 +641,15 @@ async fn list_trips(
         .execute(&mut *tx)
         .await?;
 
-    let rows = sqlx::query_as::<_, TripRow>(
+    let rows_sql = format!(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
                 t.efficiency_wh_per_mile, t.max_speed_mph, t.drive_mode, t.soc_start, t.soc_end, \
                 t.start_lat, t.start_lng, t.end_lat, t.end_lng, \
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $7 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -536,26 +657,26 @@ async fn list_trips(
          LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id) \
          LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id) \
          WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3 \
-         AND ($6::text IS NULL OR \
-              COALESCE(sg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(eg.name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(sa.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(ea.display_name, '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $6 || '%' ESCAPE '\\') \
-         ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(limit)
-    .bind(offset)
-    .bind(search.as_deref())
-    .bind(auth.user_id)
-    .fetch_all(&mut *tx)
-    .await?;
+         {} \
+         {} ORDER BY t.started_at DESC LIMIT $4 OFFSET $5",
+        trip_search_predicate(6),
+        sql_predicate("t", 8, 9, 10),
+    );
+    let rows = sqlx::query_as::<_, TripRow>(sqlx::AssertSqlSafe(rows_sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(limit)
+        .bind(offset)
+        .bind(search.as_deref())
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids.clone())
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&mut *tx)
+        .await?;
 
-    let total: i64 = sqlx::query_scalar(
+    let total_sql = format!(
         "SELECT COUNT(*) \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5 \
@@ -570,15 +691,22 @@ async fn list_trips(
               COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
               COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
-              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')",
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(search.as_deref())
-    .bind(auth.user_id)
-    .fetch_one(&mut *tx)
-    .await?;
+              COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR \
+              EXISTS (SELECT 1 FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id AND tt.name ILIKE '%' || $4 || '%' ESCAPE '\\'))
+         {}",
+        sql_predicate("t", 6, 7, 8),
+    );
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(total_sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(search.as_deref())
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids.clone())
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_one(&mut *tx)
+        .await?;
 
     tx.rollback().await?;
 
@@ -593,6 +721,79 @@ async fn list_trips(
     })))
 }
 
+async fn get_tire_pressure_timeline(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(p): Query<TripListParams>,
+) -> Result<Json<TirePressureTimelineResponse>, AppError> {
+    let vid = p
+        .vehicle_id
+        .ok_or(AppError::Validation("vehicle_id required".into()))?;
+    require_vehicle_access(&auth, vid)?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = parse_tag_filter(&p)?;
+    require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
+    let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
+
+    let samples = sqlx::query_as::<_, TirePressureTimelineSample>(
+        r#"SELECT ts, tire_fl_psi, tire_fr_psi, tire_rl_psi, tire_rr_psi
+           FROM timeseries.telemetry
+           WHERE vehicle_id=$1 AND ts >= $2 AND ts <= $3
+           ORDER BY ts"#,
+    )
+    .bind(vid)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let trips_sql = format!(
+        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.duration_seconds,
+                  COALESCE(t.duration_seconds::float8 / 60.0,
+                           EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) / 60.0) AS duration_min,
+                  t.distance_miles,
+                  COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place,
+                  COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place,
+                  sa.display_name AS start_address, ea.display_name AS end_address,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                      'id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name,
+                      'color_token', tt.color_token, 'created_by', tt.created_by,
+                      'created_at', tt.created_at, 'updated_at', tt.updated_at)
+                      ORDER BY lower(tt.name), tt.id)
+                    FROM riviamigo.trip_tag_assignments tta
+                    JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id
+                    WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
+           FROM riviamigo.trips t
+           LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id=t.id AND tua.user_id=$4
+           LEFT JOIN riviamigo.geofences sg ON sg.id=COALESCE(tua.start_geofence_id, t.start_geofence_id)
+           LEFT JOIN riviamigo.geofences eg ON eg.id=COALESCE(tua.end_geofence_id, t.end_geofence_id)
+           LEFT JOIN riviamigo.addresses sa ON sa.id=COALESCE(tua.start_address_id, t.start_address_id)
+           LEFT JOIN riviamigo.addresses ea ON ea.id=COALESCE(tua.end_address_id, t.end_address_id)
+           WHERE t.vehicle_id=$1 AND t.started_at <= $3 AND t.ended_at >= $2
+             {} ORDER BY t.started_at"#,
+        sql_predicate("t", 5, 6, 7),
+    );
+    let trips =
+        sqlx::query_as::<_, TirePressureTimelineTrip>(sqlx::AssertSqlSafe(trips_sql.as_str()))
+            .bind(vid)
+            .bind(from)
+            .bind(to)
+            .bind(auth.user_id)
+            .bind(tag_filter.tag_ids)
+            .bind(tag_filter.match_all)
+            .bind(tag_filter.untagged)
+            .fetch_all(&state.pool)
+            .await?;
+
+    Ok(Json(TirePressureTimelineResponse {
+        vehicle_id: vid,
+        from,
+        to,
+        samples,
+        trips,
+    }))
+}
+
 async fn get_trip(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -603,7 +804,7 @@ async fn get_trip(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let row = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
@@ -612,7 +813,8 @@ async fn get_trip(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -640,7 +842,9 @@ async fn get_trip_map(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
+    let tag_filter = parse_tag_filter(&p)?;
+    require_known_vehicle_tags(&state.pool, vid, &tag_filter).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let search = p
         .search
@@ -649,8 +853,9 @@ async fn get_trip_map(
         .filter(|value| !value.is_empty())
         .map(|v| v.replace('%', "\\%").replace('_', "\\_"));
 
-    let rows = sqlx::query_as::<_, TripMapRow>(
-        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview
+    let map_sql = format!(
+        r#"SELECT t.id, t.vehicle_id, t.started_at, t.ended_at, t.route_preview,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags
            FROM riviamigo.trips t
            LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $5
            LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id)
@@ -658,22 +863,23 @@ async fn get_trip_map(
            LEFT JOIN riviamigo.addresses sa ON sa.id = COALESCE(tua.start_address_id, t.start_address_id)
            LEFT JOIN riviamigo.addresses ea ON ea.id = COALESCE(tua.end_address_id, t.end_address_id)
            WHERE t.vehicle_id=$1 AND t.started_at>=$2 AND t.started_at<=$3
-             AND ($4::text IS NULL OR
-                  COALESCE(sg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(eg.name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(sa.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(ea.display_name, '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(CONCAT_WS(', ', sa.road, sa.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\' OR
-                  COALESCE(CONCAT_WS(', ', ea.road, ea.city), '') ILIKE '%' || $4 || '%' ESCAPE '\\')
+             {}
+             {}
            ORDER BY t.started_at DESC"#,
-    )
-    .bind(vid)
-    .bind(from)
-    .bind(to)
-    .bind(search.as_deref())
-    .bind(auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
+        trip_search_predicate(4),
+        sql_predicate("t", 6, 7, 8),
+    );
+    let rows = sqlx::query_as::<_, TripMapRow>(sqlx::AssertSqlSafe(map_sql.as_str()))
+        .bind(vid)
+        .bind(from)
+        .bind(to)
+        .bind(search.as_deref())
+        .bind(auth.user_id)
+        .bind(tag_filter.tag_ids.clone())
+        .bind(tag_filter.match_all)
+        .bind(tag_filter.untagged)
+        .fetch_all(&state.pool)
+        .await?;
 
     let mut route_by_id = std::collections::HashMap::<Uuid, Vec<[f64; 2]>>::new();
     let mut missing = Vec::new();
@@ -757,6 +963,7 @@ async fn get_trip_map(
             route_by_id.remove(&row.id).map(|coordinates| TripMapRoute {
                 trip_id: row.id,
                 coordinates,
+                tags: row.tags.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -790,7 +997,7 @@ async fn get_trip_detail(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripRow>(
         "SELECT t.id, t.started_at, t.ended_at, t.duration_seconds, t.distance_miles, \
@@ -799,7 +1006,8 @@ async fn get_trip_detail(
                 COALESCE(sg.name, NULLIF(CONCAT_WS(', ', sa.road, sa.city), '')) AS start_place, \
                 COALESCE(eg.name, NULLIF(CONCAT_WS(', ', ea.road, ea.city), '')) AS end_place, \
                 sa.display_name AS start_address, ea.display_name AS end_address, \
-                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source \
+                t.outside_temp_c AS outside_temp_c, t.outside_temp_source AS outside_temp_source, \
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', tt.id, 'vehicle_id', tt.vehicle_id, 'name', tt.name, 'color_token', tt.color_token, 'created_by', tt.created_by, 'created_at', tt.created_at, 'updated_at', tt.updated_at) ORDER BY lower(tt.name), tt.id) FROM riviamigo.trip_tag_assignments tta JOIN riviamigo.trip_tags tt ON tt.id=tta.tag_id WHERE tta.trip_id=t.id), '[]'::jsonb) AS tags \
          FROM riviamigo.trips t \
          LEFT JOIN riviamigo.trip_user_annotations tua ON tua.trip_id = t.id AND tua.user_id = $3 \
          LEFT JOIN riviamigo.geofences sg ON sg.id = COALESCE(tua.start_geofence_id, t.start_geofence_id) \
@@ -1064,7 +1272,7 @@ async fn get_track(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1150,7 +1358,7 @@ async fn get_speed_profile(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1192,7 +1400,7 @@ async fn get_elevation_profile(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1259,7 +1467,7 @@ async fn power_profile_response(
     vehicle_id: Uuid,
     trip_id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2"
@@ -1322,7 +1530,7 @@ async fn trip_series_response(
     vehicle_id: Uuid,
     trip_id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let trip = sqlx::query_as::<_, TripWindowRow>(
         "SELECT started_at, ended_at, NULL::int4 AS duration_seconds FROM riviamigo.trips WHERE id=$1 AND vehicle_id=$2",
@@ -1506,6 +1714,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -1513,6 +1723,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 
@@ -1554,6 +1765,16 @@ mod tests {
         let app = make_app().await;
         assert_eq!(
             get_status(app, "/v1/trips/map").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn tire_pressure_timeline_requires_auth() {
+        let app = make_app().await;
+        assert_eq!(
+            get_status(app, "/v1/trips/tire-pressure-timeline").await,
             StatusCode::UNAUTHORIZED
         );
     }

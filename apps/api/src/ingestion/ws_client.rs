@@ -40,6 +40,7 @@ pub enum WsInboundKind {
     Control,
     Heartbeat,
     Telemetry,
+    ChargingSession,
 }
 
 impl WsInboundKind {
@@ -48,6 +49,7 @@ impl WsInboundKind {
             Self::Control => "control",
             Self::Heartbeat => "heartbeat",
             Self::Telemetry => "telemetry",
+            Self::ChargingSession => "charging_session",
         }
     }
 }
@@ -59,6 +61,8 @@ pub struct WsInboundEvent {
     pub raw: String,
     pub message_type: Option<String>,
     pub telemetry: Option<TelemetryEvent>,
+    pub charging_session: Option<parser::ChargingSessionEvent>,
+    pub battery_cell_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -259,6 +263,7 @@ const VEHICLE_STATE_FIELDS: &[VehicleStateField] = &[
         "otaAvailableVersion",
         "otaAvailableVersion { timeStamp value }",
     ),
+    VehicleStateField::optional("batteryCellType", "batteryCellType { timeStamp value }"),
     VehicleStateField::optional("otaCurrentVersion", "otaCurrentVersion { timeStamp value }"),
     VehicleStateField::optional("otaStatus", "otaStatus { timeStamp value }"),
     VehicleStateField::optional("otaCurrentStatus", "otaCurrentStatus { timeStamp value }"),
@@ -520,6 +525,13 @@ subscription vehicleDepartureSchedules($vehicleID: String!) {
 }
 "#;
 
+const CHARGING_SESSION_SUBSCRIPTION: &str = r#"subscription chargingSession($vehicleID: String!) {
+  chargingSession(vehicleId: $vehicleID) {
+    chartData { soc powerKW startTime endTime timeEstimationValidityStatus vehicleChargerState }
+    liveData { powerKW kilometersChargedPerHour rangeAddedThisSession totalChargedEnergy timeElapsed timeRemaining price currency isFreeSession vehicleChargerState startTime }
+  }
+}"#;
+
 pub async fn run_ws_loop(
     vehicle_id: Uuid,
     rivian_veh_id: String,
@@ -588,6 +600,8 @@ pub async fn run_ws_loop(
                                 .to_string(),
                                 message_type: Some("ws_schema_degraded".into()),
                                 telemetry: None,
+                                charging_session: None,
+                                battery_cell_type: None,
                             })
                             .await;
                     }
@@ -601,6 +615,8 @@ pub async fn run_ws_loop(
                         raw: json!({"type": "reconnect", "backoff_seconds": delay}).to_string(),
                         message_type: Some("reconnect".into()),
                         telemetry: None,
+                        charging_session: None,
+                        battery_cell_type: None,
                     })
                     .await;
                 tokio::select! {
@@ -626,7 +642,7 @@ async fn connect_and_subscribe(
     shutdown: &mut tokio::sync::broadcast::Receiver<()>,
     subscription: WsSubscription<'_>,
 ) -> anyhow::Result<WsLoopEnd> {
-    let request = build_rivian_ws_request()?;
+    let request = build_rivian_ws_request(tokens)?;
 
     let (mut ws, _) = match tokio_tungstenite::connect_async(request).await {
         Ok(connection) => connection,
@@ -643,6 +659,8 @@ async fn connect_and_subscribe(
                     .to_string(),
                     message_type: Some("ws_handshake_rejected".into()),
                     telemetry: None,
+                    charging_session: None,
+                    battery_cell_type: None,
                 })
                 .await;
             tracing::warn!(
@@ -662,6 +680,8 @@ async fn connect_and_subscribe(
             raw: json!({"type": "connection_open"}).to_string(),
             message_type: Some("connection_open".into()),
             telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
         })
         .await;
 
@@ -687,6 +707,8 @@ async fn connect_and_subscribe(
             raw: json!({"type": "connection_init"}).to_string(),
             message_type: Some("connection_init".into()),
             telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
         })
         .await;
 
@@ -703,6 +725,8 @@ async fn connect_and_subscribe(
                         raw: t.to_string(),
                         message_type: message_type.clone(),
                         telemetry: None,
+                        charging_session: None,
+                        battery_cell_type: None,
                     })
                     .await;
                 if v.get("type").and_then(|x| x.as_str()) == Some("connection_ack") {
@@ -742,6 +766,33 @@ async fn connect_and_subscribe(
                     .to_string(),
             message_type: Some("subscribe".into()),
             telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
+        })
+        .await;
+
+    let charging_sub = json!({
+        "id": "2",
+        "type": "subscribe",
+        "payload": {
+            "operationName": "chargingSession",
+            "query": CHARGING_SESSION_SUBSCRIPTION,
+            "variables": { "vehicleID": rivian_veh_id }
+        }
+    });
+    ws.send(Message::Text(charging_sub.to_string().into()))
+        .await?;
+    let _ = tx
+        .send(WsInboundEvent {
+            kind: WsInboundKind::Control,
+            received_at: Utc::now(),
+            raw:
+                json!({"type": "subscribe", "subscription_id": "2", "operation": "chargingSession"})
+                    .to_string(),
+            message_type: Some("subscribe".into()),
+            telemetry: None,
+            charging_session: None,
+            battery_cell_type: None,
         })
         .await;
 
@@ -754,6 +805,18 @@ async fn connect_and_subscribe(
                         let value: Value = serde_json::from_str(&text).unwrap_or_default();
                         let message_type = message_type(&value);
                         if matches!(message_type.as_deref(), Some("error") | Some("complete")) {
+                            if value.get("id").and_then(Value::as_str) == Some("2") {
+                                let _ = tx.send(WsInboundEvent {
+                                    kind: WsInboundKind::Control,
+                                    received_at: Utc::now(),
+                                    raw: text.to_string(),
+                                    message_type,
+                                    telemetry: None,
+                                    charging_session: None,
+                                    battery_cell_type: None,
+                                }).await;
+                                continue;
+                            }
                             // Rivian sometimes rejects a single field by name in the error body.
                             // Surface the full message so we can diagnose which field is at fault
                             // rather than silently downgrading to a degraded subscription.
@@ -776,6 +839,8 @@ async fn connect_and_subscribe(
                                 }).to_string(),
                                 message_type: Some("ws_schema_rejected".into()),
                                 telemetry: None,
+                                charging_session: None,
+                                battery_cell_type: None,
                             }).await;
                             return Err(RivianSubscriptionRejection {
                                 reason,
@@ -800,6 +865,8 @@ async fn connect_and_subscribe(
                                     raw: text.to_string(),
                                     message_type,
                                     telemetry: None,
+                                    charging_session: None,
+                                    battery_cell_type: None,
                                 }).await;
                             }
                         }
@@ -832,6 +899,8 @@ async fn connect_and_subscribe(
                                 }).to_string(),
                                 message_type: Some("ws_no_active_subscriptions".into()),
                                 telemetry: None,
+                                charging_session: None,
+                                battery_cell_type: None,
                             }).await;
                             tracing::warn!(
                                 vehicle_id = %vehicle_id,
@@ -871,11 +940,35 @@ fn is_rivian_no_active_subscriptions(frame: Option<&CloseFrame>) -> bool {
 }
 
 fn build_rivian_ws_request(
+    tokens: &RivianTokenBundle,
 ) -> anyhow::Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
     let mut request = WS_URL.into_client_request()?;
     request
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
+    request.headers_mut().insert(
+        "A-Sess",
+        tokens
+            .app_session_token
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid Rivian app session header"))?,
+    );
+    request.headers_mut().insert(
+        "U-Sess",
+        tokens
+            .user_session_token
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid Rivian user session header"))?,
+    );
+    if !tokens.csrf_token.is_empty() {
+        request.headers_mut().insert(
+            "Csrf-Token",
+            tokens
+                .csrf_token
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid Rivian CSRF header"))?,
+        );
+    }
     Ok(request)
 }
 
@@ -883,6 +976,19 @@ fn classify_text_message(
     raw: &str,
     vehicle_id: Uuid,
 ) -> Result<WsInboundEvent, parser::ParseError> {
+    let value: Value = serde_json::from_str(raw)?;
+    let charging_root = value.pointer("/payload/data/chargingSession").is_some();
+    if charging_root {
+        return Ok(WsInboundEvent {
+            kind: WsInboundKind::ChargingSession,
+            received_at: Utc::now(),
+            raw: raw.to_string(),
+            message_type: None,
+            telemetry: None,
+            charging_session: parser::parse_charging_session_message(raw)?,
+            battery_cell_type: None,
+        });
+    }
     let telemetry = parser::parse_ws_message(raw, vehicle_id)?;
     let kind = match telemetry.as_ref() {
         Some(event) if event_has_meaningful_payload(event) => WsInboundKind::Telemetry,
@@ -896,6 +1002,8 @@ fn classify_text_message(
         raw: raw.to_string(),
         message_type: None,
         telemetry,
+        charging_session: None,
+        battery_cell_type: parser::parse_battery_cell_type(raw)?,
     })
 }
 
@@ -1050,7 +1158,15 @@ mod tests {
 
     #[test]
     fn rivian_ws_request_includes_required_handshake_headers() {
-        let request = build_rivian_ws_request().expect("request");
+        let tokens = RivianTokenBundle {
+            access_token: "access-token".into(),
+            refresh_token: "refresh-token".into(),
+            app_session_token: "app-session-token".into(),
+            user_session_token: "user-session-token".into(),
+            csrf_token: "csrf-token".into(),
+            created_at: Utc::now(),
+        };
+        let request = build_rivian_ws_request(&tokens).expect("request");
         let headers = request.headers();
 
         assert_eq!(
@@ -1058,6 +1174,18 @@ mod tests {
                 .get("Sec-WebSocket-Protocol")
                 .and_then(|v| v.to_str().ok()),
             Some("graphql-transport-ws")
+        );
+        assert_eq!(
+            headers.get("A-Sess").and_then(|v| v.to_str().ok()),
+            Some("app-session-token")
+        );
+        assert_eq!(
+            headers.get("U-Sess").and_then(|v| v.to_str().ok()),
+            Some("user-session-token")
+        );
+        assert_eq!(
+            headers.get("Csrf-Token").and_then(|v| v.to_str().ok()),
+            Some("csrf-token")
         );
         assert!(headers.contains_key("Host"));
         assert!(headers.contains_key("Connection"));
@@ -1141,6 +1269,20 @@ mod tests {
     }
 
     #[test]
+    fn classifies_charging_payload_by_root_field() {
+        let msg = json!({
+            "id": "2",
+            "type": "next",
+            "payload": { "data": { "chargingSession": null } }
+        })
+        .to_string();
+        let inbound = classify_text_message(&msg, Uuid::new_v4()).unwrap();
+        assert_eq!(inbound.kind, WsInboundKind::ChargingSession);
+        assert!(inbound.telemetry.is_none());
+        assert_eq!(inbound.charging_session.unwrap().live_data, None);
+    }
+
+    #[test]
     fn extracts_rejected_vehicle_state_fields() {
         let msg = json!({
             "id": "1",
@@ -1178,6 +1320,15 @@ mod tests {
         assert!(!query.contains("vehiclePowerOutput { timeStamp value }"));
         assert!(query.contains("batteryLevel { timeStamp value }"));
         assert!(query.contains("subscription vehicleState"));
+        assert!(query.contains("batteryCellType { timeStamp value }"));
+    }
+
+    #[test]
+    fn charging_subscription_matches_reverse_engineered_contract() {
+        assert_eq!(
+            CHARGING_SESSION_SUBSCRIPTION,
+            "subscription chargingSession($vehicleID: String!) {\n  chargingSession(vehicleId: $vehicleID) {\n    chartData { soc powerKW startTime endTime timeEstimationValidityStatus vehicleChargerState }\n    liveData { powerKW kilometersChargedPerHour rangeAddedThisSession totalChargedEnergy timeElapsed timeRemaining price currency isFreeSession vehicleChargerState startTime }\n  }\n}"
+        );
     }
 
     #[test]

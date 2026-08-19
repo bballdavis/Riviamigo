@@ -12,6 +12,18 @@ Create and revoke them in **Settings > API Access**. The secret is shown once;
 store it in the integration's secret store rather than in a dashboard or source
 file.
 
+New keys expire after 90 days by default. Creation accepts `expires_in_days`
+from 1 through 365. Rotating a supported read key creates a new 90-day key and
+shortens the old key to a 24-hour overlap; replace the secret in the consuming
+integration before that overlap ends. Creation and rotation return the new
+secret once only.
+
+Older records without `expires_at` are reported as `legacy_no_expiry` and
+continue to authenticate only if they are otherwise valid read keys. Treat that
+state as migration debt: rotate the key to move it onto the current 90-day
+expiry policy. Legacy `view`, `edit`, and `admin` access-level records are
+shown as `legacy_unmigrated` and are not treated as integration read access.
+
 The Settings inventory preserves legacy `view`, `edit`, or `admin` values as
 `legacy_unmigrated` compatibility state while the database catches up. Those
 values are never treated as read access; restart the current API build so its
@@ -63,16 +75,21 @@ routes.
 | Vehicle | `GET /v1/vehicles`; `/v1/vehicles/{id}/status`, `/images`, `/raw-data`, `/telemetry/lanes`, `/health`, `/idle-drain`, `/parked-energy`, `/state-timeline`, `/locations`, `/live-session`, `/charging-schedule`, `/departure-schedules`, `/wallboxes`, `/ota-details`, and `/backfill-status` |
 | Battery | `GET /v1/battery/soc`, `/range`, `/capacity`, `/health`, `/mileage`, `/phantom-drain`, `/degradation` |
 | Metrics | `GET /v1/metrics/catalog`, `/value`, `/series`; `POST /v1/metrics/batch` |
-| Trips | `GET /v1/trips`, `/trips/map`, and `/trips/{id}` with `/detail`, `/track`, `/speed`, `/elevation`, `/power`, or `/series`; `GET /v1/vehicles/{id}/drives/{trip_id}/power` is the path-scoped power alias |
-| Charging | `GET /v1/charging`, `/summary`, `/chart-series`, `/curve-analysis`, and individual session/curve routes; path-scoped aliases are available below `/v1/vehicles/{id}/charging-sessions` and `/costs` |
-| Efficiency | `GET /v1/efficiency/summary`, `/by-mode`, `/trend`, `/vs-temp`, `/range-vs-temp` |
+| Trips | `GET /v1/trips`, `/trips/map`, and `/trips/{id}` with `/detail`, `/track`, `/speed`, `/elevation`, `/power`, or `/series`; `GET /v1/vehicles/{id}/drives/{trip_id}/power` is the path-scoped power alias. Vehicle members may read `/v1/vehicles/{id}/trip-tags`; owners and managers may create, update, delete, and batch-assign those shared tags. |
+| Charging | `GET /v1/charging`, `/summary`, `/chart-series`, `/curve-analysis`, and individual session/curve routes; path-scoped aliases are available below `/v1/vehicles/{id}/charging-sessions` and `/costs`. Managers may patch a session with additive `location_mode` (`automatic`, `saved_place`, `none`) and `cost_mode` (`automatic`, `free`, `manual`); legacy `{ place_id }` requests remain supported. `GET/PATCH /v1/vehicles/{id}/charging-networks` exposes only networks already observed for that vehicle and lets managers mark their automatic cost as Free. |
+| Efficiency | `GET /v1/efficiency/summary`, `/by-mode`, `/by-tag`, `/trend`, `/vs-temp`, `/range-vs-temp` |
 | Overview | `GET /v1/dashboard/overview/{vehicle_id}` and `GET /v1/vehicles/{id}/live-session` |
 | Grafana compatibility | `GET /v1/grafana`; `POST /v1/grafana/search`, `/query`, `/annotations`, `/tag-keys`, `/tag-values` |
 
 `GET /v1/vehicles/{id}/live-session` returns `200` with the latest ephemeral
 charging snapshot while the vehicle is actively charging. It returns `204` when
 no Redis snapshot exists; live snapshots are refreshed by the ingestion worker
-and expire after 120 seconds without a successful refresh.
+from Rivian's `chargingSession` WebSocket subscription and expire after 120
+seconds without a successful refresh. Existing nullable fields remain stable;
+newer snapshots may also include `charge_rate_kph`, `time_elapsed_seconds`,
+`price`, `currency`, `is_free_session`, `vehicle_charger_state`, and
+`started_at`. Missing upstream values remain `null` rather than being replaced
+with zeroes.
 
 Trip detail responses include a `power` metadata object. Its `source` is
 `direct`, `estimated_soc`, or `unavailable`; estimated samples are signed net
@@ -81,6 +98,13 @@ the median/p90 SoC interval plus estimated coverage. The `/power` and `/series`
 responses carry the same provenance per point through `estimated_net_power_kw`
 and `power_source`. Estimated values are averaged between SoC updates and do
 not represent short acceleration or braking peaks.
+
+Efficiency endpoints accept the same `tag_ids`, `tag_match` (`all` by default
+or `any`), and `untagged` filters as trip history. `GET /v1/efficiency/by-tag`
+groups the selected trip cohort by every assigned tag and includes a nullable
+`tag_id` `Untagged` row where applicable; rows are not additive for trips with
+multiple tags. `POST /v1/metrics/batch` accepts the same fields and applies
+them only to trip-derived metrics.
 
 ## Raw telemetry explorer
 

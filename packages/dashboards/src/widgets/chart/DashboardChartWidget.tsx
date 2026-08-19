@@ -1,18 +1,25 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, Maximize2, SlidersHorizontal, X } from 'lucide-react';
+import { useNavigate } from '@tanstack/react-router';
 import {
   useBatteryMileage,
   useChargeCurve,
   useChargeCurveAnalysis,
   useChargingChartSeries,
   useDegradation,
+  useDashboardChartFavorites,
   useEfficiencyByMode,
+  useEfficiencyByTag,
   useEfficiencyTrend,
   useEfficiencyVsTemp,
   usePhantomDrainPeriods,
   useRangeHistory,
   useSocHistory,
+  useTirePressureTimeline,
+  useTripTags,
+  useUpdateDashboardChartFavorite,
+  useVehicles,
 } from '@riviamigo/hooks';
 import {
   CHART_COLORS,
@@ -28,6 +35,7 @@ import {
   curveSmoothnessLabel,
   normalizeCurveSmoothness,
   RichTimeSeriesChart,
+  TirePressureTripsChart,
   TIME_FILTER_OPTIONS,
   timeFilterLabel,
   type TimeFilterWindow,
@@ -41,10 +49,12 @@ import {
   formatTemp,
   getEfficiencyDisplay,
   getUnitSystem,
+  getUnitPreferences,
   whPerMileToKmPerKwh,
   whPerMileToMiPerKwh,
   whPerMileToWhPerKm,
 } from '@riviamigo/ui/lib/utils';
+import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@riviamigo/types';
 import {
   getChartDefinition,
@@ -71,6 +81,8 @@ interface DashboardChartOptions {
   chartIds?: string[];
   page?: DashboardChartPage;
   showPicker?: boolean;
+  /** The widget keeps its layout, but its available charts come from the page catalog. */
+  managed?: boolean;
   timeFilter?: TimeFilterWindow;
   smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
@@ -112,8 +124,6 @@ const LEGACY_CHART_ID_ALIASES: Record<string, string> = {
   'range-history': 'soc-history',
 };
 
-const CHART_DEFAULTS_STORAGE_KEY = 'rm-dashboard-chart-defaults';
-
 function normalizeChartId(chartId: string) {
   return LEGACY_CHART_ID_ALIASES[chartId] ?? chartId;
 }
@@ -124,63 +134,25 @@ function chartDefaultStorageKey(ctx: WidgetCtx, instance: WidgetInstance) {
   return dashboardId ? `${slug}:${dashboardId}:${instance.id}` : `${slug}:${instance.id}`;
 }
 
-function readStoredChartDefault(
-  storageKey: string,
-  validIds: readonly string[],
-  fallback: string,
-  legacyStorageKey?: string,
-) {
-  if (typeof window === 'undefined') return fallback;
-
-  try {
-    const raw = window.localStorage.getItem(CHART_DEFAULTS_STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return fallback;
-    const keys = legacyStorageKey
-      ? [storageKey, legacyStorageKey]
-      : [storageKey];
-    for (const key of keys) {
-      const value = (parsed as Record<string, unknown>)[key];
-      if (typeof value === 'string' && validIds.includes(value)) {
-        return value;
-      }
-    }
-    return fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function saveStoredChartDefault(storageKey: string, chartId: string) {
-  if (typeof window === 'undefined') return;
-
-  try {
-    const raw = window.localStorage.getItem(CHART_DEFAULTS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : {};
-    const stored = parsed && typeof parsed === 'object'
-      ? { ...(parsed as Record<string, unknown>) }
-      : {};
-    stored[storageKey] = chartId;
-    window.localStorage.setItem(CHART_DEFAULTS_STORAGE_KEY, JSON.stringify(stored));
-  } catch {
-    // Preferences are best-effort when storage is unavailable or full.
-  }
-}
-
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
   const options = (instance.options ?? {}) as DashboardChartOptions;
+  const managed = instance.managed === true || options.managed === true;
   const page = isDashboardChartPage(options.page) ? options.page : undefined;
   const pageDefinitions = getChartDefinitions(page);
   const validIds = new Set(pageDefinitions.map((definition) => definition.id));
-  const chartIds = Array.isArray(options.chartIds)
+  const chartIds = managed
+    ? pageDefinitions.map((definition) => definition.id)
+    : Array.isArray(options.chartIds)
     ? [...new Set(options.chartIds
       .filter((id): id is string => typeof id === 'string')
       .map(normalizeChartId)
       .filter((id) => validIds.has(id)))]
     : [];
   const fallbackIds = chartIds.length > 0 ? chartIds : pageDefinitions.map((definition) => definition.id);
-  const fallbackChartId = fallbackIds[0] ?? getChartDefinitions()[0]?.id ?? 'soc-history';
+  const pageDefaultChartId = page === 'overview' ? 'battery-capacity-mileage' : undefined;
+  const fallbackChartId = (pageDefaultChartId && fallbackIds.includes(pageDefaultChartId)
+    ? pageDefaultChartId
+    : fallbackIds[0]) ?? getChartDefinitions()[0]?.id ?? 'soc-history';
   const configuredChartId = typeof options.chartId === 'string' ? normalizeChartId(options.chartId) : undefined;
   const chartId = configuredChartId && validIds.has(configuredChartId)
     ? configuredChartId
@@ -212,15 +184,16 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const options = readOptions(instance);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
-  const legacyStorageKey = `${ctx.dashboardSlug ?? 'dashboard'}:${instance.id}`;
+  const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
+  const updateFavorite = useUpdateDashboardChartFavorite();
   const chartIdsSignature = options.chartIds.join('|');
-  const [chartId, setChartId] = React.useState(() => (
-    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId, legacyStorageKey)
-  ));
-  const [defaultChartId, setDefaultChartId] = React.useState(() => (
-    readStoredChartDefault(defaultStorageKey, options.chartIds, options.chartId, legacyStorageKey)
-  ));
-  const previousDefaultStorageKeyRef = React.useRef(defaultStorageKey);
+  const serverFavorite = favoriteResponse?.chart_favorites?.[defaultStorageKey];
+  const resolvedFavorite = typeof serverFavorite === 'string' && options.chartIds.includes(serverFavorite)
+    ? serverFavorite
+    : options.chartId;
+  const [chartId, setChartId] = React.useState(options.chartId);
+  const [defaultChartId, setDefaultChartId] = React.useState(options.chartId);
+  const favoriteInitializationRef = React.useRef<string | null>(null);
   const [search, setSearch] = React.useState('');
   const [draftChartSettings, setDraftChartSettings] = React.useState(options.chartSettings);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -232,19 +205,14 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   const chartSettingsSignature = JSON.stringify(options.chartSettings);
 
   React.useEffect(() => {
-    const storedDefault = readStoredChartDefault(
-      defaultStorageKey,
-      options.chartIds,
-      options.chartId,
-      legacyStorageKey,
-    );
-    setDefaultChartId(storedDefault);
-    setChartId((current) => {
-      if (previousDefaultStorageKeyRef.current !== defaultStorageKey) return storedDefault;
-      return options.chartIds.includes(current) ? current : storedDefault;
-    });
-    previousDefaultStorageKeyRef.current = defaultStorageKey;
-  }, [defaultStorageKey, options.chartId, chartIdsSignature]);
+    if (!favoritesLoaded) return;
+    const initializationKey = `${defaultStorageKey}|${chartIdsSignature}|${options.chartId}`;
+    setDefaultChartId(resolvedFavorite);
+    if (favoriteInitializationRef.current !== initializationKey) {
+      setChartId(resolvedFavorite);
+      favoriteInitializationRef.current = initializationKey;
+    }
+  }, [defaultStorageKey, options.chartId, chartIdsSignature, favoritesLoaded, resolvedFavorite]);
 
   React.useEffect(() => {
     setDraftChartSettings(options.chartSettings);
@@ -274,8 +242,8 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   }
 
   function setChartAsDefault(nextChartId: string) {
-    saveStoredChartDefault(defaultStorageKey, nextChartId);
     setDefaultChartId(nextChartId);
+    updateFavorite.mutate({ key: defaultStorageKey, chartId: nextChartId });
   }
 
   const settingsButton = (
@@ -289,7 +257,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         onClick={() => setSettingsOpen((value) => !value)}
         className={cn(
           'flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors',
-          'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent',
+          'hover:border-border-strong hover:text-fg focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0',
           settingsOpen && 'border-accent text-accent',
         )}
       >
@@ -306,7 +274,7 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
         type="button"
         aria-label="Expand chart"
         onClick={() => setViewerOpen(true)}
-        className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-1 focus:ring-accent sm:hidden"
+        className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-surface text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg focus:outline-none focus:ring-0 focus-visible:!outline-none focus-visible:!outline-offset-0 focus-visible:ring-0 sm:hidden"
       >
         <Maximize2 className="h-4 w-4" />
       </button>
@@ -498,10 +466,12 @@ function ActiveDashboardChartSource(props: ActiveDashboardChartSourceProps) {
     case 'efficiency_trend': return <EfficiencyTrendSource {...props} />;
     case 'efficiency_temperature': return <EfficiencyTemperatureSource {...props} />;
     case 'efficiency_mode': return <EfficiencyModeSource {...props} />;
+    case 'efficiency_tags': return <EfficiencyTagsSource {...props} />;
     case 'phantom_drain': return <PhantomDrainSource {...props} />;
     case 'battery_degradation': return <BatteryDegradationSource {...props} />;
     case 'battery_capacity_mileage': return <BatteryMileageSource {...props} />;
     case 'projected_range_mileage': return <ProjectedRangeMileageSource {...props} />;
+    case 'tire_pressure_trips': return <TirePressureTripsSource {...props} />;
   }
 }
 
@@ -581,19 +551,58 @@ function ChargingCurveAnalysisSource({ definition, ctx, height, settings, presen
 }
 
 function EfficiencyTrendSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to);
+  const { data = [], isLoading } = useEfficiencyTrend(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
   const { yRange } = sourceAxisRanges(settings);
   return <EfficiencyTrendChart definition={definition} trend={data} loading={isLoading} height={height} timeFilter={timeFilter} smoothness={smoothness} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} />;
 }
 
 function EfficiencyTemperatureSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyVsTemp(ctx.vehicleId, ctx.from, ctx.to);
+  const { data = [], isLoading } = useEfficiencyVsTemp(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
   return <EfficiencyTemperatureChart definition={definition} data={data} loading={isLoading} height={height} />;
 }
 
 function EfficiencyModeSource({ definition, ctx, height }: ActiveDashboardChartSourceProps) {
-  const { data = [], isLoading } = useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to);
+  const { data = [], isLoading } = useEfficiencyByMode(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
   return <EfficiencyModeChart definition={definition} data={data} loading={isLoading} height={height} />;
+}
+
+function EfficiencyTagsSource({ ctx, height }: ActiveDashboardChartSourceProps) {
+  const { data = [], isLoading } = useEfficiencyByTag(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
+  const tags = useTripTags(ctx.vehicleId);
+  if (tags.isError) {
+    return <EfficiencyTagsCatalogError height={height} onRetry={() => void tags.refetch()} />;
+  }
+  if (!tags.isLoading && (tags.data ?? []).length === 0) {
+    return <EfficiencyTagsOnboarding height={height} canManage={Boolean(ctx.canManageTripTags)} />;
+  }
+  const hasTagFilter = Boolean(ctx.tripTagFilter?.tagIds.length || ctx.tripTagFilter?.untagged);
+  return (
+    <EfficiencyTagsChart
+      data={data}
+      loading={isLoading || tags.isLoading}
+      height={height}
+      hasTagFilter={hasTagFilter}
+    />
+  );
+}
+
+function EfficiencyTagsCatalogError({ height, onRetry }: { height: number; onRetry: () => void }) {
+  return (
+    <div role="alert" className="flex flex-col items-center justify-center gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 px-4 text-center text-sm text-status-danger" style={{ height }}>
+      <p>Couldn’t load shared tags. Retry to compare tagged trips.</p>
+      <button type="button" className="min-h-11 rounded-lg border border-status-danger/40 px-3 text-sm font-medium transition-colors hover:bg-status-danger/10" onClick={onRetry}>Retry</button>
+    </div>
+  );
+}
+
+function EfficiencyTagsOnboarding({ height, canManage }: { height: number; canManage: boolean }) {
+  return (
+    <div className="flex items-center justify-center rounded-lg border border-dashed border-border px-4 text-center text-sm text-fg-tertiary" style={{ height }}>
+      {canManage
+        ? 'No shared tags yet. Create one with the Tags filter above to compare setups.'
+        : 'No shared tags yet. A vehicle manager can create tags from Trips.'}
+    </div>
+  );
 }
 
 function PhantomDrainSource({ definition, ctx, height, settings, presentation }: ActiveDashboardChartSourceProps) {
@@ -623,10 +632,35 @@ function BatteryMileageSource({ definition, ctx, height, timeFilter, settings, p
   return <BatteryCapacityMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
 }
 
-function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
+function ProjectedRangeMileageSource({ definition, ctx, height, timeFilter, smoothness, settings, presentation, onResolvedAxisRanges }: ActiveDashboardChartSourceProps) {
   const { data, isLoading } = useBatteryMileage(ctx.vehicleId, ctx.from, ctx.to);
   const { yRange, yRightRange } = sourceAxisRanges(settings);
-  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
+  return <ProjectedRangeMileageChart definition={definition} loading={isLoading} height={height} points={mileagePoints(data)} timeFilter={timeFilter} smoothness={smoothness} interactionMode={chartInteractionMode(presentation)} {...(yRange ? { yRange } : {})} {...(yRightRange ? { yRightRange } : {})} {...(onResolvedAxisRanges ? { onResolvedAxisRanges } : {})} />;
+}
+
+function TirePressureTripsSource({ definition, ctx, height, presentation }: ActiveDashboardChartSourceProps) {
+  const { data, isLoading } = useTirePressureTimeline(ctx.vehicleId, ctx.from, ctx.to, ctx.tripTagFilter);
+  const { data: vehicles } = useVehicles();
+  const navigate = useNavigate();
+  const activeVehicle = vehicles?.find((vehicle) => vehicle.id === ctx.vehicleId);
+  const unitPreferences = getUnitPreferences();
+  const pressureFactor = unitPreferences.pressure_unit === 'kpa' ? 6.89476 : 1;
+  const pressureUnit = unitPreferences.pressure_unit === 'kpa' ? 'kPa' : 'psi';
+
+  return (
+    <TirePressureTripsChart
+      samples={data?.samples ?? []}
+      trips={data?.trips ?? []}
+      targetPressure={activeVehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI}
+      pressureFactor={pressureFactor}
+      pressureUnit={pressureUnit}
+      loading={isLoading}
+      height={height}
+      {...(definition.emptyTitle ? { emptyTitle: definition.emptyTitle } : {})}
+      interactionMode={chartInteractionMode(presentation)}
+      onTripClick={(tripId) => void navigate({ to: '/trips/$tripId', params: { tripId } })}
+    />
+  );
 }
 
 function renderSocHistoryChart(
@@ -1352,6 +1386,54 @@ function EfficiencyModeChart({
   );
 }
 
+function EfficiencyTagsChart({
+  data,
+  loading,
+  height,
+  hasTagFilter,
+}: {
+  data: Array<{
+    tag_id: string | null;
+    tag_name: string;
+    trip_count: number;
+    total_miles: number;
+    efficiency_miles: number;
+    avg_efficiency_wh_mi: number | null;
+    coverage: number;
+  }>;
+  loading: boolean;
+  height: number;
+  hasTagFilter: boolean;
+}) {
+  const rows = data
+    .filter((point) => point.avg_efficiency_wh_mi != null)
+    .map((point) => ({
+      label: point.tag_name,
+      value: convertEfficiency(point.avg_efficiency_wh_mi),
+      count: point.trip_count,
+      distance: point.total_miles,
+      coverage: point.coverage,
+      tone: point.tag_id == null ? 'neutral' as const : 'accent' as const,
+    }))
+    .filter((point): point is { label: string; value: number; count: number; distance: number; coverage: number; tone: 'accent' | 'neutral' } => point.value != null);
+  const emptyTitle = hasTagFilter
+      ? 'No trips match these tag filters. Clear filters above or choose another range.'
+      : data.length > 0
+        ? 'Trips in this range do not have efficiency readings yet.'
+        : 'No trips in this period.';
+
+  return (
+    <EfficiencyPillBarChart
+      data={rows}
+      loading={loading}
+      emptyTitle={emptyTitle}
+      height={height}
+      valueUnit={getEfficiencyUnit()}
+      wideLabels
+    />
+  );
+}
+
 function formatDriveModeLabel(value: string) {
   return formatDriveMode(value);
 }
@@ -1440,6 +1522,7 @@ function ProjectedRangeMileageChart({
   loading,
   height,
   timeFilter,
+  smoothness,
   yRange: manualYRange,
   yRightRange,
   interactionMode,
@@ -1450,6 +1533,7 @@ function ProjectedRangeMileageChart({
   loading: boolean;
   height: number;
   timeFilter: TimeFilterWindow;
+  smoothness: CurveSmoothness;
   yRange?: [number, number];
   yRightRange?: [number, number];
   interactionMode: 'standard' | 'touch-explore';
@@ -1483,7 +1567,6 @@ function ProjectedRangeMileageChart({
           color: CHART_COLORS.emerald,
           mode: 'line',
           yScale: 'y2',
-          filterable: false,
         },
       ]}
       loading={loading}
@@ -1495,6 +1578,7 @@ function ProjectedRangeMileageChart({
       yRightRange={yRightRange}
       mode={definition.mode}
       timeFilter={timeFilter}
+      smoothness={smoothness}
       connectGaps
       interactionMode={interactionMode}
       onResolvedAxisRanges={onResolvedAxisRanges}
@@ -1775,61 +1859,78 @@ function ChartSettingsPanel({
           </button>
         </div>
         <div className="grid gap-3 p-4">
-          {capabilities.timeFilter ? (
-            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display filter</p>
-                <p className="text-sm text-fg">Time window</p>
+          {capabilities.timeFilter || capabilities.smoothness ? (
+            <details open className="group overflow-hidden rounded-xl border border-border bg-bg-elevated/50">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium text-fg marker:hidden">
+                <span>
+                  <span className="block text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display</span>
+                  <span>Filter &amp; curve</span>
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="grid gap-3 border-t border-border p-3">
+                {capabilities.timeFilter ? (
+                  <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Display filter</p>
+                      <p className="text-sm text-fg">Time window</p>
+                    </div>
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                        <span>All compatible curves keep their recorded timestamps.</span>
+                        <span>{timeFilterLabel(settings.timeFilter)}</span>
+                      </div>
+                      <input
+                        aria-label="Display filter"
+                        type="range"
+                        min={0}
+                        max={TIME_FILTER_OPTIONS.length - 1}
+                        step={1}
+                        value={timeFilterIndex}
+                        onChange={(event) => onTimeFilterChange(TIME_FILTER_OPTIONS[Number(event.target.value)]!.value)}
+                        className="rm-accent-range w-full"
+                      />
+                    </div>
+                  </section>
+                ) : null}
+                {capabilities.smoothness ? (
+                  <section className="grid gap-2 rounded-lg border border-border bg-bg-surface/70 p-3">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve smoothness</p>
+                      <p className="text-sm text-fg">Path between recorded points</p>
+                    </div>
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
+                        <span>Values and timestamps stay unchanged.</span>
+                        <span>{curveSmoothnessLabel(settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
+                        step={1}
+                        value={smoothnessIndex}
+                        onChange={(event) => onSmoothnessChange(CURVE_SMOOTHNESS_OPTIONS[Number(event.target.value)]!.value)}
+                        className="rm-accent-range w-full"
+                        aria-label="Curve smoothness"
+                      />
+                    </div>
+                  </section>
+                ) : null}
               </div>
-              <div>
-                <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                  <span>Raw points stay at their recorded timestamps.</span>
-                  <span>{timeFilterLabel(settings.timeFilter)}</span>
-                </div>
-                <input
-                  aria-label="Display filter"
-                  type="range"
-                  min={0}
-                  max={TIME_FILTER_OPTIONS.length - 1}
-                  step={1}
-                  value={timeFilterIndex}
-                  onChange={(event) => onTimeFilterChange(TIME_FILTER_OPTIONS[Number(event.target.value)]!.value)}
-                  className="rm-accent-range w-full"
-                />
-              </div>
-            </section>
-          ) : null}
-          {capabilities.smoothness ? (
-            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Curve smoothness</p>
-                <p className="text-sm text-fg">Path between recorded points</p>
-              </div>
-              <div>
-                <div className="mb-1.5 flex items-center justify-between text-xs text-fg-tertiary">
-                  <span>Values and timestamps stay unchanged.</span>
-                  <span>{curveSmoothnessLabel(settings.smoothness ?? DEFAULT_CURVE_SMOOTHNESS)}</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={CURVE_SMOOTHNESS_OPTIONS.length - 1}
-                  step={1}
-                  value={smoothnessIndex}
-                  onChange={(event) => onSmoothnessChange(CURVE_SMOOTHNESS_OPTIONS[Number(event.target.value)]!.value)}
-                  className="rm-accent-range w-full"
-                  aria-label="Curve smoothness"
-                />
-              </div>
-            </section>
+            </details>
           ) : null}
           {axisEntries.length > 0 ? (
-            <section className="grid gap-2 rounded-xl border border-border bg-bg-elevated/50 p-3">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Axes</p>
-                <p className="text-sm text-fg">Auto or manual range per supported axis.</p>
-              </div>
-              <div className="grid gap-2">
+            <details open className="group overflow-hidden rounded-xl border border-border bg-bg-elevated/50">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium text-fg marker:hidden">
+                <span>
+                  <span className="block text-[10px] font-medium uppercase tracking-wider text-fg-tertiary">Scale controls</span>
+                  <span>Axes</span>
+                </span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="grid gap-2 border-t border-border p-3">
+                <p className="text-xs text-fg-tertiary">Auto or manual range for each supported axis.</p>
                 {axisEntries.map(([axisId, capability]) => (
                   <ChartAxisRangeField
                     key={axisId}
@@ -1842,7 +1943,7 @@ function ChartSettingsPanel({
                   />
                 ))}
               </div>
-            </section>
+            </details>
           ) : null}
           {!hasControls ? (
             <div className="rounded-xl border border-border bg-bg-elevated/50 px-3 py-4 text-sm text-fg-secondary">
@@ -1958,7 +2059,7 @@ registerWidget({
   minSize: { w: 4, h: 6 },
   defaultOptions: {
     page: 'overview',
-    chartId: 'soc-history',
+    chartId: 'battery-capacity-mileage',
     showPicker: true,
     timeFilter: DEFAULT_CHART_TIME_FILTER,
   },

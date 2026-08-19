@@ -37,12 +37,20 @@ vi.mock('@riviamigo/hooks', () => ({
   }),
   useChargeCurve: () => ({ data: [], isLoading: false }),
   useSavedPlaces: () => ({ data: [], isLoading: false }),
-  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false, isLoading: false }),
+  useUpdateChargeSession: () => ({ mutate: vi.fn(), isPending: false, isLoading: false, error: null }),
+  useVehicles: () => ({ data: [{ id: 'v1', membership_role: 'owner' }] }),
 }));
 
 vi.mock('@riviamigo/dashboards', () => ({
   DashboardChartWidget: ({ title }: { title?: string }) => (
     <div data-testid="dashboard-chart-widget">{title}</div>
+  ),
+  SensorChipSummary: ({ title, value, secondary }: { title: string; value: string; secondary?: string }) => (
+    <div data-testid={`sensor-chip-${title.toLowerCase().replace(/\s+/g, '-')}`}>
+      <span>{title}</span>
+      <span>{value}</span>
+      {secondary ? <span>{secondary}</span> : null}
+    </div>
   ),
 }));
 
@@ -54,18 +62,21 @@ vi.mock('../../components/layout/NoVehicleState', () => ({
 vi.mock('@riviamigo/ui/lib/utils', () => ({
   formatKwh: (v: number) => `${v} kWh`,
   formatCurrency: (v: number) => `$${v.toFixed(2)}`,
+  formatDistanceKm: (v: number) => `${v.toFixed(1)} km`,
   formatPercent: (v: number) => `${v}%`,
   formatDuration: (v: number) => `${v} min`,
 }));
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="icon-arrow-left" />,
-  Database: () => <svg data-testid="icon-database" />,
-  ChevronDown: () => <svg data-testid="icon-chevron-down" />,
+  Info: () => <svg data-testid="icon-info" />,
   MapPin: () => <svg data-testid="icon-map-pin" />,
+  Edit2: () => <svg data-testid="icon-edit" />,
   RadioTower: () => <svg data-testid="icon-radio" />,
   Receipt: () => <svg data-testid="icon-receipt" />,
   Route: () => <svg data-testid="icon-route" />,
   Zap: () => <svg data-testid="icon-zap" />,
+  RotateCcw: () => <svg data-testid="icon-restore" />,
+  Save: () => <svg data-testid="icon-save" />,
 }));
 
 import { ChargeSessionContent } from '../charging.$sessionId';
@@ -89,6 +100,7 @@ describe('ChargeSessionContent', () => {
 
   it('renders source telemetry and network facts for telemetry sessions', () => {
     render(<ChargeSessionContent />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show session source details' }));
     expect(screen.getByText('Source')).toBeInTheDocument();
     expect(screen.getByText('Live telemetry')).toBeInTheDocument();
     expect(screen.getByText('Telemetry')).toBeInTheDocument();
@@ -113,7 +125,6 @@ describe('ChargeSessionContent', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/charging' });
   });
 });
-
 
 
 

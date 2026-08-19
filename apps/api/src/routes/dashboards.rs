@@ -13,7 +13,26 @@ use crate::{
     middleware::auth::{AppState, AuthUser},
 };
 
-const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 1;
+// Advance this whenever a bundled system dashboard changes so existing
+// installations receive the new baseline on their next startup.
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 6;
+
+const UPSERT_SYSTEM_DEFAULT_SQL: &str = r#"
+    INSERT INTO dashboards
+      (id, owner_id, slug, name, is_default, is_locked, config, baseline_revision)
+    VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4, $5)
+    ON CONFLICT (id) DO UPDATE
+    SET slug = EXCLUDED.slug,
+        name = EXCLUDED.name,
+        is_default = TRUE,
+        is_locked = TRUE,
+        config = EXCLUDED.config,
+        baseline_revision = EXCLUDED.baseline_revision,
+        updated_at = NOW()
+    WHERE dashboards.owner_id IS NULL
+      AND dashboards.is_default = TRUE
+      AND COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision
+    "#;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -540,9 +559,9 @@ fn bundled_default_config(id: Uuid) -> Option<Value> {
 
 /// Insert missing system defaults and apply a newer bundled baseline once.
 ///
-/// User-owned dashboards are never seeded or updated here. A system default
-/// edited by an administrator remains untouched across restarts until a newer
-/// bundled revision intentionally supersedes it.
+/// User-owned dashboards keep their saved layout and widget settings. The
+/// additive managed-composition patch below only adds or marks explicitly
+/// managed bundled widgets so new fixed page content reaches existing copies.
 pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let defaults: &[(&str, &str)] = &[
         (
@@ -575,34 +594,175 @@ pub async fn seed_defaults(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         let config =
             dashboard_config_with_metadata(config, id, None, &slug, &name, None, true, true);
 
-        sqlx::query(
-            r#"
-            INSERT INTO dashboards
-              (id, owner_id, slug, name, is_default, is_locked, config, baseline_revision)
-            VALUES ($1, NULL, $2, $3, TRUE, TRUE, $4, $5)
-            ON CONFLICT (id) DO UPDATE
-            SET slug = EXCLUDED.slug,
-                name = EXCLUDED.name,
-                is_default = TRUE,
-                is_locked = TRUE,
-                config = EXCLUDED.config,
-                baseline_revision = EXCLUDED.baseline_revision,
-                updated_at = NOW()
-            WHERE dashboards.owner_id IS NULL
-              AND dashboards.is_default = TRUE
-              AND COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision
-            "#,
+        sqlx::query(UPSERT_SYSTEM_DEFAULT_SQL)
+            .bind(id)
+            .bind(slug)
+            .bind(name)
+            .bind(config)
+            .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
+            .execute(pool)
+            .await?;
+    }
+
+    migrate_user_owned_managed_widgets(pool, defaults).await?;
+
+    Ok(())
+}
+
+/// Apply bundled fixed-composition widgets without replacing a personal layout.
+///
+/// Managed widgets own their visual composition, but their saved grid position,
+/// title, visibility, and unrelated options remain user-owned. The operation is
+/// intentionally additive and idempotent so it can run on every API startup.
+async fn migrate_user_owned_managed_widgets(
+    pool: &sqlx::PgPool,
+    defaults: &[(&str, &str)],
+) -> anyhow::Result<()> {
+    for (_id_str, json_str) in defaults {
+        let bundled: Value = serde_json::from_str(json_str)?;
+        let Some(slug) = bundled["slug"].as_str() else {
+            continue;
+        };
+        let managed_widgets = bundled["widgets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|widget| widget["managed"].as_bool() == Some(true))
+            .collect::<Vec<_>>();
+        if managed_widgets.is_empty() {
+            continue;
+        }
+
+        let rows = sqlx::query_as::<_, (Uuid, Value)>(
+            "SELECT id, config FROM riviamigo.dashboards WHERE owner_id IS NOT NULL AND slug = $1",
         )
-        .bind(id)
         .bind(slug)
-        .bind(name)
-        .bind(config)
-        .bind(BUNDLED_DASHBOARD_BASELINE_REVISION)
-        .execute(pool)
+        .fetch_all(pool)
         .await?;
+
+        for (id, current) in rows {
+            let Some(next) = merge_managed_widgets(current, &managed_widgets) else {
+                continue;
+            };
+            sqlx::query(
+                "UPDATE riviamigo.dashboards SET config = $1, updated_at = NOW() WHERE id = $2 AND owner_id IS NOT NULL",
+            )
+            .bind(next)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        }
     }
 
     Ok(())
+}
+
+fn merge_managed_widgets(mut config: Value, bundled_widgets: &[&Value]) -> Option<Value> {
+    let widgets = config.get_mut("widgets")?.as_array_mut()?;
+    let mut changed = false;
+
+    for bundled in bundled_widgets {
+        let bundled_id = bundled["id"].as_str();
+        let managed_key = bundled["managedKey"].as_str();
+        let existing_index = widgets.iter().position(|widget| {
+            managed_key.is_some_and(|key| widget["managedKey"].as_str() == Some(key))
+                || bundled_id.is_some_and(|id| widget["id"].as_str() == Some(id))
+        });
+
+        if let Some(index) = existing_index {
+            let existing = &mut widgets[index];
+            let Some(existing_object) = existing.as_object_mut() else {
+                continue;
+            };
+            let Some(bundled_object) = bundled.as_object() else {
+                continue;
+            };
+
+            if existing_object.get("managed") != Some(&Value::Bool(true)) {
+                existing_object.insert("managed".into(), Value::Bool(true));
+                changed = true;
+            }
+            if let Some(key) = managed_key {
+                if existing_object.get("managedKey").and_then(Value::as_str) != Some(key) {
+                    existing_object.insert("managedKey".into(), Value::String(key.into()));
+                    changed = true;
+                }
+            }
+
+            // A legacy copy may have stored the old chart definition ID. Bring
+            // the canonical widget identity forward while retaining its layout.
+            for field in ["componentType", "definitionId"] {
+                if existing_object.get(field) != bundled_object.get(field) {
+                    if let Some(value) = bundled_object.get(field) {
+                        existing_object.insert(field.into(), value.clone());
+                        changed = true;
+                    }
+                }
+            }
+
+            let mut next_options = bundled_object
+                .get("options")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(existing_options) =
+                existing_object.get("options").and_then(Value::as_object)
+            {
+                for (key, value) in existing_options {
+                    next_options.insert(key.clone(), value.clone());
+                }
+            }
+            // The timeline is a fixed composition. It must always resolve to
+            // the timeline source even if an older copy used the bad widget ID.
+            if managed_key == Some("trips.tire-pressure-timeline") {
+                if let Some(value) = bundled_object
+                    .get("options")
+                    .and_then(|options| options.get("page"))
+                {
+                    next_options.insert("page".into(), value.clone());
+                }
+                if let Some(value) = bundled_object
+                    .get("options")
+                    .and_then(|options| options.get("chartId"))
+                {
+                    next_options.insert("chartId".into(), value.clone());
+                }
+                if let Some(value) = bundled_object
+                    .get("options")
+                    .and_then(|options| options.get("showPicker"))
+                {
+                    next_options.insert("showPicker".into(), value.clone());
+                }
+            }
+            let next_options = Value::Object(next_options);
+            if existing_object.get("options") != Some(&next_options) {
+                existing_object.insert("options".into(), next_options);
+                changed = true;
+            }
+            continue;
+        }
+
+        let mut appended = (*bundled).clone();
+        if let Some(object) = appended.as_object_mut() {
+            let max_y = widgets
+                .iter()
+                .filter_map(|widget| {
+                    widget["layout"]["y"]
+                        .as_i64()
+                        .zip(widget["layout"]["h"].as_i64())
+                })
+                .map(|(y, h)| y + h)
+                .max()
+                .unwrap_or(0);
+            if let Some(layout) = object.get_mut("layout").and_then(Value::as_object_mut) {
+                layout.insert("y".into(), Value::from(max_y));
+            }
+        }
+        widgets.push(appended);
+        changed = true;
+    }
+
+    changed.then_some(config)
 }
 
 #[cfg(test)]
@@ -645,6 +805,26 @@ mod tests {
     }
 
     #[test]
+    fn efficiency_tag_chart_advances_only_the_system_default_baseline() {
+        let efficiency: Value =
+            serde_json::from_str(include_str!("../../dashboards/efficiency.json")).unwrap();
+        let chart_ids = efficiency["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|widget| widget["componentType"] == "chart")
+            .and_then(|widget| widget["options"]["chartIds"].as_array())
+            .expect("efficiency chart IDs");
+
+        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 6);
+        assert!(chart_ids.iter().any(|id| id == "efficiency-tags"));
+        assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.owner_id IS NULL"));
+        assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.is_default = TRUE"));
+        assert!(UPSERT_SYSTEM_DEFAULT_SQL
+            .contains("COALESCE(dashboards.baseline_revision, 0) < EXCLUDED.baseline_revision"));
+    }
+
+    #[test]
     fn bundled_default_config_resolves_known_dashboard_ids() {
         let id: Uuid = "00000000-0000-0000-0000-000000000004".parse().unwrap();
         let config = bundled_default_config(id).expect("charging default");
@@ -653,6 +833,22 @@ mod tests {
         assert!(config["widgets"]
             .as_array()
             .is_some_and(|widgets| !widgets.is_empty()));
+    }
+
+    #[test]
+    fn overview_bundle_uses_battery_capacity_by_mileage_as_its_default_chart() {
+        let id: Uuid = "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        let config = bundled_default_config(id).expect("overview default");
+        let chart_id = config["widgets"]
+            .as_array()
+            .and_then(|widgets| {
+                widgets
+                    .iter()
+                    .find(|widget| widget["managedKey"] == "overview.chart-catalog")
+            })
+            .and_then(|widget| widget["options"]["chartId"].as_str());
+
+        assert_eq!(chart_id, Some("battery-capacity-mileage"));
     }
 
     #[test]
@@ -690,6 +886,101 @@ mod tests {
         assert_eq!(normalized["isDefault"], false);
         assert_eq!(normalized["isLocked"], false);
         assert!(normalized.get("description").is_none());
+    }
+
+    #[test]
+    fn managed_composition_patch_preserves_personal_layout_and_options() {
+        let bundled: Value =
+            serde_json::from_str(include_str!("../../dashboards/trips.json")).unwrap();
+        let managed = bundled["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|widget| widget["managed"].as_bool() == Some(true))
+            .collect::<Vec<_>>();
+        let current = serde_json::json!({
+            "widgets": [{
+                "id": "d5000005-0000-0000-0000-000000000007",
+                "componentType": "chart",
+                "definitionId": "tire-pressure-trips",
+                "title": "My timeline",
+                "layout": { "x": 2, "y": 41, "w": 8, "h": 9 },
+                "visibility": [{ "type": "vehicle-connection", "value": "plugged" }],
+                "options": { "chartSettings": { "tire-pressure-trips": { "timeFilter": "24h" } }, "custom": true }
+            }]
+        });
+
+        let patched = merge_managed_widgets(current, &managed).unwrap();
+        let widget = &patched["widgets"][0];
+        assert_eq!(widget["layout"]["y"], 41);
+        assert_eq!(widget["layout"]["w"], 8);
+        assert_eq!(widget["title"], "My timeline");
+        assert_eq!(widget["visibility"][0]["value"], "plugged");
+        assert_eq!(widget["componentType"], "chart");
+        assert_eq!(widget["definitionId"], "catalog");
+        assert_eq!(widget["managed"], true);
+        assert_eq!(widget["managedKey"], "trips.tire-pressure-timeline");
+        assert_eq!(widget["options"]["custom"], true);
+        assert_eq!(
+            widget["options"]["chartSettings"]["tire-pressure-trips"]["timeFilter"],
+            "24h"
+        );
+        assert_eq!(widget["options"]["chartId"], "tire-pressure-trips");
+        assert_eq!(widget["options"]["showPicker"], false);
+    }
+
+    #[test]
+    fn managed_composition_patch_appends_missing_widget_without_overlap() {
+        let bundled: Value =
+            serde_json::from_str(include_str!("../../dashboards/trips.json")).unwrap();
+        let managed = bundled["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|widget| widget["managed"].as_bool() == Some(true))
+            .collect::<Vec<_>>();
+        let current = serde_json::json!({
+            "widgets": [{
+                "id": "11111111-1111-1111-1111-111111111111",
+                "layout": { "x": 0, "y": 0, "w": 12, "h": 10 }
+            }]
+        });
+
+        let patched = merge_managed_widgets(current, &managed).unwrap();
+        assert_eq!(patched["widgets"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            patched["widgets"][1]["managedKey"],
+            "trips.tire-pressure-timeline"
+        );
+        assert_eq!(patched["widgets"][1]["layout"]["y"], 10);
+
+        let again = merge_managed_widgets(patched, &managed);
+        assert!(again.is_none(), "the managed patch should be idempotent");
+    }
+
+    #[test]
+    fn managed_composition_patch_is_selective() {
+        let bundled: Value =
+            serde_json::from_str(include_str!("../../dashboards/dashboard.json")).unwrap();
+        let managed = bundled["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|widget| widget["managed"].as_bool() == Some(true))
+            .collect::<Vec<_>>();
+        let current = serde_json::json!({
+            "widgets": [{
+                "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "componentType": "chart",
+                "definitionId": "catalog",
+                "layout": { "x": 0, "y": 0, "w": 12, "h": 5 },
+                "options": { "page": "overview", "chartId": "soc-history", "chartIds": ["soc-history"] }
+            }]
+        });
+
+        let patched = merge_managed_widgets(current.clone(), &managed);
+        assert!(patched.is_some());
+        assert_eq!(patched.unwrap()["widgets"][0], current["widgets"][0]);
     }
 
     // ── integration tests (require DATABASE_URL) ─────────────────────────────
@@ -746,13 +1037,16 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: false,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
-            cookie_insecure: Some("1".into()),
+            cookie_insecure: Some(true),
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 

@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::{
+        require_vehicle_manager_access, require_vehicle_membership, require_vehicle_read_access,
+    },
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     services::cost::recompute_charge_session_cost,
@@ -43,6 +45,14 @@ pub fn router() -> Router<AppState> {
             "/vehicles/{vehicle_id}/charging-sessions/{id}",
             patch(update_session_location_path),
         )
+        .route(
+            "/vehicles/{vehicle_id}/charging-networks",
+            get(list_network_preferences),
+        )
+        .route(
+            "/vehicles/{vehicle_id}/charging-networks/{vendor}",
+            patch(update_network_preference),
+        )
         .route("/vehicles/{vehicle_id}/costs", get(get_summary_path))
 }
 
@@ -66,7 +76,85 @@ struct VehicleParam {
 
 #[derive(Deserialize)]
 struct SessionLocationUpdate {
-    place_id: Option<Uuid>,
+    /// Legacy field. `null` retains its historical meaning: no location.
+    #[serde(default)]
+    place_id: PatchField<Uuid>,
+    location_mode: Option<LocationOverrideMode>,
+    cost_mode: Option<CostOverrideMode>,
+    cost_usd: Option<f64>,
+}
+
+/// Distinguishes an omitted patch field from JSON `null`; this is required to
+/// preserve `{ "place_id": null }` behavior while allowing a cost-only patch.
+#[derive(Debug, Clone, Copy, Default)]
+enum PatchField<T> {
+    #[default]
+    Absent,
+    Null,
+    Value(T),
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PatchField<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Value(value),
+            None => Self::Null,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LocationOverrideMode {
+    Automatic,
+    SavedPlace,
+    None,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CostOverrideMode {
+    Automatic,
+    Free,
+    Manual,
+}
+
+impl CostOverrideMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Free => "free",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkPreferenceUpdate {
+    cost_mode: NetworkCostMode,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum NetworkCostMode {
+    Automatic,
+    Free,
+}
+
+impl NetworkCostMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Free => "free",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ChargingNetworkPreferenceRow {
+    network_vendor: String,
+    cost_mode: String,
+    session_count: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -75,6 +163,7 @@ struct PlaceLookupRow {
     is_home: bool,
     latitude: Option<f64>,
     longitude: Option<f64>,
+    cost_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -86,6 +175,16 @@ struct SessionRow {
     ended_at: Option<DateTime<Utc>>,
     location_lat: Option<f64>,
     location_lng: Option<f64>,
+    #[sqlx(default)]
+    source_location_lat: Option<f64>,
+    #[sqlx(default)]
+    source_location_lng: Option<f64>,
+    #[sqlx(default)]
+    location_override_mode: Option<String>,
+    #[sqlx(default)]
+    cost_override_mode: Option<String>,
+    #[sqlx(default)]
+    cost_override_usd: Option<f64>,
     location_name: Option<String>,
     is_home: Option<bool>,
     charger_type: Option<String>,
@@ -147,6 +246,47 @@ mod timeframe_tests {
 
         assert_eq!(resolved_to, to);
         assert_eq!(from, chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    }
+
+    #[test]
+    fn session_patch_distinguishes_omitted_and_null_legacy_place_id() {
+        let omitted: super::SessionLocationUpdate = serde_json::from_str("{}").unwrap();
+        assert!(matches!(omitted.place_id, super::PatchField::Absent));
+
+        let cleared: super::SessionLocationUpdate =
+            serde_json::from_str(r#"{"place_id":null}"#).unwrap();
+        assert!(matches!(cleared.place_id, super::PatchField::Null));
+    }
+
+    #[test]
+    fn location_mode_changes_replace_or_clear_the_explicit_cost_profile() {
+        let place_profile = uuid::Uuid::new_v4();
+
+        assert_eq!(
+            super::cost_profile_for_location(
+                super::LocationOverrideMode::SavedPlace,
+                Some(place_profile),
+            ),
+            Some(place_profile),
+        );
+        assert_eq!(
+            super::cost_profile_for_location(super::LocationOverrideMode::Automatic, None),
+            None,
+        );
+        assert_eq!(
+            super::cost_profile_for_location(super::LocationOverrideMode::None, None),
+            None,
+        );
+    }
+}
+
+fn cost_profile_for_location(
+    mode: LocationOverrideMode,
+    saved_place_profile_id: Option<Uuid>,
+) -> Option<Uuid> {
+    match mode {
+        LocationOverrideMode::SavedPlace => saved_place_profile_id,
+        LocationOverrideMode::Automatic | LocationOverrideMode::None => None,
     }
 }
 
@@ -394,8 +534,7 @@ async fn update_session_location(
     let vehicle_id = p
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
-    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id)
-        .await?;
+    update_charge_session(&state.pool, &auth, vehicle_id, id, payload).await?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
@@ -405,28 +544,58 @@ async fn update_session_location_path(
     Path((vehicle_id, id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<SessionLocationUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    update_charge_session_location(&state.pool, auth.user_id, vehicle_id, id, payload.place_id)
-        .await?;
+    update_charge_session(&state.pool, &auth, vehicle_id, id, payload).await?;
     get_session_response(&state, auth.user_id, vehicle_id, id).await
 }
 
-async fn update_charge_session_location(
+async fn update_charge_session(
     pool: &sqlx::PgPool,
-    user_id: Uuid,
+    auth: &AuthUser,
     vehicle_id: Uuid,
     session_id: Uuid,
-    place_id: Option<Uuid>,
+    payload: SessionLocationUpdate,
 ) -> Result<(), AppError> {
-    require_vehicle_owned(pool, user_id, vehicle_id).await?;
+    require_vehicle_manager_access(pool, auth, vehicle_id).await?;
 
-    let updated_session_id = if let Some(place_id) = place_id {
+    let location_mode = payload.location_mode.or(match payload.place_id {
+        PatchField::Value(_) => Some(LocationOverrideMode::SavedPlace),
+        PatchField::Null => Some(LocationOverrideMode::None),
+        PatchField::Absent => None,
+    });
+
+    let requested_place_id = match payload.place_id {
+        PatchField::Value(id) => Some(id),
+        PatchField::Absent | PatchField::Null => None,
+    };
+    if location_mode == Some(LocationOverrideMode::SavedPlace) && requested_place_id.is_none() {
+        return Err(AppError::Validation(
+            "place_id required when location_mode is saved_place".into(),
+        ));
+    }
+    if payload.cost_mode == Some(CostOverrideMode::Manual)
+        && !payload
+            .cost_usd
+            .is_some_and(|value| value.is_finite() && value >= 0.0)
+    {
+        return Err(AppError::Validation(
+            "cost_usd must be a non-negative number when cost_mode is manual".into(),
+        ));
+    }
+    if payload.cost_mode != Some(CostOverrideMode::Manual) && payload.cost_usd.is_some() {
+        return Err(AppError::Validation(
+            "cost_usd is only valid when cost_mode is manual".into(),
+        ));
+    }
+
+    let updated_session_id = if location_mode == Some(LocationOverrideMode::SavedPlace) {
+        let place_id = requested_place_id.expect("validated saved place id");
         let place = sqlx::query_as::<_, PlaceLookupRow>(
-            "SELECT address_id, is_home, latitude, longitude
+            "SELECT address_id, is_home, latitude, longitude, cost_profile_id
                FROM riviamigo.geofences
               WHERE id=$1 AND user_id=$2",
         )
         .bind(place_id)
-        .bind(user_id)
+        .bind(auth.user_id)
         .fetch_optional(pool)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -437,8 +606,10 @@ async fn update_charge_session_location(
                    address_id=$2,
                    is_home=$3,
                    location_lat=$4,
-                   location_lng=$5
-             WHERE id=$6 AND vehicle_id=$7
+                   location_lng=$5,
+                   cost_profile_id=$6,
+                   location_override_mode='saved_place'
+             WHERE id=$7 AND vehicle_id=$8
              RETURNING id",
         )
         .bind(place_id)
@@ -446,26 +617,92 @@ async fn update_charge_session_location(
         .bind(place.is_home)
         .bind(place.latitude)
         .bind(place.longitude)
+        .bind(cost_profile_for_location(
+            LocationOverrideMode::SavedPlace,
+            place.cost_profile_id,
+        ))
         .bind(session_id)
         .bind(vehicle_id)
         .fetch_optional(pool)
         .await?
-    } else {
+    } else if location_mode == Some(LocationOverrideMode::None) {
         sqlx::query_scalar::<_, Uuid>(
             "UPDATE riviamigo.charge_sessions
                SET geofence_id=NULL,
                    address_id=NULL,
                    is_home=NULL,
                    location_lat=NULL,
-                   location_lng=NULL
-             WHERE id=$1 AND vehicle_id=$2
+                   location_lng=NULL,
+                   cost_profile_id=$1,
+                   location_override_mode='none'
+             WHERE id=$2 AND vehicle_id=$3
              RETURNING id",
+        )
+        .bind(cost_profile_for_location(LocationOverrideMode::None, None))
+        .bind(session_id)
+        .bind(vehicle_id)
+        .fetch_optional(pool)
+        .await?
+    } else if location_mode == Some(LocationOverrideMode::Automatic) {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"UPDATE riviamigo.charge_sessions cs
+                SET geofence_id=(
+                      SELECT g.id FROM riviamigo.geofences g
+                       WHERE g.user_id=$3 AND cs.source_location_lat IS NOT NULL AND cs.source_location_lng IS NOT NULL
+                         AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m)
+                             @> ll_to_earth(cs.source_location_lat, cs.source_location_lng)
+                         AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
+                       ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
+                    address_id=(
+                      SELECT g.address_id FROM riviamigo.geofences g
+                       WHERE g.user_id=$3 AND cs.source_location_lat IS NOT NULL AND cs.source_location_lng IS NOT NULL
+                         AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m) @> ll_to_earth(cs.source_location_lat, cs.source_location_lng)
+                         AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
+                       ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
+                    is_home=(
+                      SELECT g.is_home FROM riviamigo.geofences g
+                       WHERE g.user_id=$3 AND cs.source_location_lat IS NOT NULL AND cs.source_location_lng IS NOT NULL
+                         AND earth_box(ll_to_earth(g.latitude, g.longitude), g.radius_m) @> ll_to_earth(cs.source_location_lat, cs.source_location_lng)
+                         AND earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) <= g.radius_m
+                       ORDER BY earth_distance(ll_to_earth(g.latitude, g.longitude), ll_to_earth(cs.source_location_lat, cs.source_location_lng)) ASC LIMIT 1),
+                    location_lat=cs.source_location_lat, location_lng=cs.source_location_lng,
+                    cost_profile_id=$4,
+                    location_override_mode='automatic'
+              WHERE cs.id=$1 AND cs.vehicle_id=$2 RETURNING cs.id"#,
+        )
+        .bind(session_id)
+        .bind(vehicle_id)
+        .bind(auth.user_id)
+        .bind(cost_profile_for_location(LocationOverrideMode::Automatic, None))
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
         )
         .bind(session_id)
         .bind(vehicle_id)
         .fetch_optional(pool)
         .await?
     };
+
+    if let Some(cost_mode) = payload.cost_mode {
+        sqlx::query(
+            "UPDATE riviamigo.charge_sessions
+                SET cost_override_mode=$1, cost_override_usd=$2
+              WHERE id=$3 AND vehicle_id=$4",
+        )
+        .bind(cost_mode.as_str())
+        .bind(if cost_mode == CostOverrideMode::Manual {
+            payload.cost_usd
+        } else {
+            None
+        })
+        .bind(session_id)
+        .bind(vehicle_id)
+        .execute(pool)
+        .await?;
+    }
 
     match updated_session_id {
         Some(_) => {
@@ -477,6 +714,85 @@ async fn update_charge_session_location(
         }
         None => Err(AppError::NotFound),
     }
+}
+
+async fn list_network_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<Vec<ChargingNetworkPreferenceRow>>, AppError> {
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
+    let rows = sqlx::query_as::<_, ChargingNetworkPreferenceRow>(
+        r#"SELECT MIN(trim(cs.network_vendor)) AS network_vendor,
+                  COALESCE(pref.cost_mode, 'automatic') AS cost_mode,
+                  COUNT(*)::int8 AS session_count
+             FROM riviamigo.charge_sessions cs
+             LEFT JOIN riviamigo.vehicle_charging_network_preferences pref
+               ON pref.vehicle_id=cs.vehicle_id
+              AND pref.vendor_normalized=lower(trim(cs.network_vendor))
+            WHERE cs.vehicle_id=$1
+              AND cs.network_vendor IS NOT NULL AND trim(cs.network_vendor) <> ''
+            GROUP BY lower(trim(cs.network_vendor)), pref.cost_mode
+            ORDER BY lower(MIN(trim(cs.network_vendor)))"#,
+    )
+    .bind(vehicle_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+async fn update_network_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((vehicle_id, vendor)): Path<(Uuid, String)>,
+    Json(payload): Json<NetworkPreferenceUpdate>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_vehicle_manager_access(&state.pool, &auth, vehicle_id).await?;
+    let normalized = vendor.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Err(AppError::Validation("network vendor required".into()));
+    }
+    let observed: Option<String> = sqlx::query_scalar(
+        "SELECT MIN(trim(network_vendor)) FROM riviamigo.charge_sessions
+          WHERE vehicle_id=$1 AND lower(trim(network_vendor))=$2",
+    )
+    .bind(vehicle_id)
+    .bind(&normalized)
+    .fetch_one(&state.pool)
+    .await?;
+    let Some(observed) = observed else {
+        return Err(AppError::NotFound);
+    };
+
+    sqlx::query(
+        r#"INSERT INTO riviamigo.vehicle_charging_network_preferences
+              (vehicle_id, vendor_normalized, network_vendor, cost_mode)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (vehicle_id, vendor_normalized) DO UPDATE
+             SET network_vendor=EXCLUDED.network_vendor, cost_mode=EXCLUDED.cost_mode, updated_at=now()"#,
+    )
+    .bind(vehicle_id)
+    .bind(&normalized)
+    .bind(&observed)
+    .bind(payload.cost_mode.as_str())
+    .execute(&state.pool)
+    .await?;
+
+    let sessions = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM riviamigo.charge_sessions
+          WHERE vehicle_id=$1 AND lower(trim(COALESCE(network_vendor, '')))=$2
+            AND cost_override_mode='automatic'",
+    )
+    .bind(vehicle_id)
+    .bind(&normalized)
+    .fetch_all(&state.pool)
+    .await?;
+    for id in sessions {
+        recompute_charge_session_cost(&state.pool, id).await?;
+    }
+    Ok(Json(
+        serde_json::json!({ "network_vendor": observed, "cost_mode": payload.cost_mode.as_str() }),
+    ))
 }
 
 async fn list_sessions_path(
@@ -550,7 +866,7 @@ async fn get_curve_analysis(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let sessions = sqlx::query_as::<_, CurveAnalysisSessionRow>(
@@ -619,7 +935,7 @@ async fn list_sessions_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
     let from = p
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(90));
@@ -637,6 +953,8 @@ async fn list_sessions_response(
         "SELECT cs.id, cs.started_at, \
             TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
+                cs.source_location_lat, cs.source_location_lng, cs.location_override_mode, \
+                cs.cost_override_mode, cs.cost_override_usd, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
                     CASE \
@@ -704,7 +1022,7 @@ async fn get_chart_series_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
 
     let rows = sqlx::query_as::<_, ChartSeriesSessionSourceRow>(
@@ -857,12 +1175,14 @@ async fn get_session_response(
     vehicle_id: Uuid,
     id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionRow>(
         "SELECT cs.id, cs.started_at, \
             TO_CHAR((cs.started_at AT TIME ZONE COALESCE((SELECT value FROM riviamigo.system_config WHERE key = 'app_timezone'), 'UTC'))::date, 'YYYY-MM-DD') AS session_day_local, \
             cs.ended_at, cs.location_lat, cs.location_lng, \
+                cs.source_location_lat, cs.source_location_lng, cs.location_override_mode, \
+                cs.cost_override_mode, cs.cost_override_usd, \
                 COALESCE(g.name, a.display_name, CASE WHEN cs.is_home THEN 'Home' END) AS location_name, \
                 cs.is_home, COALESCE(cs.charger_type, \
                     CASE \
@@ -923,7 +1243,7 @@ async fn get_session_curve_response(
     vehicle_id: Uuid,
     id: Uuid,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
 
     let session = sqlx::query_as::<_, SessionBoundsRow>(
         "SELECT id, started_at, ended_at, charger_type, soc_start, soc_end FROM riviamigo.charge_sessions WHERE id=$1 AND vehicle_id=$2",
@@ -953,7 +1273,7 @@ async fn get_summary_response(
     vehicle_id: Uuid,
     p: SessionListParams,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_vehicle_owned(&state.pool, user_id, vehicle_id).await?;
+    require_vehicle_membership(&state.pool, user_id, vehicle_id).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let agg = sqlx::query_as::<_, SummaryAggRow>(
@@ -1219,6 +1539,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -1226,6 +1548,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 
