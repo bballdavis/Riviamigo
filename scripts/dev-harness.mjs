@@ -263,16 +263,19 @@ function imageEnvLines(image) {
   return lines;
 }
 
-function writeHarnessEnv(source, destination, image, plan) {
+export function writeHarnessEnv(source, destination, image, plan) {
+  const sourceLines = readFileSync(source, 'utf8').split(/\r?\n/);
+  const isDevelopment = sourceLines.some((line) => /^\s*RIVIAMIGO_ENV\s*=\s*development\s*$/i.test(line));
   const overrideKeys = new Set([
     'RIVIAMIGO_IMAGE_REF', 'RIVIAMIGO_IMAGE_REGISTRY', 'IMAGE_TAG', 'RIVIAMIGO_DATA_DIR',
     'RIVIAMIGO_ORIGIN_PORT', 'RIVIAMIGO_HOST_BIND_ADDRESS', 'COMPOSE_PROJECT_NAME', 'RIVIAMIGO_ENV_FILE',
     'RIVIAMIGO_HEALTH_HOST',
   ]);
-  const retained = readFileSync(source, 'utf8').split(/\r?\n/).filter((line) => {
+  const retained = sourceLines.filter((line) => {
     const key = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/)?.[1];
-    return !key || !overrideKeys.has(key);
+    return !key || (!overrideKeys.has(key) && !(isDevelopment && key === 'COOKIE_INSECURE'));
   });
+  if (isDevelopment) retained.push('COOKIE_INSECURE=true');
   retained.push(...imageEnvLines(image), `RIVIAMIGO_DATA_DIR=${plan.target.root}`, `RIVIAMIGO_ORIGIN_PORT=${plan.target.port}`, `RIVIAMIGO_HOST_BIND_ADDRESS=${plan.target.healthHost}`, `RIVIAMIGO_HEALTH_HOST=${plan.target.healthHost}`, `COMPOSE_PROJECT_NAME=${plan.target.project}`, `RIVIAMIGO_ENV_FILE=${destination}`);
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   writeFileSync(destination, `${retained.filter((line, index, all) => line || index < all.length - 1).join('\n')}\n`, { mode: 0o600 });

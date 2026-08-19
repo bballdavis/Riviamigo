@@ -59,7 +59,14 @@ ALLOW_PUBLIC_ORIGIN_BIND=true
 ALLOW_INSECURE_LAN_HTTP_AUTH=true
 ALLOWED_ORIGINS=http://192.168.1.7:8067
 RIVIAMIGO_ENV=development
+COOKIE_INSECURE=true
 ```
+
+`COOKIE_INSECURE=true` is required for this disposable HTTP test origin. It
+allows the browser to retain and resend the `HttpOnly` refresh cookie after a
+page reload. The harness also adds this value when it generates a test env
+from a development source env. Never copy it into the production env; the
+production configuration rejects `COOKIE_INSECURE` and expects HTTPS.
 
 Do not expose that origin through a router or public DNS. Prefer an authenticated HTTPS gateway if the test needs access beyond the trusted LAN.
 

@@ -204,7 +204,7 @@ function startApi() {
         '-e',
         `ALLOWED_ORIGINS=${baseUrl}`,
         '-e',
-        'COOKIE_INSECURE=1',
+        'COOKIE_INSECURE=true',
         '-e',
         'BACKUP_ARTIFACT_DIR=/backups',
         '-e',

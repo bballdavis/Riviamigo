@@ -27,10 +27,12 @@ function walk(value, visit) {
 
 const standardText = read('compose/docker-compose.yml');
 const buildText = read('compose/docker-compose.build.yml');
+const devText = read('compose/docker-compose.dev.yml');
 const dockerfileText = read('compose/Dockerfile');
 const synologyText = read('compose/docker-compose.synology.yml');
 const standard = parse(standardText);
 const build = parse(buildText);
+const dev = parse(devText);
 const synology = parse(synologyText);
 const standardServices = Object.keys(standard.services ?? {}).sort();
 const synologyServices = Object.keys(synology.services ?? {}).sort();
@@ -52,6 +54,15 @@ assert(
     '${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080'
   ),
   'standard Compose must use normal host publication'
+);
+assert(
+  dev.services.api.environment?.COOKIE_INSECURE === 'true' &&
+    dev.services.api.environment?.RIVIAMIGO_ENV === 'development',
+  'development Compose must omit Secure refresh cookies for HTTP browser reloads'
+);
+assert(
+  !Object.hasOwn(standard.services.riviamigo.environment ?? {}, 'COOKIE_INSECURE'),
+  'standard Compose must not enable development-only insecure cookies'
 );
 assert(
   synology.services.riviamigo.ports?.includes('127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080'),

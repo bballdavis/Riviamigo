@@ -63,4 +63,23 @@ Weather, geocoding, basemap, and Iconify policies are configured in **Settings >
 - `TZ` sets the Docker/container timezone for nginx and other runtime processes. It is separate from the shared user-facing application timezone configured under **Settings > Units**.
 - Reconnect, telemetry-retention, logging, and rate-limit settings are available in the [complete reference](../environment-variables.md).
 
+## Local HTTP development
+
+The local development stack is started with `pnpm dev:stack` and uses
+`compose/docker-compose.dev.yml`. It deliberately sets:
+
+```dotenv
+RIVIAMIGO_ENV=development
+COOKIE_INSECURE=true
+```
+
+The development stack runs over HTTP. `COOKIE_INSECURE=true` makes the
+`HttpOnly` refresh cookie usable by the browser on that HTTP origin, so a page
+refresh can resume the session instead of requiring another login. This is not
+an HTTPS substitute: leave the variable unset for the standard production
+Compose stack, which keeps refresh cookies `Secure`. If you run the
+production-like Compose file locally over HTTP, set both values in an
+untracked local env file and do not reuse that file for production. Existing
+local env files using `1` or `0` must be updated to `true` or `false`.
+
 The active `.env` and `.env.local` files remain ignored by Git.

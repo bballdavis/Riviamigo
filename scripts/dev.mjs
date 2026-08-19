@@ -467,7 +467,7 @@ function apiEnv() {
     ALLOWED_ORIGINS: webOrigins().join(','),    // Dev stack is served over http://localhost (and often LAN IPs), so
     // refresh cookies must not be marked Secure or browser reload will drop
     // session continuity and trigger repeated 401/WS reconnect churn.
-    COOKIE_INSECURE: '1',
+    COOKIE_INSECURE: 'true',
     RIVIAMIGO_ENV: 'development',
     RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
     RESTORE_AGENT_KEY_FILE: devRestoreAgentKeyFile,
