@@ -27,7 +27,8 @@ Chart widgets can be switched temporarily from their chart picker. To keep a
 chart as the default for that widget, hover its row and click the favorite star.
 The choice is stored in your account for that dashboard component and returns
 after a reload or sign-in from another browser; it does not change other chart
-widgets.
+widgets. The bundled Overview dashboard defaults to **Battery Capacity by
+Mileage**.
 
 ## Reset, delete, and restore
 
@@ -36,6 +37,10 @@ The recovery action depends on who owns the row:
 - **Reset to default** deletes a same-slug personal override. The system version immediately becomes active for that user again.
 - **Delete** removes a standalone personal dashboard that does not override a system slug.
 - **Restore bundled** is an administrator action for system defaults. It replaces that system row with the layout shipped in the installed Riviamigo version.
+
+For the administrator performing the restore, the saved default for the restored
+managed Overview chart is also aligned with the chart in that bundle. Other
+users' chart preferences are unchanged.
 
 Resetting a personal copy does not restore or modify the system row. Restoring a bundled system dashboard does not delete personal copies. Personal dashboards are never replaced by an upgrade: saved widgets, positions, and settings remain yours. A release may apply a narrow additive patch for a bundled widget explicitly marked as managed, preserving the existing layout while adding fixed page composition that is not editor-configurable. System edits survive ordinary restarts, but a release that intentionally ships a newer dashboard baseline updates the shared system row once; users with a same-slug personal copy continue to see their own version plus any managed composition additions.
 

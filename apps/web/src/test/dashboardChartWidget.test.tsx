@@ -69,20 +69,33 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('uses projected range by mileage as the Overview app default', () => {
+  it('uses battery capacity by mileage as the Overview app default', () => {
     const overview = getDefaultBySlug('dashboard');
     const chart = overview?.widgets.find((widget) => widget.definitionId === 'catalog');
 
-    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('projected-range-mileage');
+    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('battery-capacity-mileage');
   });
 
-  it('uses projected range by mileage for new overview chart widgets', () => {
+  it('uses battery capacity by mileage for new overview chart widgets', () => {
     const chart = getWidget('chart', 'catalog');
 
     expect(chart?.defaultOptions).toMatchObject({
       page: 'overview',
-      chartId: 'projected-range-mileage',
+      chartId: 'battery-capacity-mileage',
     });
+  });
+
+  it('falls back to battery capacity by mileage when an overview chart has no saved chart ID', () => {
+    renderWidget({
+      ...makeInstance('soc-history', true),
+      options: {
+        chartIds: ['soc-history', 'battery-capacity-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    });
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Capacity by Mileage');
   });
 
   it('registers the tire-pressure timeline through the shared catalog widget on Trips', () => {
