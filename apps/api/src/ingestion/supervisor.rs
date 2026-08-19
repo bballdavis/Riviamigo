@@ -63,7 +63,7 @@ mod tests {
             rivian_persist_raw_events: false,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
-            cookie_insecure: Some("1".into()),
+            cookie_insecure: Some(true),
             allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         }
