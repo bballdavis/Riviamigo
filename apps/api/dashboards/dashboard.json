@@ -22,7 +22,7 @@
       "title": "Overview Charts",
       "options": {
         "page": "overview",
-        "chartId": "projected-range-mileage",
+        "chartId": "battery-capacity-mileage",
         "chartIds": [
           "soc-history",
           "charge-level",

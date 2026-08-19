@@ -15,7 +15,7 @@ use crate::{
 
 // Advance this whenever a bundled system dashboard changes so existing
 // installations receive the new baseline on their next startup.
-const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 5;
+const BUNDLED_DASHBOARD_BASELINE_REVISION: i32 = 6;
 
 const UPSERT_SYSTEM_DEFAULT_SQL: &str = r#"
     INSERT INTO dashboards
@@ -816,7 +816,7 @@ mod tests {
             .and_then(|widget| widget["options"]["chartIds"].as_array())
             .expect("efficiency chart IDs");
 
-        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 5);
+        assert_eq!(BUNDLED_DASHBOARD_BASELINE_REVISION, 6);
         assert!(chart_ids.iter().any(|id| id == "efficiency-tags"));
         assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.owner_id IS NULL"));
         assert!(UPSERT_SYSTEM_DEFAULT_SQL.contains("dashboards.is_default = TRUE"));
@@ -833,6 +833,18 @@ mod tests {
         assert!(config["widgets"]
             .as_array()
             .is_some_and(|widgets| !widgets.is_empty()));
+    }
+
+    #[test]
+    fn overview_bundle_uses_battery_capacity_by_mileage_as_its_default_chart() {
+        let id: Uuid = "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        let config = bundled_default_config(id).expect("overview default");
+        let chart_id = config["widgets"]
+            .as_array()
+            .and_then(|widgets| widgets.iter().find(|widget| widget["managedKey"] == "overview.chart-catalog"))
+            .and_then(|widget| widget["options"]["chartId"].as_str());
+
+        assert_eq!(chart_id, Some("battery-capacity-mileage"));
     }
 
     #[test]

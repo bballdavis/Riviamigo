@@ -149,7 +149,10 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
       .filter((id) => validIds.has(id)))]
     : [];
   const fallbackIds = chartIds.length > 0 ? chartIds : pageDefinitions.map((definition) => definition.id);
-  const fallbackChartId = fallbackIds[0] ?? getChartDefinitions()[0]?.id ?? 'soc-history';
+  const pageDefaultChartId = page === 'overview' ? 'battery-capacity-mileage' : undefined;
+  const fallbackChartId = (pageDefaultChartId && fallbackIds.includes(pageDefaultChartId)
+    ? pageDefaultChartId
+    : fallbackIds[0]) ?? getChartDefinitions()[0]?.id ?? 'soc-history';
   const configuredChartId = typeof options.chartId === 'string' ? normalizeChartId(options.chartId) : undefined;
   const chartId = configuredChartId && validIds.has(configuredChartId)
     ? configuredChartId
@@ -2056,7 +2059,7 @@ registerWidget({
   minSize: { w: 4, h: 6 },
   defaultOptions: {
     page: 'overview',
-    chartId: 'projected-range-mileage',
+    chartId: 'battery-capacity-mileage',
     showPicker: true,
     timeFilter: DEFAULT_CHART_TIME_FILTER,
   },
