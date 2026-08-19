@@ -1,4 +1,10 @@
 services:
+  riviamigo-init:
+    image: riviamigo:local
+    build:
+      context: ..
+      dockerfile: compose/Dockerfile
+
   riviamigo:
     image: riviamigo:local
     build:

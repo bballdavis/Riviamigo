@@ -52,9 +52,15 @@ The first completed account setup becomes the installation owner. After signing 
 Follow [Rivian account setup](./rivian-account.md), then confirm:
 
 - The connected vehicle appears in the vehicle selector.
-- Current vehicle status eventually appears after Rivian authentication succeeds.
+- The completion screen first confirms that the vehicle was saved, then reports
+  whether the telemetry collector is starting, connected, or needs attention.
+- Current vehicle status eventually appears after Rivian authentication succeeds;
+  a container restart should not be required.
 - Sleeping vehicles are allowed time to report; missing immediate telemetry is not automatically an installation failure.
-- Persistent authentication or MFA errors are handled through the Rivian connection flow rather than by repeatedly restarting the entire stack.
+- If the vehicle was saved but telemetry does not start, open the dashboard's
+  vehicle health details and inspect the app logs instead of repeating OTP or
+  restarting the entire stack.
+- Persistent authentication or MFA errors are handled through the Rivian connection flow.
 
 ## Verify the gateway before remote use
 

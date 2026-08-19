@@ -34,9 +34,13 @@ precise vehicle locations in public issues.
 
 ## Transport Security
 
-- Production nginx is an HTTP origin on port 8080, not a public TLS endpoint
+- Production nginx is an HTTP origin on port 8080, loopback-bound by default,
+  not a public TLS endpoint. Non-loopback binding requires the explicit
+  `ALLOW_PUBLIC_ORIGIN_BIND=true` opt-in.
 - Public HTTPS and HSTS are enforced by the authenticated outer gateway
-- `Secure` cookie flag enforced (disable only with COOKIE_INSECURE=1 in local dev)
+- `Secure` cookie flag enforced; `COOKIE_INSECURE` is local-development-only.
+  The narrow `ALLOW_INSECURE_LAN_HTTP_AUTH=true` production exception accepts
+  only documented private literal-IP HTTP origins and emits a startup warning.
 
 ## Rate Limiting
 
@@ -62,11 +66,24 @@ precise vehicle locations in public issues.
 
 - Durable Rivian credential bundles are encrypted before storage in `riviamigo.vehicle_credentials`
 - Short-lived connect / OTP staging data should stay encrypted at rest in Redis and Redis should remain internal-only
-- Production generates `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and `JWT_PUBLIC_KEY` on first start and persists them in PostgreSQL; externally managed overrides must supply all three together
+- Production may generate `AGE_ENCRYPTION_KEY`, `JWT_SECRET`, and
+  `JWT_PUBLIC_KEY` on first start and persist them in PostgreSQL; externally
+  managed overrides must supply all three together. The database-backed option
+  is an explicitly accepted P2 shared-fate risk, mitigated by tested database
+  recovery; a secret manager is the optional separate-custody recovery path.
 
 ## Audit Logging
 
-- Security events (login success/failure, key operations) logged to `riviamigo.security_events`
+- Security events (first-owner claim, login success/failure, password changes,
+  account-invitation operations, API-key create/revoke/rotate, and user
+  administration) are recorded in `riviamigo.security_events`.
+- Each current event has an event type, actor when known, stable target,
+  UUID request correlation when supplied, success/failure outcome, and
+  redacted enum-like metadata. The service must not store credentials, tokens,
+  email addresses, locations, or raw telemetry in this audit metadata.
+- There is currently **no automatic retention/deletion job** for security
+  events. Retention is therefore bounded by the operator's database retention
+  and backup policy, not by an application purge interval.
 - Structured `[riviamigo][LEVEL]` key-value logs are written to stdout/stderr; Docker supplies the outer timestamp. The production wrapper normalizes Nginx error lines into the same shape.
 
 ## Security regression controls
@@ -98,7 +115,8 @@ precise vehicle locations in public issues.
 
 ## Production Checklist
 
-- [ ] `COOKIE_INSECURE` is NOT set
+- [ ] `COOKIE_INSECURE` is NOT set (except local development)
+- [ ] `ALLOW_INSECURE_LAN_HTTP_AUTH` remains `false`, or the documented trusted-LAN exception and host firewall controls are in place
 - [ ] `POSTGRES_PASSWORD` changed from default
 - [ ] `REDIS_PASSWORD` is strong and Redis is not host-published
 - [ ] Generated application keys are protected by database backups, or all three explicit key overrides are stored safely

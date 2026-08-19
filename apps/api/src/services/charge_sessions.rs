@@ -95,6 +95,8 @@ pub enum UnmatchedInsertPolicy {
 pub struct ChargeSessionPayloadRef {
     pub payload_id: Uuid,
     pub captured_at: DateTime<Utc>,
+    pub charge_session_id: Option<Uuid>,
+    pub unchanged: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -509,7 +511,8 @@ async fn update_session_from_summary(
             is_free_session = COALESCE(is_free_session, $7),
             is_rivian_network = COALESCE(is_rivian_network, $8),
             rivian_paid_total = COALESCE(rivian_paid_total, $9),
-            is_home = COALESCE(is_home, $10),
+            is_home = CASE WHEN location_override_mode = 'automatic'
+                THEN COALESCE(is_home, $10) ELSE is_home END,
             duration_minutes = COALESCE(
                 duration_minutes,
                 CASE
@@ -537,6 +540,44 @@ async fn update_session_from_summary(
             is_public = COALESCE(is_public, $19),
             rivian_meta = COALESCE(rivian_meta, $20)
         WHERE id = $1
+          AND (
+              api_started_at IS DISTINCT FROM CASE
+                  WHEN $2::timestamptz IS NULL THEN api_started_at
+                  WHEN api_started_at IS NULL THEN $2
+                  ELSE LEAST(api_started_at, $2)
+              END
+              OR api_ended_at IS DISTINCT FROM CASE
+                  WHEN $3::timestamptz IS NULL THEN api_ended_at
+                  WHEN api_ended_at IS NULL THEN $3
+                  ELSE GREATEST(api_ended_at, $3)
+              END
+              OR ended_at IS DISTINCT FROM CASE
+                  WHEN COALESCE(source, '') = 'rivian_api' THEN COALESCE(ended_at, $3)
+                  ELSE ended_at
+              END
+              OR source IS DISTINCT FROM $12
+              OR data_confidence IS DISTINCT FROM $13
+              OR (rivian_meta IS NULL AND $20 IS NOT NULL)
+              OR (kwh_added IS NULL AND $4 IS NOT NULL)
+              OR (network_vendor IS NULL AND $5 IS NOT NULL)
+              OR (range_added_km IS NULL AND $6 IS NOT NULL)
+              OR (is_free_session IS NULL AND $7 IS NOT NULL)
+              OR (is_rivian_network IS NULL AND $8 IS NOT NULL)
+              OR (rivian_paid_total IS NULL AND $9 IS NOT NULL)
+              OR (location_override_mode = 'automatic' AND is_home IS NULL AND $10 IS NOT NULL)
+              OR (duration_minutes IS NULL AND COALESCE(source, '') = 'rivian_api'
+                  AND $2::timestamptz IS NOT NULL AND $3::timestamptz IS NOT NULL)
+              OR (charger_type IS NULL AND COALESCE($11, CASE
+                  WHEN $10 = true THEN 'ac'
+                  WHEN lower(COALESCE($5, '')) = ANY(ARRAY['tesla','rivian','electrify america','evgo']) THEN 'dc'
+              END) IS NOT NULL)
+              OR (rivian_charger_type IS NULL AND $14 IS NOT NULL)
+              OR (currency_code IS NULL AND $15 IS NOT NULL)
+              OR (rivian_city IS NULL AND $16 IS NOT NULL)
+              OR (rivian_vehicle_id IS NULL AND $17 IS NOT NULL)
+              OR (rivian_vehicle_name IS NULL AND $18 IS NOT NULL)
+              OR (is_public IS NULL AND $19 IS NOT NULL)
+          )
         "#,
     )
     .bind(session_id)
@@ -690,8 +731,20 @@ pub async fn upsert_external_aliases(
                 latest_payload_captured_at = COALESCE(
                     EXCLUDED.latest_payload_captured_at,
                     riviamigo.charge_session_external_aliases.latest_payload_captured_at
-                ),
-                updated_at = now()
+                )
+            WHERE (
+                (riviamigo.charge_session_external_aliases.alias_kind = 'legacy'
+                    AND EXCLUDED.alias_kind <> 'legacy')
+                OR (EXCLUDED.transaction_id_grouping_key IS NOT NULL
+                    AND riviamigo.charge_session_external_aliases.transaction_id_grouping_key
+                        IS DISTINCT FROM EXCLUDED.transaction_id_grouping_key)
+                OR (EXCLUDED.latest_payload_id IS NOT NULL
+                    AND riviamigo.charge_session_external_aliases.latest_payload_id
+                        IS DISTINCT FROM EXCLUDED.latest_payload_id)
+                OR (EXCLUDED.latest_payload_captured_at IS NOT NULL
+                    AND riviamigo.charge_session_external_aliases.latest_payload_captured_at
+                        IS DISTINCT FROM EXCLUDED.latest_payload_captured_at)
+            )
             "#,
         )
         .bind(charge_session_id)
@@ -739,15 +792,13 @@ pub async fn finalize_charge_session_aliases(pool: &PgPool, charge_session_id: U
         "UPDATE riviamigo.charge_sessions
          SET rivian_session_id = $2
          WHERE id = $1
-           AND (
-               rivian_session_id = $2
-               OR NOT EXISTS (
+           AND rivian_session_id IS DISTINCT FROM $2
+           AND NOT EXISTS (
                    SELECT 1
                    FROM riviamigo.charge_sessions existing
                    WHERE existing.rivian_session_id = $2
                      AND existing.id <> $1
-               )
-           )",
+               )",
     )
     .bind(charge_session_id)
     .bind(best_alias.external_id)
@@ -1132,6 +1183,8 @@ pub async fn replay_charge_payload_summaries(
         let payload_ref = ChargeSessionPayloadRef {
             payload_id: payload.id,
             captured_at: payload.captured_at,
+            charge_session_id: None,
+            unchanged: false,
         };
         if let Some(session_id) = reconcile_completed_session_summary(
             pool,
@@ -1667,9 +1720,36 @@ pub async fn canonicalize_charge_sessions(
                     r#"
                     UPDATE riviamigo.charge_sessions canonical
                     SET
-                        location_lat = COALESCE(canonical.location_lat, duplicate.location_lat),
-                        location_lng = COALESCE(canonical.location_lng, duplicate.location_lng),
-                        is_home = COALESCE(canonical.is_home, duplicate.is_home),
+                        source_location_lat = COALESCE(canonical.source_location_lat, duplicate.source_location_lat, canonical.location_lat, duplicate.location_lat),
+                        source_location_lng = COALESCE(canonical.source_location_lng, duplicate.source_location_lng, canonical.location_lng, duplicate.location_lng),
+                        location_override_mode = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic'
+                            THEN duplicate.location_override_mode ELSE canonical.location_override_mode END,
+                        location_lat = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.location_lat
+                            WHEN canonical.location_override_mode = 'automatic'
+                            THEN COALESCE(canonical.location_lat, duplicate.source_location_lat, duplicate.location_lat)
+                            ELSE canonical.location_lat END,
+                        location_lng = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.location_lng
+                            WHEN canonical.location_override_mode = 'automatic'
+                            THEN COALESCE(canonical.location_lng, duplicate.source_location_lng, duplicate.location_lng)
+                            ELSE canonical.location_lng END,
+                        is_home = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.is_home
+                            ELSE COALESCE(canonical.is_home, duplicate.is_home) END,
+                        geofence_id = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.geofence_id
+                            ELSE COALESCE(canonical.geofence_id, duplicate.geofence_id) END,
+                        address_id = CASE
+                            WHEN canonical.location_override_mode = 'automatic'
+                             AND duplicate.location_override_mode <> 'automatic' THEN duplicate.address_id
+                            ELSE COALESCE(canonical.address_id, duplicate.address_id) END,
                         charger_type = COALESCE(canonical.charger_type, duplicate.charger_type),
                         kwh_added = CASE
                             WHEN canonical.kwh_added IS NULL THEN duplicate.kwh_added
@@ -1684,8 +1764,22 @@ pub async fn canonicalize_charge_sessions(
                             WHEN duplicate.max_charge_rate_kw IS NULL THEN canonical.max_charge_rate_kw
                             ELSE GREATEST(canonical.max_charge_rate_kw, duplicate.max_charge_rate_kw)
                         END,
-                        cost_usd = COALESCE(canonical.cost_usd, duplicate.cost_usd),
-                        cost_method = COALESCE(canonical.cost_method, duplicate.cost_method),
+                        cost_override_mode = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic'
+                            THEN duplicate.cost_override_mode ELSE canonical.cost_override_mode END,
+                        cost_override_usd = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic'
+                            THEN duplicate.cost_override_usd ELSE canonical.cost_override_usd END,
+                        cost_usd = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic' THEN duplicate.cost_usd
+                            ELSE COALESCE(canonical.cost_usd, duplicate.cost_usd) END,
+                        cost_method = CASE
+                            WHEN canonical.cost_override_mode = 'automatic'
+                             AND duplicate.cost_override_mode <> 'automatic' THEN duplicate.cost_method
+                            ELSE COALESCE(canonical.cost_method, duplicate.cost_method) END,
                         energy_added_wh = CASE
                             WHEN canonical.energy_added_wh IS NULL THEN duplicate.energy_added_wh
                             WHEN duplicate.energy_added_wh IS NULL THEN canonical.energy_added_wh

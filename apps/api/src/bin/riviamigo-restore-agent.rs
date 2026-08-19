@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
@@ -12,9 +11,7 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use flate2::read::GzDecoder;
 use serde_json::json;
-use tar::Archive;
 use tokio::{fs, net::TcpListener, process::Command, time::sleep};
 use uuid::Uuid;
 
@@ -117,6 +114,20 @@ fn host_restore_state_path(config: &Config) -> PathBuf {
 }
 
 async fn host_restore(config: &Config, package: &Path, force: bool) -> anyhow::Result<()> {
+    let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
+    let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(config.recovery.restore_deadline_seconds),
+        host_restore_inner(config, package, force),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("host restore exceeded the configured deadline"))?;
+    lock.release().await;
+    lock_pool.close().await;
+    result
+}
+
+async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> anyhow::Result<()> {
     let state_path = host_restore_state_path(config);
     if fs::try_exists(&state_path).await.unwrap_or(false) {
         anyhow::bail!("a host restore is already awaiting finalize or rollback");
@@ -174,14 +185,17 @@ async fn host_restore(config: &Config, package: &Path, force: bool) -> anyhow::R
         .join(".restore-staging")
         .join(format!("host-{job_id}"));
     fs::create_dir_all(&staging).await?;
+    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let staged_package = staging.join("recovery-package.rma.tar.gz");
     fs::copy(package, &staged_package).await?;
+    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let staged_validation = backups::validate_recovery_package(&staged_package).await?;
     if staged_validation.checksum_sha256 != validated.checksum_sha256 {
         let _ = fs::remove_dir_all(&staging).await;
         anyhow::bail!("recovery package changed while it was being staged");
     }
     extract_package(&staged_package, &staging).await?;
+    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let prepared = prepare_restore_database(
         config,
         job_id,
@@ -395,9 +409,10 @@ async fn record_host_restore_history(
     sqlx::query(
         r#"
         INSERT INTO riviamigo.backup_runs
-          (id, trigger, status, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
-        VALUES ($1, 'restore', $2, NULL, $3, now(), now(), $4, now(), now())
+          (id, trigger, status, phase, progress_percent, requested_by, artifact_key, started_at, completed_at, error_message, created_at, updated_at)
+        VALUES ($1, 'restore', $2, $5, $6, NULL, $3, now(), now(), $4, now(), now())
         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,
+          phase = EXCLUDED.phase, progress_percent = EXCLUDED.progress_percent,
           completed_at = EXCLUDED.completed_at, error_message = EXCLUDED.error_message, updated_at = now()
         "#,
     )
@@ -405,6 +420,8 @@ async fn record_host_restore_history(
     .bind(if status == "completed" { "succeeded" } else { "failed" })
     .bind(format!("restore:{}", state.plan.package_checksum_sha256))
     .bind(error)
+    .bind(if status == "completed" { "completed" } else { "failed" })
+    .bind(if status == "completed" { 100_i16 } else { 0_i16 })
     .execute(&pool)
     .await?;
     sqlx::query(
@@ -601,6 +618,20 @@ async fn execute_job(
 }
 
 async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
+    let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
+    let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(config.recovery.restore_deadline_seconds),
+        perform_restore_inner(config, job_id),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("restore exceeded the four hour deadline"))?;
+    lock.release().await;
+    lock_pool.close().await;
+    result
+}
+
+async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let job = restore_jobs::read(config, job_id).await?;
     let staging = Path::new(&config.backup_artifact_dir)
         .join(".restore-staging")
@@ -609,8 +640,10 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
         fs::remove_dir_all(&staging).await?;
     }
     fs::create_dir_all(&staging).await?;
+    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let staged_package = staging.join("recovery-package.rma.tar.gz");
     fs::copy(Path::new(&job.artifact_path), &staged_package).await?;
+    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let validated = backups::validate_recovery_package(&staged_package).await?;
     if job
         .plan
@@ -626,6 +659,7 @@ async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     }
     inject_restore_fault("package_validated")?;
     extract_package(&staged_package, &staging).await?;
+    ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
 
     restore_jobs::update(
         config,
@@ -1013,16 +1047,18 @@ async fn stop_api_process() -> anyhow::Result<()> {
 }
 
 async fn extract_package(package: &Path, staging: &Path) -> anyhow::Result<()> {
-    let package = package.to_path_buf();
-    let staging = staging.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let file = File::open(package)?;
-        let decoder = GzDecoder::new(file);
-        let mut archive = Archive::new(decoder);
-        archive.unpack(staging)?;
-        Ok::<(), anyhow::Error>(())
-    })
-    .await??;
+    backups::extract_recovery_package(package, staging).await?;
+    Ok(())
+}
+
+fn ensure_recovery_free_space(path: &Path, minimum: u64) -> anyhow::Result<()> {
+    let available = fs2::available_space(path)?;
+    if available < minimum {
+        anyhow::bail!(
+            "recovery storage needs at least {} GiB free before continuing",
+            minimum / 1024 / 1024 / 1024
+        );
+    }
     Ok(())
 }
 
@@ -1385,18 +1421,6 @@ async fn activate_artwork(
         fs::remove_dir_all(&incoming).await?;
     }
     copy_directory(source, &incoming).await?;
-    #[cfg(not(windows))]
-    {
-        let ownership = Command::new("chown")
-            .arg("-R")
-            .arg("1001:1001")
-            .arg(&incoming)
-            .status()
-            .await?;
-        if !ownership.success() {
-            anyhow::bail!("could not assign restored artwork to the Riviamigo service user");
-        }
-    }
     let previous = parent.join(format!(".vehicle-images-before-{job_id}"));
     if fs::try_exists(&destination).await.unwrap_or(false) {
         fs::rename(&destination, &previous).await?;

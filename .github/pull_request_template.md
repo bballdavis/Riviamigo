@@ -39,8 +39,8 @@ Checks run locally or in CI:
 - [ ] `PR Quality` workflow passed
 - [ ] `PR Frontend` workflow passed when frontend or shared UI code changed
 - [ ] `PR Backend` workflow passed when Rust/API/database code changed
-- [ ] `PR Security` workflow passed for the target commit
-- [ ] `Runtime` workflow passed for deployment or release changes
+- [ ] `PR Security` source-scan workflow passed for the target commit
+- [ ] Scheduled/manual Runtime and dependency/image security workflows passed when the change affects release or deployment contracts
 - [ ] `Fresh install` passed for release or installation changes
 - [ ] `pnpm docs:check` passed when docs, routes, env, auth, or operations changed
 - [ ] Browser/mobile verification completed when shared UI behavior changed
@@ -72,6 +72,10 @@ If AI assistance was used, briefly describe its scope and the human verification
 -
 
 ## Documentation Impact
+
+Choose exactly one classification for every non-trivial change. If the choice
+is not `No doc impact`, list the canonical docs changed or link the tracked
+in-repository documentation-debt item.
 
 - [ ] No doc impact
 - [ ] Internal doc update required

@@ -77,6 +77,7 @@ export function TripStatWidget({ instance, ctx }: { instance: WidgetInstance; ct
     !dashboardDataAvailable && options.stat === 'efficiency' ? ctx.vehicleId : null,
     ctx.from,
     ctx.to,
+    ctx.tripTagFilter,
   );
   const value = dashboardDataAvailable ? dashboardMetric?.value : fetchedValue;
   const series = dashboardDataAvailable ? dashboardMetric?.series ?? [] : fetchedSeries;

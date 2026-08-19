@@ -48,7 +48,9 @@ the collector also checks migrations so it can be started independently.
 On the Health page, the **Extended Vehicle Telemetry** card reports collector
 status, last event time, connectivity quality, efficiency, and mass. The
 Phantom Drain page shows **Parked Energy** as `Rivian reported`, above the
-separate `Riviamigo battery-change estimate`.
+separate `Riviamigo battery-change estimate`, only while the collector reports a
+fresh connected heartbeat. If the collector is stopped, the Parked Energy card
+is hidden and the derived Phantom Drain view remains available.
 
 If the collector reports an error:
 

@@ -35,6 +35,15 @@ describe('RichTimeSeriesChart bar rendering', () => {
     expect(options[2]?.fill).toBeUndefined();
   });
 
+  it('connects line paths across retained null samples when requested', () => {
+    const options = buildRichTimeSeriesUPlotSeries(
+      [{ key: 'pressure', label: 'Pressure', values: [48, null, 47] }],
+      { connectGaps: true },
+    );
+
+    expect(options[1]?.spanGaps).toBe(true);
+  });
+
   it('uses the shared bar radius for uPlot bars while leaving their baseline square', () => {
     expect(getUPlotBarRadius(78)).toEqual([8 / 78, 0]);
     expect(getUPlotBarRadius(40)).toEqual([0.2, 0]);

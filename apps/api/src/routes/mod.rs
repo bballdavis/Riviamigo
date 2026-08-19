@@ -49,6 +49,8 @@ pub mod rivian_stewardship;
 pub mod schedules;
 pub mod settings;
 pub mod state_timeline;
+pub mod trip_tag_filter;
+pub mod trip_tags;
 pub mod trips;
 pub mod users;
 pub mod users_support;
@@ -249,6 +251,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(vehicles::router())
         .merge(battery::router())
         .merge(trips::router())
+        .merge(trip_tags::router())
         .merge(charging::router())
         .merge(efficiency::router())
         .merge(external_connections::router())

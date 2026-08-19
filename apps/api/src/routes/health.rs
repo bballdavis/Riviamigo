@@ -11,7 +11,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
@@ -48,6 +48,7 @@ struct ExtendedTelemetry {
 #[derive(Serialize, sqlx::FromRow)]
 struct CollectorHealth {
     status: String,
+    running: bool,
     connected_at: Option<DateTime<Utc>>,
     last_event_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
@@ -158,7 +159,7 @@ async fn health(
     Path(vehicle_id): Path<Uuid>,
 ) -> Result<Json<HealthResponse>, AppError> {
     require_vehicle_access(&auth, vehicle_id)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
 
     let (vehicle, runtime, latest, tires, closures, sw_history, thermal_count, extended) = tokio::try_join!(
         fetch_vehicle(&state.pool, vehicle_id),
@@ -201,7 +202,11 @@ async fn fetch_extended_telemetry(
 ) -> Result<ExtendedTelemetry, AppError> {
     let (collector, network, efficiency, mass, cold_weather) = tokio::try_join!(
         sqlx::query_as::<_, CollectorHealth>(
-            r#"SELECT status, connected_at, last_event_at, last_error, updated_at
+            // updated_at is the collector heartbeat; two minutes allows for
+            // transient scheduling delays while making stale connected rows false.
+            r#"SELECT status,
+                      status = 'connected' AND updated_at >= now() - interval '2 minutes' AS running,
+                      connected_at, last_event_at, last_error, updated_at
                FROM riviamigo.parallax_collector_state WHERE vehicle_id = $1"#,
         )
         .bind(vid)

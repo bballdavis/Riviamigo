@@ -21,6 +21,8 @@ export interface RichSeries {
   mode?: 'line' | 'area' | 'bar' | 'scatter';
   /** Marker diameter for scatter series. */
   pointSize?: number;
+  /** Stroke width for line and area series. */
+  strokeWidth?: number;
   /** Include values in the hover tooltip without drawing a series or legend item. */
   tooltipOnly?: boolean;
   /** Draw the series without adding another legend item. */
@@ -37,6 +39,79 @@ export interface RichSeries {
   smoothable?: boolean;
   /** Stack bar values with other bar series carrying the same ID. */
   stackId?: string;
+}
+
+export interface RichTimeInterval {
+  id: string;
+  start: string | number | Date;
+  end: string | number | Date;
+  label: string;
+  details?: string;
+  color?: string;
+}
+
+export interface RichReferenceLine {
+  value: number;
+  label?: string;
+  color?: string;
+}
+
+export interface PackedRichTimeInterval extends RichTimeInterval {
+  lane: number;
+}
+
+export interface RichTimeIntervalBandGeometry {
+  bandTop: number;
+  bandHeight: number;
+  laneTop: number;
+  laneHeight: number;
+  top: number;
+  height: number;
+  hitTop: number;
+  hitHeight: number;
+}
+
+/** Calculate the compact bottom lane used by interval overlays. */
+export function getRichTimeIntervalBandGeometry(
+  lane: number,
+  laneCount: number,
+  plotTop: number,
+  plotHeight: number,
+  bandRatio = 0.3,
+): RichTimeIntervalBandGeometry {
+  const safePlotHeight = Math.max(0, plotHeight);
+  const safeLaneCount = Math.max(1, laneCount);
+  const safeRatio = Math.min(0.45, Math.max(0.2, bandRatio));
+  const bandHeight = safePlotHeight * safeRatio;
+  const bandTop = plotTop + safePlotHeight - bandHeight;
+  const laneHeight = bandHeight / safeLaneCount;
+  const laneTop = bandTop + Math.min(Math.max(0, lane), safeLaneCount - 1) * laneHeight;
+  const height = Math.max(4, laneHeight * 0.72);
+  const top = laneTop + Math.max(0, (laneHeight - height) / 2);
+  const hitHeight = Math.max(44, laneHeight);
+  const hitTop = safePlotHeight < hitHeight
+    ? plotTop
+    : Math.min(
+        plotTop + safePlotHeight - hitHeight,
+        Math.max(plotTop, laneTop + (laneHeight - hitHeight) / 2),
+      );
+  return { bandTop, bandHeight, laneTop, laneHeight, top, height, hitTop, hitHeight };
+}
+
+/** Assign overlapping intervals to the smallest available horizontal lane. */
+export function packRichTimeIntervals(intervals: RichTimeInterval[]): PackedRichTimeInterval[] {
+  const laneEnds: number[] = [];
+  return [...intervals]
+    .map((interval, index) => ({ interval, index, start: toSeconds(interval.start), end: toSeconds(interval.end) }))
+    .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index)
+    .map(({ interval, start, end }) => {
+      const lane = laneEnds.findIndex((lastEnd) => lastEnd <= start);
+      const resolvedLane = lane === -1 ? laneEnds.length : lane;
+      laneEnds[resolvedLane] = end;
+      return { ...interval, lane: resolvedLane };
+    })
+    .sort((a, b) => toSeconds(a.start) - toSeconds(b.start) || a.lane - b.lane);
 }
 
 export interface RichTimeSeriesChartProps {
@@ -77,6 +152,13 @@ export interface RichTimeSeriesChartProps {
   connectGaps?: boolean | undefined;
   /** Enables touch-first pan and pinch exploration for a dedicated mobile chart view. */
   interactionMode?: 'standard' | 'touch-explore' | undefined;
+  /** Optional time-span marks rendered as accessible, clickable secondary-axis lane bars. */
+  intervals?: RichTimeInterval[] | undefined;
+  onIntervalClick?: ((interval: PackedRichTimeInterval) => void) | undefined;
+  /** Fraction of the plot reserved for interval lanes at the bottom. */
+  intervalBandRatio?: number | undefined;
+  /** Optional horizontal reference lines on the primary Y axis. */
+  referenceLines?: RichReferenceLine[] | undefined;
 }
 
 export function clampExplorationRange(
@@ -415,7 +497,7 @@ export function buildRichTimeSeriesUPlotSeries(
         show: !hidden,
         stroke: color,
         scale: item.yScale ?? 'y',
-        width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : 2,
+        width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : item.strokeWidth ?? 2,
         points: {
           show: seriesMode === 'scatter',
           size: item.pointSize ?? 6,
@@ -525,10 +607,20 @@ export function RichTimeSeriesChart({
   onResolvedAxisRanges,
   connectGaps = false,
   interactionMode = 'standard',
+  intervals = [],
+  onIntervalClick,
+  intervalBandRatio = 0.3,
+  referenceLines = [],
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
   const [tooltip, setTooltip] = React.useState<{ left: number; top: number; text: string } | null>(null);
+  const [intervalHover, setIntervalHover] = React.useState<string | null>(null);
+  const [overlay, setOverlay] = React.useState<{
+    bars: Array<PackedRichTimeInterval & { left: number; top: number; width: number; height: number; hitTop: number; hitHeight: number }>;
+    lines: Array<RichReferenceLine & { left: number; top: number; width: number }>;
+    intervalBand: { top: number; height: number } | null;
+  }>({ bars: [], lines: [], intervalBand: null });
   const [hiddenKeys, setHiddenKeys] = React.useState<Set<string>>(() => new Set());
   const [isZoomed, setIsZoomed] = React.useState(false);
 
@@ -544,6 +636,7 @@ export function RichTimeSeriesChart({
   const xSecondaryFormatterRef = React.useRef(xSecondaryFormatter);
   const onCursorIndexChangeRef = React.useRef(onCursorIndexChange);
   const onResolvedAxisRangesRef = React.useRef(onResolvedAxisRanges);
+  const onIntervalClickRef = React.useRef(onIntervalClick);
   const tooltipValuesRef = React.useRef<Array<Array<number | null>>>([]);
   const tooltipDetailsRef = React.useRef<Array<Array<string | null | undefined>>>([]);
   const yPrecisionRef = React.useRef(0);
@@ -561,6 +654,10 @@ export function RichTimeSeriesChart({
   xSecondaryFormatterRef.current = xSecondaryFormatter;
   onCursorIndexChangeRef.current = onCursorIndexChange;
   onResolvedAxisRangesRef.current = onResolvedAxisRanges;
+  onIntervalClickRef.current = onIntervalClick;
+
+  const packedIntervals = React.useMemo(() => packRichTimeIntervals(intervals), [intervals]);
+  const laneCount = packedIntervals.reduce((max, interval) => Math.max(max, interval.lane + 1), 0);
 
   const alignedData = React.useMemo<AlignedData>(() => {
     const x = points.map((point) => xTime ? toSeconds(point.ts) : Number(point.ts));
@@ -595,10 +692,12 @@ export function RichTimeSeriesChart({
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
       `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
       `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
-      `${interactionMode}|` +
-      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
+      `${interactionMode}|${intervalBandRatio}|` +
+      `${packedIntervals.map((item) => `${item.id}:${item.start}:${item.end}:${item.lane}`).join('|')}|` +
+      `${referenceLines.map((line) => `${line.value}:${line.color ?? ''}`).join('|')}|` +
+      series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.strokeWidth ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, series, hiddenKeySignature],
+    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines],
   );
 
   React.useEffect(() => {
@@ -622,7 +721,7 @@ export function RichTimeSeriesChart({
       : undefined;
     const fullXRange: [number, number] = xRange ?? [xValues[0]!, xValues[xValues.length - 1]!];
 
-    const hasRightAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
+    const hasRightDataAxis = seriesRef.current.some((s) => !s.tooltipOnly && s.yScale === 'y2');
 
     const isBarChart = series.some((s) => (s.mode ?? mode) === 'bar');
 
@@ -634,7 +733,9 @@ export function RichTimeSeriesChart({
 
     const xScaleConfig = getExplicitScaleConfig(xRange, { time: xTime });
 
-    const rightYScaleConfig: uPlot.Scale | undefined = hasRightAxis ? getExplicitScaleConfig(yRightRange) : undefined;
+    const rightYScaleConfig: uPlot.Scale | undefined = hasRightDataAxis
+      ? getExplicitScaleConfig(yRightRange)
+      : undefined;
 
     const xAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
@@ -704,7 +805,7 @@ export function RichTimeSeriesChart({
     };
 
     // Right Y axis — only added when at least one series uses scale 'y2'.
-    const rightYAxisConfig: uPlot.Axis | null = hasRightAxis
+    const rightYAxisConfig: uPlot.Axis | null = hasRightDataAxis
       ? {
           scale: 'y2',
           side: 1, // right
@@ -740,13 +841,58 @@ export function RichTimeSeriesChart({
     if (xSecondaryAxisConfig) allAxes.push(xSecondaryAxisConfig);
     if (rightYAxisConfig) allAxes.push(rightYAxisConfig);
 
+    const updateOverlay = () => {
+      const chart = chartRef.current;
+      if (!chart || !chart.bbox) return;
+      const plotLeft = chart.bbox.left;
+      const plotTop = chart.bbox.top;
+      const plotWidth = chart.bbox.width;
+      const plotHeight = chart.bbox.height;
+      const xPosition = (value: number) => plotLeft + chart.valToPos(value, 'x');
+      const primaryYPosition = (value: number) => plotTop + chart.valToPos(value, 'y');
+      const intervalBand = packedIntervals.length > 0
+        ? getRichTimeIntervalBandGeometry(0, laneCount, plotTop, plotHeight, intervalBandRatio)
+        : null;
+      const bars = packedIntervals.map((interval) => {
+        const left = xPosition(toSeconds(interval.start));
+        const right = xPosition(toSeconds(interval.end));
+        const geometry = getRichTimeIntervalBandGeometry(
+          interval.lane,
+          laneCount,
+          plotTop,
+          plotHeight,
+          intervalBandRatio,
+        );
+        return {
+          ...interval,
+          left: Math.min(left, right),
+          top: geometry.top,
+          width: Math.max(2, Math.abs(right - left)),
+          height: geometry.height,
+          hitTop: geometry.hitTop,
+          hitHeight: geometry.hitHeight,
+        };
+      });
+      const lines = referenceLines.map((line) => ({
+        ...line,
+        left: plotLeft,
+        top: primaryYPosition(line.value),
+        width: plotWidth,
+      }));
+      setOverlay({
+        bars,
+        lines,
+        intervalBand: intervalBand ? { top: intervalBand.bandTop, height: intervalBand.bandHeight } : null,
+      });
+    };
+
     const opts: Options = {
       width,
       height: chartHeight,
       data: alignedDataRef.current,
       // Keep a small left gutter so y-axis labels are not clipped at narrow widths.
       // Right gutter grows when a right axis is present so its labels aren't clipped.
-      padding: [topPadding, hasRightAxis ? 4 : 14, 0, 10],
+      padding: [topPadding, hasRightDataAxis ? 4 : 14, 0, 10],
       cursor: {
         drag: { x: interactionMode !== 'touch-explore', y: false },
         points: { size: 6 },
@@ -756,7 +902,7 @@ export function RichTimeSeriesChart({
       scales: {
         x: xScaleConfig,
         y: yScaleConfig,
-        ...(hasRightAxis && rightYScaleConfig ? { y2: rightYScaleConfig } : {}),
+        ...(hasRightDataAxis && rightYScaleConfig ? { y2: rightYScaleConfig } : {}),
       },
       axes: allAxes,
       series: buildRichTimeSeriesUPlotSeries(seriesRef.current, {
@@ -776,6 +922,7 @@ export function RichTimeSeriesChart({
             if (scale?.min == null || scale.max == null) return;
             const nextZoomed = isZoomedXRange([scale.min, scale.max], fullXRange);
             setIsZoomed((current) => current === nextZoomed ? current : nextZoomed);
+            requestAnimationFrame(updateOverlay);
           },
         ],
         setCursor: [
@@ -851,6 +998,7 @@ export function RichTimeSeriesChart({
       ...(rangeFromScale(chart.scales.y) ? { y: rangeFromScale(chart.scales.y)! } : {}),
       ...(rangeFromScale(chart.scales.y2) ? { y2: rangeFromScale(chart.scales.y2)! } : {}),
     });
+    requestAnimationFrame(updateOverlay);
     const touchCleanup = interactionMode === 'touch-explore'
       ? attachTouchExploration(root, chart, fullXRange)
       : undefined;
@@ -859,6 +1007,7 @@ export function RichTimeSeriesChart({
       typeof ResizeObserver !== 'undefined'
         ? new ResizeObserver(() => {
             chartRef.current?.setSize({ width: Math.max(320, root.clientWidth || 320), height: chartHeight });
+            requestAnimationFrame(updateOverlay);
           })
         : null;
     observer?.observe(root);
@@ -869,6 +1018,8 @@ export function RichTimeSeriesChart({
       chartRef.current?.destroy();
       chartRef.current = null;
       setTooltip(null);
+      setIntervalHover(null);
+      setOverlay({ bars: [], lines: [], intervalBand: null });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structureKey, loading, hasData]);
@@ -904,12 +1055,108 @@ export function RichTimeSeriesChart({
       )}
       style={{ height }}
     >
-      <div
-        ref={rootRef}
-        className="rich-uplot-chart w-full min-h-0 flex-1"
-        style={{ height: chartHeight }}
-        data-chart-smoothness={smoothness}
-      />
+      <div className="relative min-h-0 flex-1" style={{ height: chartHeight }}>
+        {overlay.bars.map((interval) => {
+          const isActive = intervalHover === interval.id;
+          const color = interval.color ?? CHART_COLORS.violet;
+          return (
+            <span
+              key={`interval-visual-${interval.id}`}
+              aria-hidden="true"
+              className="pointer-events-none absolute z-0 border"
+              style={{
+                left: interval.left,
+                top: interval.top,
+                width: interval.width,
+                height: interval.height,
+                borderColor: color,
+                borderRadius: CHART_BAR_STYLE.radius,
+                backgroundColor: color,
+                opacity: isActive ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity,
+              }}
+            />
+          );
+        })}
+        <div
+          ref={rootRef}
+          className="relative z-10 rich-uplot-chart h-full w-full"
+          data-chart-smoothness={smoothness}
+        />
+        {overlay.lines.map((line) => (
+          <div
+            key={`reference-${line.value}-${line.label ?? ''}`}
+            className="pointer-events-none absolute z-10 border-t border-dashed"
+            style={{
+              left: line.left,
+              top: line.top,
+              width: line.width,
+              borderColor: line.color ?? CHART_COLORS.muted,
+            }}
+            aria-hidden="true"
+          />
+        ))}
+        {overlay.lines.map((line) => line.label ? (
+          <span
+            key={`reference-label-${line.value}-${line.label}`}
+            className="pointer-events-none absolute z-10 -translate-y-full rounded-sm bg-bg-surface/80 px-1 text-[10px] text-fg-tertiary"
+            style={{ left: Math.max(8, line.left + line.width - 58), top: line.top - 2 }}
+          >
+            {line.label}
+          </span>
+        ) : null)}
+        {overlay.intervalBand && yRightUnit ? (
+          <span
+            className="pointer-events-none absolute right-2 z-10 rounded-sm bg-bg-surface/80 px-1 text-[10px] text-fg-tertiary"
+            style={{ top: overlay.intervalBand.top + 4 }}
+          >
+            {yRightUnit}
+          </span>
+        ) : null}
+        {overlay.bars.map((interval) => {
+          const isActive = intervalHover === interval.id;
+          return (
+            <button
+              key={interval.id}
+              type="button"
+              className={cn(
+                'absolute z-20 overflow-visible border-0 bg-transparent p-0 text-left transition-[filter,opacity,transform] focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-bg-surface',
+                isActive ? 'brightness-110' : 'hover:brightness-110',
+              )}
+              style={{
+                left: interval.left,
+                top: interval.hitTop,
+                width: interval.width,
+                height: interval.hitHeight,
+                minWidth: 12,
+              }}
+              aria-label={`${interval.label}${interval.details ? `: ${interval.details}` : ''}`}
+              title={`${interval.label}${interval.details ? ` — ${interval.details}` : ''}`}
+              onMouseEnter={() => setIntervalHover(interval.id)}
+              onMouseLeave={() => setIntervalHover(null)}
+              onFocus={() => setIntervalHover(interval.id)}
+              onBlur={() => setIntervalHover(null)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onIntervalClickRef.current?.(interval);
+              }}
+            >
+              <span className="sr-only">{interval.label}</span>
+            </button>
+          );
+        })}
+        {intervalHover ? (() => {
+          const active = overlay.bars.find((bar) => bar.id === intervalHover);
+          if (!active) return null;
+          return (
+            <div
+              className="pointer-events-none absolute z-30 max-w-[min(22rem,calc(100%-1rem))] whitespace-pre-wrap rounded-md border border-border-strong bg-bg-surface/95 px-2.5 py-1.5 text-[11px] leading-[1.5] text-fg shadow-xl"
+              style={{ left: Math.min(active.left, Math.max(8, (rootRef.current?.clientWidth ?? 320) - 180)), top: Math.max(8, active.top - 48) }}
+            >
+              {active.label}{active.details ? `\n${active.details}` : ''}
+            </div>
+          );
+        })() : null}
+      </div>
       {isZoomed ? (
         <button
           type="button"

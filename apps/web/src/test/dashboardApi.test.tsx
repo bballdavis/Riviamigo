@@ -3,7 +3,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuth } from '@riviamigo/hooks';
-import { normalizeDashboardConfig, useDashboardById, useDashboardBySlug, useDashboards, useUpdateDashboard } from '@riviamigo/dashboards';
+import {
+  normalizeDashboardConfig,
+  useDashboardById,
+  useDashboardBySlug,
+  useDashboards,
+  useRestoreAdminDashboardDefault,
+  useUpdateDashboard,
+} from '@riviamigo/dashboards';
 import type { DashboardConfig } from '@riviamigo/dashboards';
 
 const dashboardConfig: DashboardConfig = {
@@ -25,6 +32,28 @@ const dashboardConfig: DashboardConfig = {
   ],
 };
 
+const overviewDashboardConfig: DashboardConfig = {
+  ...dashboardConfig,
+  id: '00000000-0000-0000-0000-000000000001',
+  slug: 'dashboard',
+  name: 'Overview',
+  widgets: [
+    {
+      id: 'd1000001-0000-0000-0000-000000000006',
+      componentType: 'chart',
+      definitionId: 'catalog',
+      managed: true,
+      managedKey: 'overview.chart-catalog',
+      options: {
+        page: 'overview',
+        chartId: 'battery-capacity-mileage',
+        showPicker: true,
+      },
+      layout: { x: 0, y: 0, w: 12, h: 10 },
+    },
+  ],
+};
+
 function dashboardRecord(config = dashboardConfig) {
   return {
     id: config.id,
@@ -38,13 +67,12 @@ function dashboardRecord(config = dashboardConfig) {
   };
 }
 
-function wrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
+function wrapper(queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false },
+    mutations: { retry: false },
+  },
+})) {
 
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -198,5 +226,110 @@ describe('dashboard API wiring', () => {
     });
     expect(body.config.widgets).toHaveLength(1);
     expect(body.config.widgets[0].options.timeFilter).toBe('24h');
+  });
+
+  it('rejects a malformed restore ID before it reaches the API', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const { result } = renderHook(() => useRestoreAdminDashboardDefault(), {
+      wrapper: wrapper(),
+    });
+
+    await expect(act(async () => {
+      await result.current.mutateAsync('default-overview');
+    })).rejects.toThrow('Invalid dashboard ID');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('restoring the overview bundle aligns the account favorite with the bundled chart default', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/restore-default')) {
+        return new Response(JSON.stringify(dashboardRecord(overviewDashboardConfig)), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/auth/preferences/chart-favorites')) {
+        return new Response(JSON.stringify({
+          chart_favorites: {
+            'dashboard:00000000-0000-0000-0000-000000000001:d1000001-0000-0000-0000-000000000006': 'battery-capacity-mileage',
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url} ${String(init?.method)}`);
+    });
+    const { result } = renderHook(() => useRestoreAdminDashboardDefault(), {
+      wrapper: wrapper(),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync(overviewDashboardConfig.id);
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(`/v1/admin/dashboards/${overviewDashboardConfig.id}/restore-default`),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/v1/auth/preferences/chart-favorites'),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          key: 'dashboard:00000000-0000-0000-0000-000000000001:d1000001-0000-0000-0000-000000000006',
+          chart_id: 'battery-capacity-mileage',
+        }),
+      }),
+    );
+  });
+
+  it('keeps a successful dashboard restore when account favorite alignment fails', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const favoriteKey = 'dashboard:00000000-0000-0000-0000-000000000001:d1000001-0000-0000-0000-000000000006';
+    queryClient.setQueryData(['auth', 'dashboard-chart-favorites', null], {
+      chart_favorites: { [favoriteKey]: 'soc-history' },
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/restore-default')) {
+        return new Response(JSON.stringify(dashboardRecord(overviewDashboardConfig)), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/auth/preferences/chart-favorites')) {
+        return new Response('preference unavailable', { status: 503 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const { result } = renderHook(() => useRestoreAdminDashboardDefault(), {
+      wrapper: wrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync(overviewDashboardConfig.id);
+    });
+
+    expect(result.current.data?.widgets[0]?.options?.chartId).toBe('battery-capacity-mileage');
+    expect(queryClient.getQueryData<DashboardConfig>([
+      'dashboards',
+      'id',
+      overviewDashboardConfig.id,
+    ])?.widgets[0]?.options?.chartId).toBe('battery-capacity-mileage');
+    expect(queryClient.getQueryData<{ chart_favorites: Record<string, string> }>([
+      'auth',
+      'dashboard-chart-favorites',
+      null,
+    ])?.chart_favorites[favoriteKey]).toBe('battery-capacity-mileage');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

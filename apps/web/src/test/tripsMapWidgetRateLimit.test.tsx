@@ -22,6 +22,7 @@ vi.mock('@riviamigo/hooks', () => ({
   },
   useTrips: vi.fn(() => ({ data: { items: [], total: 0, per_page: 15 } })),
   useTripMapRoutes: (...args: unknown[]) => mockUseTripMapRoutes(...args),
+  useBasemapConfig: () => ({ data: undefined, isError: false }),
   useDocumentTheme: () => false,
 }));
 
@@ -83,6 +84,7 @@ describe('TripsMapWidget batched route behavior', () => {
       '2024-01-01T00:00:00Z',
       '2024-01-31T23:59:59Z',
       '',
+      undefined,
     );
     expect(screen.queryByTestId('trip-map-chart')).not.toBeInTheDocument();
     expect(screen.getByText('Loading route map...')).toBeInTheDocument();

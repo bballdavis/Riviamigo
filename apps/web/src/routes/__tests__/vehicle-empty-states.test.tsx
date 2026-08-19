@@ -7,6 +7,10 @@ vi.mock('@riviamigo/ui/primitives', async () => {
   return m;
 });
 
+vi.mock('@riviamigo/ui/hooks', () => ({
+  useDocumentTheme: () => false,
+}));
+
 const mockNavigate = vi.fn();
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -59,16 +63,17 @@ vi.mock('@riviamigo/ui/tables', () => ({
 }));
 
 vi.mock('@riviamigo/hooks', () => ({
+  useBasemapConfig: () => ({ data: undefined, isLoading: false }),
   useAuth: () => ({ defaultVehicleId: null, accessToken: null }),
   useResolvedVehicleSelection: () => ({ authReady: true, effectiveVehicleId: null, vehicleSelectionReady: true, vehicles: [] }),
   useMe: () => ({ data: { role: 'user' } }),
   useCurrentVehicleStatus: () => ({ data: null }),
   useVehicles: () => ({ data: [] }),
-  useDocumentTheme: () => false,
   useChargeSession: () => ({ data: undefined, isLoading: false }),
   useChargeCurve: () => ({ data: undefined, isLoading: false }),
   useSavedPlaces: () => ({ data: [], isLoading: false, isFetching: false, isError: false }),
-  useUpdateChargeSessionLocation: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateChargeSession: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useUpdateTripTagAssignments: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useTrip: () => ({ data: undefined, isLoading: false }),
   useTripDetailData: () => ({ data: undefined, isLoading: false }),
   useTripTrack: () => ({ data: undefined, isLoading: false }),

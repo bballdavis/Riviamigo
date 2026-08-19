@@ -21,7 +21,10 @@ use std::{
 
 use crate::{
     db::users::require_admin_or_super_user,
-    db::vehicles::{get_default_vehicle_id, require_vehicle_role},
+    db::vehicles::{
+        get_default_vehicle_id, require_vehicle_read_access, require_vehicle_role,
+        require_vehicle_session_access,
+    },
     errors::AppError,
     ingestion::{
         rivian_auth::{RivianAuthError, RivianVehicleSummary},
@@ -1253,20 +1256,16 @@ async fn add_vehicle(
         .fetch_one(&mut *tx)
         .await?;
 
-        if already_member {
-            return Err(AppError::Conflict(
-                "vehicle already exists; refresh credentials from vehicle settings".into(),
-            ));
+        if !already_member {
+            sqlx::query(
+                "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
+                 VALUES ($1, $2, 'owner', FALSE)",
+            )
+            .bind(existing_vehicle_id)
+            .bind(auth.user_id)
+            .execute(&mut *tx)
+            .await?;
         }
-
-        sqlx::query(
-            "INSERT INTO riviamigo.vehicle_memberships (vehicle_id, user_id, role, is_default)
-             VALUES ($1, $2, 'owner', FALSE)",
-        )
-        .bind(existing_vehicle_id)
-        .bind(auth.user_id)
-        .execute(&mut *tx)
-        .await?;
 
         sqlx::query(
             "INSERT INTO riviamigo.vehicle_user_settings
@@ -1365,12 +1364,15 @@ async fn add_vehicle(
     .await?;
 
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
-         VALUES ($1, 'authorized', NULL, NULL, now())
+        "INSERT INTO riviamigo.vehicle_runtime_state
+         (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
+         VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
          ON CONFLICT (vehicle_id) DO UPDATE
-         SET auth_state = 'authorized',
+         SET is_online = FALSE,
+             worker_health = 'starting',
+             worker_health_msg = 'Initializing Rivian telemetry collector',
+             auth_state = 'authorized',
              auth_reason_code = NULL,
-             worker_health_msg = NULL,
              updated_at = now()",
     )
     .bind(vehicle_id)
@@ -1379,9 +1381,18 @@ async fn add_vehicle(
 
     tx.commit().await?;
 
-    cache_vehicle_images(&state.pool, &state.config, vehicle_id, &tokens).await;
+    // The vehicle and credentials are durable after commit. Artwork and one-time
+    // session cleanup must not turn a successful add into a client-visible error.
+    queue_vehicle_artwork_repair(&state, vehicle_id).await;
 
-    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
+    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vehicle_id,
+            err = %error,
+            "vehicle.add.connect_session_cleanup_failed"
+        );
+    }
     info!(
         user_id = %auth.user_id,
         vehicle_id = %vehicle_id,
@@ -1389,12 +1400,21 @@ async fn add_vehicle(
         "vehicle.add.persisted"
     );
 
-    state
+    let telemetry_start_queued = state
         .supervisor
         .send(SupervisorCommand::StartWorker { vehicle_id })
         .await;
 
-    Ok(Json(serde_json::json!({"vehicle_id": vehicle_id})))
+    Ok(Json(serde_json::json!({
+        "vehicle_id": vehicle_id,
+        "vehicle_saved": true,
+        "telemetry_status": if telemetry_start_queued { "starting" } else { "delayed" },
+        "telemetry_error": if telemetry_start_queued {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
+        },
+    })))
 }
 
 async fn refresh_vehicle_credentials(
@@ -1446,6 +1466,8 @@ async fn refresh_vehicle_credentials(
     let encrypted = crate::ingestion::session_store::encrypt_tokens(&tokens, &identity)
         .map_err(AppError::Internal)?;
 
+    let mut tx = state.pool.begin().await?;
+
     sqlx::query(
         "INSERT INTO riviamigo.vehicle_credentials (vehicle_id, encrypted_tokens, token_created_at, last_refreshed_at)
          VALUES ($1,$2,now(),now())
@@ -1455,31 +1477,53 @@ async fn refresh_vehicle_credentials(
     )
     .bind(vid)
     .bind(encrypted.as_slice())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
-        "INSERT INTO riviamigo.vehicle_runtime_state (vehicle_id, auth_state, auth_reason_code, worker_health_msg, updated_at)
-         VALUES ($1, 'authorized', NULL, NULL, now())
+        "INSERT INTO riviamigo.vehicle_runtime_state
+         (vehicle_id, is_online, worker_health, worker_health_msg, auth_state, auth_reason_code, updated_at)
+         VALUES ($1, FALSE, 'starting', 'Initializing Rivian telemetry collector', 'authorized', NULL, now())
          ON CONFLICT (vehicle_id) DO UPDATE
-         SET auth_state = 'authorized',
+         SET is_online = FALSE,
+             worker_health = 'starting',
+             worker_health_msg = 'Initializing Rivian telemetry collector',
+             auth_state = 'authorized',
              auth_reason_code = NULL,
-             worker_health_msg = NULL,
              updated_at = now()",
     )
     .bind(vid)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
-    let _: () = redis::AsyncCommands::del(&mut conn, &key).await?;
+    tx.commit().await?;
+
+    if let Err(error) = redis::AsyncCommands::del::<_, ()>(&mut conn, &key).await {
+        warn!(
+            user_id = %auth.user_id,
+            vehicle_id = %vid,
+            err = %error,
+            "vehicle.refresh_credentials.connect_session_cleanup_failed"
+        );
+    }
     // Credential refresh is also the recovery path after a sanitized restore.
     // Start the worker immediately so an existing vehicle does not remain
     // authorized in the database but disconnected from Rivian.
-    state
+    let telemetry_start_queued = state
         .supervisor
         .send(SupervisorCommand::StartWorker { vehicle_id: vid })
         .await;
-    Ok(Json(serde_json::json!({ "ok": true, "vehicle_id": vid })))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "vehicle_id": vid,
+        "vehicle_saved": true,
+        "telemetry_status": if telemetry_start_queued { "starting" } else { "delayed" },
+        "telemetry_error": if telemetry_start_queued {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
+        },
+    })))
 }
 
 async fn delete_vehicle(
@@ -1650,7 +1694,7 @@ async fn set_default_vehicle(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_session_access(&state.pool, &auth, vid).await?;
     let mut tx = state.pool.begin().await?;
 
     sqlx::query(
@@ -1693,7 +1737,7 @@ async fn list_vehicle_members(
     auth: AuthUser,
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_session_access(&state.pool, &auth, vid).await?;
 
     let rows = sqlx::query_as::<_, VehicleMemberRow>(
         "SELECT vm.user_id, u.email, vm.role, vm.is_default, vm.created_at
@@ -2282,7 +2326,7 @@ async fn vehicle_status(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<VehicleStatusResponse>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     queue_vehicle_artwork_repair(&state, vid).await;
 
     let vehicle = sqlx::query_scalar::<_, Option<f64>>(
@@ -3379,7 +3423,7 @@ async fn vehicle_images(
     axum::extract::Path(vid): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     Ok(Json(
         fetch_vehicle_images_json(&state.pool, &state.config, vid).await?,
     ))
@@ -4072,7 +4116,7 @@ async fn vehicle_image_cache_asset(
     if !sanitize_image_key(&image_key) {
         return Err(AppError::NotFound);
     }
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vehicle_id).await?;
+    require_vehicle_read_access(&state.pool, &auth, vehicle_id).await?;
     let Some(metadata) = find_mirrored_asset(&state.pool, vehicle_id, &image_key).await? else {
         return Ok(vehicle_artwork_placeholder_response());
     };
@@ -4409,7 +4453,7 @@ async fn telemetry_lanes(
     Query(params): Query<TelemetryLaneParams>,
 ) -> Result<Json<TelemetryLaneFrame>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let requested_lanes = parse_telemetry_lanes(params.lanes.as_deref())?;
     let to = params.to.unwrap_or_else(chrono::Utc::now);
@@ -4597,7 +4641,7 @@ async fn raw_vehicle_data(
     Query(params): Query<RawDataParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_vehicle_access(&auth, vid)?;
-    crate::db::vehicles::require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     validate_raw_time_bounds(params.from, params.to)?;
     let selected_fields = parse_raw_fields(params.fields.as_deref())?;
     let selected_fields_csv = selected_fields
@@ -5065,6 +5109,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5072,6 +5118,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 
@@ -5128,6 +5175,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5135,6 +5184,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 
@@ -5338,6 +5388,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -5345,6 +5397,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
         let metadata = serde_json::json!({

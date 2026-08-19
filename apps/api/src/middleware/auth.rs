@@ -151,7 +151,15 @@ async fn authenticate_api_key(
 
     match row.2.as_str() {
         "read" if is_integration_read_request(&method, path) => {}
-        _ => return Err(AppError::Forbidden),
+        _ => {
+            tracing::warn!(
+                method = %method,
+                path,
+                access_level = %row.2,
+                "API key request denied by integration read scope"
+            );
+            return Err(AppError::Forbidden);
+        }
     }
 
     // Only update last_used_at at most once per minute to avoid an UPDATE on every request.
@@ -187,15 +195,20 @@ pub fn require_vehicle_access(auth: &AuthUser, vehicle_id: Uuid) -> Result<(), A
 /// make it available just because it happens to use GET.  `metrics/batch` and
 /// the Grafana compatibility calls are read operations despite using POST.
 fn is_integration_read_request(method: &Method, path: &str) -> bool {
+    // The protected API router is nested below `/v1`, so Axum passes the
+    // inner route path (`/vehicles`, `/api/catalog`, ...) to extractors. Keep
+    // accepting the fully-qualified form in unit tests and direct callers.
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+
     if *method == Method::POST {
         return matches!(
             path,
-            "/v1/metrics/batch"
-                | "/v1/grafana/search"
-                | "/v1/grafana/query"
-                | "/v1/grafana/annotations"
-                | "/v1/grafana/tag-keys"
-                | "/v1/grafana/tag-values"
+            "/metrics/batch"
+                | "/grafana/search"
+                | "/grafana/query"
+                | "/grafana/annotations"
+                | "/grafana/tag-keys"
+                | "/grafana/tag-values"
         );
     }
 
@@ -203,20 +216,21 @@ fn is_integration_read_request(method: &Method, path: &str) -> bool {
         return false;
     }
 
-    path == "/v1/api/catalog"
-        || path == "/v1/vehicles"
-        || path.starts_with("/v1/battery/")
-        || path.starts_with("/v1/metrics/")
-        || path.starts_with("/v1/trips")
-        || path.starts_with("/v1/charging")
-        || path.starts_with("/v1/efficiency/")
-        || path.starts_with("/v1/dashboard/overview/")
-        || path.starts_with("/v1/grafana")
+    path == "/api/catalog"
+        || path == "/vehicles"
+        || path.starts_with("/battery/")
+        || path.starts_with("/metrics/")
+        || path.starts_with("/trips")
+        || path.starts_with("/charging")
+        || path.starts_with("/efficiency/")
+        || path.starts_with("/dashboard/overview/")
+        || path.starts_with("/grafana")
         || is_scoped_vehicle_read_path(path)
 }
 
 fn is_scoped_vehicle_read_path(path: &str) -> bool {
-    let Some(suffix) = path.strip_prefix("/v1/vehicles/") else {
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    let Some(suffix) = path.strip_prefix("/vehicles/") else {
         return false;
     };
     matches!(
@@ -312,6 +326,18 @@ mod tests {
             &Method::GET,
             "/v1/admin/users"
         ));
+    }
+
+    #[test]
+    fn integration_gate_accepts_router_nested_paths() {
+        assert!(is_integration_read_request(&Method::GET, "/api/catalog"));
+        assert!(is_integration_read_request(&Method::GET, "/vehicles"));
+        assert!(is_integration_read_request(
+            &Method::GET,
+            "/vehicles/id/live-session"
+        ));
+        assert!(is_integration_read_request(&Method::POST, "/metrics/batch"));
+        assert!(!is_integration_read_request(&Method::GET, "/admin/users"));
     }
 
     #[test]

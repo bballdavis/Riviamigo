@@ -23,6 +23,7 @@ use crate::ingestion::session_store::{decrypt_tokens, RivianTokenBundle};
 const WS_URL: &str = "wss://api.rivian.com/gql-consumer-subscriptions/graphql";
 const SUBSCRIPTION_ID: &str = "riviamigo-parallax-collector";
 const SCHEMA_VERSION: i32 = 1;
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const TOPICS: &[&str] = &[
     "vehicle.network.state",
     "dynamics.vehicle.efficiency",
@@ -257,6 +258,32 @@ async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result
     request
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse()?);
+    request.headers_mut().insert(
+        "A-Sess",
+        session
+            .tokens
+            .app_session_token
+            .parse()
+            .context("invalid Rivian app session header")?,
+    );
+    request.headers_mut().insert(
+        "U-Sess",
+        session
+            .tokens
+            .user_session_token
+            .parse()
+            .context("invalid Rivian user session header")?,
+    );
+    if !session.tokens.csrf_token.is_empty() {
+        request.headers_mut().insert(
+            "Csrf-Token",
+            session
+                .tokens
+                .csrf_token
+                .parse()
+                .context("invalid Rivian CSRF header")?,
+        );
+    }
     let (mut websocket, _) = tokio_tungstenite::connect_async(request).await?;
     websocket
         .send(Message::Text(
@@ -284,34 +311,65 @@ async fn collect_connection(pool: &PgPool, session: &CollectorSession) -> Result
         .await?;
     set_collector_state(pool, session.vehicle_id, "connected", None).await?;
 
-    while let Some(message) = websocket.next().await {
-        match message? {
-            Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
-            Message::Text(text) => {
-                let value: Value = serde_json::from_str(&text).unwrap_or_default();
-                if value.get("id").and_then(Value::as_str) != Some(SUBSCRIPTION_ID) {
-                    continue;
-                }
-                match value.get("type").and_then(Value::as_str) {
-                    Some("next") => {
-                        let Some(envelope) = value.pointer("/payload/data/parallaxMessages") else {
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.tick().await;
+    loop {
+        tokio::select! {
+            message = websocket.next() => {
+                let Some(message) = message else {
+                    anyhow::bail!("Parallax socket ended");
+                };
+                match message? {
+                    Message::Ping(payload) => websocket.send(Message::Pong(payload)).await?,
+                    Message::Text(text) => {
+                        let value: Value = serde_json::from_str(&text).unwrap_or_default();
+                        if value.get("id").and_then(Value::as_str) != Some(SUBSCRIPTION_ID) {
                             continue;
-                        };
-                        persist_envelope(pool, session.vehicle_id, envelope).await?;
+                        }
+                        match value.get("type").and_then(Value::as_str) {
+                            Some("next") => {
+                                let Some(envelope) =
+                                    value.pointer("/payload/data/parallaxMessages")
+                                else {
+                                    continue;
+                                };
+                                persist_envelope(pool, session.vehicle_id, envelope).await?;
+                            }
+                            Some("error") => anyhow::bail!("Parallax subscription rejected"),
+                            Some("complete") => {
+                                anyhow::bail!("Parallax subscription completed")
+                            }
+                            _ => {}
+                        }
                     }
-                    Some("error") => anyhow::bail!("Parallax subscription rejected"),
-                    Some("complete") => anyhow::bail!("Parallax subscription completed"),
+                    Message::Close(frame) => {
+                        set_collector_state(pool, session.vehicle_id, "disconnected", None)
+                            .await?;
+                        anyhow::bail!("Parallax socket closed: {frame:?}");
+                    }
                     _ => {}
                 }
             }
-            Message::Close(frame) => {
-                set_collector_state(pool, session.vehicle_id, "disconnected", None).await?;
-                anyhow::bail!("Parallax socket closed: {frame:?}");
+            _ = heartbeat.tick() => {
+                touch_collector_heartbeat(pool, session.vehicle_id).await?;
             }
-            _ => {}
         }
     }
-    anyhow::bail!("Parallax socket ended")
+}
+
+async fn touch_collector_heartbeat(pool: &PgPool, vehicle_id: Uuid) -> Result<()> {
+    let result = sqlx::query(
+        r#"UPDATE riviamigo.parallax_collector_state
+           SET updated_at = now()
+           WHERE vehicle_id = $1 AND status = 'connected'"#,
+    )
+    .bind(vehicle_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() != 1 {
+        anyhow::bail!("Parallax collector heartbeat state is missing or disconnected");
+    }
+    Ok(())
 }
 
 async fn wait_for_ack<S>(websocket: &mut S) -> Result<()>

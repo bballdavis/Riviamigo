@@ -40,6 +40,23 @@ The lab rechecks the package SHA-256, reads the expected source head and chain i
 
 The unified production image runs nginx, the API, and a local-only restore supervisor. A restore job is journaled under `/backups/.restore-jobs`; nginx proxies its capability-token status endpoint even while the API process is intentionally stopped. Before handoff, that journal also snapshots the backup runs, artifact catalog, and restore request history. The restarted API merges the snapshot back after the supervisor marks the job complete. The supervisor never receives Docker access and does not restart PostgreSQL or Redis.
 
+### Resource envelope and contention
+
+Import and restore share a PostgreSQL-backed recovery-mutation lock; do not
+start a second import, restore, or recovery intervention while one is active.
+The imported package is streamed to a temporary artifact only after a free-space
+check and is rechecked while receiving bytes. The default envelope is 16 GiB
+compressed upload, 64 GiB expanded/member size, 10,000 members, 200:1 maximum
+compression ratio, and at least 2 GiB free artifact storage. Upload has a
+30-minute deadline; the restore supervisor has a four-hour deadline. Limits
+are configuration, not estimates—an archive that exceeds any one is rejected.
+
+When a limit, free-space, or deadline error occurs, preserve the original
+package and journal, correct the condition, and retry after the active lock has
+cleared. Do not bypass the check by copying unvalidated content into staging.
+The service rejects unsafe or duplicate paths and validates the entire package
+before extraction or cataloging.
+
 For an in-app restore:
 
 1. Confirm the package finishes import validation and preflight records the expected package checksum, chain/catalog identities, and source/target heads.
@@ -49,6 +66,10 @@ For an in-app restore:
 5. Do not edit `_sqlx_migrations` manually. Normal ledger reconstruction occurs only in an isolated candidate after its exact-prefix ledger and complete source schema contract pass. Packages from the former five-migration chain are unsupported by the cutover release; use the explicit database-adoption runbook with a verified dump and matching old image instead. Partial or contradictory historical schemas fail closed.
 
 The container healthcheck treats an active restore supervisor as healthy so an external container manager does not interrupt the short swap window. Public `/health` remains available during candidate preparation and unavailable only while the API is intentionally stopped for swap or rollback.
+
+### Backup run diagnostics
+
+Manual and scheduled backups are detached from the HTTP request. The start endpoint returns `202 Accepted`; use `GET /v1/admin/backups` and inspect the newest run's `status`, `phase`, `progress_percent`, `started_at`, and `error_message`. The Settings page performs this polling automatically while a run is pending or running. A stale `running` row after an API restart is reconciled to `failed` during startup; it does not represent active work. A second start returning `409 Conflict` means the existing backup worker still owns the PostgreSQL advisory lock.
 
 For disposable fault-injection drills, set `RIVIAMIGO_RESTORE_FAULT_PHASE` to one of `package_validated`, `timescale_pre_restore`, `dump_restored`, `compatibility_transform`, `target_migrations`, `candidate_validated`, `safety_backup`, `history_merged`, `database_swapped`, `artwork_activated`, or `health_verification`. Never enable this variable on a production installation. Pre-swap faults must leave the live database untouched; post-swap faults must report a successful rollback and restore health.
 

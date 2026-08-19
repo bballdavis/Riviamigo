@@ -103,10 +103,16 @@ export function DateRangePicker({
   const resolvedRange = React.useMemo(() => timeframeToRange(timeframe), [timeframe]);
   const [customFrom, setCustomFrom] = React.useState(resolvedRange?.from ?? new Date());
   const [customTo, setCustomTo] = React.useState(resolvedRange?.to ?? new Date());
-  const [customFromInput, setCustomFromInput] = React.useState(formatDateInputValue(resolvedRange?.from ?? new Date()));
-  const [customToInput, setCustomToInput] = React.useState(formatDateInputValue(resolvedRange?.to ?? new Date()));
+  const [customFromInput, setCustomFromInput] = React.useState(
+    formatDateInputValue(resolvedRange?.from ?? new Date())
+  );
+  const [customToInput, setCustomToInput] = React.useState(
+    formatDateInputValue(resolvedRange?.to ?? new Date())
+  );
   const [inputError, setInputError] = React.useState<string | null>(null);
-  const [monthCursor, setMonthCursor] = React.useState(startOfMonth(resolvedRange?.from ?? new Date()));
+  const [monthCursor, setMonthCursor] = React.useState(
+    startOfMonth(resolvedRange?.from ?? new Date())
+  );
   const [target, setTarget] = React.useState<'from' | 'to'>('from');
   const ref = React.useRef<HTMLDivElement>(null);
 
@@ -114,8 +120,17 @@ export function DateRangePicker({
     function handler(event: MouseEvent) {
       if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
     }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false);
+    }
+
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', handleEscape);
+    };
   }, []);
 
   React.useEffect(() => {
@@ -143,7 +158,12 @@ export function DateRangePicker({
 
   const handleDayPick = (picked: Date) => {
     const base = getAppDateParts(target === 'from' ? customFrom : customTo) ?? {
-      year: picked.getFullYear(), month: picked.getMonth() + 1, day: picked.getDate(), hour: 0, minute: 0, second: 0,
+      year: picked.getFullYear(),
+      month: picked.getMonth() + 1,
+      day: picked.getDate(),
+      hour: 0,
+      minute: 0,
+      second: 0,
     };
     const next = appDatePartsToDate({
       ...base,
@@ -170,171 +190,191 @@ export function DateRangePicker({
       setInputError('Enter a valid From and To date, like 1/7/25 6:30 PM.');
       return;
     }
-    const normalized = parsedFrom <= parsedTo
-      ? { from: parsedFrom, to: parsedTo }
-      : { from: parsedTo, to: parsedFrom };
+    const normalized =
+      parsedFrom <= parsedTo
+        ? { from: parsedFrom, to: parsedTo }
+        : { from: parsedTo, to: parsedFrom };
     onChange({ kind: 'custom', ...normalized });
     setOpen(false);
   };
 
-    return (
+  return (
     <div ref={ref} className={cn('relative', className)}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className={cn(
           'flex h-9 items-center gap-2 rounded-lg border border-border bg-bg-elevated px-3 text-sm',
           'text-fg-secondary transition-colors duration-150 hover:border-border-strong hover:text-fg',
-          triggerClassName,
+          triggerClassName
         )}
       >
         <Calendar className="h-3.5 w-3.5 text-fg-tertiary" />
         {displayLabel}
-        <ChevronDown className={cn('h-3.5 w-3.5 text-fg-tertiary transition-transform', open && 'rotate-180')} />
+        <ChevronDown
+          className={cn('h-3.5 w-3.5 text-fg-tertiary transition-transform', open && 'rotate-180')}
+        />
       </button>
 
       {open ? (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-[380px] max-w-[calc(100vw-1rem)] space-y-3 rounded-xl border border-border bg-bg-elevated p-3 shadow-lg sm:left-auto sm:right-0">
-          <div className="grid grid-cols-2 gap-1">
-            {PRESETS.map((preset) => (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-bg-page/70 p-4 backdrop-blur-sm sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-1 sm:block sm:w-max sm:bg-transparent sm:p-0 sm:backdrop-blur-none"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Select timeframe"
+            className="max-h-[calc(100dvh-2rem)] w-full max-w-md space-y-3 overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-elevated p-3 shadow-lg sm:max-h-[calc(100vh-1rem)] sm:min-w-[380px] sm:max-w-[calc(100vw-1rem)]"
+          >
+            <div className="grid grid-cols-2 gap-1">
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  onClick={() => {
+                    if (preset.key === 'lifetime') {
+                      setCustomExpanded(false);
+                      onChange({ kind: 'lifetime' });
+                    } else {
+                      setCustomExpanded(false);
+                      onChange({ kind: 'preset', preset: preset.key });
+                    }
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    'rounded-md px-3 py-1.5 text-left text-sm transition-colors',
+                    matchesPreset(timeframe, preset.key)
+                      ? 'bg-accent-muted text-accent'
+                      : 'text-fg-secondary hover:bg-bg-surface hover:text-fg'
+                  )}
+                >
+                  {preset.label}
+                </button>
+              ))}
               <button
-                key={preset.key}
                 type="button"
                 onClick={() => {
-                  if (preset.key === 'lifetime') {
-                    setCustomExpanded(false);
-                    onChange({ kind: 'lifetime' });
-                  } else {
-                    setCustomExpanded(false);
-                    onChange({ kind: 'preset', preset: preset.key });
-                  }
-                  setOpen(false);
-                }}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-left text-sm transition-colors',
-                  matchesPreset(timeframe, preset.key)
-                    ? 'bg-accent-muted text-accent'
-                    : 'text-fg-secondary hover:bg-bg-surface hover:text-fg',
-                )}
-              >
-                {preset.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => {
-                setCustomExpanded((value) => !value);
-                if (!customExpanded) {
-                  setTarget('from');
-                  setMonthCursor(startOfMonth(customFrom));
-                }
-              }}
-              className={cn(
-                'flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition-colors',
-                customExpanded || timeframe.kind === 'custom'
-                  ? 'bg-accent-muted text-accent'
-                  : 'text-fg-secondary hover:bg-bg-surface hover:text-fg',
-              )}
-            >
-              <span>Custom Range</span>
-              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', customExpanded && 'rotate-180')} />
-            </button>
-          </div>
-
-          {customExpanded ? (
-            <div className="space-y-3 border-t border-border pt-3">
-              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
-                <Calendar className="h-3.5 w-3.5" />
-                Custom range
-              </div>
-
-              <div className="grid gap-2 sm:grid-cols-2">
-                <DateTimeRow
-                  label="From"
-                  active={target === 'from'}
-                  value={customFrom}
-                  inputValue={customFromInput}
-                  onInputChange={(value) => {
-                    setCustomFromInput(value);
-                    const parsed = parseUserInput(value, customFrom);
-                    if (parsed) {
-                      setCustomFrom(parsed);
-                      setMonthCursor(startOfMonth(parsed));
-                      setInputError(null);
-                    }
-                  }}
-                  onTarget={() => {
+                  setCustomExpanded((value) => !value);
+                  if (!customExpanded) {
                     setTarget('from');
                     setMonthCursor(startOfMonth(customFrom));
-                  }}
-                  onHour={(hours) => {
-                    const next = setAppTime(customFrom, { hour: hours });
-                    setCustomFrom(next);
-                    setCustomFromInput(formatDateInputValue(next));
-                  }}
-                  onMinute={(minutes) => {
-                    const next = setAppTime(customFrom, { minute: minutes });
-                    setCustomFrom(next);
-                    setCustomFromInput(formatDateInputValue(next));
-                  }}
-                />
-                <DateTimeRow
-                  label="To"
-                  active={target === 'to'}
-                  value={customTo}
-                  inputValue={customToInput}
-                  onInputChange={(value) => {
-                    setCustomToInput(value);
-                    const parsed = parseUserInput(value, customTo);
-                    if (parsed) {
-                      setCustomTo(parsed);
-                      setMonthCursor(startOfMonth(parsed));
-                      setInputError(null);
-                    }
-                  }}
-                  onTarget={() => {
-                    setTarget('to');
-                    setMonthCursor(startOfMonth(customTo));
-                  }}
-                  onHour={(hours) => {
-                    const next = setAppTime(customTo, { hour: hours });
-                    setCustomTo(next);
-                    setCustomToInput(formatDateInputValue(next));
-                  }}
-                  onMinute={(minutes) => {
-                    const next = setAppTime(customTo, { minute: minutes });
-                    setCustomTo(next);
-                    setCustomToInput(formatDateInputValue(next));
-                  }}
-                />
-              </div>
-
-              <ThemedCalendar
-                month={monthCursor}
-                selected={target === 'from' ? customFrom : customTo}
-                from={customFrom}
-                to={customTo}
-                onMonth={setMonthCursor}
-                onPick={handleDayPick}
-              />
-
-              {inputError ? (
-                <p className="text-xs text-status-negative">{inputError}</p>
-              ) : (
-                <p className="text-xs text-fg-tertiary">
-                  Applying: {formatAppDateTime(customFrom <= customTo ? customFrom : customTo)} - {formatAppDateTime(customFrom <= customTo ? customTo : customFrom)}
-                </p>
-              )}
-
-              <button
-                type="button"
-                onClick={applyCustomRange}
-                className="h-8 w-full rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90"
+                  }
+                }}
+                className={cn(
+                  'flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm transition-colors',
+                  customExpanded || timeframe.kind === 'custom'
+                    ? 'bg-accent-muted text-accent'
+                    : 'text-fg-secondary hover:bg-bg-surface hover:text-fg'
+                )}
               >
-                Apply custom range
+                <span>Custom Range</span>
+                <ChevronDown
+                  className={cn('h-3.5 w-3.5 transition-transform', customExpanded && 'rotate-180')}
+                />
               </button>
             </div>
-          ) : null}
+
+            {customExpanded ? (
+              <div className="space-y-3 border-t border-border pt-3">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-fg-tertiary">
+                  <Calendar className="h-3.5 w-3.5" />
+                  Custom range
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <DateTimeRow
+                    label="From"
+                    active={target === 'from'}
+                    value={customFrom}
+                    inputValue={customFromInput}
+                    onInputChange={(value) => {
+                      setCustomFromInput(value);
+                      const parsed = parseUserInput(value, customFrom);
+                      if (parsed) {
+                        setCustomFrom(parsed);
+                        setMonthCursor(startOfMonth(parsed));
+                        setInputError(null);
+                      }
+                    }}
+                    onTarget={() => {
+                      setTarget('from');
+                      setMonthCursor(startOfMonth(customFrom));
+                    }}
+                    onHour={(hours) => {
+                      const next = setAppTime(customFrom, { hour: hours });
+                      setCustomFrom(next);
+                      setCustomFromInput(formatDateInputValue(next));
+                    }}
+                    onMinute={(minutes) => {
+                      const next = setAppTime(customFrom, { minute: minutes });
+                      setCustomFrom(next);
+                      setCustomFromInput(formatDateInputValue(next));
+                    }}
+                  />
+                  <DateTimeRow
+                    label="To"
+                    active={target === 'to'}
+                    value={customTo}
+                    inputValue={customToInput}
+                    onInputChange={(value) => {
+                      setCustomToInput(value);
+                      const parsed = parseUserInput(value, customTo);
+                      if (parsed) {
+                        setCustomTo(parsed);
+                        setMonthCursor(startOfMonth(parsed));
+                        setInputError(null);
+                      }
+                    }}
+                    onTarget={() => {
+                      setTarget('to');
+                      setMonthCursor(startOfMonth(customTo));
+                    }}
+                    onHour={(hours) => {
+                      const next = setAppTime(customTo, { hour: hours });
+                      setCustomTo(next);
+                      setCustomToInput(formatDateInputValue(next));
+                    }}
+                    onMinute={(minutes) => {
+                      const next = setAppTime(customTo, { minute: minutes });
+                      setCustomTo(next);
+                      setCustomToInput(formatDateInputValue(next));
+                    }}
+                  />
+                </div>
+
+                <ThemedCalendar
+                  month={monthCursor}
+                  selected={target === 'from' ? customFrom : customTo}
+                  from={customFrom}
+                  to={customTo}
+                  onMonth={setMonthCursor}
+                  onPick={handleDayPick}
+                />
+
+                {inputError ? (
+                  <p className="text-xs text-status-negative">{inputError}</p>
+                ) : (
+                  <p className="text-xs text-fg-tertiary">
+                    Applying: {formatAppDateTime(customFrom <= customTo ? customFrom : customTo)} -{' '}
+                    {formatAppDateTime(customFrom <= customTo ? customTo : customFrom)}
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={applyCustomRange}
+                  className="h-8 w-full rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent/90"
+                >
+                  Apply custom range
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -368,13 +408,17 @@ function DateTimeRow({
     <div
       className={cn(
         'w-full min-w-0 rounded-lg border px-2 py-2 text-left',
-        active ? 'border-accent bg-accent-muted/40' : 'border-border bg-bg-surface hover:border-border-strong',
+        active
+          ? 'border-accent bg-accent-muted/40'
+          : 'border-border bg-bg-surface hover:border-border-strong'
       )}
     >
       <button type="button" onClick={onTarget} className="w-full text-left">
         <div className="flex items-baseline justify-between gap-2">
           <div className="text-[11px] uppercase tracking-wide text-fg-tertiary">{label}</div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-fg-tertiary">mm/dd/yyyy</div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-fg-tertiary">
+            mm/dd/yyyy
+          </div>
         </div>
         <div className="mt-1 text-xs text-fg">{formatAppDate(value, { weekday: 'short' })}</div>
       </button>
@@ -448,7 +492,11 @@ function ThemedCalendar({
   return (
     <div className="rounded-lg border border-border bg-bg-surface p-2">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <button type="button" onClick={() => onMonth(startOfMonth(addMonths(month, -1)))} className="rounded-md p-1 hover:bg-bg-elevated">
+        <button
+          type="button"
+          onClick={() => onMonth(startOfMonth(addMonths(month, -1)))}
+          className="rounded-md p-1 hover:bg-bg-elevated"
+        >
           <ChevronLeft className="h-4 w-4 text-fg-secondary" />
         </button>
         <div className="flex items-center gap-2">
@@ -457,31 +505,53 @@ function ThemedCalendar({
             value={String(month.getMonth())}
             onChange={(value) => onMonth(new Date(month.getFullYear(), Number(value), 1))}
             size="sm"
-            options={MONTH_OPTIONS.map((option) => ({ value: String(option.value), label: option.label }))}
+            options={MONTH_OPTIONS.map((option) => ({
+              value: String(option.value),
+              label: option.label,
+            }))}
           />
           <SelectPicker
             aria-label="Year"
             value={String(month.getFullYear())}
             onChange={(value) => onMonth(new Date(Number(value), month.getMonth(), 1))}
             size="sm"
-            options={YEAR_OPTIONS.map((option) => ({ value: String(option.value), label: option.label }))}
+            options={YEAR_OPTIONS.map((option) => ({
+              value: String(option.value),
+              label: option.label,
+            }))}
           />
         </div>
-        <button type="button" onClick={() => onMonth(startOfMonth(addMonths(month, 1)))} className="rounded-md p-1 hover:bg-bg-elevated">
+        <button
+          type="button"
+          onClick={() => onMonth(startOfMonth(addMonths(month, 1)))}
+          className="rounded-md p-1 hover:bg-bg-elevated"
+        >
           <ChevronRight className="h-4 w-4 text-fg-secondary" />
         </button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-fg-tertiary">
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <div key={`${day}-${index}`}>{day}</div>)}
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+          <div key={`${day}-${index}`}>{day}</div>
+        ))}
       </div>
       <div className="mt-1 grid grid-cols-7 gap-1">
         {cells.map((date, index) => {
           if (!date) return <div key={`blank-${index}`} className="h-8" />;
-          const dateInstant = appDatePartsToDate({ year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate(), hour: 0, minute: 0, second: 0 });
+          const dateInstant = appDatePartsToDate({
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            day: date.getDate(),
+            hour: 0,
+            minute: 0,
+            second: 0,
+          });
           const inRange = dateInstant >= startOfAppDay(from) && dateInstant <= startOfAppDay(to);
           const dateParts = getAppDateParts(dateInstant);
           const selectedParts = getAppDateParts(selected);
-          const selectedDay = dateParts?.year === selectedParts?.year && dateParts?.month === selectedParts?.month && dateParts?.day === selectedParts?.day;
+          const selectedDay =
+            dateParts?.year === selectedParts?.year &&
+            dateParts?.month === selectedParts?.month &&
+            dateParts?.day === selectedParts?.day;
           return (
             <button
               key={date.toISOString()}
@@ -490,8 +560,10 @@ function ThemedCalendar({
               className={cn(
                 'h-8 rounded-md text-xs',
                 !isSameMonth(date, month) && 'text-fg-tertiary/40',
-                inRange ? 'bg-accent-muted text-fg' : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg',
-                selectedDay && 'ring-1 ring-accent text-accent',
+                inRange
+                  ? 'bg-accent-muted text-fg'
+                  : 'text-fg-secondary hover:bg-bg-elevated hover:text-fg',
+                selectedDay && 'ring-1 ring-accent text-accent'
               )}
             >
               {date.getDate()}
@@ -551,9 +623,10 @@ function setAppTime(value: Date, changes: Partial<{ hour: number; minute: number
 }
 
 function snapMinuteToOption(value: number) {
-  return [0, 15, 30, 45].reduce((closest, option) => (
-    Math.abs(option - value) < Math.abs(closest - value) ? option : closest
-  ), 0);
+  return [0, 15, 30, 45].reduce(
+    (closest, option) => (Math.abs(option - value) < Math.abs(closest - value) ? option : closest),
+    0
+  );
 }
 
 function matchesPreset(timeframe: DashboardTimeframe, preset: PresetKey) {

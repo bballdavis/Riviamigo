@@ -28,10 +28,14 @@ This directory is canonical for operational and process runbooks. Update it when
   Calendar Version releases, public GHCR images, pre-release images from `dev`, and recovery steps.
 - [`backup-restore.md`](./backup-restore.md)
   Recovery-package validation, clean-install restore, and incident recovery steps.
+- [`dev-harness.md`](./dev-harness.md)
+  Refresh a disposable production clone from a verified recovery package and test an immutable dev image.
 - [`dependency-maintenance.md`](./dependency-maintenance.md)
   Catalog ownership, upgrade grouping, runtime baselines, audits, and release qualification.
 - [`parallax-capture.md`](./parallax-capture.md)
   Operate and troubleshoot the optional, independent normalized Parallax telemetry collector.
+- [`charge-payload-cleanup.md`](./charge-payload-cleanup.md)
+  Diagnose and compact redundant charging payload evidence without broad or automatic deletion.
 
 ## When To Add A Runbook
 

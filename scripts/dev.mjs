@@ -306,7 +306,10 @@ async function assertPortAvailable(port, label) {
   }
 }
 
-async function waitForHttp(url, child, label, timeoutMs = 30000) {
+// API startup can bind and report health before the resumable charge-history
+// worker finishes its first pass. Keep local readiness tolerant of a cold Rust
+// start and database recovery without changing the single-container contract.
+async function waitForHttp(url, child, label, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -464,7 +467,7 @@ function apiEnv() {
     ALLOWED_ORIGINS: webOrigins().join(','),    // Dev stack is served over http://localhost (and often LAN IPs), so
     // refresh cookies must not be marked Secure or browser reload will drop
     // session continuity and trigger repeated 401/WS reconnect churn.
-    COOKIE_INSECURE: '1',
+    COOKIE_INSECURE: 'true',
     RIVIAMIGO_ENV: 'development',
     RESTORE_AGENT_URL: `http://127.0.0.1:${ports.restoreAgent}`,
     RESTORE_AGENT_KEY_FILE: devRestoreAgentKeyFile,

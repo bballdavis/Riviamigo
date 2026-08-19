@@ -11,7 +11,8 @@ export interface TripMapRoute {
 
 export type MapStyleMode = 'dark' | 'light';
 
-interface BasemapConfig {
+/** Resolved by the application data layer before the chart is rendered. */
+export interface BasemapConfig {
   enabled: boolean;
   light_url: string;
   dark_url: string;
@@ -32,6 +33,12 @@ export interface TripMapChartProps {
   mapStyle?: MapStyleMode;
   /** Bearer token used only for Riviamigo's same-origin basemap proxy. */
   accessToken?: string | null;
+  /** Resolved basemap policy. UI never performs API requests. */
+  basemapConfig?: BasemapConfig | null | undefined;
+  /** Optional connected-wrapper error copy. */
+  basemapError?: string | null;
+  /** Retries configuration in the connected wrapper, not in this presentation component. */
+  onBasemapRetry?: () => void;
   mapLoader?: typeof loadMapLibre;
 }
 
@@ -72,7 +79,7 @@ const ROUTE_SOURCE_ID = 'trip-routes';
 const ROUTE_LAYER_ID = 'trip-routes-line';
 const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 
-const NEUTRAL_BASEMAP: BasemapConfig = {
+export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
   dark_url: '',
   light_url: '',
@@ -130,6 +137,9 @@ export function TripMapChart({
   className,
   mapStyle = 'dark',
   accessToken = null,
+  basemapConfig,
+  basemapError = null,
+  onBasemapRetry,
   mapLoader = loadMapLibre,
 }: TripMapChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -144,11 +154,10 @@ export function TripMapChart({
   const activePointFrameRef = React.useRef<number | null>(null);
   const lastActivePointRef = React.useRef<LatLng | null>(null);
   const accessTokenRef = React.useRef<string | null>(accessToken);
-  const basemapRef = React.useRef<BasemapConfig>(NEUTRAL_BASEMAP);
+  const basemap = basemapConfig ?? NEUTRAL_BASEMAP_CONFIG;
+  const basemapRef = React.useRef<BasemapConfig>(basemap);
   const appliedBasemapSignatureRef = React.useRef('');
-  const [basemap, setBasemap] = React.useState<BasemapConfig>(NEUTRAL_BASEMAP);
   const [mapError, setMapError] = React.useState<string | null>(null);
-  const [configRetry, setConfigRetry] = React.useState(0);
 
   React.useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -157,27 +166,6 @@ export function TripMapChart({
   React.useEffect(() => {
     basemapRef.current = basemap;
   }, [basemap]);
-
-  React.useEffect(() => {
-    if (typeof fetch !== 'function') return;
-    let cancelled = false;
-    const requestInit: RequestInit = accessToken
-      ? { credentials: 'same-origin', headers: { Authorization: `Bearer ${accessToken}` } }
-      : { credentials: 'same-origin' };
-    setMapError(null);
-    fetch('/v1/external/basemap/config', requestInit)
-      .then((response) => response.ok
-        ? response.json() as Promise<BasemapConfig>
-        : Promise.reject(new Error('Basemap configuration unavailable')))
-      .then((config) => { if (!cancelled) setBasemap(config); })
-      .catch(() => {
-        if (!cancelled) {
-          setBasemap(NEUTRAL_BASEMAP);
-          setMapError('Map tiles unavailable');
-        }
-      });
-    return () => { cancelled = true; };
-  }, [accessToken, configRetry]);
 
   const routeList = React.useMemo(
     () => (routes?.length ? routes : [{ id: 'trip', track }]).filter((route) => route.track.length > 1),
@@ -485,11 +473,13 @@ export function TripMapChart({
             <span className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary">{basemap.attribution}</span>
           )
         ) : null}
-        {mapError ? (
+        {mapError || basemapError ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/70 p-4 text-center">
             <div className="rounded-lg border border-border bg-bg-elevated px-3 py-2 text-xs text-fg-secondary shadow-lg">
-              <p>{mapError}</p>
-              <button type="button" onClick={() => setConfigRetry((value) => value + 1)} className="mt-1 font-medium text-accent hover:underline">Retry</button>
+              <p>{basemapError ?? mapError}</p>
+              {onBasemapRetry ? (
+                <button type="button" onClick={() => { setMapError(null); onBasemapRetry(); }} className="mt-1 font-medium text-accent hover:underline">Retry</button>
+              ) : null}
             </div>
           </div>
         ) : null}

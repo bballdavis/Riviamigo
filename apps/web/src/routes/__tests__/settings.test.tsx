@@ -61,6 +61,31 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 });
 
 vi.mock('@riviamigo/hooks', () => ({
+  queryKeys: {
+    apiKeys: { all: ['api-keys'] },
+    apiCatalog: { all: ['api-catalog'] },
+    appTimezone: { current: ['app-timezone'] },
+    backups: {
+      all: ['backup-overview'],
+      overview: (page: number, perPage: number) => ['backup-overview', page, perPage],
+    },
+    me: { all: ['me'] },
+    unitPreferences: { current: ['unit-preferences'] },
+    vehicle: {
+      health: (vehicleId: string) => ['vehicles', 'health', vehicleId],
+      images: (vehicleId: string) => ['vehicles', 'images', vehicleId],
+    },
+    vehicleInvites: {
+      byVehicle: (vehicleId: string) => ['vehicle-invites', vehicleId],
+    },
+    vehicleMembers: {
+      byVehicle: (vehicleId: string) => ['vehicle-members', vehicleId],
+    },
+    vehicles: {
+      all: ['vehicles'],
+      status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
+    },
+  },
   api: {
     me: vi.fn().mockResolvedValue({ role: 'user' }),
     changePassword: hooksMocks.changePassword,
@@ -196,6 +221,8 @@ vi.mock('@riviamigo/hooks', () => ({
           id: 'run-1',
           trigger: 'manual',
           status: 'succeeded',
+          phase: 'completed',
+          progress_percent: 100,
           artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
           started_at: '2026-05-04T12:00:00Z',
           completed_at: '2026-05-04T12:01:00Z',
@@ -225,6 +252,8 @@ vi.mock('@riviamigo/hooks', () => ({
         id: 'run-1',
         trigger: 'manual',
         status: 'succeeded',
+        phase: 'completed',
+        progress_percent: 100,
         artifact_key: '/tmp/riviamigo/prod/riviamigo/backup.dump',
         started_at: '2026-05-04T12:00:00Z',
         completed_at: '2026-05-04T12:01:00Z',
@@ -340,6 +369,14 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuthReady: () => true,
   useMe: () => ({ data: settingsMocks.me }),
   useVehicles: () => ({ data: settingsMocks.vehicles }),
+  useChargingNetworkPreferences: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
+  useUpdateChargingNetworkPreference: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+    variables: undefined,
+  }),
   resolveVehicleArtwork: (_images: unknown, model: string) => ({
     light: null,
     dark: null,
@@ -360,6 +397,9 @@ vi.mock('@riviamigo/hooks', () => ({
 
 vi.mock('@riviamigo/dashboards', () => ({
   downloadDashboardYaml: dashboardMocks.downloadDashboardYaml,
+  getDefaultBySlug: (slug: string) => slug === 'dashboard'
+    ? { id: '00000000-0000-0000-0000-000000000001' }
+    : undefined,
   materializeUserDashboardDraft: (dashboard: Record<string, unknown>) => ({
     ...dashboard,
     id: 'personal-draft',
@@ -399,6 +439,7 @@ vi.mock('../../components/layout/AuthGuard', () => ({
 }));
 vi.mock('lucide-react', () => ({
   Activity: () => <svg data-testid="icon-activity" />,
+  AlertCircle: () => <svg data-testid="icon-alert-circle" />,
   Braces: () => <svg data-testid="icon-braces" />,
   Car: () => <svg data-testid="icon-car" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
@@ -444,6 +485,7 @@ vi.mock('lucide-react', () => ({
   SlidersHorizontal: () => <svg data-testid="icon-sliders" />,
   Star: () => <svg data-testid="icon-star" />,
   Users: () => <svg data-testid="icon-users" />,
+  Zap: () => <svg data-testid="icon-zap" />,
   X: () => <svg data-testid="icon-x" />,
   Trash2: () => <svg data-testid="icon-trash" />,
   Unlock: () => <svg data-testid="icon-unlock" />,
@@ -610,7 +652,7 @@ describe('Settings page', () => {
     dashboardMocks.dashboards = [
       {
         id: 'default-overview',
-        slug: 'overview',
+        slug: 'dashboard',
         name: 'Overview',
         description: null,
         isDefault: true,
@@ -619,7 +661,7 @@ describe('Settings page', () => {
         widgets: [{ id: 'w1' }],
       },
       {
-        id: 'user-charging',
+        id: '22222222-2222-2222-2222-222222222222',
         slug: 'my-charging',
         name: 'My Charging',
         description: null,
@@ -630,8 +672,8 @@ describe('Settings page', () => {
       },
     ];
     dashboardMocks.cloneMutateAsync.mockResolvedValue({
-      id: 'clone-1',
-      slug: 'overview-copy',
+      id: '33333333-3333-3333-3333-333333333333',
+      slug: 'dashboard-copy',
       name: 'Overview Copy',
       description: null,
       isDefault: false,
@@ -640,8 +682,8 @@ describe('Settings page', () => {
       widgets: [],
     });
     dashboardMocks.createMutateAsync.mockResolvedValue({
-      id: 'personal-overview',
-      slug: 'overview',
+      id: '44444444-4444-4444-4444-444444444444',
+      slug: 'dashboard',
       name: 'Overview',
       description: null,
       isDefault: false,
@@ -671,15 +713,15 @@ describe('Settings page', () => {
     fireEvent.click(openDefaultButton);
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
-      params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview' },
+      params: { slug: 'dashboard' },
+      search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit default' }));
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/d/$slug',
-      params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview', edit: 1 },
+      params: { slug: 'dashboard' },
+      search: { dashboardId: '00000000-0000-0000-0000-000000000001', edit: 1 },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
@@ -687,7 +729,7 @@ describe('Settings page', () => {
       expect(dashboardMocks.createMutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'personal-draft',
-          slug: 'overview',
+          slug: 'dashboard',
           isDefault: false,
         })
       );
@@ -695,8 +737,8 @@ describe('Settings page', () => {
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/d/$slug',
-        params: { slug: 'overview' },
-        search: { dashboardId: 'personal-overview', edit: 1 },
+        params: { slug: 'dashboard' },
+        search: { dashboardId: '44444444-4444-4444-4444-444444444444', edit: 1 },
       });
     });
 
@@ -705,15 +747,15 @@ describe('Settings page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
     expect(dashboardMocks.lockMutate).toHaveBeenCalledWith({
-      id: 'default-overview',
+      id: '00000000-0000-0000-0000-000000000001',
       locked: false,
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Restore bundled' }));
-    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('default-overview');
+    expect(dashboardMocks.restoreMutate).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000001');
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('user-charging');
+    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('22222222-2222-2222-2222-222222222222');
 
     const showEditButton = screen.getByRole('switch', {
       name: 'Show edit button on dashboard pages',
@@ -729,7 +771,7 @@ describe('Settings page', () => {
     dashboardMocks.dashboards = [
       {
         id: 'default-overview',
-        slug: 'overview',
+        slug: 'dashboard',
         name: 'Overview',
         description: null,
         isDefault: true,
@@ -738,8 +780,8 @@ describe('Settings page', () => {
         widgets: [{ id: 'w1' }],
       },
       {
-        id: 'personal-overview',
-        slug: 'overview',
+        id: '55555555-5555-5555-5555-555555555555',
+        slug: 'dashboard',
         name: 'Overview',
         description: null,
         isDefault: false,
@@ -759,12 +801,12 @@ describe('Settings page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open default' }));
     expect(mockNavigate).toHaveBeenLastCalledWith({
       to: '/d/$slug',
-      params: { slug: 'overview' },
-      search: { dashboardId: 'default-overview' },
+      params: { slug: 'dashboard' },
+      search: { dashboardId: '00000000-0000-0000-0000-000000000001' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('personal-overview');
+    expect(dashboardMocks.deleteMutate).toHaveBeenCalledWith('55555555-5555-5555-5555-555555555555');
     confirmSpy.mockRestore();
   });
 
@@ -1277,6 +1319,50 @@ describe('Settings page', () => {
     expect(screen.getAllByText(/active|connected/i).length).toBeGreaterThan(0);
   });
 
+  it('shows durable backup phase and progress while a run is active', async () => {
+    const hooks = await import('@riviamigo/hooks');
+    const getBackupOverview = vi.mocked(hooks.api.getBackupOverview);
+    const baseline = await getBackupOverview({ page: 1, perPage: 10 });
+    const baselineRun = baseline.recent_runs[0];
+    if (!baselineRun) throw new Error('backup fixture is missing a recent run');
+    const activeOverview = {
+      ...baseline,
+      recent_runs: [
+        {
+          ...baselineRun,
+          status: 'running' as const,
+          phase: 'packaging' as const,
+          progress_percent: 65,
+          completed_at: null,
+        },
+      ],
+      latest_successful_run: null,
+    };
+    getBackupOverview.mockReset();
+    getBackupOverview.mockResolvedValue(activeOverview);
+    settingsMocks.me = {
+      user_id: 'u1',
+      email: 'admin@example.com',
+      role: 'admin',
+      default_vehicle_id: 'v1',
+    };
+
+    renderSettings();
+    fireEvent.click(screen.getByText('Backups'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Backup Packaging');
+      expect(screen.getByRole('progressbar', { name: 'Backup progress' })).toHaveAttribute(
+        'aria-valuenow',
+        '65'
+      );
+      expect(screen.getByRole('button', { name: 'Backup running' })).toBeDisabled();
+    });
+
+    getBackupOverview.mockReset();
+    getBackupOverview.mockResolvedValue(baseline);
+  });
+
   it('calls logout and navigates on Sign Out click', async () => {
     const logoutFn = vi.fn().mockResolvedValue(undefined);
     vi.doMock('@riviamigo/hooks', () => ({
@@ -1323,4 +1409,5 @@ describe('Settings page', () => {
     expect(settingsMocks.auth.clearSession).toHaveBeenCalledOnce();
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { password_changed: '1' } });
   });
+
 });

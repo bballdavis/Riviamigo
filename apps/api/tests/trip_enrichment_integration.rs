@@ -98,6 +98,8 @@ impl TestApp {
                 backup_poll_interval_seconds: 60,
                 restore_agent_url: "http://127.0.0.1:3002".into(),
                 restore_agent_key_file: "/backups/.restore-agent-key".into(),
+                recovery: riviamigo_api::config::RecoveryConfig::default(),
+                origin_bind: riviamigo_api::config::OriginBindConfig::default(),
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
@@ -105,6 +107,7 @@ impl TestApp {
                 rivian_suppress_duplicate_telemetry: true,
                 riviamigo_env: None,
                 cookie_insecure: None,
+                allow_insecure_lan_http_auth: false,
                 rate_limit: Default::default(),
                 vehicle_image_cache_dir: std::env::temp_dir()
                     .join("riviamigo-trip-enrichment-test-images")

@@ -27,7 +27,7 @@ Sources:
 | Battery | current SoC, estimated range, phantom drain, capacity health, SoC/range/drain/degradation charts | latest telemetry plus validated parked periods from the idle-drain route | Phantom Drain rate is duration-weighted from validated parked periods; current SoC/range use latest vehicle status; capacity falls back to latest usable kWh. |
 | Efficiency | avg Wh/mi, best/worst bands, efficiency by mode, trend, temp bins, average outside temperature | completed trips plus route-aware trip weather samples | Outside temperature is a time-weighted vehicle/Open-Meteo summary shared with the trip timeline. |
 | Charging | energy, cost, sessions, charge mix, daily energy, charging curve trend | charge session detector and charging curve samples | Charging charts use a dedicated daily chart-series endpoint and a session-aware curve-analysis path; daily totals and stacked session composition share the filled charging-bar visual; older curves can fall back to saved Rivian charge points when telemetry history is sparse. |
-| Trips | trip list, route map, synchronized detail charts, speed, elevation, signed net power | completed trip detector, persisted route previews, adaptive telemetry samples, SoC/capacity telemetry | Map requests use one bounded route dataset; detail requests use one columnar sample payload and canvas charts. Drive power uses direct fields when available, otherwise a bounded SoC-derived estimate with provenance and coverage metadata. |
+| Trips | trip list, route map, tire-pressure/trip timeline, synchronized detail charts, speed, elevation, signed net power | completed trip detector, persisted route previews, full-density tire-pressure telemetry, adaptive telemetry samples, SoC/capacity telemetry | Map requests use one bounded route dataset; the tire-pressure timeline uses `GET /v1/trips/tire-pressure-timeline` for raw nullable PSI samples plus every overlapping trip interval. Interval lanes are spatial only and clicking a bar opens the trip. Detail requests use one columnar sample payload and canvas charts. Drive power uses direct fields when available, otherwise a bounded SoC-derived estimate with provenance and coverage metadata. |
 | Settings Raw Data | bounded telemetry lanes, searchable normalized records, per-field coverage, selected-record inspection, and owner/manager-only retained inbound events | bucketed Timescale telemetry for dense views, compatibility raw records for detail, plus short-lived Rivian websocket payload retention | Use lanes for history visualization and the normalized record path for search/detail; original payloads are troubleshooting evidence, not a stable dashboard contract. |
 
 ## Full-density dashboard time-series rule
@@ -45,6 +45,25 @@ and Phantom Drain bars use local days, while drive-mode and temperature charts
 use categories/bins. Trip-detail charts retain their 10-second synchronized
 telemetry contract.
 
+The `tire-pressure-trips` chart is an explicit full-density exception to
+display filtering: it keeps each retained timestamp and each tire value,
+including nulls, so short pressure drops and sensor gaps remain visible. The
+API returns canonical PSI; the renderer converts values and the configured
+target line to the user's PSI/kPa preference. Trip intervals use
+timeframe-overlap filtering and carry route labels, duration, distance, and
+tags.
+
+## Account-scoped dashboard preferences
+
+Chart-picker favorites are account data, not browser state. The authenticated
+`GET`/`PUT /v1/auth/preferences/chart-favorites` endpoints read and update the
+`user_preferences.dashboard_chart_favorites` JSON object. Each entry is keyed
+by dashboard slug, dashboard config ID when present, and widget ID, so a user
+can choose different defaults for different dashboard copies while retaining
+the choice across browsers and sessions. Managed chart catalogs may gain new
+definitions during an upgrade; a saved favorite remains the initial chart when
+it is still present in the catalog.
+
 ## TeslaMate parity targets
 
 ### Charging chart semantics
@@ -58,14 +77,14 @@ TeslaMate-style dashboards generally cover these data families:
 
 | Family | Example metrics | Rivian candidate fields | Riviamigo status |
 | --- | --- | --- | --- |
-| Live battery | SoC, rated/estimated range, charge limit, usable capacity | `batteryLevel`, `distanceToEmpty`, `batteryLimit`, `batteryCapacity` | Captured and surfaced. |
+| Live battery | SoC, rated/estimated range, charge limit, usable capacity, cell chemistry | `batteryLevel`, `distanceToEmpty`, `batteryLimit`, `batteryCapacity`, `batteryCellType` | Live state is captured and surfaced; `batteryCellType` is persisted from the vehicle-state WebSocket rather than a startup-only HTTP query. |
 | Location and motion | latitude, longitude, speed, altitude, heading, odometer | `gnssLocation`, `gnssSpeed`, `gnssAltitude`, `gnssBearing`, `vehicleMileage` | Captured; odometer converted from meters to miles. |
-| Charging | plugged/charging state, charge status, time remaining, sessions, rate | `chargerState`, `chargerStatus`, `timeToEndOfCharge`, live charge endpoints | Basic status captured; session aggregation needs more real data. |
+| Charging | plugged/charging state, charge status, time remaining, sessions, rate | `chargerState`, `chargerStatus`, `timeToEndOfCharge`, `chargingSession.liveData`, `chargingSession.chartData` | Vehicle-state status remains telemetry-backed; live power/energy/range/rate and observed SoC/power points come from the shared WebSocket charging subscription. REST `getLiveSessionHistory` is post-session enrichment only. |
 | Drive efficiency | trip distance, Wh/mi, drive mode, elevation, cabin/setpoint temperature, estimated exterior temperature, signed net power | `driveMode`, telemetry deltas, `batteryLevel`, `batteryCapacity`, `cabinClimateInteriorTemperature`, trip points, `trip_weather_samples` | Exterior samples are estimated because Rivian rejects the subscription field; power is direct only when Rivian supplies it, otherwise averaged between SoC updates with explicit provenance. |
 | Climate | cabin temp, driver setpoint, preconditioning, pet mode, defrost, seat heat/vent | climate and seat fields in `vehicleState` | Cabin/driver temp captured; advanced climate fields not yet stored. |
 | Closures and locks | doors, windows, frunk/liftgate/tailgate, side bins, tonneau, locked/unlocked | HASS `LOCK_STATE_ENTITIES`, `DOOR_STATE_ENTITIES`, `CLOSURE_STATE_ENTITIES` | Door/frunk/liftgate/tailgate basics stored; side bins, tonneau, and windows are next parity gaps. |
 | Tires and maintenance | TPMS pressure, TPMS status/validity, 12V health, brake/wiper warnings | `tirePressure*` values are BAR in HASS, plus `tirePressureStatus*` and `tirePressureStatusValid*` | Numeric tire pressure converted to PSI on ingest; status stored; validity still a gap. |
-| Software | current version, available version, install status/progress/readiness | `otaCurrentVersion*`, `otaAvailableVersion*`, `otaStatus`, `otaInstallProgress`, `otaInstallReady` | Core versions/status stored; week/year/number/progress/readiness are next parity gaps. |
+| Software | current version, available version, install status/progress/readiness | `otaCurrentVersion*`, `otaAvailableVersion*`, `otaStatus`, `otaInstallProgress`, `otaInstallReady` | Core versions/status stored; `otaAvailableVersion == 0.0.0` is the upstream no-update sentinel and is treated as no available update; week/year/number/progress/readiness are next parity gaps. |
 | Media/images | configured vehicle images, style variants | HASS `VehicleImageCoordinator`; cel style uses vehicle version `3`, photo style uses version `2`, `resolution="@3x"` | Every Rivian-provided variant and overlay is mirrored through the existing account session to persistent local storage. UI consumes only first-party normalized side/overhead/front/rear URLs; model-specific packaged artwork renders immediately while missing blobs repair in the background. |
 
 The authenticated artwork endpoint uses `200` only for a validated local mirror. Missing metadata, missing files, checksum failures, and active repairs return `202` with `x-riviamigo-artwork-state: restoring`, causing the browser to keep the packaged R1S/R1T/R2S fallback visible and poll for the completed first-party asset. Startup repairs enrolled vehicles with bounded concurrency so one slow account does not block every other vehicle.

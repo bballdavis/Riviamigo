@@ -1,8 +1,11 @@
 import * as React from 'react';
 import { createColumnHelper, type ColumnDef } from '@tanstack/react-table';
+import { Tag } from 'lucide-react';
 import { FaInfo } from 'react-icons/fa6';
+import { LuTags } from 'react-icons/lu';
 import { PiArrowFatLinesRight } from 'react-icons/pi';
 import { Badge } from '../primitives/Badge';
+import { Tooltip } from '../primitives/Tooltip';
 import {
   formatMiles,
   formatDuration,
@@ -13,7 +16,7 @@ import {
 import { formatDriveMode, getDriveModeBadgeClass } from '../lib/driveMode';
 import { resolveTripLocation } from '../lib/tripPresentation';
 import { formatAppDateTime } from '../lib/dateTime';
-import type { Place } from '@riviamigo/types';
+import type { Place, TripTag } from '@riviamigo/types';
 
 export interface TripRow {
   id: string;
@@ -35,15 +38,18 @@ export interface TripRow {
   end_address?: string | null;
   start_place?: string | null;
   end_place?: string | null;
+  tags?: TripTag[];
 }
 
 const col = createColumnHelper<TripRow>();
 
 interface CreateTripColumnsOptions {
   onInfoClick?: (tripId: string) => void;
+  includeTags?: boolean;
 }
 
 export function createTripColumns(places: Place[] = [], options: CreateTripColumnsOptions = {}) {
+  const includeTags = options.includeTags ?? true;
   const columns: ColumnDef<TripRow, any>[] = [
     col.accessor('started_at', {
       header: () => <span>Date</span>,
@@ -139,6 +145,48 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
     }),
   ];
 
+  if (includeTags) {
+    columns.push(
+      col.accessor('tags', {
+        header: 'Tags',
+        enableSorting: false,
+        meta: {
+          headerClassName: 'w-[3.25rem] text-center',
+          cellClassName: 'w-[3.25rem] text-center',
+          headerContentClassName: 'w-full justify-center',
+        },
+        cell: (info) => {
+          const tags: TripTag[] = info.getValue() ?? [];
+          if (tags.length === 0) return <span className="text-fg-tertiary">—</span>;
+          return (
+            <Tooltip
+              align="end"
+              content={(
+                <div className="space-y-2">
+                  <p className="font-medium text-fg">Trip tags</p>
+                  <div className="flex flex-wrap gap-1">
+                    {tags.map((tag) => <TripTagBadge key={tag.id} tag={tag} />)}
+                  </div>
+                </div>
+              )}
+              contentClassName="w-64"
+            >
+              <button
+                type="button"
+                aria-label={`Show ${tags.length} tag${tags.length === 1 ? '' : 's'} for trip`}
+                title="Show trip tags"
+                onClick={(event) => event.stopPropagation()}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-bg-surface p-1 text-fg-tertiary transition-colors hover:border-border-strong hover:text-fg"
+              >
+                <LuTags className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          );
+        },
+      }),
+    );
+  }
+
   if (options.onInfoClick) {
     columns.push(
       col.display({
@@ -171,6 +219,22 @@ export function createTripColumns(places: Place[] = [], options: CreateTripColum
   }
 
   return columns;
+}
+
+export function TripTagBadge({ tag }: { tag: Pick<TripTag, 'name' | 'color_token'> }) {
+  const variant = tag.color_token === 'neutral' ? 'default' : tag.color_token;
+  const name = formatTripTagName(tag.name);
+  return (
+    <Badge size="sm" variant={variant} className="max-w-[8rem] truncate" title={name}>
+      <Tag className="h-3 w-3 shrink-0" aria-hidden="true" />
+      <span className="truncate">{name}</span>
+    </Badge>
+  );
+}
+
+export function formatTripTagName(value: string) {
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  return normalized ? `${normalized.charAt(0).toLocaleUpperCase()}${normalized.slice(1)}` : normalized;
 }
 
 export const tripColumns = createTripColumns();

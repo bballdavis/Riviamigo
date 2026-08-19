@@ -1,19 +1,39 @@
 import { useId } from 'react';
+import { useCurrentVehicleStatus } from '@riviamigo/hooks';
 import { TbCarSuvFilled } from 'react-icons/tb';
 import { Button } from '@riviamigo/ui/primitives';
 import { ArrowRight } from 'lucide-react';
 
 interface ConnectedVehicleSuccessProps {
+  vehicleId: string;
   vehicleName: string;
   onOpenDashboard: () => void;
 }
 
-const HILLS_LINE = "M-10,65 C20,65 50,25 75,25 C100,25 125,65 148,65 C165,65 195,16 220,16 C245,16 260,64 280,64 C298,64 320,35 342,35 C360,35 380,56 410,52";
+const HILLS_LINE =
+  'M-10,65 C20,65 50,25 75,25 C100,25 125,65 148,65 C165,65 195,16 220,16 C245,16 260,64 280,64 C298,64 320,35 342,35 C360,35 380,56 410,52';
 const HILLS_FILL = `${HILLS_LINE} L410,80 L-10,80 Z`;
 const MOTION_DURATION = '2.2s';
 
-export function ConnectedVehicleSuccess({ vehicleName, onOpenDashboard }: ConnectedVehicleSuccessProps) {
+export function ConnectedVehicleSuccess({
+  vehicleId,
+  vehicleName,
+  onOpenDashboard,
+}: ConnectedVehicleSuccessProps) {
   const hillPathId = `rm-success-hills-${useId().replace(/:/g, '')}`;
+  const { data: status } = useCurrentVehicleStatus(vehicleId);
+  const health = status?.worker_health?.toLowerCase();
+  const needsAttention = health === 'error' || health === 'degraded' || health === 'stale';
+  const telemetryAvailable =
+    (health === 'connected' || health === 'ok') &&
+    Boolean(status?.last_event_at || status?.last_payload_at);
+
+  const title = telemetryAvailable ? 'Vehicle connected' : 'Vehicle saved';
+  const readinessMessage = needsAttention
+    ? `${vehicleName} was saved, but its telemetry collector needs attention. Open the dashboard to review vehicle health.`
+    : telemetryAvailable
+      ? `${vehicleName} is connected and telemetry is available.`
+      : `${vehicleName} was saved. Riviamigo is starting its telemetry collector; a sleeping vehicle may take a little while to report.`;
 
   return (
     <div className="py-3 text-center">
@@ -45,7 +65,10 @@ export function ConnectedVehicleSuccess({ vehicleName, onOpenDashboard }: Connec
               className="text-accent"
               aria-hidden="true"
               focusable="false"
-              style={{ filter: 'drop-shadow(0 1px 6px color-mix(in oklab, var(--rm-accent) 50%, transparent))' }}
+              style={{
+                filter:
+                  'drop-shadow(0 1px 6px color-mix(in oklab, var(--rm-accent) 50%, transparent))',
+              }}
             />
 
             <animateMotion
@@ -75,20 +98,25 @@ export function ConnectedVehicleSuccess({ vehicleName, onOpenDashboard }: Connec
               className="text-accent"
               aria-hidden="true"
               focusable="false"
-              style={{ filter: 'drop-shadow(0 1px 6px color-mix(in oklab, var(--rm-accent) 50%, transparent))' }}
+              style={{
+                filter:
+                  'drop-shadow(0 1px 6px color-mix(in oklab, var(--rm-accent) 50%, transparent))',
+              }}
             />
           </g>
         </svg>
       </div>
 
-      <div className="mx-auto mt-7 max-w-sm">
-        <p className="font-display text-xl font-semibold text-fg">Vehicle added</p>
-        <p className="mt-2 text-sm leading-6 text-fg-secondary">
-          {vehicleName} is connected and ready for Riviamigo telemetry.
-        </p>
+      <div className="mx-auto mt-7 max-w-sm" aria-live="polite">
+        <p className="font-display text-xl font-semibold text-fg">{title}</p>
+        <p className="mt-2 text-sm leading-6 text-fg-secondary">{readinessMessage}</p>
       </div>
 
-      <Button className="mt-7" iconRight={<ArrowRight className="h-4 w-4" />} onClick={onOpenDashboard}>
+      <Button
+        className="mt-7"
+        iconRight={<ArrowRight className="h-4 w-4" />}
+        onClick={onOpenDashboard}
+      >
         Open Dashboard
       </Button>
     </div>

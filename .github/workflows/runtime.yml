@@ -8,9 +8,13 @@ on:
 permissions:
   contents: read
 
+env:
+  NODE_VERSION: '24.18.0'
+  RUST_VERSION: '1.97.1'
+
 jobs:
   runtime:
-    name: Checks
+    name: Runtime contract
     runs-on: ubuntu-latest
     services:
       timescaledb:
@@ -37,14 +41,20 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_smoke
+      UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Verify migration integrity
         run: node tools/migration-integrity.mjs
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: apps/api
@@ -54,9 +64,14 @@ jobs:
       - name: Run migrations on fresh DB
         working-directory: apps/api
         run: cargo sqlx migrate run
-      - name: Verify migration idempotency
+      - name: Inspect migration ledger after fresh DB migration
         working-directory: apps/api
-        run: cargo sqlx migrate run
+        run: cargo sqlx migrate info
+      - name: Verify populated charge identity upgrade
+        env:
+          UPGRADE_DATABASE_URL: ${{ env.UPGRADE_DATABASE_URL }}
+          REDIS_URL: redis://127.0.0.1:6379
+        run: node scripts/verify-populated-upgrade.mjs
       - name: Start API and probe health
         working-directory: apps/api
         run: |

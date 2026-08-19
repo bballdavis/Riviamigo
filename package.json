@@ -12,10 +12,17 @@
     "dev": "turbo dev",
     "dev:stack": "node ./scripts/dev.mjs",
     "dev:stack:parallax": "node ./scripts/dev.mjs --parallax",
+    "dev:harness": "node ./scripts/dev-harness.mjs",
+    "dev:harness:procedure": "node ./scripts/dev-harness-procedure.mjs",
     "dev:parallax": "cargo run --manifest-path apps/api/Cargo.toml --bin riviamigo-parallax-collector",
     "build": "turbo build",
-    "test": "turbo test",
-    "test:e2e": "turbo test:e2e",
+    "test": "pnpm test:packages && pnpm test:scripts",
+    "test:packages": "turbo test",
+    "test:scripts": "node --test scripts/*.test.mjs",
+    "test:api": "cargo test --manifest-path apps/api/Cargo.toml --all --all-features",
+    "test:e2e": "pnpm --filter @riviamigo/web test:e2e",
+    "test:coverage": "pnpm --filter @riviamigo/web test:coverage",
+    "verify": "pnpm lint && pnpm typecheck && pnpm docs:check && pnpm deps:check && pnpm security:routes && pnpm dashboards:sync-defaults --check && pnpm test && pnpm test:api",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "docs:dev": "pnpm --filter @riviamigo/docs start",
@@ -26,10 +33,15 @@
     "deps:check": "node ./scripts/check-dependency-policy.mjs && knip --dependencies",
     "deps:catalogs": "node ./scripts/check-dependency-policy.mjs --catalogs-only",
     "verify:fresh-install": "node ./scripts/verify-fresh-install.mjs",
+    "verify:populated-upgrade": "node ./scripts/verify-populated-upgrade.mjs",
     "verify:backup-restore-s3": "node ./scripts/verify-backup-restore-s3.mjs",
     "verify:restore-compatibility": "node ./tools/restore-lab/run.mjs",
     "verify:migration-integrity": "node ./tools/migration-integrity.mjs",
     "verify:release-image": "node ./scripts/verify-release-image.mjs",
+    "compose:synology:generate": "node ./scripts/generate-synology-compose.mjs",
+    "compose:synology:check": "node ./scripts/generate-synology-compose.mjs --check",
+    "compose:check": "node ./scripts/check-compose-contracts.mjs",
+    "compose:render-check": "node ./scripts/validate-compose.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
@@ -48,6 +60,7 @@
     "globals": "^17.7.0",
     "knip": "^6.27.0",
     "prettier": "^3.9.5",
+    "yaml": "^2.9.0",
     "turbo": "^2.10.5"
   },
   "knip": {
@@ -57,9 +70,6 @@
       "@riviamigo/config",
       "@riviamigo/ui",
       "prettier"
-    ],
-    "ignoreBinaries": [
-      "sqlx"
     ]
   }
 }

@@ -1,10 +1,18 @@
 import type React from 'react';
 import type { DashboardTimeframe } from '@riviamigo/types';
-import type { DashboardDataRequirements } from './dashboardData';
+import type { TripTagMatch } from '@riviamigo/types';
 import type { DashboardVisibilityState } from './dashboardVisibility';
 import type { DashboardComponentType, WidgetInstance } from './schema';
 
 export type { WidgetInstance };
+
+export interface DashboardDataRequirements {
+  metrics?: import('@riviamigo/types').MetricBatchMetricRequest[];
+  status?: boolean;
+  batteryHealth?: boolean;
+  chargingSummary?: boolean;
+  efficiencySummary?: boolean;
+}
 
 export interface WidgetCtx {
   vehicleId: string | null;
@@ -21,6 +29,15 @@ export interface WidgetCtx {
   updateWidgetLayout?: (widgetId: string, nextHeight: number) => void;
   /** Temporary editor preview state; absent in normal dashboard view mode. */
   visibilityState?: DashboardVisibilityState;
+  /** Trip-page-only server filter; omitted by every other dashboard. */
+  tripTagFilter?: {
+    tagIds: string[];
+    tagMatch: TripTagMatch;
+    untagged: boolean;
+    setFilter?: (next: { tagIds: string[]; tagMatch: TripTagMatch; untagged: boolean }) => void;
+  };
+  /** Vehicle membership derived by the Trips route, never from account role. */
+  canManageTripTags?: boolean;
 }
 
 export interface WidgetEditorMeta {

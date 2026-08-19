@@ -11,10 +11,12 @@ export type DashboardChartSource =
   | 'efficiency_trend'
   | 'efficiency_temperature'
   | 'efficiency_mode'
+  | 'efficiency_tags'
   | 'phantom_drain'
   | 'battery_degradation'
   | 'battery_capacity_mileage'
-  | 'projected_range_mileage';
+  | 'projected_range_mileage'
+  | 'tire_pressure_trips';
 
 export interface DashboardChartDefinition {
   id: string;
@@ -152,6 +154,15 @@ export function getChartSettingsCapabilities(definition: DashboardChartDefinitio
         axes: {
           y: axisCapability('Projected max range', definition.yUnit),
           y2: { label: 'Mileage', unit: 'mi' },
+        },
+        xDomainSource: 'dashboard-timeframe',
+      };
+    case 'tire_pressure_trips':
+      return {
+        timeFilter: false,
+        axes: {
+          y: axisCapability('Tire pressure', definition.yUnit),
+          y2: { label: 'Trips', unit: 'Trips' },
         },
         xDomainSource: 'dashboard-timeframe',
       };

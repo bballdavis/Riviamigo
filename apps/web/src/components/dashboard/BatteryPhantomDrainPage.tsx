@@ -1,6 +1,6 @@
 import React from 'react';
 import { DashboardChartWidget, SensorChipSummary, type WidgetInstance } from '@riviamigo/dashboards';
-import { usePhantomDrainPeriods } from '@riviamigo/hooks';
+import { usePhantomDrainPeriods, useVehicleHealth } from '@riviamigo/hooks';
 import type { PhantomDrainPeriod } from '@riviamigo/types';
 import { DataTable, TableControls, phantomDrainColumns } from '@riviamigo/ui/tables';
 import { formatPercent } from '@riviamigo/ui/lib/utils';
@@ -50,7 +50,10 @@ function formatPeriodSearchText(period: PhantomDrainPeriod) {
 
 function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }) {
   const { vehicleId, ctx } = state;
+  const { data: health } = useVehicleHealth(vehicleId);
   const { data, isLoading } = usePhantomDrainPeriods(vehicleId, ctx.from, ctx.to, 500, 6);
+  const parallaxCollectorRunning =
+    health?.vehicle_id === vehicleId && health.extended_telemetry.collector?.running === true;
   const periods = data?.periods ?? [];
   const [search, setSearch] = React.useState('');
   const [page, setPage] = React.useState(1);
@@ -82,7 +85,9 @@ function PhantomDrainContent({ state }: { state: DashboardPageShellRenderState }
   const summaryCards = React.useMemo(() => buildPhantomDrainSummaryCards(summary), [summary]);
   return (
     <div className="grid gap-4 min-w-0">
-      <ParkedEnergyPanel vehicleId={vehicleId} from={ctx.from} to={ctx.to} />
+      {parallaxCollectorRunning ? (
+        <ParkedEnergyPanel vehicleId={vehicleId} from={ctx.from} to={ctx.to} />
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>

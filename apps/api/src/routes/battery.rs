@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_owned,
+    db::vehicles::require_vehicle_read_access,
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::idle_drain::fetch_validated_idle_drain_periods_for_chart,
@@ -96,7 +96,7 @@ async fn get_soc(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 7);
 
     let points = sqlx::query_as::<_, TimeSeriesPoint>(
@@ -122,7 +122,7 @@ async fn get_range(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 30);
 
     let points = sqlx::query_as::<_, TimeSeriesPoint>(
@@ -148,7 +148,7 @@ async fn get_capacity(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
 
     let points = sqlx::query_as::<_, TimeSeriesPoint>(
@@ -208,7 +208,7 @@ async fn get_degradation(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 365);
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
@@ -246,7 +246,7 @@ async fn get_health(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
 
@@ -316,7 +316,7 @@ async fn get_mileage(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
 
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 730);
     let usable_new_wh = resolve_usable_new_wh(&state.pool, vid).await?;
@@ -393,7 +393,7 @@ async fn get_phantom_drain(
         .vehicle_id
         .ok_or(AppError::Validation("vehicle_id required".into()))?;
     require_vehicle_access(&auth, vid)?;
-    require_vehicle_owned(&state.pool, auth.user_id, vid).await?;
+    require_vehicle_read_access(&state.pool, &auth, vid).await?;
     let (from, to) = resolve_time_bounds(p.from, p.to, p.lifetime.unwrap_or(false), 90);
     let periods = fetch_validated_idle_drain_periods_for_chart(&state.pool, vid, from, to).await?;
 
@@ -474,6 +474,8 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
@@ -481,6 +483,7 @@ mod tests {
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
             cookie_insecure: None,
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         };
 

@@ -50,6 +50,7 @@ vi.mock('@riviamigo/hooks', () => ({
   useAuth: (selector: (state: { setDefaultVehicleId: (vehicleId: string) => void }) => unknown) =>
     selector({ setDefaultVehicleId: apiMocks.setDefaultVehicleId }),
   useVehicles: () => ({ data: [] }),
+  useCurrentVehicleStatus: () => ({ data: null }),
 }));
 
 import { ConnectContent } from '../connect';
@@ -159,7 +160,7 @@ describe('ConnectContent', () => {
         vin: '7FCTGAAL0NN000001',
       });
       expect(apiMocks.setDefaultVehicleId).toHaveBeenCalledWith('local-vehicle-1');
-      expect(screen.getByText('Vehicle added')).toBeInTheDocument();
+      expect(screen.getByText(/Launch Green was saved/)).toBeInTheDocument();
     });
   });
 
@@ -307,7 +308,7 @@ describe('ConnectOtpContent', () => {
         vin: '7PDSGABL0PN000002',
       });
       expect(apiMocks.setDefaultVehicleId).toHaveBeenCalledWith('local-vehicle-2');
-      expect(screen.getByText('Vehicle added')).toBeInTheDocument();
+      expect(screen.getByText(/Forest R1S was saved/)).toBeInTheDocument();
     });
   });
 

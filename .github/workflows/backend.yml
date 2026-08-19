@@ -9,10 +9,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_VERSION: '1.97.1'
 
 jobs:
   backend:
-    name: Checks
+    name: Backend checks
     runs-on: ubuntu-latest
     services:
       timescaledb:
@@ -43,18 +44,43 @@ jobs:
     env:
       DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo
       REDIS_URL: redis://localhost:6379
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+      - name: Install PostgreSQL 18 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ca-certificates curl
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error \
+            --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: https://apt.postgresql.org/pub/repos/apt' \
+            "Suites: ${VERSION_CODENAME}-pgdg" \
+            "Architectures: $(dpkg --print-architecture)" \
+            'Components: main' \
+            'Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc' \
+            | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/18/bin:$PATH"
+          pg_dump --version
+          pg_restore --version
       - name: Verify migration integrity
         working-directory: .
-        run: node tools/migration-integrity.mjs --base-ref "${GITHUB_BASE_SHA:-}"
+        run: node tools/migration-integrity.mjs --base-ref "$BASE_SHA"
       - name: Verify repository whitespace
         working-directory: .
-        run: git diff --check "${GITHUB_BASE_SHA:-HEAD^}"...HEAD
+        run: git diff --check "$BASE_SHA"...HEAD
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: clippy, rustfmt, llvm-tools-preview
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:

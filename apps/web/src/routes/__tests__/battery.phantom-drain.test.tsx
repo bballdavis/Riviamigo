@@ -1,6 +1,10 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const mockCollector = vi.hoisted(() => ({
+  running: true,
+}));
 
 vi.mock('@riviamigo/ui/primitives', async () => {
   const m = await import('../../test/mockPrimitives');
@@ -51,6 +55,14 @@ vi.mock('@riviamigo/hooks', async (importOriginal) => {
     }),
     useVehicles: () => ({ data: [{ id: 'vehicle-1', display_name: 'Demo R1T', model: 'R1T' }] }),
     useMe: () => ({ data: { role: 'user' } }),
+    useVehicleHealth: () => ({
+      data: {
+        vehicle_id: 'vehicle-1',
+        extended_telemetry: {
+          collector: mockCollector.running ? { running: true } : { running: false },
+        },
+      },
+    }),
     usePhantomDrainPeriods: () => ({ data: { vehicle_id: 'vehicle-1', periods: [period] }, isLoading: false }),
     useParkedEnergy: () => ({
       data: {
@@ -173,6 +185,10 @@ vi.mock('../../lib/dates', () => ({
 
 import { BatteryPhantomDrainPage } from '../../components/dashboard/BatteryPhantomDrainPage';
 
+afterEach(() => {
+  mockCollector.running = true;
+});
+
 describe('BatteryPhantomDrainPage', () => {
   it('renders the shared chart above unified table controls', async () => {
     render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
@@ -200,5 +216,14 @@ describe('BatteryPhantomDrainPage', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Search periods'), { target: { value: '999' } });
     expect(await screen.findByText('No matching phantom drain periods')).toBeInTheDocument();
+  });
+
+  it('hides the Parked Energy panel when the Parallax collector is not running', () => {
+    mockCollector.running = false;
+
+    render(<BatteryPhantomDrainPage navKey="battery.phantom-drain" slug="battery" title="Phantom Drain" />);
+
+    expect(screen.queryByTestId('parked-energy-panel')).not.toBeInTheDocument();
+    expect(screen.getByText('Riviamigo battery-change estimate')).toBeInTheDocument();
   });
 });

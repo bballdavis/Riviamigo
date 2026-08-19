@@ -63,19 +63,19 @@ function OverviewVehicleWidget({ ctx }: { instance: WidgetInstance; ctx: WidgetC
   );
 }
 
-function CurrentVehicleStatePanel({
+export function CurrentVehicleStatePanel({
   status,
   images,
   vehicleName,
   vehicleModel,
-  isDemoVehicle,
+  isDemoVehicle = false,
   targetTirePressurePsi,
 }: {
   status: VehicleStatus | null | undefined;
   images?: VehicleImages | null | undefined;
   vehicleName?: string | undefined;
   vehicleModel?: string | undefined;
-  isDemoVehicle: boolean;
+  isDemoVehicle?: boolean;
   targetTirePressurePsi?: number | null | undefined;
 }) {
   const anchors = OVERVIEW_ANCHORS[vehicleModel ?? ''] ?? SHARED_OVERVIEW_ANCHORS;

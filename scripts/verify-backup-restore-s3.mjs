@@ -54,7 +54,7 @@ function environmentFile(name, port) {
     `REDIS_URL=redis://default:${name}-redis-password@redis:6379`,
     `ALLOWED_ORIGINS=http://localhost:${port}`,
     'RIVIAMIGO_ENV=development',
-    'COOKIE_INSECURE=1',
+    'COOKIE_INSECURE=true',
     'BACKUP_ARTIFACT_DIR=/backups',
     'VEHICLE_IMAGE_CACHE_DIR=/data/cache/riviamigo/vehicle-images',
     'RUST_LOG=riviamigo_api=info,tower_http=info',

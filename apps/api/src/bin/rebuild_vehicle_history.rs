@@ -376,8 +376,12 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
                     WHEN cs.source = 'rivian_api' THEN COALESCE(cs.ended_at, matched_existing.ended_at)
                     ELSE matched_existing.ended_at
                 END,
-                location_lat = COALESCE(cs.location_lat, matched_existing.location_lat),
-                location_lng = COALESCE(cs.location_lng, matched_existing.location_lng),
+                source_location_lat = COALESCE(cs.source_location_lat, matched_existing.location_lat),
+                source_location_lng = COALESCE(cs.source_location_lng, matched_existing.location_lng),
+                location_lat = CASE WHEN cs.location_override_mode = 'automatic'
+                    THEN COALESCE(cs.location_lat, matched_existing.location_lat) ELSE cs.location_lat END,
+                location_lng = CASE WHEN cs.location_override_mode = 'automatic'
+                    THEN COALESCE(cs.location_lng, matched_existing.location_lng) ELSE cs.location_lng END,
                 soc_start = CASE
                     WHEN cs.source = 'rivian_api' THEN COALESCE(cs.soc_start, matched_existing.soc_start)
                     ELSE matched_existing.soc_start
@@ -450,7 +454,7 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
         inserted AS (
             INSERT INTO riviamigo.charge_sessions (
                 id, vehicle_id, started_at, ended_at,
-                location_lat, location_lng,
+                location_lat, location_lng, source_location_lat, source_location_lng,
                 soc_start, soc_end, charge_limit, duration_minutes,
                 kwh_added, max_charge_rate_kw, cost_usd,
                 energy_added_wh, energy_used_wh,
@@ -459,7 +463,7 @@ async fn repair_charge_sessions_for_vehicle(pool: &PgPool, vehicle_id: Uuid) -> 
             )
             SELECT
                 id, vehicle_id, started_at, ended_at,
-                location_lat, location_lng,
+                location_lat, location_lng, location_lat, location_lng,
                 soc_start, soc_end, charge_limit, duration_minutes,
                 energy_added_wh / 1000.0, max_charge_rate_kw, NULL,
                 energy_added_wh, NULL,

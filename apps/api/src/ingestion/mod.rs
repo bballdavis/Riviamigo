@@ -35,9 +35,14 @@ pub async fn start_workers(
     .await?;
 
     for vid in enrolled {
-        handle
+        if !handle
             .send(supervisor::SupervisorCommand::StartWorker { vehicle_id: vid })
-            .await;
+            .await
+        {
+            return Err(anyhow::anyhow!(
+                "worker supervisor stopped while starting vehicle {vid}"
+            ));
+        }
     }
 
     crate::routes::vehicles::start_vehicle_artwork_repair_worker(pool, config, age_key);

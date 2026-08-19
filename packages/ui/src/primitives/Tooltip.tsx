@@ -25,6 +25,7 @@ export function Tooltip({
     left: 0,
     visibility: 'hidden',
   });
+  const rootRef = React.useRef<HTMLSpanElement | null>(null);
   const triggerRef = React.useRef<HTMLSpanElement | null>(null);
   const contentRef = React.useRef<HTMLSpanElement | null>(null);
   const tooltipId = React.useId();
@@ -91,6 +92,24 @@ export function Tooltip({
     };
   }, [align, open, side, content]);
 
+  React.useEffect(() => {
+    if (!open) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node | null)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
   const tooltip = open ? (
     <span
       id={tooltipId}
@@ -98,7 +117,7 @@ export function Tooltip({
       role="tooltip"
       aria-hidden={!open}
       className={cn(
-        'pointer-events-none fixed z-50 w-56 rounded-lg border border-border bg-bg-surface px-3 py-2 text-[11px] normal-case tracking-normal text-fg shadow-lg transition-opacity duration-150 max-w-[calc(100vw-1rem)]',
+        'pointer-events-none fixed z-50 max-h-[calc(100vh-1rem)] w-56 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-border bg-bg-surface px-3 py-2 text-[11px] normal-case tracking-normal text-fg shadow-lg transition-opacity duration-150',
         open ? 'opacity-100' : 'opacity-0',
         contentClassName
       )}
@@ -108,11 +127,28 @@ export function Tooltip({
     </span>
   ) : null;
 
+  const describedBy = React.isValidElement(children)
+    ? [
+      (children as React.ReactElement<{ 'aria-describedby'?: string }>).props['aria-describedby'],
+      open ? tooltipId : null,
+    ].filter((value): value is string => Boolean(value)).join(' ')
+    : '';
+  const describedChild = React.isValidElement(children)
+    ? React.cloneElement(
+      children as React.ReactElement<{ 'aria-describedby'?: string }>,
+      describedBy ? { 'aria-describedby': describedBy } : {},
+    )
+    : children;
+
   return (
     <span
+      ref={rootRef}
       className={cn('relative inline-flex', className)}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
+      onPointerDown={(event) => {
+        if (event.pointerType === 'touch') setOpen(true);
+      }}
       onFocus={() => setOpen(true)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -120,8 +156,8 @@ export function Tooltip({
         }
       }}
     >
-      <span ref={triggerRef} aria-describedby={open ? tooltipId : undefined} className="inline-flex">
-        {children}
+      <span ref={triggerRef} className="inline-flex">
+        {describedChild}
       </span>
       {typeof document !== 'undefined' ? createPortal(tooltip, document.body) : tooltip}
     </span>

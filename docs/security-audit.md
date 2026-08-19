@@ -29,8 +29,8 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 
 | Severity | Finding                                                                                                 | Resolution                                                                                                                   |
 | -------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Critical | Production Compose publishes the web origin on the host.                                                | Documentation requires host firewall protection plus an authenticated tunnel or identity-aware proxy before remote exposure. |
-| Critical | Production startup could fall back to database-generated signing and encryption keys.                   | Production validation now requires externally supplied JWT private/public and age keys.                                      |
+| High | An unclaimed production installation could accept its first owner without an out-of-band proof. | Production registration now requires a configured 32-byte setup proof while no user exists; its source/value is never exposed. |
+| High | The origin could be published more broadly than the intended gateway boundary. | Standard Compose binds the origin to loopback and requires an explicit public-bind opt-in; the app service is rootless, read-only, capability-dropped, and `no-new-privileges`. |
 | High     | The former separate nginx image originally used the wrong upstream boundary.                            | The unified production image now runs nginx and the API together and intentionally proxies over container-local loopback.    |
 | High     | The production Compose topology omitted its Redis dependency and had stale ports/service documentation. | Redis is included as an internal password-protected service; Compose, user guide, runbook, and env documentation now agree.  |
 | High     | The API production image could not install matching PostgreSQL client tools from its Debian base.       | The runtime now uses the pinned `postgres:18.4-bookworm` image, which includes matching `pg_dump`.                           |
@@ -44,12 +44,22 @@ The release posture remains: do not expose Riviamigo directly to the Internet.
 - The internal origin deliberately does not trust arbitrary forwarded client-IP
   headers. Configure client-IP trust only at the outer gateway after validating
   its network boundary.
+- Application signing/encryption keys may be persisted in PostgreSQL when the
+  complete external key trio is omitted. This is an explicitly accepted P2
+  shared-fate risk: database compromise or loss can affect both state and
+  locally generated keys. Tested database recovery is required; a secret
+  manager supplying all three keys is the optional separate-custody path.
+- Security events are structured, redacted, and retained in the live database
+  for 365 days by the application retention worker. Backup retention remains
+  an operator policy and may preserve older events inside recovery packages.
 - CI runs cargo audit, pnpm audit, Gitleaks, blocking Semgrep, and blocking
   high/critical Trivy image scans. Fork pull requests run the separate
   secret-free blocking Semgrep scan. Reviewed exceptions must be documented in
   the PR with an owner, expiry, and remediation link. Local
   dependency validation in this audit found no high-severity production npm
-  vulnerabilities; the Rust/secret/SAST tools were not installed locally.
+  vulnerabilities; the Rust/secret/SAST tools were not installed locally. The
+  four RustSec exceptions are listed with owners, evidence, and expiry in the
+  [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
 - Before a wider exposure or multi-tenant use case, commission an independent
   authenticated penetration test and review gateway, host, backup, and secret
   manager configuration in the target environment.

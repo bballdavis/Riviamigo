@@ -21,6 +21,10 @@
       "dependsOn": ["build"],
       "outputs": ["playwright-report/**", "test-results/**"]
     },
+    "test:coverage": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

@@ -33,7 +33,10 @@ Phase 2 standardizes Node 24.18.0, pnpm 11.15.1, Rust 1.97.1, PostgreSQL 18.4, T
 
 ## Release evidence
 
-RustSec has one time-bounded warning exception for `RUSTSEC-2026-0173`, an unmaintained procedural macro pulled by the latest stable `age` release. CI expires the exception on 2026-10-01; it does not suppress vulnerabilities or high/critical advisories.
+RustSec has four time-bounded warning exceptions—`RUSTSEC-2026-0173`,
+`RUSTSEC-2026-0098`, `RUSTSEC-2026-0099`, and `RUSTSEC-2026-0104`—which CI
+expires on 2026-10-01. Their dependency chains, owner, and removal evidence
+are maintained in the [maintenance register](./runbooks/dependency-maintenance.md#maintenance-register).
 
 The final production image passed an isolated fresh-install smoke test, amd64 and arm64 packaging builds, and a digest-pinned Trivy 0.72.0 scan with zero fixable high/critical findings. The same scan on July 20, 2026 reported 67 high/critical Debian 13.6 base-package advisories whose status was `affected` or `fix_deferred` and for which Debian published no fixed version. CI blocks fixable high/critical findings; unfixed base-image findings remain visible in scan output and must be reevaluated whenever a new base digest is available.
 

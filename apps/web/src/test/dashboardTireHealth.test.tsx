@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
 import { CurrentVehicleStatePanel } from '../components/dashboard/DashboardPage';
@@ -13,9 +14,14 @@ const images = {
   },
 };
 
+function renderPanel(node: React.ReactNode) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+}
+
 describe('dashboard tire health', () => {
   it('colors tire borders from the saved target pressure', () => {
-    render(
+    renderPanel(
       <CurrentVehicleStatePanel
         images={images}
         targetTirePressurePsi={48}
@@ -45,7 +51,7 @@ describe('dashboard tire health', () => {
   });
 
   it('keeps invalid sensors neutral', () => {
-    render(
+    renderPanel(
       <CurrentVehicleStatePanel
         images={images}
         targetTirePressurePsi={48}
@@ -70,7 +76,7 @@ describe('dashboard tire health', () => {
   });
 
   it('shows a threshold legend tooltip for tire health', async () => {
-    render(
+    renderPanel(
       <CurrentVehicleStatePanel
         images={images}
         targetTirePressurePsi={48}

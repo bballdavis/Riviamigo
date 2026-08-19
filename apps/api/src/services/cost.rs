@@ -1,10 +1,7 @@
 //! Cost profile resolution service.
 //!
-//! Resolution priority:
-//!   1. Explicit `charge_sessions.cost_profile_id` (set by caller)
-//!   2. Matched geofence's `cost_profile_id`
-//!   3. Vehicle default `cost_profile_id`
-//!   4. NULL → cost_method = "unknown"
+//! Resolution priority is explicit session correction, configured network,
+//! upstream Rivian amount/free status, then the normal profile resolution.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -40,6 +37,10 @@ struct ChargeSessionCostRow {
     rivian_paid_total: Option<f64>,
     is_rivian_network: Option<bool>,
     is_home: Option<bool>,
+    is_free_session: Option<bool>,
+    network_cost_mode: Option<String>,
+    cost_override_mode: String,
+    cost_override_usd: Option<f64>,
 }
 
 /// Inputs for a pure cost computation — no DB required.
@@ -47,6 +48,10 @@ struct ChargeSessionCostRow {
 pub struct CostInputs {
     pub is_rivian_network: Option<bool>,
     pub is_home: Option<bool>,
+    pub is_free_session: Option<bool>,
+    pub network_cost_mode: Option<String>,
+    pub cost_override_mode: String,
+    pub cost_override_usd: Option<f64>,
     pub rivian_paid_total: Option<f64>,
     pub energy_added_kwh: Option<f64>,
     pub energy_used_kwh: Option<f64>,
@@ -79,6 +84,34 @@ pub fn apply_cost_inputs(
     inputs: &CostInputs,
     profile: Option<&CostProfile>,
 ) -> ChargeCostComputation {
+    if inputs.cost_override_mode == "free" {
+        return ChargeCostComputation {
+            cost_profile_id: None,
+            cost_method: String::from("user_free"),
+            cost_usd: Some(0.0),
+        };
+    }
+    if inputs.cost_override_mode == "manual" {
+        return ChargeCostComputation {
+            cost_profile_id: None,
+            cost_method: String::from("user_manual"),
+            cost_usd: inputs.cost_override_usd,
+        };
+    }
+    if inputs.network_cost_mode.as_deref() == Some("free") {
+        return ChargeCostComputation {
+            cost_profile_id: None,
+            cost_method: String::from("network_free"),
+            cost_usd: Some(0.0),
+        };
+    }
+    if inputs.is_free_session == Some(true) {
+        return ChargeCostComputation {
+            cost_profile_id: None,
+            cost_method: String::from("rivian_free_session"),
+            cost_usd: Some(0.0),
+        };
+    }
     let is_paid_network_session =
         inputs.is_rivian_network == Some(true) && inputs.is_home != Some(true);
     let authoritative_paid_total = is_paid_network_session
@@ -284,11 +317,16 @@ pub async fn recompute_charge_session_cost(
     session_id: Uuid,
 ) -> Result<Option<ChargeCostComputation>> {
     let session = sqlx::query_as::<_, ChargeSessionCostRow>(
-        r#"SELECT id, vehicle_id, geofence_id, cost_profile_id, started_at, ended_at,
+        r#"SELECT cs.id, cs.vehicle_id, cs.geofence_id, cs.cost_profile_id, cs.started_at, cs.ended_at,
                   duration_minutes, kwh_added, energy_added_wh, energy_used_wh,
-                  rivian_paid_total, is_rivian_network, is_home
-           FROM riviamigo.charge_sessions
-           WHERE id = $1"#,
+                  rivian_paid_total, is_rivian_network, is_home, is_free_session,
+                  COALESCE(pref.cost_mode, 'automatic') AS network_cost_mode,
+                  cs.cost_override_mode, cs.cost_override_usd
+           FROM riviamigo.charge_sessions cs
+           LEFT JOIN riviamigo.vehicle_charging_network_preferences pref
+             ON pref.vehicle_id = cs.vehicle_id
+            AND pref.vendor_normalized = lower(trim(COALESCE(cs.network_vendor, '')))
+           WHERE cs.id = $1"#,
     )
     .bind(session_id)
     .fetch_optional(pool)
@@ -345,6 +383,10 @@ pub async fn recompute_charge_session_cost(
     let inputs = CostInputs {
         is_rivian_network: session.is_rivian_network,
         is_home: session.is_home,
+        is_free_session: session.is_free_session,
+        network_cost_mode: session.network_cost_mode,
+        cost_override_mode: session.cost_override_mode,
+        cost_override_usd: session.cost_override_usd,
         rivian_paid_total: session.rivian_paid_total,
         energy_added_kwh: session
             .energy_added_wh
@@ -364,7 +406,10 @@ pub async fn recompute_charge_session_cost(
            SET cost_profile_id = $2,
                cost_method = $3,
                cost_usd = $4
-           WHERE id = $1"#,
+           WHERE id = $1
+             AND (cost_profile_id IS DISTINCT FROM $2
+                  OR cost_method IS DISTINCT FROM $3
+                  OR cost_usd IS DISTINCT FROM $4)"#,
     )
     .bind(session.id)
     .bind(result.cost_profile_id)
@@ -386,7 +431,14 @@ pub async fn recompute_charge_session_cost(
                    cost_usd = EXCLUDED.cost_usd,
                    currency_code = EXCLUDED.currency_code,
                    computed_at = now(),
-                   updated_at = now()"#,
+                   updated_at = now()
+               WHERE (riviamigo.charge_session_user_annotations.cost_profile_id IS DISTINCT FROM EXCLUDED.cost_profile_id
+                      OR riviamigo.charge_session_user_annotations.cost_method IS DISTINCT FROM EXCLUDED.cost_method
+                      OR riviamigo.charge_session_user_annotations.cost_usd IS DISTINCT FROM EXCLUDED.cost_usd
+                      OR (EXCLUDED.geofence_id IS NOT NULL
+                          AND riviamigo.charge_session_user_annotations.geofence_id IS DISTINCT FROM EXCLUDED.geofence_id)
+                      OR (EXCLUDED.is_home IS NOT NULL
+                          AND riviamigo.charge_session_user_annotations.is_home IS DISTINCT FROM EXCLUDED.is_home))"#,
         )
         .bind(session.id)
         .bind(owner_id)
@@ -444,6 +496,10 @@ mod tests {
         CostInputs {
             is_rivian_network: Some(false),
             is_home: Some(true),
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: Some(999.99), // should be ignored for home sessions
             energy_added_kwh: Some(kwh),
             energy_used_kwh: None,
@@ -475,6 +531,10 @@ mod tests {
         let inputs = CostInputs {
             is_rivian_network: Some(true),
             is_home: Some(false),
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: Some(12.50),
             energy_added_kwh: Some(50.0),
             energy_used_kwh: None,
@@ -498,11 +558,53 @@ mod tests {
     }
 
     #[test]
+    fn explicit_cost_overrides_take_precedence_over_every_automatic_source() {
+        let profile = make_profile("per_kwh", 1.0, 0.0);
+        let mut inputs = home_inputs(10.0, 30);
+        inputs.is_rivian_network = Some(true);
+        inputs.is_home = Some(false);
+        inputs.is_free_session = Some(true);
+        inputs.network_cost_mode = Some("free".into());
+        inputs.rivian_paid_total = Some(99.0);
+        inputs.cost_override_mode = "manual".into();
+        inputs.cost_override_usd = Some(4.25);
+        let result = apply_cost_inputs(&inputs, Some(&profile));
+        assert_eq!(result.cost_method, "user_manual");
+        assert_eq!(result.cost_usd, Some(4.25));
+
+        inputs.cost_override_mode = "free".into();
+        inputs.cost_override_usd = None;
+        let result = apply_cost_inputs(&inputs, Some(&profile));
+        assert_eq!(result.cost_method, "user_free");
+        assert_eq!(result.cost_usd, Some(0.0));
+    }
+
+    #[test]
+    fn network_free_precedes_upstream_and_profile_but_not_session_override() {
+        let profile = make_profile("per_kwh", 1.0, 0.0);
+        let mut inputs = home_inputs(10.0, 30);
+        inputs.network_cost_mode = Some("free".into());
+        let result = apply_cost_inputs(&inputs, Some(&profile));
+        assert_eq!(result.cost_method, "network_free");
+        assert_eq!(result.cost_usd, Some(0.0));
+
+        inputs.network_cost_mode = None;
+        inputs.is_free_session = Some(true);
+        let result = apply_cost_inputs(&inputs, Some(&profile));
+        assert_eq!(result.cost_method, "rivian_free_session");
+        assert_eq!(result.cost_usd, Some(0.0));
+    }
+
+    #[test]
     fn profile_pending_when_energy_missing() {
         let profile = make_profile("per_kwh", 0.12, 0.0);
         let inputs = CostInputs {
             is_rivian_network: Some(false),
             is_home: Some(true),
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: None,
             energy_added_kwh: None, // no energy data → cannot compute per_kwh cost
             energy_used_kwh: None,
@@ -522,6 +624,10 @@ mod tests {
         let inputs = CostInputs {
             is_rivian_network: None,
             is_home: None,
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: Some(500.00),
             energy_added_kwh: Some(20.0),
             energy_used_kwh: None,
@@ -549,6 +655,10 @@ mod tests {
             // for a home session.
             is_rivian_network: Some(true),
             is_home: Some(true),
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: Some(508.88), // the kind of garbage we saw in prod
             energy_added_kwh: Some(50.4),
             energy_used_kwh: None,
@@ -582,6 +692,10 @@ mod tests {
         let inputs = CostInputs {
             is_rivian_network: Some(false),
             is_home: Some(true),
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: Some(999.99),
             energy_added_kwh: Some(46.51),
             energy_used_kwh: None,
@@ -661,6 +775,10 @@ mod tests {
         let inputs = CostInputs {
             is_rivian_network: Some(false),
             is_home: Some(true),
+            is_free_session: None,
+            network_cost_mode: None,
+            cost_override_mode: "automatic".into(),
+            cost_override_usd: None,
             rivian_paid_total: None,
             energy_added_kwh: Some(total_kwh),
             energy_used_kwh: None,

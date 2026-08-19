@@ -2,6 +2,7 @@
   "name": "@riviamigo/hooks",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -10,6 +11,7 @@
     "lint": "eslint src --max-warnings 0"
   },
   "dependencies": {
+    "@riviamigo/ui": "workspace:*",
     "@riviamigo/types": "workspace:*",
     "@tanstack/react-query": "catalog:",
     "zustand": "^5.0.14"

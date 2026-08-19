@@ -174,7 +174,7 @@ import { userDashboardRoute } from '../routes/d.$slug';
 
 const RouteComponent = userDashboardRoute.options.component as React.ComponentType;
 
-async function expectEditableDashboard(widgetId: string, widgetCount: number) {
+async function expectEditableDashboard(widgetId: string, widgetCount: number, editableWidgetCount = widgetCount) {
   expect(screen.queryByTestId(`widget-overlay-right-${widgetId}`)).toBeNull();
 
   await userEvent.click(screen.getByRole('button', { name: 'Edit dashboard' }));
@@ -186,7 +186,7 @@ async function expectEditableDashboard(widgetId: string, widgetCount: number) {
   const editFrames = document.querySelectorAll('[data-widget-frame="edit"]');
 
   expect(editFrames).toHaveLength(widgetCount);
-  expect(screen.getAllByRole('button', { name: 'Edit widget settings' })).toHaveLength(widgetCount);
+  expect(screen.getAllByRole('button', { name: 'Edit widget settings' })).toHaveLength(editableWidgetCount);
   expect(host.closest('[data-widget-frame="edit"]')).toHaveAttribute('data-widget-id', widgetId);
   expect(host.closest('[data-widget-frame="edit"]')).toHaveAttribute('data-widget-resizable', 'true');
   expect(editOverlay).toHaveAttribute('data-widget-edit-control', 'true');
@@ -213,15 +213,15 @@ describe('dashboard editability', () => {
   });
 
   it.each([
-    ['dashboard', 'd1000001-0000-0000-0000-000000000002', 6],
-    ['battery', 'd2000002-0000-0000-0000-000000000001', 9],
-    ['charging', 'd4000004-0000-0000-0000-000000000001', 9],
-    ['efficiency', 'd3000003-0000-0000-0000-000000000001', 5],
-    ['trips', 'd5000005-0000-0000-0000-000000000005', 6],
-  ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId, widgetCount) => {
+    ['dashboard', 'd1000001-0000-0000-0000-000000000002', 6, 5],
+    ['battery', 'd2000002-0000-0000-0000-000000000001', 9, 9],
+    ['charging', 'd4000004-0000-0000-0000-000000000001', 9, 9],
+    ['efficiency', 'd3000003-0000-0000-0000-000000000001', 5, 5],
+    ['trips', 'd5000005-0000-0000-0000-000000000005', 7, 6],
+  ] as const)('opens widget editing from the shared shell for %s', async (slug, widgetId, widgetCount, editableWidgetCount) => {
     render(<DashboardPageShell navKey={slug} slug={slug} title={slug} />);
 
-    await expectEditableDashboard(widgetId, widgetCount);
+    await expectEditableDashboard(widgetId, widgetCount, editableWidgetCount);
   });
 
   it('opens the same edit overlay path for /d/$slug custom dashboards', async () => {

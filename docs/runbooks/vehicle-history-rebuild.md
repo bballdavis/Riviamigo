@@ -35,7 +35,17 @@ Supporting charge-session maintenance commands:
 ```bash
 cargo run --bin diagnose_charge_sessions -- [--vehicle <uuid>]
 cargo run --bin canonicalize_charge_sessions -- [--vehicle <uuid>]
+cargo run --bin compact_charge_payloads -- [--vehicle <uuid>] [--apply] [--batch-size <count>]
 ```
+
+`compact_charge_payloads` reports semantically identical Rivian payload fingerprints by default and
+does not change data. After creating a verified backup, add `--apply` to remove
+only equivalent JSON payloads with the same vehicle, operation, transaction,
+and upstream vehicle identity. It retains one payload, preferring a payload that
+is already linked to a canonical charge session. Cleanup is limited to 5,000 rows
+per run by default to bound WAL and disk pressure on NAS storage; repeat the
+command until the dry-run report reaches zero, or choose a smaller batch with
+`--batch-size`.
 
 ## Diagnostics First
 

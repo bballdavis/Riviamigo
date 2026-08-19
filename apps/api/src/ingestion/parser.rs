@@ -16,6 +16,39 @@ pub enum ParseError {
     InvalidJson(#[from] serde_json::Error),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChargingSessionEvent {
+    pub live_data: Option<ChargingSessionLiveData>,
+    pub live_data_present: bool,
+    pub chart_data: Vec<ChargingSessionChartPoint>,
+    pub ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChargingSessionLiveData {
+    pub power_kw: Option<f64>,
+    pub kilometers_charged_per_hour: Option<f64>,
+    pub range_added_this_session: Option<f64>,
+    pub total_charged_energy: Option<f64>,
+    pub time_elapsed_seconds: Option<f64>,
+    pub time_remaining_seconds: Option<f64>,
+    pub price: Option<f64>,
+    pub currency: Option<String>,
+    pub is_free_session: Option<bool>,
+    pub vehicle_charger_state: Option<String>,
+    pub start_time: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChargingSessionChartPoint {
+    pub soc: Option<f64>,
+    pub power_kw: Option<f64>,
+    pub start_time: Option<DateTime<Utc>>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub time_estimation_validity_status: Option<String>,
+    pub vehicle_charger_state: Option<String>,
+}
+
 /// Parse a raw WebSocket message. Returns None for non-data messages.
 /// Never panics — all field parsing is defensive.
 pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryEvent>, ParseError> {
@@ -110,9 +143,7 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
         ota_current_version: extract_str(state, "/otaCurrentVersion/value")
             .or_else(|| extract_str(state, "/otaCurrentVersionGitHash/value"))
             .map(String::from),
-        ota_available_version: extract_str(state, "/otaAvailableVersion/value")
-            .or_else(|| extract_str(state, "/otaAvailableVersionGitHash/value"))
-            .map(String::from),
+        ota_available_version: extract_ota_available_version(state),
         ota_status: extract_str(state, "/otaStatus/value").map(String::from),
         ota_current_status: extract_str(state, "/otaCurrentStatus/value").map(String::from),
 
@@ -166,8 +197,105 @@ pub fn parse_ws_message(raw: &str, vehicle_id: Uuid) -> Result<Option<TelemetryE
     }))
 }
 
+pub fn parse_charging_session_message(
+    raw: &str,
+) -> Result<Option<ChargingSessionEvent>, ParseError> {
+    let msg: Value = serde_json::from_str(raw)?;
+    if msg.get("type").and_then(Value::as_str) != Some("next") {
+        return Ok(None);
+    }
+    let Some(session) = msg.pointer("/payload/data/chargingSession") else {
+        return Ok(None);
+    };
+    if session.is_null() {
+        return Ok(Some(ChargingSessionEvent {
+            live_data: None,
+            live_data_present: true,
+            chart_data: Vec::new(),
+            ts: Utc::now(),
+        }));
+    }
+    Ok(Some(parse_charging_session_value(session)))
+}
+
+fn extract_ota_available_version(state: &Value) -> Option<String> {
+    if let Some(value) = extract_str(state, "/otaAvailableVersion/value") {
+        return (value.trim() != "0.0.0").then(|| value.to_string());
+    }
+    extract_str(state, "/otaAvailableVersionGitHash/value")
+        .filter(|value| value.trim() != "0.0.0")
+        .map(str::to_string)
+}
+
+pub fn parse_battery_cell_type(raw: &str) -> Result<Option<String>, ParseError> {
+    let msg: Value = serde_json::from_str(raw)?;
+    if msg.get("type").and_then(Value::as_str) != Some("next") {
+        return Ok(None);
+    }
+    Ok(msg
+        .pointer("/payload/data/vehicleState/batteryCellType/value")
+        .and_then(value_as_string))
+}
+
+pub(crate) fn parse_charging_session_value(session: &Value) -> ChargingSessionEvent {
+    let live_data_present = session.get("liveData").is_some();
+    let live_data = session.get("liveData").and_then(|value| {
+        if value.is_null() {
+            None
+        } else {
+            Some(ChargingSessionLiveData {
+                power_kw: value.get("powerKW").and_then(value_as_f64),
+                kilometers_charged_per_hour: value
+                    .get("kilometersChargedPerHour")
+                    .and_then(value_as_f64),
+                range_added_this_session: value.get("rangeAddedThisSession").and_then(value_as_f64),
+                total_charged_energy: value.get("totalChargedEnergy").and_then(value_as_f64),
+                time_elapsed_seconds: value.get("timeElapsed").and_then(value_as_f64),
+                time_remaining_seconds: value.get("timeRemaining").and_then(value_as_f64),
+                price: value.get("price").and_then(value_as_f64),
+                currency: value.get("currency").and_then(value_as_string),
+                is_free_session: value.get("isFreeSession").and_then(value_as_bool),
+                vehicle_charger_state: value.get("vehicleChargerState").and_then(value_as_string),
+                start_time: value.get("startTime").and_then(value_as_timestamp),
+            })
+        }
+    });
+    let chart_data: Vec<ChargingSessionChartPoint> = session
+        .get("chartData")
+        .and_then(Value::as_array)
+        .map(|points| {
+            points
+                .iter()
+                .map(|point| ChargingSessionChartPoint {
+                    soc: point.get("soc").and_then(value_as_f64),
+                    power_kw: point.get("powerKW").and_then(value_as_f64),
+                    start_time: point.get("startTime").and_then(value_as_timestamp),
+                    end_time: point.get("endTime").and_then(value_as_timestamp),
+                    time_estimation_validity_status: point
+                        .get("timeEstimationValidityStatus")
+                        .and_then(value_as_string),
+                    vehicle_charger_state: point
+                        .get("vehicleChargerState")
+                        .and_then(value_as_string),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let ts = live_data
+        .as_ref()
+        .and_then(|live| live.start_time)
+        .or_else(|| chart_data.first().and_then(|point| point.start_time))
+        .unwrap_or_else(Utc::now);
+    ChargingSessionEvent {
+        live_data,
+        live_data_present,
+        chart_data,
+        ts,
+    }
+}
+
 fn extract_f64(v: &Value, ptr: &str) -> Option<f64> {
-    v.pointer(ptr)?.as_f64()
+    v.pointer(ptr).and_then(value_as_f64)
 }
 
 fn extract_i32(v: &Value, ptr: &str) -> Option<i32> {
@@ -192,6 +320,45 @@ fn extract_bool_like(v: &Value, ptr: &str) -> Option<bool> {
 
 fn extract_str<'a>(v: &'a Value, ptr: &str) -> Option<&'a str> {
     v.pointer(ptr)?.as_str()
+}
+
+fn value_as_f64(value: &Value) -> Option<f64> {
+    scalar_value(value)
+        .as_f64()
+        .or_else(|| scalar_value(value).as_str()?.trim().parse::<f64>().ok())
+}
+
+fn value_as_bool(value: &Value) -> Option<bool> {
+    scalar_value(value).as_bool().or_else(|| {
+        match scalar_value(value).as_str()?.to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+fn value_as_string(value: &Value) -> Option<String> {
+    scalar_value(value).as_str().map(str::to_string)
+}
+
+fn value_as_timestamp(value: &Value) -> Option<DateTime<Utc>> {
+    scalar_value(value)
+        .as_str()
+        .and_then(|raw| raw.parse::<DateTime<Utc>>().ok())
+        .or_else(|| {
+            value
+                .get("updatedAt")
+                .and_then(Value::as_str)
+                .and_then(|raw| raw.parse::<DateTime<Utc>>().ok())
+        })
+}
+
+/// Rivian's charging payload is documented with scalar fields, but some
+/// deployments return the same fields in the vehicle-state `{ value, ... }`
+/// envelope. Accept both shapes at this boundary.
+fn scalar_value(value: &Value) -> &Value {
+    value.get("value").unwrap_or(value)
 }
 
 fn extract_timestamp(v: &Value, ptr: &str) -> Option<DateTime<Utc>> {
@@ -516,5 +683,132 @@ mod tests {
     fn empty_object_returns_none() {
         let msg = r#"{"type":"ping"}"#;
         assert!(parse_ws_message(msg, vid()).unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_charging_session_numbers_and_strings() {
+        let msg = serde_json::json!({
+        "type": "next",
+        "payload": { "data": { "chargingSession": {
+            "liveData": {
+                "powerKW": "11.5",
+                "kilometersChargedPerHour": 68.0,
+                "rangeAddedThisSession": "42.25",
+                "totalChargedEnergy": 7.5,
+                "timeElapsed": "120",
+                "timeRemaining": 360,
+                "price": "1.25",
+                "currency": "USD",
+                "isFreeSession": "false",
+                "vehicleChargerState": "Charging",
+                "startTime": "2026-08-18T12:00:00Z"
+            },
+            "chartData": [{
+                "soc": "55",
+                "powerKW": 10,
+                "startTime": "2026-08-18T12:00:00Z",
+                "endTime": "2026-08-18T12:01:00Z",
+                "timeEstimationValidityStatus": "VALID",
+                "vehicleChargerState": "Charging"
+            }]
+        }}}})
+        .to_string();
+        let event = parse_charging_session_message(&msg).unwrap().unwrap();
+        let live = event.live_data.unwrap();
+        assert_eq!(live.power_kw, Some(11.5));
+        assert_eq!(live.time_remaining_seconds, Some(360.0));
+        assert_eq!(live.is_free_session, Some(false));
+        assert_eq!(
+            live.start_time.unwrap().to_rfc3339(),
+            "2026-08-18T12:00:00+00:00"
+        );
+        assert_eq!(event.chart_data[0].soc, Some(55.0));
+        assert_eq!(event.ts.to_rfc3339(), "2026-08-18T12:00:00+00:00");
+    }
+
+    #[test]
+    fn parses_vehicle_state_envelopes_in_charging_session_values() {
+        let msg = serde_json::json!({
+        "type": "next",
+        "payload": { "data": { "chargingSession": {
+            "liveData": {
+                "powerKW": { "value": 9.6, "updatedAt": "2026-08-18T12:00:00Z" },
+                "totalChargedEnergy": { "value": "12.5" },
+                "timeRemaining": { "value": 120 },
+                "vehicleChargerState": { "value": "charging_active" },
+                "startTime": { "value": "2026-08-18T11:00:00Z" }
+            },
+            "chartData": [{
+                "soc": { "value": 66.0 },
+                "powerKW": { "value": 9.5 },
+                "startTime": { "value": "2026-08-18T11:59:00Z" }
+            }]
+        }}}})
+        .to_string();
+        let event = parse_charging_session_message(&msg).unwrap().unwrap();
+        let live = event.live_data.unwrap();
+        assert_eq!(live.power_kw, Some(9.6));
+        assert_eq!(live.total_charged_energy, Some(12.5));
+        assert_eq!(live.time_remaining_seconds, Some(120.0));
+        assert_eq!(
+            live.vehicle_charger_state.as_deref(),
+            Some("charging_active")
+        );
+        assert_eq!(
+            live.start_time.unwrap().to_rfc3339(),
+            "2026-08-18T11:00:00+00:00"
+        );
+        assert_eq!(event.chart_data[0].soc, Some(66.0));
+        assert_eq!(event.chart_data[0].power_kw, Some(9.5));
+    }
+
+    #[test]
+    fn preserves_null_charging_session_and_no_active_object() {
+        let null_msg = r#"{"type":"next","payload":{"data":{"chargingSession":null}}}"#;
+        let null_event = parse_charging_session_message(null_msg).unwrap().unwrap();
+        assert!(null_event.live_data.is_none());
+        assert!(null_event.chart_data.is_empty());
+
+        let empty_msg = r#"{"type":"next","payload":{"data":{"chargingSession":{"liveData":null,"chartData":[]}}}}"#;
+        let event = parse_charging_session_message(empty_msg).unwrap().unwrap();
+        assert!(event.live_data.is_none());
+        assert!(event.live_data_present);
+        assert!(event.chart_data.is_empty());
+
+        let chart_only =
+            r#"{"type":"next","payload":{"data":{"chargingSession":{"chartData":[]}}}}"#;
+        let event = parse_charging_session_message(chart_only).unwrap().unwrap();
+        assert!(event.live_data.is_none());
+        assert!(!event.live_data_present);
+    }
+
+    #[test]
+    fn extracts_battery_cell_type_without_telemetry_field() {
+        let msg = r#"{"type":"next","payload":{"data":{"vehicleState":{"batteryCellType":{"value":"4680"}}}}}"#;
+        assert_eq!(
+            parse_battery_cell_type(msg).unwrap().as_deref(),
+            Some("4680")
+        );
+    }
+
+    #[test]
+    fn normalizes_only_ota_zero_sentinel() {
+        for (value, expected) in [("0.0.0", None), ("2026.08.1", Some("2026.08.1"))] {
+            let msg = serde_json::json!({
+                "type": "next",
+                "payload": { "data": { "vehicleState": {
+                    "otaAvailableVersion": { "value": value }
+                }}}
+            })
+            .to_string();
+            assert_eq!(
+                parse_ws_message(&msg, vid())
+                    .unwrap()
+                    .unwrap()
+                    .ota_available_version
+                    .as_deref(),
+                expected
+            );
+        }
     }
 }

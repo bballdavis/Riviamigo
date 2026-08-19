@@ -55,13 +55,16 @@ mod tests {
             backup_poll_interval_seconds: 60,
             restore_agent_url: "http://127.0.0.1:3002".into(),
             restore_agent_key_file: "/backups/.restore-agent-key".into(),
+            recovery: crate::config::RecoveryConfig::default(),
+            origin_bind: crate::config::OriginBindConfig::default(),
             rivian_ws_reconnect_initial_seconds: 10,
             rivian_ws_reconnect_max_seconds: 900,
             rivian_raw_event_retention_days: 7,
             rivian_persist_raw_events: false,
             rivian_suppress_duplicate_telemetry: true,
             riviamigo_env: None,
-            cookie_insecure: Some("1".into()),
+            cookie_insecure: Some(true),
+            allow_insecure_lan_http_auth: false,
             rate_limit: crate::config::RateLimitConfig::default(),
         }
     }
@@ -103,6 +106,21 @@ mod tests {
             .send(SupervisorCommand::StopWorker { vehicle_id: id })
             .await;
         handle.send(SupervisorCommand::Shutdown).await;
+    }
+
+    #[tokio::test]
+    async fn send_reports_when_supervisor_channel_is_closed() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let handle = SupervisorHandle { tx };
+
+        assert!(
+            !handle
+                .send(SupervisorCommand::StartWorker {
+                    vehicle_id: Uuid::new_v4(),
+                })
+                .await
+        );
     }
 
     // ── StopWorker sends shutdown signal ─────────────────────────────────────
@@ -259,8 +277,8 @@ pub struct SupervisorHandle {
 }
 
 impl SupervisorHandle {
-    pub async fn send(&self, cmd: SupervisorCommand) {
-        let _ = self.tx.send(cmd).await;
+    pub async fn send(&self, cmd: SupervisorCommand) -> bool {
+        self.tx.send(cmd).await.is_ok()
     }
 
     /// Creates a handle whose commands are silently dropped — for use in tests.
