@@ -198,7 +198,6 @@ async function verifyProduction() {
   );
   if (persistedSetup.setup_required)
     throw new Error(`${composeFile} restart did not preserve the first owner.`);
-  run('sh', ['compose/prepare-data.sh'], { env: productionEnvironment });
 }
 
 function printProductionLogs() {
