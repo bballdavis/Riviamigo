@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildPlan, DEFAULT_TEST_ROOT, HarnessError, inspectPackage } from './dev-harness.mjs';
+import { buildPlan, DEFAULT_TEST_ROOT, HarnessError, inspectPackage, writeHarnessEnv } from './dev-harness.mjs';
 
 const root = () => mkdtempSync(join(tmpdir(), 'riviamigo-test-'));
 function tar(files) {
@@ -73,4 +73,17 @@ test('refuses populated storage without reset and allows explicit reset in safe 
 test('dry-run plan has machine-readable package, images, target, and phases', () => {
   const dir = root(); writeFileSync(join(dir, '.env.test'), 'SAFE=1'); const plan = buildPlan(base(dir));
   assert.equal(plan.kind, 'riviamigo-dev-harness-plan'); assert.ok(plan.package.path.endsWith('.rma.tar.gz')); assert.deepEqual(Object.keys(plan.images), ['baseline', 'dev']); assert.ok(plan.target.data.db); assert.ok(plan.phases.includes('restore-with-baseline-image')); assert.equal(plan.execution, 'dry-run');
+});
+test('development harness env keeps HTTP refresh cookies across browser reloads', () => {
+  const dir = root();
+  const source = join(dir, '.env.source');
+  const destination = join(dir, '.harness', 'dev.env');
+  writeFileSync(source, 'RIVIAMIGO_ENV=development\nCOOKIE_INSECURE=false\n');
+  const plan = buildPlan(base(dir, { envFile: source }));
+
+  writeHarnessEnv(source, destination, plan.images.dev, plan);
+
+  const generated = readFileSync(destination, 'utf8');
+  assert.match(generated, /^COOKIE_INSECURE=true$/m);
+  assert.equal((generated.match(/^COOKIE_INSECURE=/gm) ?? []).length, 1);
 });

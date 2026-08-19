@@ -73,7 +73,9 @@ services:
       S3_SECRET_KEY: deadbeef0000000000000000000000000000000000000000000000000000cafe
       PORT: ${DEV_API_PORT:-3001}
       ALLOWED_ORIGINS: ${DEV_WEB_ORIGINS:-http://localhost:5173}
-      COOKIE_INSECURE: '1'
+      # This stack is served over HTTP. Omit Secure so the browser can resend
+      # the refresh cookie after a page reload instead of forcing a new login.
+      COOKIE_INSECURE: 'true'
       RIVIAMIGO_ENV: development
       RUST_LOG: riviamigo_api=info,tower_http=info
       VEHICLE_IMAGE_CACHE_DIR: /data/vehicle-image-cache
