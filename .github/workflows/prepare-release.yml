@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -33,6 +34,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$version" -m "Release $version"
           git push origin "$version"
+
+      - name: Dispatch release image workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh workflow run publish-release-images.yml --repo "$GITHUB_REPOSITORY" --ref "$VERSION" --field version="$VERSION"
 
       - name: Report release tag
         run: echo "Created Calendar Version ${{ steps.version.outputs.version }} from main."
