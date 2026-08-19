@@ -516,7 +516,7 @@ async fn upload_backup_artifact(
         .execute(&state.pool)
         .await?;
         sqlx::query(
-            "UPDATE riviamigo.backup_runs SET phase = 'uploading', progress_percent = 10, updated_at = now() WHERE id = $1",
+            "UPDATE riviamigo.backup_runs SET phase = 'uploading', progress_percent = 10, updated_at = now() WHERE id = $1 AND status = 'running'",
         )
         .bind(run_id)
         .execute(&state.pool)
@@ -550,7 +550,7 @@ async fn upload_backup_artifact(
         drop(output);
 
         sqlx::query(
-            "UPDATE riviamigo.backup_runs SET phase = 'validating', progress_percent = 90, updated_at = now() WHERE id = $1",
+            "UPDATE riviamigo.backup_runs SET phase = 'validating', progress_percent = 90, updated_at = now() WHERE id = $1 AND status = 'running'",
         )
         .bind(run_id)
         .execute(&state.pool)
@@ -581,7 +581,7 @@ async fn upload_backup_artifact(
         .fetch_one(&state.pool)
         .await?;
         sqlx::query(
-            "UPDATE riviamigo.backup_runs SET status = 'succeeded', phase = 'completed', progress_percent = 100, artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1",
+            "UPDATE riviamigo.backup_runs SET status = 'succeeded', phase = 'completed', progress_percent = 100, artifact_key = $2, completed_at = now(), updated_at = now() WHERE id = $1 AND status = 'running'",
         )
         .bind(run_id)
         .bind(&storage_path)
@@ -597,7 +597,7 @@ async fn upload_backup_artifact(
             let _ = fs::remove_file(&temporary_path).await;
             let _ = fs::remove_file(&final_path).await;
             let _ = sqlx::query(
-                "UPDATE riviamigo.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1",
+                "UPDATE riviamigo.backup_runs SET status = 'failed', phase = 'failed', completed_at = now(), updated_at = now(), error_message = $2 WHERE id = $1 AND status = 'running'",
             )
             .bind(run_id)
             .bind(error.to_string())
