@@ -83,6 +83,7 @@ COPY packages/dashboards/package.json packages/dashboards/
 COPY packages/hooks/package.json packages/hooks/
 COPY packages/types/package.json packages/types/
 COPY packages/ui/package.json packages/ui/
+COPY patches/image-size@2.0.2.patch patches/
 RUN pnpm install --frozen-lockfile
 COPY apps/web/ apps/web/
 COPY packages/config/ packages/config/

@@ -137,7 +137,7 @@ jobs:
     env:
       UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade_${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
       REDIS_URL: redis://127.0.0.1:6379
-      UPGRADE_IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:${{ needs.validate-tag.outputs.version }}
+      UPGRADE_IMAGE: ghcr.io/bballdavis/riviamigo:${{ needs.validate-tag.outputs.version }}
       UPGRADE_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
