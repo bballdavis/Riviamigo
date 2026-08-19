@@ -14,6 +14,22 @@ describe('DateRangePicker', () => {
     expect(screen.queryByText('Custom range')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /last 30 days/i }));
+    const dialog = screen.getByRole('dialog', { name: 'Select timeframe' });
+    const modalShell = dialog.parentElement as HTMLElement;
+    expect(modalShell).toHaveClass(
+      'fixed',
+      'inset-0',
+      'items-center',
+      'justify-center',
+      'sm:absolute',
+      'sm:right-0',
+    );
+    expect(dialog).toHaveClass(
+      'max-h-[calc(100dvh-2rem)]',
+      'w-full',
+      'sm:min-w-[380px]',
+      'sm:max-w-[calc(100vw-1rem)]'
+    );
     await user.click(screen.getByRole('button', { name: 'Custom Range' }));
     expect(screen.getByText('Custom range')).toBeInTheDocument();
     expect(screen.getAllByText('mm/dd/yyyy')).toHaveLength(2);
