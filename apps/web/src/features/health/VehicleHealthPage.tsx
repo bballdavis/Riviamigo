@@ -27,13 +27,14 @@ import {
 import {
   api,
   AuthenticatedVehicleArtwork,
+  queryKeys,
   resolveVehicleArtwork,
   useAuth,
   useCurrentVehicleStatus,
   useResolvedVehicleSelection,
   useVehicleHealth,
 } from '@riviamigo/hooks';
-import { resolveVehicleGateCapability, type VehicleHealthTires } from '@riviamigo/types';
+import { resolveVehicleGateCapability } from '@riviamigo/types';
 import { SensorChipSummary } from '@riviamigo/dashboards';
 import {
   Badge,
@@ -51,6 +52,8 @@ import {
   DEFAULT_TARGET_TIRE_PRESSURE_PSI,
   formatTireLabel,
   getTireHealthTone,
+  normalizeTireWheels,
+  summarizeTireHealth,
 } from '@riviamigo/ui/lib/vehicleTires';
 import {
   buildAvailabilityTooltip,
@@ -87,7 +90,7 @@ export function VehicleHealthContent() {
   const { data, isLoading } = useVehicleHealth(effectiveVehicleId);
   const { data: status } = useCurrentVehicleStatus(effectiveVehicleId);
   const { data: images } = useQuery({
-    queryKey: ['vehicles', 'images', effectiveVehicleId],
+    queryKey: queryKeys.vehicle.images(effectiveVehicleId),
     queryFn: () => api.vehicleImages(effectiveVehicleId!),
     enabled: authReady && Boolean(effectiveVehicleId) && !!accessToken,
   });
@@ -107,7 +110,17 @@ export function VehicleHealthContent() {
   const targetTirePressurePsi = Math.round(
     activeVehicle?.target_tire_pressure_psi ?? DEFAULT_TARGET_TIRE_PRESSURE_PSI
   );
-  const tireSummary = summarizeTires(status, data?.tires ?? null);
+  const tireWheels = normalizeTireWheels(status, data?.tires ?? null).map((wheel) => ({
+    ...wheel,
+    availability: status
+      ? summarizeStatusAvailability(status, [
+          `tire_${wheel.position}_psi`,
+          `tire_${wheel.position}_status`,
+          `tire_${wheel.position}_valid`,
+        ])
+      : null,
+  }));
+  const tireSummary = summarizeTires(tireWheels, targetTirePressurePsi);
   const softwareHistory = dedupeSoftwareHistory(data?.software_history ?? []);
   const currentSoftwareEntry =
     softwareHistory.find((entry) => !entry.observed_until) ?? softwareHistory[0];
@@ -432,70 +445,17 @@ export function VehicleHealthContent() {
                     <EmptyPanel text="No tire telemetry found yet." />
                   ) : (
                     <div className="grid grid-cols-2 gap-3">
-                      <TireGauge
-                        label="Front Left"
-                        targetPressurePsi={targetTirePressurePsi}
-                        value={status?.tire_fl_psi ?? data.tires.tire_fl_psi}
-                        status={status?.tire_fl_status ?? data.tires.tire_fl_status}
-                        valid={status?.tire_fl_valid ?? null}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, [
-                                'tire_fl_psi',
-                                'tire_fl_status',
-                                'tire_fl_valid',
-                              ])
-                            : null
-                        }
-                      />
-                      <TireGauge
-                        label="Front Right"
-                        targetPressurePsi={targetTirePressurePsi}
-                        value={status?.tire_fr_psi ?? data.tires.tire_fr_psi}
-                        status={status?.tire_fr_status ?? data.tires.tire_fr_status}
-                        valid={status?.tire_fr_valid ?? null}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, [
-                                'tire_fr_psi',
-                                'tire_fr_status',
-                                'tire_fr_valid',
-                              ])
-                            : null
-                        }
-                      />
-                      <TireGauge
-                        label="Rear Left"
-                        targetPressurePsi={targetTirePressurePsi}
-                        value={status?.tire_rl_psi ?? data.tires.tire_rl_psi}
-                        status={status?.tire_rl_status ?? data.tires.tire_rl_status}
-                        valid={status?.tire_rl_valid ?? null}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, [
-                                'tire_rl_psi',
-                                'tire_rl_status',
-                                'tire_rl_valid',
-                              ])
-                            : null
-                        }
-                      />
-                      <TireGauge
-                        label="Rear Right"
-                        targetPressurePsi={targetTirePressurePsi}
-                        value={status?.tire_rr_psi ?? data.tires.tire_rr_psi}
-                        status={status?.tire_rr_status ?? data.tires.tire_rr_status}
-                        valid={status?.tire_rr_valid ?? null}
-                        availability={
-                          status
-                            ? summarizeStatusAvailability(status, [
-                                'tire_rr_psi',
-                                'tire_rr_status',
-                                'tire_rr_valid',
-                              ])
-                            : null
-                        }
-                      />
+                      {tireWheels.map((wheel) => (
+                        <TireGauge
+                          key={wheel.position}
+                          label={wheel.label}
+                          targetPressurePsi={targetTirePressurePsi}
+                          value={wheel.psi}
+                          status={wheel.status}
+                          valid={wheel.valid}
+                          availability={wheel.availability}
+                        />
+                      ))}
                     </div>
                   )}
                 </CardContent>
@@ -959,43 +919,25 @@ function formatEfficiency(value: number | null | undefined) {
 }
 
 function summarizeTires(
-  status: import('@riviamigo/types').VehicleStatus | null | undefined,
-  tires: VehicleHealthTires | null
+  wheels: Array<ReturnType<typeof normalizeTireWheels>[number] & { availability: StatusAvailabilitySummary | null }>,
+  targetPsi: number
 ): HealthState & { detail: string } {
-  const availability = status?.field_availability?.tire_pressure_status;
-  const states = [
-    status?.tire_fl_status ?? tires?.tire_fl_status,
-    status?.tire_fr_status ?? tires?.tire_fr_status,
-    status?.tire_rl_status ?? tires?.tire_rl_status,
-    status?.tire_rr_status ?? tires?.tire_rr_status,
-  ].filter(Boolean);
-  const invalidSensor = [
-    status?.tire_fl_valid,
-    status?.tire_fr_valid,
-    status?.tire_rl_valid,
-    status?.tire_rr_valid,
-  ].some((value) => value === false);
-  const values = [
-    status?.tire_fl_psi ?? tires?.tire_fl_psi,
-    status?.tire_fr_psi ?? tires?.tire_fr_psi,
-    status?.tire_rl_psi ?? tires?.tire_rl_psi,
-    status?.tire_rr_psi ?? tires?.tire_rr_psi,
-  ].filter((v): v is number => typeof v === 'number');
+  const health = summarizeTireHealth(wheels, targetPsi);
 
-  if (invalidSensor) return { label: 'Unavailable', detail: 'Invalid sensor', variant: 'info' };
-  if (availability?.availability === 'never_seen' && values.length === 0) {
+  if (health.hasInvalidSensor) return { label: 'Unavailable', detail: 'Invalid sensor', variant: 'info' };
+  if (wheels.some((wheel) => wheel.availability?.availability === 'never_seen') && health.readings.length === 0) {
     return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
   }
-  const hasWarning = states.some((state) => /low|high|warn|critical|fault/i.test(state ?? ''));
-  if (hasWarning) return { label: 'Check', detail: 'Attention needed', variant: 'warning' };
-  if (values.length === 4)
+  if (health.tone === 'danger' || health.tone === 'warning')
+    return { label: 'Check', detail: 'Attention needed', variant: health.tone };
+  if (health.readings.length === 4)
     return {
       label: 'Normal',
-      detail: `${Math.round(Math.min(...values))}-${Math.round(Math.max(...values))} psi`,
+      detail: `${Math.round(Math.min(...health.readings))}-${Math.round(Math.max(...health.readings))} psi`,
       variant: 'success',
     };
-  if (values.length > 0)
-    return { label: 'Partial', detail: `${values.length}/4 wheels`, variant: 'info' };
+  if (health.readings.length > 0)
+    return { label: 'Partial', detail: `${health.readings.length}/4 wheels`, variant: 'info' };
   return { label: 'Unavailable', detail: 'No readings yet', variant: 'info' };
 }
 
