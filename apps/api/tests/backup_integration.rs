@@ -798,8 +798,15 @@ async fn admin_can_preflight_a_versioned_recovery_package() {
         preflight.body["plan"]["package_format"],
         "riviamigo-recovery-v3"
     );
-    assert_eq!(preflight.body["plan"]["source"]["migration_version"], 3);
-    assert_eq!(preflight.body["plan"]["target"]["migration_version"], 3);
+    let latest_migration_version = restore_compatibility::latest_migration_version();
+    assert_eq!(
+        preflight.body["plan"]["source"]["migration_version"],
+        latest_migration_version
+    );
+    assert_eq!(
+        preflight.body["plan"]["target"]["migration_version"],
+        latest_migration_version
+    );
     assert!(preflight.body["plan"]["plan_id"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
