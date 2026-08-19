@@ -1056,9 +1056,30 @@ export function RichTimeSeriesChart({
       style={{ height }}
     >
       <div className="relative min-h-0 flex-1" style={{ height: chartHeight }}>
+        {overlay.bars.map((interval) => {
+          const isActive = intervalHover === interval.id;
+          const color = interval.color ?? CHART_COLORS.violet;
+          return (
+            <span
+              key={`interval-visual-${interval.id}`}
+              aria-hidden="true"
+              className="pointer-events-none absolute z-0 border"
+              style={{
+                left: interval.left,
+                top: interval.top,
+                width: interval.width,
+                height: interval.height,
+                borderColor: color,
+                borderRadius: CHART_BAR_STYLE.radius,
+                backgroundColor: color,
+                opacity: isActive ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity,
+              }}
+            />
+          );
+        })}
         <div
           ref={rootRef}
-          className="rich-uplot-chart h-full w-full"
+          className="relative z-10 rich-uplot-chart h-full w-full"
           data-chart-smoothness={smoothness}
         />
         {overlay.lines.map((line) => (
@@ -1093,7 +1114,6 @@ export function RichTimeSeriesChart({
         ) : null}
         {overlay.bars.map((interval) => {
           const isActive = intervalHover === interval.id;
-          const color = interval.color ?? CHART_COLORS.accent;
           return (
             <button
               key={interval.id}
@@ -1120,18 +1140,6 @@ export function RichTimeSeriesChart({
                 onIntervalClickRef.current?.(interval);
               }}
             >
-              <span
-                aria-hidden="true"
-                className="absolute inset-x-0 border"
-                style={{
-                  top: interval.top - interval.hitTop,
-                  height: interval.height,
-                  borderColor: color,
-                  borderRadius: CHART_BAR_STYLE.radius,
-                  backgroundColor: color,
-                  opacity: isActive ? CHART_BAR_STYLE.activeOpacity : CHART_BAR_STYLE.fillOpacity,
-                }}
-              />
               <span className="sr-only">{interval.label}</span>
             </button>
           );

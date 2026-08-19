@@ -78,7 +78,7 @@ export function TirePressureTripsChart({
     end: trip.ended_at,
     label: tripLabel(trip),
     details: tripDetails(trip),
-    color: CHART_COLORS.accent,
+    color: CHART_COLORS.violet,
   })), [trips]);
 
   const series = TIRE_SERIES.map((tire) => ({
