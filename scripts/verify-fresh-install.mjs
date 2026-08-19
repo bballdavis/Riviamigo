@@ -21,7 +21,8 @@ const imageTag = value('--image-tag');
 const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
-const composeFile = mode === 'synology' ? 'compose/docker-compose.synology.yml' : 'compose/docker-compose.yml';
+const composeFile =
+  mode === 'synology' ? 'compose/docker-compose.synology.yml' : 'compose/docker-compose.yml';
 const compose = [
   'compose',
   '-p',
@@ -63,14 +64,50 @@ async function waitFor(url, timeoutMs = 120000) {
   throw new Error(`Timed out waiting for ${url}`);
 }
 
+function readEnvValue(file, name) {
+  const prefix = `${name}=`;
+  const line = readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(prefix) && !entry.startsWith('#'));
+  if (!line) return undefined;
+
+  const rawValue = line.slice(prefix.length).trim();
+  if (
+    (rawValue.startsWith('"') && rawValue.endsWith('"')) ||
+    (rawValue.startsWith("'") && rawValue.endsWith("'"))
+  ) {
+    return rawValue.slice(1, -1);
+  }
+  return rawValue;
+}
+
+function readSetupToken(file) {
+  const inline = readEnvValue(file, 'RIVIAMIGO_SETUP_TOKEN');
+  if (inline) return inline;
+
+  const tokenFile = readEnvValue(file, 'RIVIAMIGO_SETUP_TOKEN_FILE');
+  if (tokenFile && existsSync(tokenFile)) return readFileSync(tokenFile, 'utf8').trimEnd();
+  return undefined;
+}
+
 async function verifyOwnerSetup(baseUrl) {
   await waitFor(`${baseUrl}/health`);
   const setup = await fetch(`${baseUrl}/v1/auth/setup`).then((response) => response.json());
   if (!setup.setup_required) throw new Error('Fresh stack unexpectedly already has a user.');
+  const setupToken = setup.setup_proof_required ? readSetupToken(productionEnv) : undefined;
+  if (setup.setup_proof_required && !setupToken)
+    throw new Error(
+      'Production first-owner verification requires RIVIAMIGO_SETUP_TOKEN in the supplied env file.'
+    );
   const first = await fetch(`${baseUrl}/v1/auth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: 'owner@example.test', password: 'fresh-install-password' }),
+    body: JSON.stringify({
+      email: 'owner@example.test',
+      password: 'fresh-install-password',
+      ...(setupToken ? { setup_token: setupToken } : {}),
+    }),
   });
   if (first.status !== 201)
     throw new Error(`First owner registration failed with ${first.status}.`);
