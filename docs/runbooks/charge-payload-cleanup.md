@@ -11,6 +11,9 @@ This runbook is for the append-only Rivian charging payload evidence table. The
 normal synchronizer should reuse a semantic payload identity and should not
 rewrite unchanged sessions or curve points. Cleanup is bounded and dry-run by
 default; it is not a substitute for fixing a write-amplification regression.
+The canonical `charge_payload_fingerprint` and
+`charge_payload_identity_key` database functions are shared by ingestion,
+backfill, and this compactor; do not reintroduce an inline identity expression.
 
 ## Before cleanup
 

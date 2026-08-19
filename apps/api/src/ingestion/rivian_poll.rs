@@ -915,11 +915,10 @@ async fn record_charge_payload_with_ref(
 
     let existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
         r#"WITH candidate AS (
-               SELECT digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256') AS fingerprint,
-                      digest(convert_to(concat_ws(
-                          E'\x1f', $1::text, $2, coalesce($3, ''), coalesce($4, ''),
-                          encode(digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256'), 'hex')
-                      ), 'UTF8'), 'sha256') AS identity_key
+               SELECT riviamigo.charge_payload_identity_key(
+                          $1::uuid, $2, $3, $4,
+                          riviamigo.charge_payload_fingerprint($5::jsonb)
+                      ) AS identity_key
            )
            SELECT payload.id, payload.captured_at, payload.charge_session_id
            FROM candidate
@@ -958,19 +957,8 @@ async fn record_charge_payload_with_ref(
              AND payload.rivian_transaction_id IS NOT DISTINCT FROM $3::text
              AND payload.rivian_vehicle_id IS NOT DISTINCT FROM $4::text
              AND payload.payload_fingerprint IS NULL
-             AND digest(
-                     convert_to(
-                         riviamigo.semantic_charge_payload(payload.payload)::text,
-                         'UTF8'
-                     ),
-                     'sha256'
-                 ) = digest(
-                     convert_to(
-                         riviamigo.semantic_charge_payload($5::jsonb)::text,
-                         'UTF8'
-                     ),
-                     'sha256'
-                 )
+             AND riviamigo.charge_payload_fingerprint(payload.payload)
+                 = riviamigo.charge_payload_fingerprint($5::jsonb)
            ORDER BY payload.captured_at, payload.id
            LIMIT 1
            FOR UPDATE"#,
@@ -986,13 +974,7 @@ async fn record_charge_payload_with_ref(
     if let Some(pending_existing) = pending_existing {
         sqlx::query(
             r#"UPDATE riviamigo.rivian_charge_payloads
-               SET payload_fingerprint = digest(
-                   convert_to(
-                       riviamigo.semantic_charge_payload(payload)::text,
-                       'UTF8'
-                   ),
-                   'sha256'
-               )
+               SET payload_fingerprint = riviamigo.charge_payload_fingerprint(payload)
                WHERE id = $1 AND payload_fingerprint IS NULL"#,
         )
         .bind(pending_existing.0)
@@ -1001,31 +983,14 @@ async fn record_charge_payload_with_ref(
 
         sqlx::query(
             r#"WITH candidate AS (
-                   SELECT digest(
-                              convert_to(
-                                  riviamigo.semantic_charge_payload($5::jsonb)::text,
-                                  'UTF8'
-                              ),
-                              'sha256'
-                          ) AS fingerprint
+                   SELECT riviamigo.charge_payload_fingerprint($5::jsonb) AS fingerprint
                )
                INSERT INTO riviamigo.rivian_charge_payload_identities (
                    identity_key, vehicle_id, operation, payload_fingerprint,
                    canonical_payload_id
                )
-               SELECT digest(
-                          convert_to(
-                              concat_ws(
-                                  E'\\x1f',
-                                  $1::text,
-                                  $2,
-                                  coalesce($3::text, ''),
-                                  coalesce($4::text, ''),
-                                  encode(candidate.fingerprint, 'hex')
-                              ),
-                              'UTF8'
-                          ),
-                          'sha256'
+               SELECT riviamigo.charge_payload_identity_key(
+                          $1::uuid, $2, $3, $4, candidate.fingerprint
                       ),
                       $1,
                       $2,
@@ -1045,28 +1010,9 @@ async fn record_charge_payload_with_ref(
 
         let canonical = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
             r#"WITH candidate AS (
-                   SELECT digest(
-                              convert_to(
-                                  concat_ws(
-                                      E'\\x1f',
-                                      $1::text,
-                                      $2,
-                                      coalesce($3::text, ''),
-                                      coalesce($4::text, ''),
-                                      encode(
-                                          digest(
-                                              convert_to(
-                                                  riviamigo.semantic_charge_payload($5::jsonb)::text,
-                                                  'UTF8'
-                                              ),
-                                              'sha256'
-                                          ),
-                                          'hex'
-                                      )
-                                  ),
-                                  'UTF8'
-                              ),
-                              'sha256'
+                   SELECT riviamigo.charge_payload_identity_key(
+                              $1::uuid, $2, $3, $4,
+                              riviamigo.charge_payload_fingerprint($5::jsonb)
                           ) AS identity_key
                )
                SELECT payload.id, payload.captured_at, payload.charge_session_id
@@ -1116,7 +1062,7 @@ async fn record_charge_payload_with_ref(
     let candidate_id = Uuid::new_v4();
     let inserted = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
         r#"WITH candidate AS (
-               SELECT digest(convert_to(riviamigo.semantic_charge_payload($6::jsonb)::text, 'UTF8'), 'sha256') AS fingerprint
+               SELECT riviamigo.charge_payload_fingerprint($6::jsonb) AS fingerprint
            )
            INSERT INTO riviamigo.rivian_charge_payloads
                (id, vehicle_id, charge_session_id, operation, rivian_transaction_id,
@@ -1137,14 +1083,11 @@ async fn record_charge_payload_with_ref(
 
     let canonical = sqlx::query_scalar::<_, Uuid>(
         r#"WITH candidate AS (
-               SELECT digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256') AS fingerprint,
-                      digest(convert_to(concat_ws(
-                          E'\x1f', $1::text, $2, coalesce($3, ''), coalesce($4, ''),
-                          encode(
-                              digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256'),
-                              'hex'
-                          )
-                      ), 'UTF8'), 'sha256') AS identity_key
+               SELECT riviamigo.charge_payload_fingerprint($5::jsonb) AS fingerprint,
+                      riviamigo.charge_payload_identity_key(
+                          $1::uuid, $2, $3, $4,
+                          riviamigo.charge_payload_fingerprint($5::jsonb)
+                      ) AS identity_key
            )
            INSERT INTO riviamigo.rivian_charge_payload_identities
                (identity_key, vehicle_id, operation, payload_fingerprint, canonical_payload_id)
@@ -1169,11 +1112,11 @@ async fn record_charge_payload_with_ref(
             .await?;
         let existing = sqlx::query_as::<_, (Uuid, DateTime<Utc>, Option<Uuid>)>(
             r#"WITH candidate AS (
-                   SELECT digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256') AS identity_payload,
-                          digest(convert_to(concat_ws(
-                              E'\x1f', $1::text, $2, coalesce($3, ''), coalesce($4, ''),
-                              encode(digest(convert_to(riviamigo.semantic_charge_payload($5::jsonb)::text, 'UTF8'), 'sha256'), 'hex')
-                          ), 'UTF8'), 'sha256') AS identity_key
+                   SELECT riviamigo.charge_payload_fingerprint($5::jsonb) AS identity_payload,
+                          riviamigo.charge_payload_identity_key(
+                              $1::uuid, $2, $3, $4,
+                              riviamigo.charge_payload_fingerprint($5::jsonb)
+                          ) AS identity_key
                )
                SELECT payload.id, payload.captured_at, payload.charge_session_id
                FROM candidate

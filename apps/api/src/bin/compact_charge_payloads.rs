@@ -37,8 +37,10 @@ async fn main() -> Result<()> {
                SELECT COUNT(*) - 1 AS duplicate_count
                FROM riviamigo.rivian_charge_payloads
                WHERE ($1::uuid IS NULL OR vehicle_id = $1)
-               GROUP BY vehicle_id, operation, rivian_transaction_id, rivian_vehicle_id,
-                        payload_fingerprint
+               GROUP BY riviamigo.charge_payload_identity_key(
+                            vehicle_id, operation, rivian_transaction_id,
+                            rivian_vehicle_id, payload_fingerprint
+                        )
                HAVING COUNT(*) > 1
            ) duplicates"#,
     )
@@ -101,9 +103,12 @@ async fn main() -> Result<()> {
                 AND session.vehicle_id = payload.vehicle_id
                WHERE ($1::uuid IS NULL OR payload.vehicle_id = $1)
                WINDOW duplicate_group AS (
-                   PARTITION BY payload.vehicle_id, payload.operation,
-                                payload.rivian_transaction_id,
-                                payload.rivian_vehicle_id, payload.payload_fingerprint
+                   PARTITION BY riviamigo.charge_payload_identity_key(
+                                    payload.vehicle_id, payload.operation,
+                                    payload.rivian_transaction_id,
+                                    payload.rivian_vehicle_id,
+                                    payload.payload_fingerprint
+                                )
                    ORDER BY (session.id IS NOT NULL) DESC,
                             payload.captured_at ASC, payload.id ASC
                )
