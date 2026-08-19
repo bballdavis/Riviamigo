@@ -600,6 +600,16 @@ describe('/health page cleanup', () => {
     expect(healthPageMocks.auth.setActiveVehicleId).toHaveBeenCalledWith('demo-v1');
   });
 
+  it('shows the tire reading timestamp beside the tire pressure title', () => {
+    render(<HealthContent />);
+
+    const lastUpdated = screen.getByTestId('tire-reading-updated');
+    expect(lastUpdated).toHaveTextContent('Updated:');
+    expect(lastUpdated).toHaveTextContent('May 30, 2026');
+    expect(lastUpdated).not.toHaveTextContent('Last');
+    expect(lastUpdated).not.toHaveTextContent('48–50 psi');
+  });
+
   it('uses tailgate fallback from current status and renders doors & gates title', () => {
     render(<HealthContent />);
     expect(screen.getByText('Doors & Gates')).toBeInTheDocument();
@@ -720,5 +730,38 @@ describe('/health page cleanup', () => {
     expect(screen.getByText('Rivian learned estimate')).toBeInTheDocument();
     expect(screen.getByText('Estimated vehicle mass')).toBeInTheDocument();
     expect(screen.queryByText('Cold-weather impact')).not.toBeInTheDocument();
+
+    const softwareHistory = screen.getByText('Software History');
+    const extendedTelemetry = screen.getByTestId('extended-vehicle-telemetry');
+    expect(
+      softwareHistory.compareDocumentPosition(extendedTelemetry) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('hides extended telemetry when the Parallax collector is not running', () => {
+    mockUseVehicleHealth.mockReturnValueOnce({
+      data: {
+        ...healthDataBase,
+        extended_telemetry: {
+          collector: {
+            status: 'disconnected',
+            running: false,
+            connected_at: null,
+            last_event_at: null,
+            last_error: 'Collector stopped',
+            updated_at: '2026-05-30T01:00:00Z',
+          },
+          network: null,
+          efficiency: null,
+          mass: null,
+          cold_weather: null,
+        },
+      },
+      isLoading: false,
+    });
+
+    render(<HealthContent />);
+
+    expect(screen.queryByTestId('extended-vehicle-telemetry')).not.toBeInTheDocument();
   });
 });
