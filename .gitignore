@@ -33,6 +33,7 @@ playwright-report/
 test-results/
 .playwright-cli/
 output/
+/vehicle-artwork-build/
 *.log
 *.tmp
 *.tsbuildinfo
