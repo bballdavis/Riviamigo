@@ -248,7 +248,7 @@ impl TestApp {
 fn deterministic_rate_limit_config() -> RateLimitConfig {
     RateLimitConfig {
         auth_public_per_minute: 1,
-        auth_public_burst: 1,
+        auth_public_burst: 2,
         auth_metadata_per_minute: 1,
         auth_metadata_burst: 1,
         heavy_read_per_minute: 1,
