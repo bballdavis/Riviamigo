@@ -10,7 +10,6 @@ permissions:
 
 env:
   NODE_VERSION: '24.18.0'
-  PNPM_VERSION: '11.15.1'
 
 concurrency:
   group: vehicle-artwork-${{ github.event.pull_request.number || github.ref }}

@@ -86,17 +86,12 @@ struct SessionLocationUpdate {
 
 /// Distinguishes an omitted patch field from JSON `null`; this is required to
 /// preserve `{ "place_id": null }` behavior while allowing a cost-only patch.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 enum PatchField<T> {
+    #[default]
     Absent,
     Null,
     Value(T),
-}
-
-impl<T> Default for PatchField<T> {
-    fn default() -> Self {
-        Self::Absent
-    }
 }
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for PatchField<T> {
@@ -259,7 +254,7 @@ mod timeframe_tests {
         assert!(matches!(omitted.place_id, super::PatchField::Absent));
 
         let cleared: super::SessionLocationUpdate =
-            serde_json::from_str(r#"{\"place_id\":null}"#).unwrap();
+            serde_json::from_str(r#"{"place_id":null}"#).unwrap();
         assert!(matches!(cleared.place_id, super::PatchField::Null));
     }
 
@@ -562,7 +557,7 @@ async fn update_charge_session(
 ) -> Result<(), AppError> {
     require_vehicle_manager_access(pool, auth, vehicle_id).await?;
 
-    let location_mode = payload.location_mode.or_else(|| match payload.place_id {
+    let location_mode = payload.location_mode.or(match payload.place_id {
         PatchField::Value(_) => Some(LocationOverrideMode::SavedPlace),
         PatchField::Null => Some(LocationOverrideMode::None),
         PatchField::Absent => None,

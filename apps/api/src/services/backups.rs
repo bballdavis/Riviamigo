@@ -2402,7 +2402,7 @@ mod tests {
         );
 
         let traversal = root.join("traversal.rma.tar.gz");
-        write_test_archive(&traversal, &[("../outside", b"no")]);
+        write_unsafe_test_archive(&traversal, "../outside", b"no");
         assert!(
             matches!(validate_recovery_package_sync(&traversal), Err(AppError::Validation(message)) if message.contains("Unsafe"))
         );
@@ -2468,6 +2468,28 @@ mod tests {
         let encoder = archive.into_inner().expect("finish tar");
         let mut file = encoder.finish().expect("finish gzip");
         file.flush().expect("flush archive");
+    }
+
+    fn write_unsafe_test_archive(path: &std::path::Path, member_path: &str, contents: &[u8]) {
+        let file = std::fs::File::create(path).expect("archive file");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+        let mut header = Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o600);
+        let path_bytes = member_path.as_bytes();
+        assert!(path_bytes.len() < 100, "test path must fit in a tar header");
+        header.as_mut_bytes()[..100].fill(0);
+        header.as_mut_bytes()[..path_bytes.len()].copy_from_slice(path_bytes);
+        header.set_cksum();
+        archive
+            .append(&header, contents)
+            .expect("append unsafe member");
+        archive
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish gzip");
     }
 
     #[tokio::test]

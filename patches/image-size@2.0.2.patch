@@ -1,0 +1,78 @@
+diff --git a/dist/types/heif.cjs b/dist/types/heif.cjs
+index 1f490788ea654ea9896060a5c0253d81e348af92..cb49c5648afe835964978e3cf53b98c5883ef6ed 100644
+--- a/dist/types/heif.cjs
++++ b/dist/types/heif.cjs
+@@ -69,7 +69,7 @@ var HEIF = {
+         width = rawWidth - cropRight;
+       }
+       images.push({ height, width });
+-      currentOffset = ispeBox.offset + ispeBox.size;
++      currentOffset = ispeBox.offset + (ispeBox.size > 0 ? ispeBox.size : 8);
+     }
+     if (images.length === 0) {
+       throw new TypeError("Invalid HEIF, no sizes found");
+diff --git a/dist/types/heif.mjs b/dist/types/heif.mjs
+index 01330919e01b3c034a96a7b4b1dbf5a7f658bb2d..57f4d1faf7c2365757c833f7fde3cd5729efde48 100644
+--- a/dist/types/heif.mjs
++++ b/dist/types/heif.mjs
+@@ -67,7 +67,7 @@ var HEIF = {
+         width = rawWidth - cropRight;
+       }
+       images.push({ height, width });
+-      currentOffset = ispeBox.offset + ispeBox.size;
++      currentOffset = ispeBox.offset + (ispeBox.size > 0 ? ispeBox.size : 8);
+     }
+     if (images.length === 0) {
+       throw new TypeError("Invalid HEIF, no sizes found");
+diff --git a/dist/types/icns.cjs b/dist/types/icns.cjs
+index 32c8d370dcf80a10f14a6deebfdbe04d3c70585c..1c0690e0982327a56b4401a0de05509c89deb778 100644
+--- a/dist/types/icns.cjs
++++ b/dist/types/icns.cjs
+@@ -74,7 +74,7 @@ var ICNS = {
+       const imageHeader = readImageHeader(input, imageOffset);
+       const imageSize = getImageSize(imageHeader[0]);
+       images.push(imageSize);
+-      imageOffset += imageHeader[1];
++      imageOffset += imageHeader[1] > 0 ? imageHeader[1] : 8;
+     }
+     if (images.length === 0) {
+       throw new TypeError("Invalid ICNS, no sizes found");
+diff --git a/dist/types/icns.mjs b/dist/types/icns.mjs
+index 8710027bc5890a79d05a7fdb87de3018e556729e..f3becc784b73b40fa5c4eebf78444572e7969b47 100644
+--- a/dist/types/icns.mjs
++++ b/dist/types/icns.mjs
+@@ -72,7 +72,7 @@ var ICNS = {
+       const imageHeader = readImageHeader(input, imageOffset);
+       const imageSize = getImageSize(imageHeader[0]);
+       images.push(imageSize);
+-      imageOffset += imageHeader[1];
++      imageOffset += imageHeader[1] > 0 ? imageHeader[1] : 8;
+     }
+     if (images.length === 0) {
+       throw new TypeError("Invalid ICNS, no sizes found");
+diff --git a/dist/types/jxl.cjs b/dist/types/jxl.cjs
+index a12095be85c7a8fd25763895a47c46b4292ebd9c..93d5f01aa4362808248d5492789a2fc3b3ca60a4 100644
+--- a/dist/types/jxl.cjs
++++ b/dist/types/jxl.cjs
+@@ -119,7 +119,7 @@ function extractPartialStreams(input) {
+     partialStreams.push(
+       input.slice(jxlpBox.offset + 12, jxlpBox.offset + jxlpBox.size)
+     );
+-    offset = jxlpBox.offset + jxlpBox.size;
++    offset = jxlpBox.offset + (jxlpBox.size > 0 ? jxlpBox.size : 8);
+   }
+   return partialStreams;
+ }
+diff --git a/dist/types/jxl.mjs b/dist/types/jxl.mjs
+index 49b0c4cac6abb366378e5feed745f16981b441c0..24daee333740e2b80149165869a5033b99da8592 100644
+--- a/dist/types/jxl.mjs
++++ b/dist/types/jxl.mjs
+@@ -117,7 +117,7 @@ function extractPartialStreams(input) {
+     partialStreams.push(
+       input.slice(jxlpBox.offset + 12, jxlpBox.offset + jxlpBox.size)
+     );
+-    offset = jxlpBox.offset + jxlpBox.size;
++    offset = jxlpBox.offset + (jxlpBox.size > 0 ? jxlpBox.size : 8);
+   }
+   return partialStreams;
+ }

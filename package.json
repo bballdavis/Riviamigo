@@ -70,9 +70,6 @@
       "@riviamigo/config",
       "@riviamigo/ui",
       "prettier"
-    ],
-    "ignoreBinaries": [
-      "sqlx"
     ]
   }
 }
