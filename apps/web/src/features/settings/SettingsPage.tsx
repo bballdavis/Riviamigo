@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, AuthenticatedVehicleArtwork, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
+import { api, AuthenticatedVehicleArtwork, queryKeys, resolveVehicleArtwork, useAuth, useAuthReady, useMe, useVehicles } from '@riviamigo/hooks';
 import type { UnitPreferences, VehicleImages, VehicleMember } from '@riviamigo/types';
 import {
   downloadDashboardYaml,
@@ -496,14 +496,14 @@ export function SettingsContent() {
   );
 
   const apiKeys = useQuery({
-    queryKey: ['api-keys'],
+    queryKey: queryKeys.apiKeys.all,
     queryFn: () => api.listApiKeys(),
     enabled: authReady && activeSection === 'api' && !!accessToken,
     retry: false,
   });
 
   const apiCatalog = useQuery({
-    queryKey: ['api-catalog'],
+    queryKey: queryKeys.apiCatalog.all,
     queryFn: () => api.getApiCatalog(),
     enabled: authReady && activeSection === 'api' && !!accessToken,
     retry: false,
@@ -557,13 +557,13 @@ export function SettingsContent() {
   }, [createDashboard, dashboards, openDashboard]);
 
   const unitPreferencesQuery = useQuery({
-    queryKey: ['unit-preferences'],
+    queryKey: queryKeys.unitPreferences.current,
     queryFn: () => api.getUnitPreferences(),
     enabled: authReady && !!accessToken,
   });
 
   const appTimezoneQuery = useQuery({
-    queryKey: ['app-timezone'],
+    queryKey: queryKeys.appTimezone.current,
     queryFn: () => api.getAppTimezone(),
     enabled: authReady && !!accessToken,
   });
@@ -589,12 +589,12 @@ export function SettingsContent() {
   }, [apiKeyVehicleId, vehicles]);
 
   const vehicleMembers = useQuery({
-    queryKey: ['vehicle-members', sharingVehicleId],
+    queryKey: queryKeys.vehicleMembers.byVehicle(sharingVehicleId),
     queryFn: () => api.listVehicleMembers(sharingVehicleId!),
     enabled: authReady && activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
   });
   const vehicleInvites = useQuery({
-    queryKey: ['vehicle-invites', sharingVehicleId],
+    queryKey: queryKeys.vehicleInvites.byVehicle(sharingVehicleId),
     queryFn: () => api.listVehicleInvites(sharingVehicleId!),
     enabled: authReady && activeSection === 'vehicles' && !!sharingVehicleId && !!accessToken,
   });
@@ -613,13 +613,13 @@ export function SettingsContent() {
     }),
     onSuccess: (result) => {
       setCreatedKey(result.key);
-      queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys.all });
     },
   });
 
   const revokeApiKey = useMutation({
     mutationFn: (id: string) => api.revokeApiKey(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['api-keys'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys.all }),
   });
 
   const updateVehicleSettings = useMutation({
@@ -630,7 +630,7 @@ export function SettingsContent() {
         target_tire_pressure_psi: targetTirePressurePsi,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
     },
   });
 
@@ -638,7 +638,7 @@ export function SettingsContent() {
     mutationFn: ({ vehicleId, name }: { vehicleId: string; name: string }) =>
       api.updateVehicleName(vehicleId, name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
     },
   });
 
@@ -646,23 +646,23 @@ export function SettingsContent() {
     mutationFn: (vehicleId: string) => api.deleteVehicle(vehicleId),
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id ?? null);
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
     },
   });
 
   const refreshVehicleArtwork = useMutation({
     mutationFn: (vehicleId: string) => api.refreshVehicleArtwork(vehicleId),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
     },
   });
 
   const purgeVehicleArtworkCache = useMutation({
     mutationFn: (vehicleId: string) => api.purgeVehicleArtworkCache(vehicleId),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
     },
   });
 
@@ -678,8 +678,8 @@ export function SettingsContent() {
     mutationFn: (vehicleId: string) => api.setDefaultVehicle(vehicleId),
     onSuccess: (result) => {
       setDefaultVehicleId(result.default_vehicle_id);
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      queryClient.invalidateQueries({ queryKey: ['me'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
     },
   });
 
@@ -690,9 +690,9 @@ export function SettingsContent() {
       setShareEmail('');
       setShareRole('viewer');
       setLatestInviteToken(result.invite_created ? (result.invite_token ?? null) : null);
-      queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
-      queryClient.invalidateQueries({ queryKey: ['vehicle-invites', variables.vehicleId] });
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleInvites.byVehicle(variables.vehicleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
     },
   });
 
@@ -701,11 +701,11 @@ export function SettingsContent() {
     onSuccess: (result) => {
       setActiveVehicleId(result.vehicle_id);
       setDemoPickerOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', result.vehicle_id] });
-      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'health', result.vehicle_id] });
-      void queryClient.invalidateQueries({ queryKey: ['vehicles', 'images', result.vehicle_id] });
-      void queryClient.invalidateQueries({ queryKey: ['me'] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(result.vehicle_id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.health(result.vehicle_id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.images(result.vehicle_id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
     },
   });
 
@@ -713,8 +713,8 @@ export function SettingsContent() {
     mutationFn: ({ vehicleId, userId, role }: { vehicleId: string; userId: string; role: VehicleMember['role'] }) =>
       api.updateVehicleMember(vehicleId, userId, { role }),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
     },
   });
 
@@ -722,9 +722,9 @@ export function SettingsContent() {
     mutationFn: ({ vehicleId, userId }: { vehicleId: string; userId: string }) =>
       api.removeVehicleMember(vehicleId, userId),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['vehicle-members', variables.vehicleId] });
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] });
-      queryClient.invalidateQueries({ queryKey: ['me'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleMembers.byVehicle(variables.vehicleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.me.all });
     },
   });
 
@@ -732,16 +732,17 @@ export function SettingsContent() {
     mutationFn: ({ vehicleId, inviteId }: { vehicleId: string; inviteId: string }) =>
       api.revokeVehicleInvite(vehicleId, inviteId),
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['vehicle-invites', variables.vehicleId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicleInvites.byVehicle(variables.vehicleId) });
     },
   });
 
   const updateUnitPreferences = useMutation({
     mutationFn: (units: UnitPreferences) => api.updateUnitPreferences(units),
+    scope: { id: 'settings-unit-preferences' },
     onSuccess: (result) => {
       setUnitPreferencesState(result.units);
       setUnitPreferences(result.units);
-      queryClient.invalidateQueries({ queryKey: ['unit-preferences'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.unitPreferences.current });
     },
   });
 
@@ -750,8 +751,8 @@ export function SettingsContent() {
     onSuccess: (result) => {
       setAppTimezoneState(result.timezone);
       setAppTimezone(result.timezone);
-      queryClient.invalidateQueries({ queryKey: ['app-timezone'] });
-      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.appTimezone.current });
+      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
     },
   });
 

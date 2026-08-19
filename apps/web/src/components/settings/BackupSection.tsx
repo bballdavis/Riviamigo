@@ -1,6 +1,6 @@
 import React from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@riviamigo/hooks';
+import { api, queryKeys } from '@riviamigo/hooks';
 import type {
   BackupFrequency,
   BackupOverview,
@@ -329,7 +329,7 @@ export function BackupSection() {
   const [recentRunsPage, setRecentRunsPage] = React.useState(1);
   const [recentRunsPerPage, setRecentRunsPerPage] = React.useState(10);
   const overview = useQuery({
-    queryKey: ['backup-overview', recentRunsPage, recentRunsPerPage],
+    queryKey: queryKeys.backups.overview(recentRunsPage, recentRunsPerPage),
     queryFn: () => api.getBackupOverview({ page: recentRunsPage, perPage: recentRunsPerPage }),
     placeholderData: keepPreviousData,
     refetchInterval: (query) => {
@@ -392,7 +392,7 @@ export function BackupSection() {
       if (!payload) throw new Error('Retention must be a whole number greater than zero.');
       return api.updateBackupSettings(payload);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backup-overview'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
     onError: (error) => {
       emitToast(
         'Backup settings',
@@ -403,7 +403,7 @@ export function BackupSection() {
 
   const runBackupNow = useMutation({
     mutationFn: () => api.runBackupNow(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backup-overview'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
     onError: (error) => {
       emitToast(
         'Backup run',
@@ -462,7 +462,7 @@ export function BackupSection() {
       setUploadProgress(null);
       setExpandedArtifactId(artifact.id);
       setRestoreArtifactId(artifact.id);
-      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
     },
     onError: (error) => {
       setUploadProgress(null);
@@ -475,7 +475,7 @@ export function BackupSection() {
 
   const deleteUploadedArtifact = useMutation({
     mutationFn: (artifactId: string) => api.deleteUploadedBackup(artifactId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backup-overview'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.backups.all }),
     onError: (error) =>
       emitToast(
         'Delete imported package',
@@ -518,7 +518,7 @@ export function BackupSection() {
       setActiveRestoreSizeBytes(artifact.size_bytes);
       setRestoreStatusUnavailable(false);
       closeRestoreConfirmation();
-      queryClient.invalidateQueries({ queryKey: ['backup-overview'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.backups.all });
     },
     onError: (error) => {
       emitToast(
