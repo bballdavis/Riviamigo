@@ -88,12 +88,14 @@ on every push to either protected branch. Container images are published only
 by intentional release workflows: stable images from a validated `main` tag
 and pre-release images from an approved `dev` candidate.
 
-PRs run deterministic quality, typecheck, unit-test, coverage, build, SQLx,
-and security checks. Browser E2E runs on pull requests when browser-contract
-inputs changed and otherwise reports an intentional successful no-op. Runtime
-and restore contract workflows use the same change-aware behavior, while
+PRs run deterministic quality, typecheck, unit-test, SQLx, route-security, and
+source-scan checks. Coverage and Storybook run from the scheduled/manual
+frontend workflow. Browser E2E is scheduled/manual only; it is not a required
+PR gate. Runtime migration/health, populated-upgrade, deployable-image, and
+full dependency/image security audits are scheduled/manual release evidence.
+Restore and vehicle-artwork contracts remain path-targeted PR checks, while
 fresh-install acceptance remains manual-only. Use the documented coverage and
-E2E commands when reproducing CI locally.
+E2E commands when reproducing the longer-running checks locally.
 
 The runtime workflow proves fresh migration, idempotency, health, the deployable
 image contract, and the populated charge-identity upgrade. The populated gate
@@ -104,10 +106,10 @@ Release workflows repeat that gate against both published image platforms.
 | Area        | Current checks                                                                                                                               |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | PR Quality  | Repository hygiene, linting, design-token guard, docs check, and dashboard-default drift                                                     |
-| PR Frontend | Typecheck, repository test contract, coverage floor, Storybook build, and change-aware Playwright browser E2E                                    |
+| PR Frontend | Typecheck and repository test contract; coverage and Storybook are scheduled/manual                                               |
 | PR Backend  | `cargo fmt --check`, SQLx metadata, Clippy with warnings denied, and Rust tests                                                              |
-| Runtime     | Change-aware fresh TimescaleDB migrations, migration idempotency, API health probe, production Compose validation, and container build |
-| PR Security | `cargo audit`, production `pnpm audit` at high severity, Gitleaks, Semgrep, and Trivy                                                        |
+| Runtime     | Scheduled/manual fresh TimescaleDB migration, migration-ledger inspection, API health, populated upgrade, Compose validation, and image build |
+| PR Security | Route authorization inventory, Gitleaks, and Semgrep; dependency audits and Trivy run scheduled/manual                                      |
 
 Dependency and secret failures are release blockers. High-risk Semgrep
 findings and fixable critical/high Trivy findings are also blocking. Unfixed

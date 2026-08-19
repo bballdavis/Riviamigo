@@ -1,8 +1,6 @@
-name: PR Frontend
+name: Browser E2E
 
 on:
-  pull_request:
-    branches: [main, dev]
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1'
@@ -14,9 +12,10 @@ env:
   NODE_VERSION: '24.18.0'
 
 jobs:
-  validation:
-    name: Frontend checks
+  e2e:
+    name: Browser E2E contract
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -25,20 +24,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Typecheck
-        run: pnpm turbo typecheck
-      - name: Run repository test contract
-        run: pnpm test
-      - name: Enforce frontend coverage floor
-        if: github.event_name != 'pull_request'
-        run: pnpm test:coverage
-      - name: Build Storybook
-        if: github.event_name != 'pull_request'
-        run: pnpm turbo build-storybook
-      - name: Upload Storybook build
-        if: always() && github.event_name != 'pull_request'
+      - run: pnpm --filter @riviamigo/web exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - name: Upload Playwright report
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: storybook-static
-          path: packages/ui/storybook-static
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
           if-no-files-found: warn

@@ -531,7 +531,7 @@ fn load_setup_token() -> anyhow::Result<Option<String>> {
         (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
     };
     let token = trim_one_trailing_line_ending(&token).to_owned();
-    if token.as_bytes().len() < MIN_SETUP_TOKEN_BYTES {
+    if token.len() < MIN_SETUP_TOKEN_BYTES {
         anyhow::bail!("Riviamigo setup token must contain at least {MIN_SETUP_TOKEN_BYTES} bytes");
     }
     Ok(Some(token))

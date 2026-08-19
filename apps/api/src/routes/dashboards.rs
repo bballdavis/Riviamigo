@@ -841,7 +841,11 @@ mod tests {
         let config = bundled_default_config(id).expect("overview default");
         let chart_id = config["widgets"]
             .as_array()
-            .and_then(|widgets| widgets.iter().find(|widget| widget["managedKey"] == "overview.chart-catalog"))
+            .and_then(|widgets| {
+                widgets
+                    .iter()
+                    .find(|widget| widget["managedKey"] == "overview.chart-catalog")
+            })
             .and_then(|widget| widget["options"]["chartId"].as_str());
 
         assert_eq!(chart_id, Some("battery-capacity-mileage"));

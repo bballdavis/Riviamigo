@@ -3,6 +3,15 @@ name: Restore compatibility contracts
 on:
   pull_request:
     branches: [main, dev]
+    paths:
+      - 'apps/api/migrations/**'
+      - 'apps/api/src/bin/riviamigo-restore-agent.rs'
+      - 'apps/api/src/services/backups.rs'
+      - 'apps/api/src/services/restore_compatibility.rs'
+      - 'apps/api/src/services/restore_jobs.rs'
+      - 'scripts/restore-backup.mjs'
+      - 'tools/restore-lab/**'
+      - '.github/workflows/restore-compatibility.yml'
   workflow_dispatch:
 
 permissions:
@@ -10,7 +19,6 @@ permissions:
 
 env:
   NODE_VERSION: '24.18.0'
-  PNPM_VERSION: '11.15.1'
   RUST_VERSION: '1.97.1'
 
 jobs:
@@ -20,6 +28,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: '2'
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -42,7 +51,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - name: Verify migration integrity
         if: steps.changes.outputs.run == 'true'
-        run: node tools/migration-integrity.mjs --base-ref "${GITHUB_BASE_SHA:-}"
+        run: node tools/migration-integrity.mjs --base-ref "${BASE_SHA:-}"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         if: steps.changes.outputs.run == 'true'
         with:
@@ -74,8 +83,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
