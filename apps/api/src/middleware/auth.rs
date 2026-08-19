@@ -336,14 +336,8 @@ mod tests {
             &Method::GET,
             "/vehicles/id/live-session"
         ));
-        assert!(is_integration_read_request(
-            &Method::POST,
-            "/metrics/batch"
-        ));
-        assert!(!is_integration_read_request(
-            &Method::GET,
-            "/admin/users"
-        ));
+        assert!(is_integration_read_request(&Method::POST, "/metrics/batch"));
+        assert!(!is_integration_read_request(&Method::GET, "/admin/users"));
     }
 
     #[test]
