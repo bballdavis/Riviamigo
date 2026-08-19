@@ -20,7 +20,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use riviamigo_api::{
-    config::{Config, RateLimitConfig},
+    config::{Config, OriginBindConfig, RateLimitConfig, RecoveryConfig},
     ingestion::supervisor::SupervisorHandle,
     keys::bootstrap_keys,
     middleware::auth::{AppState, JwtKeys},
@@ -106,6 +106,8 @@ impl TestApp {
                 backup_poll_interval_seconds: 60,
                 restore_agent_url: "http://127.0.0.1:3002".into(),
                 restore_agent_key_file: "/backups/.restore-agent-key".into(),
+                recovery: RecoveryConfig::default(),
+                origin_bind: OriginBindConfig::default(),
                 rivian_ws_reconnect_initial_seconds: 10,
                 rivian_ws_reconnect_max_seconds: 900,
                 rivian_raw_event_retention_days: 7,
@@ -958,6 +960,133 @@ async fn account_invitation_can_assign_viewer_vehicle_access_on_acceptance() {
             .await
             .expect("no membership count");
     assert_eq!(no_membership_count, 0);
+}
+
+#[tokio::test]
+async fn login_audit_failure_rolls_back_refresh_token_insert() {
+    let app = TestApp::new().await;
+    let email = "audit-login-failure@example.com";
+    let _ = register_and_login(&app, email).await;
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.refresh_tokens")
+        .fetch_one(&app.pool)
+        .await
+        .expect("refresh token count before login");
+
+    sqlx::query(
+        r#"
+        CREATE FUNCTION public.reject_login_success_audit() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.event_type = 'login_success' THEN
+                RAISE EXCEPTION 'intentional login audit failure';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+        "#,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install login audit failure function");
+    sqlx::query(
+        "CREATE TRIGGER reject_login_success_audit BEFORE INSERT ON riviamigo.security_events FOR EACH ROW EXECUTE FUNCTION public.reject_login_success_audit()",
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install login audit failure trigger");
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/auth/login",
+            Some(json!({ "email": email, "password": "hunter2hunter2" })),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM riviamigo.refresh_tokens")
+        .fetch_one(&app.pool)
+        .await
+        .expect("refresh token count after login");
+    assert_eq!(after, before);
+    let successful_logins: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM riviamigo.security_events WHERE event_type = 'login_success'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("successful login audit count");
+    assert_eq!(successful_logins, 0);
+}
+
+#[tokio::test]
+async fn invitation_audit_failure_rolls_back_account_acceptance() {
+    let app = TestApp::new().await;
+    let admin_token = register_and_login(&app, "audit-inviter@example.com").await;
+    let created = app
+        .request(
+            Method::POST,
+            "/v1/admin/account-invitations",
+            Some(json!({ "email": "audit-invitee@example.com", "vehicle_id": null })),
+            Some(&admin_token),
+            None,
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::OK);
+    let activation_token = created.body["activation_token"]
+        .as_str()
+        .expect("activation token");
+
+    sqlx::query(
+        r#"
+        CREATE FUNCTION public.reject_invitation_acceptance_audit() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.event_type = 'account_invitation_accepted' THEN
+                RAISE EXCEPTION 'intentional invitation audit failure';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+        "#,
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install invitation audit failure function");
+    sqlx::query(
+        "CREATE TRIGGER reject_invitation_acceptance_audit BEFORE INSERT ON riviamigo.security_events FOR EACH ROW EXECUTE FUNCTION public.reject_invitation_acceptance_audit()",
+    )
+    .execute(&app.pool)
+    .await
+    .expect("install invitation audit failure trigger");
+
+    let response = app
+        .request(
+            Method::POST,
+            "/v1/auth/account-invitations/accept",
+            Some(json!({ "token": activation_token, "password": "invitepassword" })),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let user_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM riviamigo.users WHERE email = 'audit-invitee@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("invitee count");
+    assert_eq!(user_count, 0);
+    let invitation_state: (Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>) = sqlx::query_as(
+        "SELECT accepted_at, created_user_id FROM riviamigo.account_invitations WHERE invitee_email = 'audit-invitee@example.com'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("invitation state");
+    assert!(invitation_state.0.is_none());
+    assert!(invitation_state.1.is_none());
 }
 
 #[tokio::test]

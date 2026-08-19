@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{Executor, Postgres, Row};
 use uuid::Uuid;
 
 use crate::{
@@ -317,12 +317,12 @@ async fn accept_account_invitation(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
     SecurityAuditEvent::success("account_invitation_accepted", Some(user_id))
         .target(format!("account_invitation:{invitation_id}"))
         .request_id_from_headers(&headers)
-        .record(&state.pool)
+        .record_tx(&mut tx)
         .await?;
+    tx.commit().await?;
     let token = issue_access_token(user_id, None, &state.jwt_keys)?;
     let refresh = issue_refresh_token(&state.pool, user_id).await?;
     let cookie = refresh_cookie(
@@ -389,11 +389,14 @@ async fn login(
     if let Err(e) = verify_password(&body.password, hash) {
         tracing::warn!(email = %email, reason = "invalid_credentials", "auth.login_failed");
         if row.is_some() {
-            SecurityAuditEvent::failure("login_failure", None)
+            let audit_result = SecurityAuditEvent::failure("login_failure", None)
                 .metadata(serde_json::json!({ "known_account": true }))
                 .request_id_from_headers(&headers)
                 .record(&state.pool)
-                .await?;
+                .await;
+            if let Err(audit_error) = audit_result {
+                tracing::error!(error = ?audit_error, "auth.login_failure_audit_failed");
+            }
         }
         return Err(e);
     }
@@ -412,13 +415,15 @@ async fn login(
     let user_id: Uuid = row.get("id");
     let default_vehicle_id = get_default_vehicle_id(&state.pool, user_id).await?;
     let token = issue_access_token(user_id, default_vehicle_id, &state.jwt_keys)?;
-    let refresh = issue_refresh_token(&state.pool, user_id).await?;
+    let mut tx = state.pool.begin().await?;
+    let refresh = issue_refresh_token(&mut *tx, user_id).await?;
 
     SecurityAuditEvent::success("login_success", Some(user_id))
         .target(format!("user:{user_id}"))
         .request_id_from_headers(&headers)
-        .record(&state.pool)
+        .record_tx(&mut tx)
         .await?;
+    tx.commit().await?;
 
     let cookie = refresh_cookie(
         &refresh,
@@ -752,8 +757,14 @@ async fn update_chart_favorite(
     auth: AuthUser,
     Json(body): Json<DashboardChartFavoriteUpdateBody>,
 ) -> Result<Json<DashboardChartFavoritesResponse>, AppError> {
-    if body.key.is_empty() || body.key.len() > 200 || body.chart_id.is_empty() || body.chart_id.len() > 120 {
-        return Err(AppError::Validation("invalid dashboard chart favorite".into()));
+    if body.key.is_empty()
+        || body.key.len() > 200
+        || body.chart_id.is_empty()
+        || body.chart_id.len() > 120
+    {
+        return Err(AppError::Validation(
+            "invalid dashboard chart favorite".into(),
+        ));
     }
 
     sqlx::query(
@@ -907,20 +918,23 @@ fn refresh_cookie(value: &str, max_age: u64, allow_insecure: bool) -> String {
     )
 }
 
-async fn issue_refresh_token(pool: &sqlx::PgPool, user_id: Uuid) -> Result<String, AppError> {
+async fn issue_refresh_token<'e, E>(executor: E, user_id: Uuid) -> Result<String, AppError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     use rand::Rng;
     let raw: String = (0..32)
         .map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char)
         .collect();
     let hash = sha2_hash(&raw);
     let expires_at = chrono::Utc::now() + chrono::Duration::days(30);
-    sqlx::query!(
+    sqlx::query(
         "INSERT INTO riviamigo.refresh_tokens (token_hash, user_id, expires_at) VALUES ($1,$2,$3)",
-        hash.as_slice(),
-        user_id,
-        expires_at
     )
-    .execute(pool)
+    .bind(hash.as_slice())
+    .bind(user_id)
+    .bind(expires_at)
+    .execute(executor)
     .await?;
     Ok(raw)
 }
