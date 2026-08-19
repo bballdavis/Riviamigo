@@ -987,6 +987,18 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
 
     let mut inserted = 0;
     for path in paths {
+        if let Some(run_id) = backup_run_id_from_artifact_path(&path) {
+            let active_run: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM riviamigo.backup_runs WHERE id = $1 AND status IN ('pending', 'running'))",
+            )
+            .bind(run_id)
+            .fetch_one(pool)
+            .await?;
+            if active_run {
+                continue;
+            }
+        }
+
         let storage_path = path.to_string_lossy().into_owned();
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM riviamigo.backup_artifacts WHERE storage_type <> 's3' AND storage_path = $1)",
@@ -1055,6 +1067,12 @@ pub async fn reconcile_local_catalog(pool: &PgPool, config: &Config) -> Result<u
         inserted += result.rows_affected() as usize;
     }
     Ok(inserted)
+}
+
+fn backup_run_id_from_artifact_path(path: &Path) -> Option<Uuid> {
+    let file_name = path.file_name()?.to_str()?.strip_suffix(".rma.tar.gz")?;
+    let (_, run_id) = file_name.rsplit_once('-')?;
+    Uuid::parse_str(run_id).ok()
 }
 
 fn validate_recovery_package_sync(
