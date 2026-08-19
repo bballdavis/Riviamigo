@@ -10,6 +10,7 @@ import {
   useCreateDashboard,
   useDashboards,
   useDeleteDashboard,
+  getDefaultBySlug,
   useRestoreAdminDashboardDefault,
   useSetAdminDashboardLock,
 } from '@riviamigo/dashboards';
@@ -45,6 +46,11 @@ import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth
 import {
   Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
 } from 'lucide-react';
+
+function dashboardActionId(dashboard: DashboardConfig) {
+  if (!dashboard.isDefault) return dashboard.id;
+  return getDefaultBySlug(dashboard.slug)?.id ?? dashboard.id;
+}
 
 type BatteryGen = 'gen1' | 'gen2';
 
@@ -176,7 +182,7 @@ function DashboardSettingsSection({
   const defaultBySlug = new Map(defaults.map((dashboard) => [dashboard.slug, dashboard]));
 
   async function duplicate(dashboard: DashboardConfig) {
-    const cloned = await cloneDashboard.mutateAsync(dashboard.id);
+    const cloned = await cloneDashboard.mutateAsync(dashboardActionId(dashboard));
     onEdit(cloned, true);
   }
 
@@ -402,8 +408,8 @@ function DashboardSettingsList({
                         variant="secondary"
                         size="sm"
                         iconLeft={dashboard.isLocked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-                        loading={setDashboardLock.isPending && setDashboardLock.variables?.id === dashboard.id}
-                        onClick={() => setDashboardLock.mutate({ id: dashboard.id, locked: !dashboard.isLocked })}
+                        loading={setDashboardLock.isPending && setDashboardLock.variables?.id === dashboardActionId(dashboard)}
+                        onClick={() => setDashboardLock.mutate({ id: dashboardActionId(dashboard), locked: !dashboard.isLocked })}
                       >
                         {dashboard.isLocked ? 'Unlock' : 'Lock'}
                       </Button>
@@ -411,10 +417,10 @@ function DashboardSettingsList({
                         variant="danger"
                         size="sm"
                         iconLeft={<RotateCcw className="h-3.5 w-3.5" />}
-                        loading={restoreDefaultDashboard.isPending && restoreDefaultDashboard.variables === dashboard.id}
+                        loading={restoreDefaultDashboard.isPending && restoreDefaultDashboard.variables === dashboardActionId(dashboard)}
                         onClick={() => {
                           if (window.confirm(`Restore "${dashboard.name}" to the bundled default layout?`)) {
-                            restoreDefaultDashboard.mutate(dashboard.id);
+                            restoreDefaultDashboard.mutate(dashboardActionId(dashboard));
                           }
                         }}
                       >
@@ -528,7 +534,7 @@ export function SettingsContent() {
       to: '/d/$slug',
       params: { slug: dashboard.slug },
       search: {
-        dashboardId: dashboard.id,
+        dashboardId: dashboardActionId(dashboard),
         ...(edit ? { edit: 1 } : {}),
       },
     } as never);

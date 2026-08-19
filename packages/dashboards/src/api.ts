@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useAuthReady, api } from '@riviamigo/hooks';
+import { useAuth, useAuthReady, api, useUpdateDashboardChartFavorite } from '@riviamigo/hooks';
 import { DashboardConfigSchema } from './schema';
 import { sanitizeDashboardConfig } from './layout';
 import type { DashboardConfig } from './schema';
@@ -300,10 +300,49 @@ export function useSetAdminDashboardLock() {
 
 export function useRestoreAdminDashboardDefault() {
   const qc = useQueryClient();
+  const userId = useAuth((state) => state.userId);
+  const updateChartFavorite = useUpdateDashboardChartFavorite();
   return useMutation({
-    mutationFn: (id: string) =>
-      api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/restore-default`)
-        .then(normalizeDashboardConfig),
+    mutationFn: async (id: string) => {
+      if (!DashboardConfigSchema.shape.id.safeParse(id).success) {
+        throw new Error('Invalid dashboard ID');
+      }
+
+      const restored = await api.apiFetch<unknown>('POST', `/v1/admin/dashboards/${id}/restore-default`)
+        .then(normalizeDashboardConfig);
+      const managedChart = restored.widgets.find((widget) => (
+        widget.componentType === 'chart'
+        && widget.managedKey === 'overview.chart-catalog'
+      ));
+      const chartId = managedChart?.options && typeof managedChart.options.chartId === 'string'
+        ? managedChart.options.chartId
+        : undefined;
+
+      if (managedChart && chartId) {
+        const favoriteKey = `${restored.slug}:${restored.id}:${managedChart.id}`;
+        try {
+          await updateChartFavorite.mutateAsync({
+            key: favoriteKey,
+            chartId,
+          });
+        } catch {
+          // The dashboard restore is already committed. Keep its response as
+          // the authoritative result and keep this session on the restored
+          // chart until the account preference can be changed explicitly.
+          qc.setQueryData<{ chart_favorites: Record<string, string> }>(
+            ['auth', 'dashboard-chart-favorites', userId],
+            (current) => ({
+              chart_favorites: {
+                ...(current?.chart_favorites ?? {}),
+                [favoriteKey]: chartId,
+              },
+            }),
+          );
+        }
+      }
+
+      return restored;
+    },
     onSuccess: (data) => {
       writeDashboardCache(qc, data);
       qc.invalidateQueries({ queryKey: ['dashboards'] });
