@@ -4,8 +4,6 @@ pub mod charge_backfill;
 pub mod charge_payload_identity;
 pub mod charge_sessions;
 pub mod charging;
-pub mod chart_registry;
-pub mod chart_validation;
 pub mod cost;
 pub mod demo_seed;
 pub mod external_connections;

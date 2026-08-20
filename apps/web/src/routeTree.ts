@@ -9,8 +9,6 @@ import { chargingDetailRoute } from './routes/charging.$sessionId';
 import { efficiencyRoute } from './routes/efficiency';
 import { healthRoute } from './routes/health';
 import { settingsRoute } from './routes/settings';
-import { settingsChartsNewRoute } from './routes/settings.charts.new';
-import { settingsChartsEditRoute } from './routes/settings.charts.$chartId';
 import { connectRoute } from './routes/connect';
 import { connectOtpRoute } from './routes/connect.otp';
 import { loginRoute } from './routes/login';
@@ -30,8 +28,6 @@ export const routeTree = rootRoute.addChildren([
   efficiencyRoute,
   healthRoute,
   settingsRoute,
-  settingsChartsNewRoute,
-  settingsChartsEditRoute,
   connectRoute,
   connectOtpRoute,
   loginRoute,

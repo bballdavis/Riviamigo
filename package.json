@@ -44,7 +44,6 @@
     "compose:check": "node ./scripts/check-compose-contracts.mjs",
     "compose:render-check": "node ./scripts/validate-compose.mjs",
     "dashboards:sync-defaults": "node ./scripts/sync-dashboard-defaults.mjs",
-    "charts:sync-defaults": "node ./scripts/sync-chart-defaults.mjs",
     "storybook": "turbo storybook",
     "clean": "turbo clean && rm -rf node_modules",
     "db:migrate": "node ./scripts/database.mjs migrate",

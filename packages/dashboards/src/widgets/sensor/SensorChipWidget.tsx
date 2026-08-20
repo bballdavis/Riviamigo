@@ -60,7 +60,6 @@ import {
   type SensorIconKey,
   type SensorValueColor,
 } from './sensorDefinitions';
-import { resolveSafeExpression } from '../../charts/expressions';
 
 interface SensorChipOptions {
   metric?: string;
@@ -489,7 +488,87 @@ function resolvePath(values: Record<string, unknown>, path: string): unknown {
 }
 
 function resolveFormula(formula: string, values: Record<string, unknown>) {
-  return resolveSafeExpression(formula, values);
+  let missingValue = false;
+  const expression = formula.replace(/\[([^\]]+)\]/g, (_match, rawPath: string) => {
+    const value = resolveNumberPath(values, rawPath.trim());
+    if (value == null) {
+      missingValue = true;
+      return '0';
+    }
+    return String(value);
+  });
+  if (missingValue) return null;
+  const parsed = parseMathExpression(expression);
+  return parsed != null && Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseMathExpression(expression: string) {
+  let index = 0;
+
+  function skipSpace() {
+    while (/\s/.test(expression[index] ?? '')) index += 1;
+  }
+
+  function parseNumber() {
+    skipSpace();
+    const match = expression.slice(index).match(/^\d+(?:\.\d+)?/);
+    if (!match) return null;
+    index += match[0].length;
+    return Number(match[0]);
+  }
+
+  function parseFactor(): number | null {
+    skipSpace();
+    const char = expression[index];
+    if (char === '+' || char === '-') {
+      index += 1;
+      const value = parseFactor();
+      return value == null ? null : char === '-' ? -value : value;
+    }
+    if (char === '(') {
+      index += 1;
+      const value = parseExpression();
+      skipSpace();
+      if (expression[index] !== ')') return null;
+      index += 1;
+      return value;
+    }
+    return parseNumber();
+  }
+
+  function parseTerm(): number | null {
+    let value = parseFactor();
+    if (value == null) return null;
+
+    while (true) {
+      skipSpace();
+      const op = expression[index];
+      if (op !== '*' && op !== '/') return value;
+      index += 1;
+      const right = parseFactor();
+      if (right == null || (op === '/' && right === 0)) return null;
+      value = op === '*' ? value * right : value / right;
+    }
+  }
+
+  function parseExpression(): number | null {
+    let value = parseTerm();
+    if (value == null) return null;
+
+    while (true) {
+      skipSpace();
+      const op = expression[index];
+      if (op !== '+' && op !== '-') return value;
+      index += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      value = op === '+' ? value + right : value - right;
+    }
+  }
+
+  const result = parseExpression();
+  skipSpace();
+  return index === expression.length ? result : null;
 }
 
 function usesStatus(options: Required<SensorChipOptions>) {
