@@ -42,7 +42,6 @@
       "packages/ui/src/charts/RichTimeSeriesChart.tsx": "Existing specialized renderer; split only after F7 regression coverage.",
       "apps/api/src/services/demo_seed.rs": "Existing maintenance/data fixture service; keep behavior explicit.",
       "apps/api/src/routes/dashboards.rs": "Existing dashboard contract route; split with dashboard ownership work.",
-      "apps/api/src/services/chart_validation.rs": "Chart definition validation registry; split after chart schema stabilizes.",
       "apps/api/src/services/trip_enrichment.rs": "Existing trip enrichment service; split after route extraction.",
       "apps/api/src/services/restore_compatibility.rs": "Existing restore safety service; preserve compatibility contract.",
       "apps/api/src/routes/idle_drain.rs": "Existing analytics route hotspot; split with query ownership work.",
@@ -145,11 +144,9 @@
         "packages/hooks/src/useStats.ts",
         "packages/hooks/src/useTelemetryLanes.ts",
         "packages/hooks/src/useTrips.ts",
-        "packages/hooks/src/useVehicleArtwork.tsx",
-        "packages/hooks/src/useCharts.ts",
-        "packages/hooks/src/chartSources.ts"
+        "packages/hooks/src/useVehicleArtwork.tsx"
       ],
-      "maxMatches": 123,
+      "maxMatches": 116,
       "message": "Domain queries must migrate from raw queryKey arrays to query factories"
     },
     "resolveTimeBounds": {

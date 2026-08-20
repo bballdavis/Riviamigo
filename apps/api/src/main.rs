@@ -64,8 +64,6 @@ async fn main() -> anyhow::Result<()> {
 
     routes::dashboards::seed_defaults(&pool).await?;
     tracing::info!("dashboard defaults seeded");
-    services::chart_registry::seed_defaults(&pool).await?;
-    tracing::info!("chart defaults seeded");
 
     services::external_connections::ensure_defaults(&pool).await?;
     tracing::info!("external connection defaults ensured");

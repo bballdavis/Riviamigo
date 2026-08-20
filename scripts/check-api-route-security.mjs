@@ -28,7 +28,6 @@ const authorizationMatrix = new Map([
   ['backups', 'session_admin'],
   ['battery', 'vehicle_read'],
   ['charging', 'vehicle_read_and_session_manager_mutation'],
-  ['charts', 'session_vehicle_member'],
   ['cost_profiles', 'session_vehicle_manager'],
   ['dashboards', 'session_vehicle_member'],
   ['efficiency', 'vehicle_read'],

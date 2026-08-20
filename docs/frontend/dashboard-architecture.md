@@ -14,12 +14,6 @@ This document defines the approved layering for dashboard work and the package b
 - Keep widgets small and reusable.
 - Make non-grid page sections explicit instead of implicit slug-based hacks.
 
-Chart widgets use one shared host. Assigned hosts resolve the effective
-persisted chart catalog by dashboard slug and render the active definition
-through the trusted source registry; fixed and legacy hosts remain readable
-during migration. Favorites and dashboard-specific display settings continue
-to use the stable chart slug.
-
 ## Current Anchors
 
 - Shared page shell: `apps/web/src/components/dashboard/DashboardPageShell.tsx`
