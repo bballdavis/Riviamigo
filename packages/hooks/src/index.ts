@@ -5,6 +5,24 @@ export type { ChargingSchedule, ChargingScheduleInput, DepartureSchedule, Depart
 export { useAuth } from './useAuth';
 export { useAuthReady, useResolvedVehicleSelection } from './useAuthState';
 export { useDashboardChartFavorites, useUpdateDashboardChartFavorite } from './useDashboardChartFavorites';
+export {
+  useChartManager,
+  useEffectiveCharts,
+  useChartSources,
+  useCreateChart,
+  useUpdateChart,
+  useCloneChart,
+  useDeleteChart,
+  useResetChart,
+  useSetChartEnabled,
+  useSetChartPlacements,
+  useAdminUpdateChart,
+  useAdminSetChartLock,
+  useAdminRestoreChart,
+} from './useCharts';
+export type { ChartRecordInput, ChartUpdateInput, ChartPlacementUpdate, ChartEnabledUpdate } from './useCharts';
+export { CHART_SOURCE_ADAPTERS, useChartDatasets } from './chartSources';
+export type { ChartRuntimeContext, ChartSourceAdapter, ChartSourceQueryArgs } from './chartSources';
 export { useMe } from './useMe';
 export { useVehicleStatus, useLiveStatusStore, useCurrentVehicleStatus } from './useVehicleStatus';
 export { useSocHistory, useRangeHistory, usePhantomDrain, usePhantomDrainPeriods, useParkedEnergy, useDegradation, useBatteryHealth, useBatteryMileage } from './useBattery';

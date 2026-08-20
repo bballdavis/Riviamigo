@@ -15,6 +15,8 @@ node scripts/restore-backup.mjs \
 
 Confirm that the restored instance contains the expected users, vehicles, dashboards, historical telemetry, trips, charging history, and vehicle artwork. Confirm that the Rivian account is disconnected and can be reconnected from Settings. Redis live state and encrypted `vehicle_credentials` are intentionally excluded, so a restored vehicle will not ingest telemetry or publish live charging data until it is reauthenticated.
 
+Also verify that `riviamigo.charts` is present, bundled chart slugs are visible under **Settings > Charts**, and personal chart overrides still shadow their system rows. Run `pnpm charts:sync-defaults --check` before comparing a restore against the release source tree.
+
 For repeatable regression of a private release checkpoint, use the gitignored restore lab:
 
 ```powershell

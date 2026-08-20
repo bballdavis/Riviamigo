@@ -655,6 +655,8 @@ const mockUpdateDashboardChartFavorite = vi.fn(({ key, chartId }: { key: string;
 });
 
 vi.mock('@riviamigo/hooks', () => ({
+  useEffectiveCharts: () => ({ data: [], isSuccess: false }),
+  useChartDatasets: () => ({ datasets: [], isLoading: false, errors: [] }),
   useSocHistory: () => mockSoc(),
   useRangeHistory: () => mockRange(),
   useChargingChartSeries: () => mockChargingChartSeries(),
