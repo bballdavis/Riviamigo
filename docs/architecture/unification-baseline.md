@@ -70,3 +70,9 @@ The initial guard configuration allowlists the current production locations and 
 - API route security inventory.
 
 `pnpm verify` invokes this entry point once and no longer invokes the nested dashboard and route checks separately. PR 1 changes verification and documentation only; it does not change application runtime behavior.
+
+## Cleanup checkpoint
+
+The temporary persisted custom-chart subsystem was removed from the application surface while the existing static dashboard chart catalog and specialized renderers were retained. Migration `0011_chart_definitions.sql` remains immutable; migration `0012_remove_chart_definitions.sql` removes its unused table for databases that applied the temporary feature.
+
+The trips and efficiency routes now share one trip-tag search parser, normalizer, serializer, and route adapter. The route-local implementations fell from two to zero, with four focused contract tests covering canonical ordering, invalid input, untagged precedence, and identical serialization.
