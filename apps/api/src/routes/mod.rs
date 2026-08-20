@@ -30,6 +30,7 @@ pub mod backfill;
 pub mod backups;
 pub mod battery;
 pub mod charging;
+pub mod charts;
 pub mod cost_profiles;
 pub mod dashboards;
 pub mod efficiency;
@@ -253,6 +254,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(trips::router())
         .merge(trip_tags::router())
         .merge(charging::router())
+        .merge(charts::router())
         .merge(efficiency::router())
         .merge(external_connections::router())
         .merge(metrics::router())

@@ -1,0 +1,171 @@
+{
+  "hotspots": {
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1880, "maxBytes": 100100 },
+    "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
+    "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 430, "maxBytes": 16120 },
+    "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
+    "apps/api/src/routes/vehicles.rs": { "maxLines": 5597, "maxBytes": 198198 },
+    "apps/api/src/routes/charging.rs": { "maxLines": 2242, "maxBytes": 83776 },
+    "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
+    "apps/api/src/services/backups.rs": { "maxLines": 2673, "maxBytes": 98764 },
+    "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2254, "maxBytes": 76978 }
+  },
+  "orchestration": {
+    "maxLines": 500,
+    "roots": [
+      "apps/web/src",
+      "packages/ui/src",
+      "packages/hooks/src",
+      "packages/dashboards/src",
+      "packages/types/src",
+      "apps/api/src/routes",
+      "apps/api/src/services"
+    ],
+    "extensions": [".ts", ".tsx", ".rs"],
+    "existingExceptions": {
+      "apps/api/src/routes/vehicles.rs": "Existing route hotspot; split in A3.",
+      "apps/api/src/services/backups.rs": "Existing lifecycle hotspot; split in A6.",
+      "packages/hooks/src/api/transport.ts": "Existing transport facade; split in D1.",
+      "apps/api/src/routes/charging.rs": "Existing route hotspot; split in A4.",
+      "packages/dashboards/src/widgets/chart/DashboardChartWidget.tsx": "Existing chart hotspot; address in F7.",
+      "apps/api/src/services/charge_sessions.rs": "Existing lifecycle hotspot; split in A5.",
+      "apps/web/src/features/settings/SettingsPage.tsx": "Existing settings hotspot; split in F4.",
+      "apps/api/src/routes/trips.rs": "Existing route hotspot; split in A4.",
+      "apps/web/src/components/settings/BackupSection.tsx": "Existing settings hotspot; split in F4.",
+      "apps/api/src/routes/backups.rs": "Existing route hotspot; follow backup lifecycle split.",
+      "packages/types/src/api.ts": "Existing wire-contract catalog; split with D1.",
+      "apps/api/src/routes/external_connections.rs": "Existing route hotspot; split with route ownership work.",
+      "apps/api/src/routes/auth.rs": "Existing auth route hotspot; split only with auth contract coverage.",
+      "apps/api/src/routes/metrics.rs": "Existing analytics route hotspot; split with query ownership work.",
+      "apps/web/src/features/health/VehicleHealthPage.tsx": "Existing custom health surface; migrate onto the vehicle shell in F2.",
+      "packages/ui/src/charts/RichTimeSeriesChart.tsx": "Existing specialized renderer; split only after F7 regression coverage.",
+      "apps/api/src/services/demo_seed.rs": "Existing maintenance/data fixture service; keep behavior explicit.",
+      "apps/api/src/routes/dashboards.rs": "Existing dashboard contract route; split with dashboard ownership work.",
+      "apps/api/src/services/chart_validation.rs": "Chart definition validation registry; split after chart schema stabilizes.",
+      "apps/api/src/services/trip_enrichment.rs": "Existing trip enrichment service; split after route extraction.",
+      "apps/api/src/services/restore_compatibility.rs": "Existing restore safety service; preserve compatibility contract.",
+      "apps/api/src/routes/idle_drain.rs": "Existing analytics route hotspot; split with query ownership work.",
+      "apps/web/src/components/settings/PlacesSection.tsx": "Existing settings section; split through F4.",
+      "apps/api/src/services/cost.rs": "Existing charging-domain service; split with charging ownership work.",
+      "packages/dashboards/src/editor/WidgetEditForm.tsx": "Existing dashboard editor workflow; preserve widget contract.",
+      "apps/api/src/routes/places.rs": "Existing places route; split with domain query ownership work.",
+      "packages/dashboards/src/widgets/sensor/SensorChipWidget.tsx": "Existing custom widget renderer; preserve shared chrome.",
+      "apps/api/src/routes/api_keys.rs": "Existing API access route; split with settings/API ownership work.",
+      "apps/api/src/routes/users.rs": "Existing account route; split with settings/account ownership work.",
+      "packages/ui/src/charts/DailyChargeSessionsChart.tsx": "Existing specialized renderer; preserve chart behavior.",
+      "apps/api/src/services/weather_enrichment.rs": "Existing external enrichment service; split after route extraction.",
+      "packages/ui/src/primitives/DateRangePicker.tsx": "Existing responsive picker; migrate mechanics in F1.",
+      "apps/api/src/services/restore_jobs.rs": "Existing restore workflow; split with backup lifecycle work.",
+      "apps/api/src/routes/efficiency.rs": "Existing analytics route hotspot; split with query ownership work.",
+      "apps/web/src/features/trips/TripDetailPage.tsx": "Existing custom trip detail surface; migrate shell in F2.",
+      "apps/api/src/routes/battery.rs": "Existing analytics route hotspot; split with query ownership work.",
+      "packages/ui/src/charts/TripMapChart.tsx": "Existing specialized map renderer; preserve domain behavior.",
+      "packages/dashboards/src/widgets/custom/OverviewVehicleWidget.tsx": "Approved custom vehicle visualization; preserve shared chrome."
+    }
+  },
+  "patterns": {
+    "windowAlert": {
+      "pattern": "window\\.alert\\s*\\(",
+      "directories": ["apps/web/src", "packages/ui/src", "packages/hooks/src", "packages/dashboards/src"],
+      "maxMatches": 0,
+      "message": "Production web source must not use window.alert"
+    },
+    "windowConfirm": {
+      "pattern": "window\\.confirm\\s*\\(",
+      "directories": ["apps/web/src", "packages/ui/src", "packages/hooks/src", "packages/dashboards/src"],
+      "allow": [
+        "apps/web/src/features/settings/SettingsPage.tsx",
+        "apps/web/src/components/settings/BackupSection.tsx",
+        "apps/web/src/components/settings/ExternalConnectionsSection.tsx"
+      ],
+      "maxMatches": 6,
+      "message": "Production web source must use shared confirmation overlays instead of window.confirm"
+    },
+    "roleSwitch": {
+      "pattern": "role\\s*=\\s*[\\\"']switch[\\\"']",
+      "directories": ["apps/web/src", "packages/ui/src", "packages/dashboards/src"],
+      "allow": [
+        "apps/web/src/features/settings/SettingsPage.tsx",
+        "apps/web/src/components/settings/BackupSection.tsx",
+        "packages/dashboards/src/editor/WidgetEditForm.tsx"
+      ],
+      "maxMatches": 3,
+      "message": "Production switch semantics must use the shared Switch primitive"
+    },
+    "directPortal": {
+      "pattern": "createPortal\\s*\\(",
+      "directories": ["apps/web/src", "packages/ui/src", "packages/dashboards/src"],
+      "allow": [
+        "packages/ui/src/primitives/Tooltip.tsx",
+        "packages/ui/src/primitives/ThemeToggle.tsx",
+        "packages/dashboards/src/widgets/table/TripTagPicker.tsx",
+        "packages/dashboards/src/widgets/chart/MobileChartViewer.tsx",
+        "packages/dashboards/src/widgets/chart/DashboardChartWidget.tsx",
+        "packages/dashboards/src/editor/EditorDrawer.tsx",
+        "packages/dashboards/src/editor/IconPicker.tsx"
+      ],
+      "maxMatches": 8,
+      "message": "Production overlays must use the shared overlay foundation"
+    },
+    "directToastDispatch": {
+      "pattern": "new\\s+CustomEvent\\s*\\(\\s*['\\\"]riviamigo:toast['\\\"]",
+      "directories": ["apps/web/src", "packages/hooks/src", "packages/ui/src", "packages/dashboards/src"],
+      "allow": [
+        "apps/web/src/components/feedback/toast.ts",
+        "apps/web/src/components/settings/BackupSection.tsx",
+        "apps/web/src/components/users/UserManagementPage.tsx",
+        "packages/hooks/src/api/transport.ts"
+      ],
+      "maxMatches": 4,
+      "message": "Toast events must be emitted through the shared toast module"
+    },
+    "rawQueryKey": {
+      "pattern": "queryKey\\s*:\\s*\\[",
+      "directories": ["apps/web/src", "packages/hooks/src", "packages/dashboards/src"],
+      "allow": [
+        "apps/web/src/components/dashboard/DashboardPageShell.tsx",
+        "apps/web/src/components/settings/JobsSection.tsx",
+        "apps/web/src/components/settings/PlacesSection.tsx",
+        "apps/web/src/components/settings/RawTelemetryExplorer.tsx",
+        "apps/web/src/components/users/UserManagementPage.tsx",
+        "apps/web/src/features/connect/ConnectOtpPage.tsx",
+        "apps/web/src/features/connect/ConnectPage.tsx",
+        "apps/web/src/routes/activate.tsx",
+        "apps/web/src/routes/admin.dashboards.tsx",
+        "apps/web/src/routes/login.tsx",
+        "packages/dashboards/src/api.ts",
+        "packages/dashboards/src/widgets/table/TripsTableWidget.tsx",
+        "packages/hooks/src/useBasemapConfig.ts",
+        "packages/hooks/src/useBattery.ts",
+        "packages/hooks/src/useCharging.ts",
+        "packages/hooks/src/useEfficiency.ts",
+        "packages/hooks/src/useMe.ts",
+        "packages/hooks/src/useMetrics.ts",
+        "packages/hooks/src/useStats.ts",
+        "packages/hooks/src/useTelemetryLanes.ts",
+        "packages/hooks/src/useTrips.ts",
+        "packages/hooks/src/useVehicleArtwork.tsx",
+        "packages/hooks/src/useCharts.ts",
+        "packages/hooks/src/chartSources.ts"
+      ],
+      "maxMatches": 123,
+      "message": "Domain queries must migrate from raw queryKey arrays to query factories"
+    },
+    "resolveTimeBounds": {
+      "pattern": "^\\s*(?:pub\\s+)?fn\\s+resolve_time_bounds\\s*\\(",
+      "directories": ["apps/api/src/routes"],
+      "extensions": [".rs"],
+      "allow": [
+        "apps/api/src/routes/battery.rs",
+        "apps/api/src/routes/efficiency.rs",
+        "apps/api/src/routes/idle_drain.rs",
+        "apps/api/src/routes/metrics.rs",
+        "apps/api/src/routes/trips.rs",
+        "apps/api/src/routes/charging.rs"
+      ],
+      "maxMatches": 6,
+      "message": "API time-range resolution must use the shared query utility"
+    }
+  }
+}

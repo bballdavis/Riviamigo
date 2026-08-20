@@ -61,3 +61,6 @@ Each widget's **Visibility** setting offers:
 - **Vehicle unplugged**
 
 Changing the preview does not change vehicle data and is not itself saved. Widget visibility and layout changes remain part of the normal draft and persist only after **Save**. Widgets hidden by the current preview remain in the draft, so editing one state cannot erase the other state's widgets.
+# Chart manager
+
+Chart definitions now have their own lifecycle in **Settings > Charts**. See [Chart customization](./chart-customization.md) for assignments, personal overrides, import/export, and the full-window editor.

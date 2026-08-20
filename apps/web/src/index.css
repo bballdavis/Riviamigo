@@ -83,6 +83,30 @@
   outline-offset: 2px;
 }
 
+.editor-input {
+  min-height: 2.75rem;
+  width: 100%;
+  border: 1px solid var(--rm-border-default);
+  border-radius: 0.5rem;
+  background: var(--rm-bg-elevated);
+  padding: 0 0.75rem;
+  color: var(--rm-text-primary);
+  outline: none;
+}
+.editor-input:focus { border-color: var(--rm-accent); }
+.icon-button {
+  display: inline-flex;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rm-border-default);
+  border-radius: 0.5rem;
+  color: var(--rm-text-secondary);
+}
+.icon-button:hover { background: var(--rm-bg-elevated); color: var(--rm-text-primary); }
+.icon-button:disabled { opacity: 0.4; }
+
 .rm-success-vehicle-static {
   display: none;
 }

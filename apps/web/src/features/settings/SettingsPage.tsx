@@ -40,6 +40,7 @@ import { JobsSection } from '../../components/settings/JobsSection';
 import { PlacesSection } from '../../components/settings/PlacesSection';
 import { ChargingSection } from '../../components/settings/ChargingSection';
 import { RawTelemetryExplorer } from '../../components/settings/RawTelemetryExplorer';
+import { ChartManagerSection } from './charts/ChartManagerSection';
 import { canManageSystemDashboards } from '../../components/dashboard/DashboardPage';
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
@@ -72,11 +73,12 @@ const RIVIAN_BATTERY_PRESETS: Record<BatteryGen, Array<{ key: string; label: str
 const ALL_PRESETS = [...RIVIAN_BATTERY_PRESETS.gen1, ...RIVIAN_BATTERY_PRESETS.gen2];
 const R2S_PRESET = { key: 'r2s', label: 'R2S', kwh: 82 };
 
-type SettingsSection = 'vehicles' | 'dashboards' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
+type SettingsSection = 'vehicles' | 'dashboards' | 'charts' | 'units' | 'places' | 'charging' | 'external' | 'api' | 'jobs' | 'raw' | 'backup' | 'appearance' | 'account';
 
 const baseSections: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: 'vehicles', label: 'Vehicles', icon: Car },
   { id: 'dashboards', label: 'Dashboards', icon: Clipboard },
+  { id: 'charts', label: 'Charts', icon: Database },
   { id: 'units', label: 'Units', icon: Ruler },
   { id: 'places', label: 'Places', icon: MapPin },
   { id: 'charging', label: 'Charging', icon: Zap },
@@ -456,7 +458,7 @@ function DashboardSettingsList({
   );
 }
 
-export function SettingsContent() {
+export function SettingsContent({ initialSection }: { initialSection?: SettingsSection } = {}) {
   const { accessToken, clearSession, logout, defaultVehicleId, setDefaultVehicleId, setActiveVehicleId } = useAuth();
   const authReady = useAuthReady();
   const navigate = useNavigate();
@@ -464,7 +466,7 @@ export function SettingsContent() {
   const { data: vehicles } = useVehicles();
   const me = useMe();
   const [showEditButton, setShowEditButton] = useDashboardEditButtonPreference(me.data?.user_id);
-  const [activeSection, setActiveSection] = React.useState<SettingsSection>('vehicles');
+  const [activeSection, setActiveSection] = React.useState<SettingsSection>(initialSection ?? 'vehicles');
   const [apiKeyName, setApiKeyName] = React.useState('Local troubleshooting');
   const [apiKeyVehicleId, setApiKeyVehicleId] = React.useState('');
   const [createdKey, setCreatedKey] = React.useState<string | null>(null);
@@ -500,6 +502,15 @@ export function SettingsContent() {
       : baseSections,
     [canManageBackups],
   );
+
+  React.useEffect(() => {
+    if (initialSection && initialSection !== activeSection) setActiveSection(initialSection);
+  }, [activeSection, initialSection]);
+
+  function selectSettingsSection(next: SettingsSection) {
+    setActiveSection(next);
+    navigate({ to: '/settings', search: next === 'vehicles' ? {} : { section: next } });
+  }
 
   const apiKeys = useQuery({
     queryKey: queryKeys.apiKeys.all,
@@ -875,7 +886,7 @@ export function SettingsContent() {
                 <button
                   key={section.id}
                   type="button"
-                  onClick={() => setActiveSection(section.id)}
+                  onClick={() => selectSettingsSection(section.id)}
                   className={[
                     'flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors',
                     active
@@ -1513,6 +1524,8 @@ export function SettingsContent() {
                 onEdit={openDashboard}
               />
             )}
+
+            {activeSection === 'charts' && <ChartManagerSection />}
 
             {activeSection === 'api' && (
               <div className="flex flex-col gap-5">

@@ -6,6 +6,8 @@ slug: /operations/backup-and-restore/
 
 # Backup and restore
 
+Chart definitions, personal overrides, dashboard placements, and chart baseline metadata are included in the PostgreSQL backup. A restore keeps compatible chart records and rejects a newer unsupported definition with a visible compatibility error rather than silently dropping it.
+
 Riviamigo recovery packages are full durable-state packages. They include the PostgreSQL database and the persistent vehicle artwork cache, so a downloaded package can be restored into a clean installation running the same or a newer Riviamigo release.
 
 Redis live snapshots, browser storage, refresh sessions, Rivian/provider credentials, provider connection activity history, installation keys, and backup target secrets are intentionally not restored. Non-secret backup scheduling and target configuration is restored; reconnect providers and re-enter the backup target secret after a restore. During an in-place restore, Riviamigo preserves the host's backup catalog, backup execution history, and restore request history outside PostgreSQL and merges them into the restored database after startup. A clean installation can rebuild its S3 catalog from the configured bucket.

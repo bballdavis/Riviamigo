@@ -33,6 +33,11 @@ The API is intentionally not an automation or dashboard-management API.
 Connecting a Rivian account, changing vehicle settings, creating dashboards,
 and every administrative operation require a signed-in browser session.
 
+Chart management follows the same session-only boundary. The signed-in web app
+uses `/v1/charts`, `/v1/charts/effective`, `/v1/chart-sources`, and the chart
+clone, placement, enabled, reset, and admin restore routes. Integration keys do
+not read or mutate chart definitions.
+
 Integration keys use the same bounded-feed philosophy as the dashboard data
 paths: a small typed inventory, explicit vehicle scope, server-side time and
 point limits, and specialized responses for dense history. They do not imply
