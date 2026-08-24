@@ -26,7 +26,7 @@ writeFileSync(
 );
 
 try {
-  for (const composeFile of ['compose/docker-compose.yml', 'compose/docker-compose.synology.yml']) {
+  for (const composeFile of ['compose/docker-compose.yml']) {
     execFileSync(
       'docker',
       ['compose', '--env-file', environmentFile, '-f', composeFile, 'config', '--quiet'],

@@ -178,6 +178,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
       - name: Verify published multi-architecture image
         run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.image.outputs.digest }}"
       - name: Create digest lock and GitHub release
@@ -188,9 +191,11 @@ jobs:
         shell: bash
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
+          cp compose/docker-compose.yml docker-compose.yml
+          cp compose/.env.example example.env
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $VERSION already exists; updating its digest lock asset."
-            gh release upload "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --clobber
+            echo "Release $VERSION already exists; updating deployment assets."
+            gh release upload "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
+            gh release create "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes
           fi

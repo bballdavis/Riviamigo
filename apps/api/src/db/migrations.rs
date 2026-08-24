@@ -154,15 +154,7 @@ async fn run_current_migrations_locked(
 
     let ledger_action = match (public_exists, legacy_exists) {
         (false, false) if !schema_has_users && database_is_empty(connection).await? => {
-            sqlx::raw_sql(BASELINE_SCHEMA_SQL)
-                .execute(&mut *connection)
-                .await
-                .context("apply immutable schema baseline")?;
-            // The baseline snapshot ends with Riviamigo first in search_path;
-            // all bookkeeping after it must be explicitly public.
-            set_public_search_path(connection).await?;
-            let baseline = baseline_migration()?;
-            replace_ledger(connection, &[baseline]).await?;
+            initialize_fresh_schema(connection).await?;
             MigrationLedgerAction::InitializedFresh
         }
         (false, false) => {
@@ -216,6 +208,63 @@ async fn run_current_migrations_locked(
         ledger_action,
         latest_version: latest_migration_version(),
     })
+}
+
+/// Initialize a clean database as one unit. The baseline is a large schema
+/// snapshot, so recording its SQLx ledger in a separate commit can strand a
+/// fresh installation with a complete schema that the next startup correctly
+/// rejects as untracked.
+async fn initialize_fresh_schema(connection: &mut PgConnection) -> anyhow::Result<()> {
+    let mut transaction = connection
+        .begin()
+        .await
+        .context("begin fresh schema transaction")?;
+    sqlx::raw_sql(BASELINE_SCHEMA_SQL)
+        .execute(&mut *transaction)
+        .await
+        .context("apply immutable schema baseline")?;
+
+    // The baseline snapshot changes search_path; all bookkeeping must be
+    // explicitly written to public before committing the same transaction.
+    sqlx::query("SET search_path = public")
+        .execute(&mut *transaction)
+        .await
+        .context("restore public search path after baseline")?;
+
+    let baseline = baseline_migration()?;
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
+            success BOOLEAN NOT NULL,
+            checksum BYTEA NOT NULL,
+            execution_time BIGINT NOT NULL
+        )
+        "#,
+    )
+    .execute(&mut *transaction)
+    .await
+    .context("create public migration ledger")?;
+    sqlx::query(
+        r#"
+        INSERT INTO public._sqlx_migrations
+            (version, description, success, checksum, execution_time)
+        VALUES ($1, $2, TRUE, $3, 0)
+        "#,
+    )
+    .bind(baseline.version)
+    .bind(&baseline.description)
+    .bind(hex::decode(&baseline.checksum_sha384).context("decode baseline checksum")?)
+    .execute(&mut *transaction)
+    .await
+    .context("record immutable baseline in public migration ledger")?;
+    transaction
+        .commit()
+        .await
+        .context("commit fresh schema and migration ledger")?;
+    Ok(())
 }
 
 fn require_baseline_schema(

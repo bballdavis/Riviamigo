@@ -114,9 +114,9 @@ COPY --chown=1001:1001 --from=api-builder /build/apps/api/rebaseline_db ./rebase
 COPY --chown=1001:1001 --from=api-builder /build/apps/api/migrations ./migrations
 COPY --chown=1001:1001 --from=web-builder /build/apps/web/dist ./dist
 COPY compose/nginx/nginx.conf /etc/nginx/nginx.conf
-COPY --chown=1001:1001 compose/production-init.sh compose/production-services.sh compose/production-healthcheck.sh ./
-RUN sed -i 's/\r$//' /app/production-init.sh /app/production-services.sh /app/production-healthcheck.sh \
-    && chmod 0755 /app/production-init.sh /app/production-services.sh /app/production-healthcheck.sh
+COPY --chown=1001:1001 compose/production-services.sh compose/production-healthcheck.sh ./
+RUN sed -i 's/\r$//' /app/production-services.sh /app/production-healthcheck.sh \
+    && chmod 0755 /app/production-services.sh /app/production-healthcheck.sh
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

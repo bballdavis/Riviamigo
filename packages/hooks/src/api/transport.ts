@@ -508,8 +508,15 @@ export class AuthenticatedTransport {
     return this.request('POST', '/v1/auth/login', { email, password }, undefined, true, false);
   }
 
-  async register(email: string, password: string): Promise<AuthTokens> {
-    return this.request('POST', '/v1/auth/register', { email, password }, undefined, true, false);
+  async register(email: string, password: string, setupToken?: string): Promise<AuthTokens> {
+    return this.request(
+      'POST',
+      '/v1/auth/register',
+      { email, password, ...(setupToken ? { setup_token: setupToken } : {}) },
+      undefined,
+      true,
+      false
+    );
   }
 
   async logout(): Promise<void> {
