@@ -13,6 +13,10 @@ pub enum AppError {
     Unauthorized,
     #[error("Forbidden")]
     Forbidden,
+    #[error("First-owner setup requires the configured setup token")]
+    SetupProofRequired,
+    #[error("The first-owner setup token is invalid")]
+    SetupProofInvalid,
     #[error("Conflict: {0}")]
     Conflict(String),
     #[error("Recovery operation conflict: {0}")]
@@ -55,6 +59,16 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND", self.to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", self.to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", self.to_string()),
+            AppError::SetupProofRequired => (
+                StatusCode::FORBIDDEN,
+                "SETUP_PROOF_REQUIRED",
+                self.to_string(),
+            ),
+            AppError::SetupProofInvalid => (
+                StatusCode::FORBIDDEN,
+                "SETUP_PROOF_INVALID",
+                self.to_string(),
+            ),
             AppError::Conflict(m) => (StatusCode::CONFLICT, "CONFLICT", m.clone()),
             AppError::RecoveryConflict(m) => (StatusCode::CONFLICT, "RECOVERY_CONFLICT", m.clone()),
             AppError::RecoveryTooLarge(m) => (

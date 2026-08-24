@@ -1,6 +1,19 @@
 name: Fresh install
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'compose/**'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - 'packages/hooks/**'
+      - 'packages/types/**'
+      - 'scripts/check-compose-contracts.mjs'
+      - 'scripts/validate-compose.mjs'
+      - 'scripts/verify-fresh-install.mjs'
+      - '.github/workflows/fresh-install.yml'
   workflow_dispatch:
     inputs:
       mode:
@@ -35,10 +48,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Run isolated acceptance
         run: |
-          cp compose/.env.example fresh-install.env
-          sed -i 's|DATABASE_URL=.*|DATABASE_URL=postgresql://riviamigo:fresh-install-password@timescaledb:5432/riviamigo|' fresh-install.env
-          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=fresh-install-password|' fresh-install.env
-          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=fresh-install-redis-password|' fresh-install.env
-          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://fresh-install.example.test|' fresh-install.env
-          printf '\nJWT_SECRET=%s\nJWT_PUBLIC_KEY=%s\nAGE_ENCRYPTION_KEY=%s\n' "${{ secrets.FRESH_INSTALL_JWT_SECRET }}" "${{ secrets.FRESH_INSTALL_JWT_PUBLIC_KEY }}" "${{ secrets.FRESH_INSTALL_AGE_ENCRYPTION_KEY }}" >> fresh-install.env
-          pnpm verify:fresh-install -- --mode "${{ inputs.mode }}" --production-env "$PWD/fresh-install.env" --source-build
+          fresh_env="$RUNNER_TEMP/fresh-install.env"
+          cp compose/.env.example "$fresh_env"
+          sed -i 's|DATABASE_URL=.*|DATABASE_URL=postgresql://riviamigo:fresh-install-password@timescaledb:5432/riviamigo|' "$fresh_env"
+          sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=fresh-install-password|' "$fresh_env"
+          sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=fresh-install-redis-password|' "$fresh_env"
+          sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://fresh-install.example.test|' "$fresh_env"
+          sed -i 's|RIVIAMIGO_SETUP_TOKEN=.*|RIVIAMIGO_SETUP_TOKEN=fresh-install-setup-token-32-bytes-minimum|' "$fresh_env"
+          printf '\nJWT_SECRET=%s\nJWT_PUBLIC_KEY=%s\nAGE_ENCRYPTION_KEY=%s\n' "${{ secrets.FRESH_INSTALL_JWT_SECRET }}" "${{ secrets.FRESH_INSTALL_JWT_PUBLIC_KEY }}" "${{ secrets.FRESH_INSTALL_AGE_ENCRYPTION_KEY }}" >> "$fresh_env"
+          pnpm verify:fresh-install -- --mode "${{ inputs.mode || 'production' }}" --production-env "$fresh_env" --source-build

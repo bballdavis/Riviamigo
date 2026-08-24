@@ -27,7 +27,7 @@ interface AuthState {
   isBootstrapping: boolean;
 
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, setupToken?: string) => Promise<void>;
   acceptAccountInvitation: (token: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   resumeSession: () => Promise<boolean>;
@@ -97,8 +97,8 @@ export const useAuth = create<AuthState>()(
         });
       },
 
-      register: async (email, password) => {
-        const tokens = await api.register(email, password);
+      register: async (email, password, setupToken) => {
+        const tokens = await api.register(email, password, setupToken);
         const userId = userIdFromToken(tokens.access_token);
         api.setToken(tokens.access_token);
         set({
