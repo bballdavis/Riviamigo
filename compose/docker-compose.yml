@@ -104,7 +104,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-            # initdb and crash recovery are fsync-heavy and can exceed interval x
+      # initdb and crash recovery are fsync-heavy and can exceed interval x
       # retries on hosts with slow storage, notably Docker Desktop bind mounts.
       # Probe failures inside start_period do not count toward retries, so the
       # cluster is not killed mid-initialization.
