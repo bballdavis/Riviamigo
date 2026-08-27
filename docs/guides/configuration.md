@@ -37,9 +37,10 @@ Before the first production registration, set exactly one setup proof:
 
 - `RIVIAMIGO_SETUP_TOKEN` for a securely injected value, or
 - `RIVIAMIGO_SETUP_TOKEN_FILE` for a mounted secret file (preferred).
-For Synology, start from `compose/synology/.env.synology.example`; its
-`CHANGE_ME` setup token is deliberately invalid and must be replaced before
-production startup.
+Synology uses the same `compose/.env.example` template and universal Compose
+file as every other Docker host. The template leaves the setup token commented
+out so an unclaimed production stack fails closed until a unique proof is
+configured.
 
 The proof must contain at least 32 bytes. The first registration sends it as
 `setup_token`; the app uses it only while no user exists. The public setup

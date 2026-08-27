@@ -34,8 +34,8 @@ Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of 
 
 New installations use Docker-managed volumes:
 
-| Host directory | Container path | Contents                                           |
-| -------------- | -------------- | -------------------------------------------------- |
+| Docker volume       | Container path | Contents                                           |
+| ------------------- | -------------- | -------------------------------------------------- |
 | `riviamigo-db`      | `/db`          | PostgreSQL data                                    |
 | `riviamigo-redis`   | `/data`        | Redis append-only state                            |
 | `riviamigo-backups` | `/backups`     | Downloadable recovery packages                     |
@@ -102,22 +102,13 @@ docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-c
 
 Local development continues to use `pnpm dev:stack` and `compose/docker-compose.dev.yml`; production image consolidation does not change that workflow.
 
-## Upgrade from the former named volumes
-
-Before the first start with the host-visible layout, stop the old stack and create a current recovery package. Then migrate the old volumes:
-
-```bash
-docker compose --env-file .env -f compose/docker-compose.yml down
-node scripts/migrate-production-storage.mjs --project riviamigo
-docker compose --env-file .env -f compose/docker-compose.yml up -d
-```
-
-The migration refuses running source volumes and non-empty destinations, verifies copied file counts, and retains the old volumes for rollback. Pass the prior Compose project name through `--project` if it was not `riviamigo`.
-
 ## Stopping and recovery
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml down
 ```
 
-`down` retains `./data`. Removing the containers does not remove bind-mounted application data. See [backup and restore](./backup-and-restore.md) before replacing or deleting the data directory.
+`down` retains Docker-managed volumes and existing bind-mounted application
+data. Do not add `--volumes` during a routine stop or update. See
+[backup and restore](./backup-and-restore.md) before replacing or deleting any
+persistent storage.

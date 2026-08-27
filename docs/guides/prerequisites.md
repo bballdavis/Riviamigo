@@ -15,9 +15,9 @@ The release stack pins PostgreSQL 18.4 with TimescaleDB 2.28.3, Redis 8.8, and i
 - Git and Docker Engine with Docker Compose v2 (`docker compose`).
 - Enough persistent storage for PostgreSQL/TimescaleDB and backups. Start with at least 20 GB and leave room for your history to grow.
 - A modern browser and a Rivian account with a vehicle attached.
-- Permission to pre-create the `data/db`, `data/redis`, `data/backups`, and
-  `data/cache` bind-mount directories and grant the container runtime read/write
-  access. This is commonly required on NAS platforms such as Synology DSM.
+- Permission for Docker to create and manage the named volumes used by a new
+  installation. Existing bind-mount installations must retain read/write access
+  to their configured database, Redis, backup, and cache paths.
 - If you want remote access: an authenticated HTTPS tunnel or identity-aware reverse proxy. Do not forward a public port directly to Riviamigo.
 
 ## Helpful, but optional

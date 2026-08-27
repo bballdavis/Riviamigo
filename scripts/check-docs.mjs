@@ -384,6 +384,11 @@ function checkProductionDeploymentContract() {
   const productionCompose = readFile("compose/docker-compose.yml");
   const buildCompose = readFile("compose/docker-compose.build.yml");
   const nginxConfig = readFile("compose/nginx/nginx.conf");
+  const compactEnv = readFile("compose/.env.example");
+
+  if (/^RIVIAMIGO_SETUP_TOKEN=/m.test(compactEnv)) {
+    fail("compact production env must not ship an active first-owner setup token");
+  }
 
   for (const requiredSnippet of [
     '"${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
@@ -423,7 +428,12 @@ function checkProductionDeploymentContract() {
 }
 
 function checkUniversalSynologyContract() {
-  if (fileExists("compose/docker-compose.synology.yml") || fileExists("compose/.env.synology.example")) {
+  if (
+    fileExists("compose/docker-compose.synology.yml") ||
+    fileExists("compose/.env.synology.example") ||
+    fileExists("compose/synology/docker-compose.yml") ||
+    fileExists("compose/synology/.env.synology.example")
+  ) {
     fail("Synology must use the universal Compose file instead of a second deployment definition");
   }
 }
