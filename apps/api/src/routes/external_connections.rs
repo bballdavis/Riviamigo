@@ -98,6 +98,11 @@ struct ConnectionResponse {
     last_test_at: Option<DateTime<Utc>>,
     last_test_ok: Option<bool>,
     last_test_error: Option<String>,
+    credential_issued_at: Option<DateTime<Utc>>,
+    expected_renewal_at: Option<DateTime<Utc>>,
+    renewal_state: Option<connections::RivianRenewalState>,
+    observed_health: Option<String>,
+    observed_error: Option<String>,
     cache: Option<ConnectionCacheResponse>,
 }
 
@@ -152,6 +157,7 @@ async fn build_response(
     .await?
     .unwrap_or((false, None));
     let mut result = Vec::with_capacity(rows.len());
+    let rivian_status = connections::rivian_status(&state.pool).await?;
     for (settings, activity) in rows {
         let Some(definition) = DEFINITIONS.iter().find(|item| item.id == settings.id) else {
             continue;
@@ -211,6 +217,21 @@ async fn build_response(
             last_test_at: activity.last_test_at,
             last_test_ok: activity.last_test_ok,
             last_test_error: activity.last_test_error,
+            credential_issued_at: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.credential_issued_at)
+                .flatten(),
+            expected_renewal_at: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.expected_renewal_at)
+                .flatten(),
+            renewal_state: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.renewal_state.clone())
+                .flatten(),
+            observed_health: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.observed_health.clone())
+                .flatten(),
+            observed_error: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.observed_error.clone())
+                .flatten(),
             cache,
         });
     }

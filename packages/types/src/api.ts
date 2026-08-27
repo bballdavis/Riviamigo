@@ -1104,6 +1104,14 @@ export interface AddVehicleResult {
   telemetry_error?: string | null;
 }
 
+export interface RefreshVehicleCredentialsResult {
+  ok: boolean;
+  vehicle_id: string;
+  vehicle_saved: boolean;
+  telemetry_status: 'ready' | 'waiting';
+  telemetry_error: string | null;
+}
+
 export interface CreateDemoVehicleResult {
   ok: boolean;
   vehicle_id: string;

@@ -18,7 +18,7 @@ import {
   useVehicleStatus,
 } from '@riviamigo/hooks';
 import { isVehicleCharging } from '@riviamigo/types';
-import { Loader2, LogOut, Settings, TriangleAlert, UserCog, Wifi, WifiOff } from 'lucide-react';
+import { CalendarClock, Loader2, LogOut, Settings, TriangleAlert, UserCog, Wifi, WifiOff } from 'lucide-react';
 import { GiRestingVampire } from 'react-icons/gi';
 import {
   TbBattery1,
@@ -31,6 +31,10 @@ import {
 } from 'react-icons/tb';
 import { FaTruckPickup } from 'react-icons/fa6';
 import { emitToast } from '../feedback/toast';
+import {
+  getRivianCredentialRenewalNotice,
+  type RivianCredentialRenewalNotice,
+} from '../../lib/rivianCredentialRenewal';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -47,6 +51,31 @@ interface FeedHealthStatus {
 }
 
 const FEED_HEALTH_TOAST_COOLDOWN_MS = 15 * 60 * 1000;
+
+function CredentialRenewalNotice({
+  notice,
+  compact = false,
+  onClick,
+}: {
+  notice: RivianCredentialRenewalNotice;
+  compact?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={notice.message}
+      aria-label={`${notice.label}. ${notice.message}`}
+      className={compact
+        ? '-mx-1 flex h-8 w-[calc(100%+0.5rem)] items-center justify-center rounded-lg bg-bg-elevated text-status-warning transition-colors hover:bg-bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+        : 'flex min-h-10 w-full items-center gap-2 rounded-lg bg-bg-elevated px-3 py-2 text-start text-status-warning transition-colors hover:bg-bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'}
+    >
+      <CalendarClock className="h-4 w-4 shrink-0" aria-hidden="true" />
+      {!compact ? <span className="min-w-0 text-xs font-medium leading-5">{notice.label}</span> : null}
+    </button>
+  );
+}
 
 export function getFeedHealthIssue(status?: FeedHealthStatus | null) {
   if (status?.auth_state === 'needs_reauth') {
@@ -148,6 +177,7 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
   }, []);
 
   const feedHealthIssue = getFeedHealthIssue(currentStatus);
+  const renewalNotice = getRivianCredentialRenewalNotice(currentStatus);
   React.useEffect(() => {
     if (!liveVehicleId || !feedHealthIssue || !connected) return;
 
@@ -264,6 +294,15 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
         bottomSlot={({ collapsed, mobile, closeMobileNavigation }) =>
           mobile ? (
             <div className="flex flex-col gap-3">
+              {renewalNotice ? (
+                <CredentialRenewalNotice
+                  notice={renewalNotice}
+                  onClick={() => {
+                    navigate({ to: '/settings' });
+                    closeMobileNavigation(false);
+                  }}
+                />
+              ) : null}
               <StatusBar
                 onlineState={onlineState}
                 socPercent={status?.battery_level ?? undefined}
@@ -354,6 +393,14 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
                 </div>
               </div>
 
+              {renewalNotice ? (
+                <CredentialRenewalNotice
+                  compact
+                  notice={renewalNotice}
+                  onClick={() => navigate({ to: '/settings' })}
+                />
+              ) : null}
+
               <button
                 type="button"
                 onClick={() => navigate({ to: '/settings' })}
@@ -379,6 +426,12 @@ export function AppLayout({ children, activeKey }: AppLayoutProps) {
             </div>
           ) : (
             <div className="flex flex-col gap-2">
+              {renewalNotice ? (
+                <CredentialRenewalNotice
+                  notice={renewalNotice}
+                  onClick={() => navigate({ to: '/settings' })}
+                />
+              ) : null}
               <StatusBar
                 onlineState={onlineState}
                 socPercent={status?.battery_level ?? undefined}

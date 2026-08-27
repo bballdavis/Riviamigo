@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
 
@@ -12,6 +12,69 @@ pub const ICONIFY: &str = "iconify";
 pub const S3_BACKUP: &str = "s3_backup";
 
 pub const OPTIONAL_CONNECTIONS: &[&str] = &[OPEN_METEO, NOMINATIM, BASEMAP, ICONIFY];
+
+/// Advisory policy based on observed Rivian ecosystem behavior, not an
+/// authoritative provider contract.
+pub const RIVIAN_RENEWAL_INTERVAL: Duration = Duration::days(180);
+pub const RIVIAN_RENEWAL_WARNING: Duration = Duration::days(7);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RivianRenewalState {
+    Healthy,
+    RenewalSoon,
+    RenewalDue,
+    ReauthRequired,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RivianConnectionStatus {
+    pub credential_issued_at: Option<DateTime<Utc>>,
+    pub expected_renewal_at: Option<DateTime<Utc>>,
+    pub renewal_state: Option<RivianRenewalState>,
+    pub observed_health: Option<String>,
+    pub observed_error: Option<String>,
+}
+
+pub fn rivian_renewal_state(
+    issued_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    auth_failed: bool,
+) -> RivianRenewalState {
+    if auth_failed {
+        return RivianRenewalState::ReauthRequired;
+    }
+    let renewal_at = issued_at + RIVIAN_RENEWAL_INTERVAL;
+    if now >= renewal_at {
+        RivianRenewalState::RenewalDue
+    } else if now >= renewal_at - RIVIAN_RENEWAL_WARNING {
+        RivianRenewalState::RenewalSoon
+    } else {
+        RivianRenewalState::Healthy
+    }
+}
+
+pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppError> {
+    let issued_at = sqlx::query_scalar::<_, DateTime<Utc>>(
+        "SELECT MIN(token_created_at) FROM riviamigo.vehicle_credentials",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let runtime = sqlx::query_as::<_, (Option<String>, bool, Option<String>)>(
+        "SELECT MIN(worker_health), EXISTS(SELECT 1 FROM riviamigo.vehicle_runtime_state WHERE auth_state = 'needs_reauth'), MIN(worker_health_msg) FROM riviamigo.vehicle_runtime_state",
+    )
+    .fetch_one(pool)
+    .await?;
+    let auth_failed = runtime.1;
+    let expected = issued_at.map(|at| at + RIVIAN_RENEWAL_INTERVAL);
+    Ok(RivianConnectionStatus {
+        credential_issued_at: issued_at,
+        expected_renewal_at: expected,
+        renewal_state: issued_at.map(|at| rivian_renewal_state(at, Utc::now(), auth_failed)),
+        observed_health: runtime.0,
+        observed_error: runtime.2,
+    })
+}
 
 /// Restore the non-secret provider defaults after a fresh install or a
 /// sanitized restore. Custom endpoints and encrypted credentials always win:
@@ -268,7 +331,8 @@ fn sanitize_error(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_error;
+    use super::{rivian_renewal_state, sanitize_error, RivianRenewalState};
+    use chrono::{Duration, TimeZone, Utc};
 
     #[test]
     fn strips_query_strings_and_bounds_error_text() {
@@ -278,5 +342,26 @@ mod tests {
         ));
         assert!(!result.contains("lat="));
         assert!(result.len() <= 240);
+    }
+
+    #[test]
+    fn derives_advisory_renewal_boundaries_and_auth_override() {
+        let issued = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert!(matches!(
+            rivian_renewal_state(issued, issued + Duration::days(172), false),
+            RivianRenewalState::Healthy
+        ));
+        assert!(matches!(
+            rivian_renewal_state(issued, issued + Duration::days(173), false),
+            RivianRenewalState::RenewalSoon
+        ));
+        assert!(matches!(
+            rivian_renewal_state(issued, issued + Duration::days(180), false),
+            RivianRenewalState::RenewalDue
+        ));
+        assert!(matches!(
+            rivian_renewal_state(issued, issued + Duration::days(1), true),
+            RivianRenewalState::ReauthRequired
+        ));
     }
 }
