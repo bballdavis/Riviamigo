@@ -22,7 +22,7 @@ const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
 const composeFile =
-  mode === 'synology' ? 'compose/docker-compose.synology.yml' : 'compose/docker-compose.yml';
+  mode === 'synology' ? 'compose/synology/docker-compose.yml' : 'compose/docker-compose.yml';
 const compose = [
   'compose',
   '-p',
@@ -96,10 +96,27 @@ async function verifyOwnerSetup(baseUrl) {
   const setup = await fetch(`${baseUrl}/v1/auth/setup`).then((response) => response.json());
   if (!setup.setup_required) throw new Error('Fresh stack unexpectedly already has a user.');
   const setupToken = setup.setup_proof_required ? readSetupToken(productionEnv) : undefined;
-  if (setup.setup_proof_required && !setupToken)
-    throw new Error(
-      'Production first-owner verification requires RIVIAMIGO_SETUP_TOKEN in the supplied env file.'
-    );
+  if (setup.setup_proof_required && setup.setup_proof_available !== Boolean(setupToken))
+    throw new Error('Fresh setup proof metadata is inconsistent.');
+  if (setup.setup_proof_required) {
+    for (const candidate of [undefined, 'CHANGE_ME']) {
+      const rejected = await fetch(`${baseUrl}/v1/auth/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          email: 'owner@example.test',
+          password: 'fresh-install-password',
+          ...(candidate ? { setup_token: candidate } : {}),
+        }),
+      });
+      if (rejected.status !== 403)
+        throw new Error(`Fresh setup accepted a missing or wrong proof (status ${rejected.status}).`);
+    }
+    if (!setupToken)
+      throw new Error(
+        'Production first-owner verification requires RIVIAMIGO_SETUP_TOKEN in the supplied env file.'
+      );
+  }
   const first = await fetch(`${baseUrl}/v1/auth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

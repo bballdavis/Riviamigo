@@ -7,7 +7,10 @@ sidebar_label: Synology DSM
 
 # Install Riviamigo on Synology DSM
 
-This guide uses the standalone Synology Compose file. It keeps the same
+This guide uses the standalone Synology Compose file at
+`compose/synology/docker-compose.yml` (the older
+`compose/docker-compose.synology.yml` path remains a generated compatibility
+alias). It keeps the same
 Riviamigo image, database, Redis, health checks, persistent volumes, and
 security controls as the standard deployment, while avoiding CPU quota fields
 that some DSM kernels reject.
@@ -42,7 +45,7 @@ directory. If SSH is enabled, run this from the repository checkout:
 
 ```bash
 export RIVIAMIGO_DATA_DIR=/volume1/docker/riviamigo/data
-sudo -E ./compose/prepare-data.sh
+sudo -E sh ./compose/prepare-data.sh
 ```
 
 The script is repeatable, prints each final directory, and checks that each
@@ -56,14 +59,17 @@ settings.
 
 ## Environment configuration
 
-Copy `compose/.env.synology.example` to `compose/.env.synology` and replace the
-database password, Redis password, and HTTPS origin. Set
+Copy `compose/synology/.env.synology.example` to
+`compose/synology/.env.synology` and replace the
+database password, Redis password, setup token, and HTTPS origin. The setup
+token must be at least 32 bytes; generate a high-entropy value with
+`openssl rand -hex 32`, then paste it into the env file. Set
 `RIVIAMIGO_DATA_DIR` to the actual absolute DSM path. Keep
 `ALLOW_INSECURE_LAN_HTTP_AUTH=false`; the supported path uses HTTPS through DSM
 Reverse Proxy.
 
 Do not commit the resulting env file. The generated Compose file defaults to
-`.env.synology` and does not require editing.
+`compose/synology/.env.synology` and does not require editing.
 
 ## Create the Container Manager project
 
@@ -79,11 +85,14 @@ Do not commit the resulting env file. The generated Compose file defaults to
    If Node.js and pnpm are not installed on DSM, use the checked-in generated
    file from the release artifact and do not edit it.
 3. In Container Manager, create a Project from an existing Compose file and
-   select `compose/docker-compose.synology.yml` as the single Compose file.
-4. Set the project environment file to `compose/.env.synology` if the UI does
+   select `compose/synology/docker-compose.yml` as the single Compose file.
+4. Set the project environment file to `.env.synology` in that project folder
+   if the UI does
    not use the generated default automatically.
-5. Start the project and wait until `timescaledb`, `redis`, and `riviamigo` are
-   healthy. The one-shot `riviamigo-init` service should complete successfully.
+5. Start the project and allow up to five minutes for the first TimescaleDB
+   initialization. Wait until `timescaledb`, `redis`, and `riviamigo` are
+   healthy. The one-shot `riviamigo-init` service should show `Exited (0)`;
+   that is successful and expected, while DSM may show `Partially running`.
 
 The Synology file is standalone. Do not combine it with the standard file or
 remove the generated loopback port mapping.
@@ -94,7 +103,7 @@ The documentation site embeds the generated deployment file directly from the
 repository:
 
 ```compose-include
-compose/docker-compose.synology.yml
+compose/synology/docker-compose.yml
 ```
 
 ## DSM Reverse Proxy
@@ -129,7 +138,7 @@ From the NAS, check the loopback origin:
 
 ```bash
 curl http://127.0.0.1:8080/health
-docker compose --env-file compose/.env.synology -f compose/docker-compose.synology.yml ps
+docker compose --env-file compose/synology/.env.synology -f compose/synology/docker-compose.yml ps
 ```
 
 The health endpoint should return success, and the database, Redis, and app
@@ -146,9 +155,9 @@ Back up the recovery package and verify it before upgrading. Then pull the new
 image and recreate the project with the same env file and absolute data path:
 
 ```bash
-docker compose --env-file compose/.env.synology -f compose/docker-compose.synology.yml pull
-docker compose --env-file compose/.env.synology -f compose/docker-compose.synology.yml up -d
-docker compose --env-file compose/.env.synology -f compose/docker-compose.synology.yml ps
+docker compose --env-file compose/synology/.env.synology -f compose/synology/docker-compose.yml pull
+docker compose --env-file compose/synology/.env.synology -f compose/synology/docker-compose.yml up -d
+docker compose --env-file compose/synology/.env.synology -f compose/synology/docker-compose.yml ps
 ```
 
 Startup applies forward-only migrations. The charge identity schema expansion
@@ -171,14 +180,18 @@ the previous image; reverting only the image is not a safe rollback.
 ## Troubleshooting
 
 - **`NanoCPUs can not be set`:** confirm Container Manager is using
-  `docker-compose.synology.yml`, not the standard file or an old override. The
-  generated Synology file contains no `cpus`, `cpu_period`, or `cpu_quota`
-  fields.
+  `compose/synology/docker-compose.yml`, not the standard file or an old
+  override. The generated Synology file contains no CPU or PID limit fields.
 - **Bind source path does not exist:** set an absolute `RIVIAMIGO_DATA_DIR`,
   create the four subdirectories, and recreate the project.
-- **Permission denied for `/db` or Redis `/data`:** grant Container Manager
-  read/write access to the selected shared folder in DSM; do not delete data or
-  weaken the container user settings.
+- **Permission denied during init for `/backups` or `/data/cache`:** DSM ACLs
+  can override container-side ownership. Grant the Container Manager project
+  service Owner=Read/Write on the selected shared folder, then recreate the
+  project; do not delete data or weaken the container user settings.
+- **Partial fresh database:** stop the project and move the incomplete data
+  directory to a dated quarantine path before retrying. Never delete or let a
+  new install auto-adopt an object-bearing database without its migration
+  ledger. Restore only from a verified recovery package or dump.
 - **DSM Reverse Proxy returns 502:** verify that the project is healthy, that
   the destination is `127.0.0.1:8080`, and that the configured origin port
   matches `RIVIAMIGO_ORIGIN_PORT`.

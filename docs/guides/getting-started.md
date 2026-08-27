@@ -49,6 +49,8 @@ when a specific host interface is required, and follow [secure deployment](./sec
 before making it available outside your local network.
 
 Using Synology DSM? Follow the dedicated [Synology installation guide](./synology.md).
+The DSM guide includes the setup-token template, first-boot delay, and shared
+folder ACL checks required for a fresh install.
 
 ## Copy the standard Compose file
 

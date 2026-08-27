@@ -40,7 +40,7 @@ Most installations need only `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `ALLOWED
 | `JWT_SECRET` | Generated and stored in PostgreSQL | RSA private signing key. If overridden, the public and age keys must also be supplied. |
 | `JWT_PUBLIC_KEY` | Generated and stored in PostgreSQL | RSA public verification key. Supply only as part of the complete three-key override. |
 | `AGE_ENCRYPTION_KEY` | Generated and stored in PostgreSQL | age X25519 identity used to encrypt provider credentials. Supply only as part of the complete three-key override. |
-| `RIVIAMIGO_SETUP_TOKEN` | Unset | One-time first-owner proof for production registration. Mutually exclusive with `RIVIAMIGO_SETUP_TOKEN_FILE`; must be at least 32 bytes. Keep this value out of shell history where possible. |
+| `RIVIAMIGO_SETUP_TOKEN` | Unset | One-time first-owner proof for production registration. Mutually exclusive with `RIVIAMIGO_SETUP_TOKEN_FILE`; must be at least 32 bytes. The Synology template uses the intentionally invalid `CHANGE_ME` placeholder. Keep this value out of shell history where possible. |
 | `RIVIAMIGO_SETUP_TOKEN_FILE` | Unset | File containing the one-time first-owner proof. Mutually exclusive with `RIVIAMIGO_SETUP_TOKEN`; one trailing line ending is accepted. Prefer a mounted secret file. |
 | `RIVIAMIGO_ENV` | `production` | Enables production configuration validation. Use `development` only for local development. |
 | `PORT` | `3001` | Internal API listener port. The unified production nginx expects `3001`. |

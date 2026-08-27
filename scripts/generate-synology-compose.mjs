@@ -7,14 +7,17 @@ import { parse, stringify } from 'yaml';
 
 const root = resolve(import.meta.dirname, '..');
 const sourcePath = resolve(root, 'compose/docker-compose.yml');
-const targetPath = resolve(root, 'compose/docker-compose.synology.yml');
+const targetPaths = [
+  resolve(root, 'compose/synology/docker-compose.yml'),
+  resolve(root, 'compose/docker-compose.synology.yml'),
+];
 const generatedHeader = [
   '# GENERATED FILE — DO NOT EDIT DIRECTLY.',
   '# Source: compose/docker-compose.yml',
   '# Generator: scripts/generate-synology-compose.mjs',
 ].join('\n');
 
-const forbiddenCpuKeys = new Set(['cpus', 'cpu_period', 'cpu_quota']);
+const forbiddenCpuKeys = new Set(['cpus', 'cpu_period', 'cpu_quota', 'pids']);
 
 function transformCompose(source) {
   const compose = parse(source);
@@ -47,7 +50,9 @@ function transformCompose(source) {
     return result;
   }
 
-  return transform(compose);
+  const transformed = transform(compose);
+  transformed.services.timescaledb.healthcheck.start_period = '5m';
+  return transformed;
 }
 
 function renderSynologyCompose(source) {
@@ -57,21 +62,22 @@ function renderSynologyCompose(source) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const rendered = renderSynologyCompose(readFileSync(sourcePath, 'utf8'));
   if (process.argv.includes('--check')) {
-    let current = '';
-    try {
-      current = readFileSync(targetPath, 'utf8');
-    } catch {
-      // The missing file is reported by the same stale-file path below.
-    }
-    if (current !== rendered) {
+    const stale = targetPaths.some((targetPath) => {
+      try {
+        return readFileSync(targetPath, 'utf8') !== rendered;
+      } catch {
+        return true;
+      }
+    });
+    if (stale) {
       console.error('Synology Compose is stale. Run pnpm compose:synology:generate.');
       process.exitCode = 1;
     } else {
       console.log('Synology Compose is current.');
     }
   } else {
-    writeFileSync(targetPath, rendered, 'utf8');
-    console.log(`Generated ${targetPath}`);
+    for (const targetPath of targetPaths) writeFileSync(targetPath, rendered, 'utf8');
+    console.log(`Generated ${targetPaths.join(' and ')}`);
   }
 }
 

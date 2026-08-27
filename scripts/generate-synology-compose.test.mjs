@@ -7,7 +7,7 @@ import { transformCompose } from './generate-synology-compose.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
-test('Synology transform keeps services and removes only unsupported CPU controls', () => {
+test('Synology transform keeps services and removes unsupported resource controls', () => {
   const source = parse(readFileSync(resolve(root, 'compose/docker-compose.yml'), 'utf8'));
   const synology = transformCompose(readFileSync(resolve(root, 'compose/docker-compose.yml'), 'utf8'));
 
@@ -22,6 +22,7 @@ test('Synology transform keeps services and removes only unsupported CPU control
   );
 
   const serialized = JSON.stringify(synology);
-  assert.doesNotMatch(serialized, /"cpus"|"cpu_period"|"cpu_quota"/);
+  assert.doesNotMatch(serialized, /"cpus"|"cpu_period"|"cpu_quota"|"pids"/);
+  assert.equal(synology.services.timescaledb.healthcheck.start_period, '5m');
   assert.match(JSON.stringify(synology.services.riviamigo.env_file), /\.env\.synology/);
 });

@@ -30,6 +30,7 @@ const buildText = read('compose/docker-compose.build.yml');
 const devText = read('compose/docker-compose.dev.yml');
 const dockerfileText = read('compose/Dockerfile');
 const synologyText = read('compose/docker-compose.synology.yml');
+const dsmSynologyText = read('compose/synology/docker-compose.yml');
 const standard = parse(standardText);
 const build = parse(buildText);
 const dev = parse(devText);
@@ -83,6 +84,14 @@ assert(
   'standard Compose must retain the database CPU limit'
 );
 assert(
+  standard.services.riviamigo.deploy?.resources?.limits?.pids === 256,
+  'standard Compose must retain the app PID limit'
+);
+assert(
+  standard.services.timescaledb.healthcheck?.start_period !== '5m',
+  'standard Compose must not inherit the Synology-only TimescaleDB start period'
+);
+assert(
   standard.services['riviamigo-init'].networks?.includes('internal'),
   'the init service must share the internal database network'
 );
@@ -102,7 +111,7 @@ assert(
   'the Rust builder and runtime must retain a compatible Bookworm glibc baseline'
 );
 
-for (const forbiddenKey of ['cpus', 'cpu_period', 'cpu_quota']) {
+for (const forbiddenKey of ['cpus', 'cpu_period', 'cpu_quota', 'pids']) {
   walk(synology, (key) => {
     assert(key !== forbiddenKey, `Synology Compose must not contain ${forbiddenKey}`);
   });
@@ -114,5 +123,8 @@ assert(
   synologyText === renderSynologyCompose(standardText),
   'generated Synology Compose is stale; run pnpm compose:synology:generate'
 );
+assert(dsmSynologyText === synologyText, 'DSM Compose and compatibility alias must match');
+assert(synology.services.timescaledb.healthcheck.start_period === '5m', 'Synology TimescaleDB must allow five minutes for first boot');
+assert(!synologyText.includes('pids:'), 'Synology Compose must not include PID limits');
 
 console.log('compose:check passed');

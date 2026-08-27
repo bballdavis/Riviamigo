@@ -4,6 +4,22 @@ set -eu
 mkdir -p /backups /data/cache/riviamigo/vehicle-images
 chown -R 1001:1001 /backups /data/cache
 
+# DSM shared-folder ACLs can override container-side ownership. Probe the
+# actual application identity instead of assuming chown was sufficient.
+if ! command -v setpriv >/dev/null 2>&1; then
+  echo "Riviamigo init cannot verify UID/GID 1001 access: setpriv is missing from the image" >&2
+  exit 1
+fi
+for probe_dir in /backups /data/cache/riviamigo/vehicle-images; do
+  probe_file="$probe_dir/.riviamigo-acl-probe"
+  if ! setpriv --reuid=1001 --regid=1001 --clear-groups sh -c \
+    "umask 077; printf '%s\\n' acl-probe > '$probe_file' && rm -f '$probe_file'"; then
+    echo "Riviamigo init cannot write/delete $probe_dir as UID/GID 1001." >&2
+    echo "In DSM, grant the Container Manager project service Owner=Read/Write on the shared folder and retry; do not weaken container security." >&2
+    exit 1
+  fi
+done
+
 if [ ! -s /backups/.restore-agent-key ]; then
   umask 077
   dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 > /backups/.restore-agent-key
