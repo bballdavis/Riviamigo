@@ -13,7 +13,7 @@ const build = parse(read('compose/docker-compose.build.yml'));
 const dev = parse(read('compose/docker-compose.dev.yml'));
 
 assert(
-  JSON.stringify(Object.keys(standard.services ?? {}).sort()) === JSON.stringify(['parallax', 'redis', 'riviamigo', 'timescaledb']),
+  JSON.stringify(Object.keys(standard.services ?? {}).sort()) === JSON.stringify(['redis', 'riviamigo', 'timescaledb']),
   'standard Compose must contain only the universal production services'
 );
 assert(
