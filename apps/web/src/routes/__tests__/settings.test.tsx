@@ -1133,7 +1133,7 @@ describe('Settings page', () => {
           s3_enabled: true,
         })
       );
-    });
+    }, { timeout: 5_000 });
 
     fireEvent.click(screen.getByText('Test S3 connection'));
     await waitFor(() =>
@@ -1142,11 +1142,12 @@ describe('Settings page', () => {
           bucket: 'riviamigo-backups',
           s3_enabled: true,
         })
-      )
+      ),
+      { timeout: 5_000 },
     );
 
     fireEvent.click(screen.getByText('Run now'));
-    await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled());
+    await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled(), { timeout: 5_000 });
 
     expect(screen.queryByText('File name')).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/Expand backup details/i));

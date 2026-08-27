@@ -1459,7 +1459,9 @@ async fn charging_sessions_use_the_local_start_date() {
     let res = app
         .request(
             Method::GET,
-            &format!("/v1/vehicles/{vehicle_id}/charging-sessions"),
+            &format!(
+                "/v1/vehicles/{vehicle_id}/charging-sessions?from=2026-05-24T00:00:00Z&to=2026-05-25T00:00:00Z"
+            ),
             None,
             Some(&token),
             None,
