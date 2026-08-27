@@ -114,6 +114,7 @@ function collectEnvVars() {
     "compose/.env.example",
     "compose/.env.full.example",
     "compose/.env.synology.example",
+    "compose/synology/.env.synology.example",
   ];
   const names = new Set();
 
@@ -427,22 +428,29 @@ function checkProductionDeploymentContract() {
 }
 
 function checkSynologyDeploymentContract() {
-  const synologyCompose = readFile("compose/docker-compose.synology.yml");
+  const synologyCompose = readFile("compose/synology/docker-compose.yml");
   for (const requiredSnippet of [
     "# GENERATED FILE — DO NOT EDIT DIRECTLY.",
     "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080",
     "${RIVIAMIGO_DATA_DIR:?Set RIVIAMIGO_DATA_DIR to an absolute Synology path}",
     "${RIVIAMIGO_ENV_FILE:-.env.synology}",
+    "start_period: 5m",
   ]) {
     if (!synologyCompose.includes(requiredSnippet)) {
       fail(`Synology Compose is missing required deployment contract: ${requiredSnippet}`);
     }
   }
 
-  for (const forbiddenSnippet of ["cpus:", "cpu_period:", "cpu_quota:"]) {
+  for (const forbiddenSnippet of ["cpus:", "cpu_period:", "cpu_quota:", "pids:"]) {
     if (synologyCompose.includes(forbiddenSnippet)) {
       fail(`Synology Compose must not include CPU quota setting: ${forbiddenSnippet}`);
     }
+  }
+  if (!readFile("compose/synology/.env.synology.example").includes("RIVIAMIGO_SETUP_TOKEN=CHANGE_ME")) {
+    fail("Synology setup-token template must contain the deliberate CHANGE_ME placeholder");
+  }
+  if (!readFile("compose/.env.synology.example").includes("RIVIAMIGO_SETUP_TOKEN=CHANGE_ME")) {
+    fail("Compatibility Synology env template must contain the deliberate CHANGE_ME placeholder");
   }
 }
 

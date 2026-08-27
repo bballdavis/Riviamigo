@@ -37,6 +37,9 @@ Before the first production registration, set exactly one setup proof:
 
 - `RIVIAMIGO_SETUP_TOKEN` for a securely injected value, or
 - `RIVIAMIGO_SETUP_TOKEN_FILE` for a mounted secret file (preferred).
+For Synology, start from `compose/synology/.env.synology.example`; its
+`CHANGE_ME` setup token is deliberately invalid and must be replaced before
+production startup.
 
 The proof must contain at least 32 bytes. The first registration sends it as
 `setup_token`; the app uses it only while no user exists. The public setup

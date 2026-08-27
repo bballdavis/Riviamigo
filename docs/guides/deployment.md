@@ -17,7 +17,7 @@ Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of 
 2. Create the bind-mount directories, then start the stack:
 
    ```bash
-   ./compose/prepare-data.sh
+   sh ./compose/prepare-data.sh
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
@@ -56,6 +56,9 @@ Use the dedicated [Synology DSM installation guide](./synology.md). It uses a
 generated standalone Compose file with the same services and images, a
 loopback-only host publication for DSM Reverse Proxy, absolute data paths, and
 no CPU quota fields. Do not edit the standard Compose file to accommodate DSM.
+On first boot, TimescaleDB may take up to five minutes. The successful
+one-shot `riviamigo-init` job exits with code 0; DSM may label the project
+`Partially running` while the long-lived services are healthy.
 
 ## Logs and updates
 
