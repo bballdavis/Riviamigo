@@ -1319,6 +1319,19 @@ describe('Settings page', () => {
     expect(screen.getAllByText(/active|connected/i).length).toBeGreaterThan(0);
   });
 
+  it('shows the estimated Rivian renewal date and recommendation', () => {
+    Object.assign(settingsMocks.vehicles[0]!, {
+      renewal_state: 'renewal_soon',
+      expected_renewal_at: '2027-02-23T12:00:00Z',
+    });
+
+    renderSettings();
+
+    expect(screen.getByText('Rivian renewal')).toBeInTheDocument();
+    expect(screen.getByText(/estimated\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/estimated 180-day renewal date/i)).toBeInTheDocument();
+  });
+
   it('shows durable backup phase and progress while a run is active', async () => {
     const hooks = await import('@riviamigo/hooks');
     const getBackupOverview = vi.mocked(hooks.api.getBackupOverview);

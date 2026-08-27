@@ -78,6 +78,28 @@ account, the supervisor replaces that completed worker and starts ingestion
 immediately. A successful refresh should therefore be followed by worker health
 and telemetry-timestamp checks, not only by an `authorized` database state.
 
+## Advisory Renewal Policy
+
+Riviamigo treats the durable token bundle creation time as the most recent full
+Rivian authentication. The API derives `expected_renewal_at` at 180 days and a
+typed `renewal_state`: `healthy`, `renewal_soon`, `renewal_due`, or
+`reauth_required`. The seven-day `renewal_soon` threshold is an application
+policy informed by current unofficial-client behavior, not an official Rivian
+expiry guarantee. Observed credential rejection always overrides the timer.
+
+A successful full login or OTP credential refresh resets the creation time.
+Automatic CSRF/app-session renewal preserves it because that rotation does not
+represent a new long-lived Rivian authorization. Do not move the advisory date
+from routine WebSocket reconnects or short-lived session refreshes.
+
+The credential-refresh route verifies the selected Rivian vehicle before
+storage, starts the worker, and waits for runtime health plus vehicle discovery
+for a bounded interval. It returns `telemetry_status: ready` only after that
+proof. A bounded timeout returns `waiting` with a recoverable message while
+retaining the valid encrypted credentials. The browser invalidates the vehicle,
+status, and health queries and explicitly reconnects the live vehicle socket
+after either result.
+
 ## Local Riviamigo Auth Gotcha
 
 `/v1/vehicles/connect` is protected by Riviamigo's own JWT. A browser-side
