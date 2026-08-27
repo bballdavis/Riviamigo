@@ -149,6 +149,7 @@ describe('TripMapChart', () => {
       accessToken="first-party-token"
       basemapConfig={{
         enabled: true,
+        carto_api_key_missing: false,
         light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
         dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
         attribution: null,
@@ -164,5 +165,76 @@ describe('TripMapChart', () => {
     expect(mapOptions.transformRequest('/v1/external/basemap/light/1/2/3.png').headers).toEqual({ Authorization: 'Bearer first-party-token' });
     expect(mapOptions.transformRequest('https://provider.invalid/1/2/3.png').headers).toBeUndefined();
     fetchMock.mockRestore();
+  });
+
+  it('keeps the map interactive while explaining that a remote CARTO key is missing', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+
+    const { getByRole, getByText } = render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={{
+          enabled: true,
+          carto_api_key_missing: true,
+          light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
+          dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+          attribution: null,
+          attribution_url: null,
+        }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    expect(getByRole('status')).toHaveTextContent('CARTO API key required');
+    expect(getByText(/The map remains available with CARTO watermarking/)).toBeInTheDocument();
+    await act(async () => {
+      mockMap.emit('load');
+    });
+    expect(mockMap.fitBounds).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show the CARTO notice for configured or non-remote basemaps', async () => {
+    const mockMap = new MockMap();
+    const mapLoader = vi.fn(async () => ({ Map: vi.fn(function Map() { return mockMap; }) }));
+
+    const { queryByRole, rerender } = render(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={{
+          enabled: true,
+          carto_api_key_missing: false,
+          light_url: '/v1/external/basemap/light/{z}/{x}/{y}.png',
+          dark_url: '/v1/external/basemap/dark/{z}/{x}/{y}.png',
+          attribution: null,
+          attribution_url: null,
+        }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    await waitFor(() => expect(mapLoader).toHaveBeenCalledTimes(1));
+    expect(queryByRole('status')).not.toBeInTheDocument();
+
+    rerender(
+      <TripMapChart
+        routes={buildRoutes(1)}
+        track={[]}
+        basemapConfig={{
+          enabled: false,
+          carto_api_key_missing: false,
+          light_url: '',
+          dark_url: '',
+          attribution: null,
+          attribution_url: null,
+        }}
+        mapLoader={mapLoader as never}
+      />,
+    );
+
+    expect(queryByRole('status')).not.toBeInTheDocument();
   });
 });

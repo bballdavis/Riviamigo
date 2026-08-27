@@ -4,6 +4,8 @@ import { useAuthReady } from './useAuthState';
 
 export interface BasemapConfigPayload {
   enabled: boolean;
+  /** Remote CARTO remains usable without a key, but its tiles will be watermarked. */
+  carto_api_key_missing: boolean;
   light_url: string;
   dark_url: string;
   attribution: string | null;
