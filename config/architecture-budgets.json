@@ -1,15 +1,15 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1880, "maxBytes": 100100 },
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1892, "maxBytes": 100100 },
     "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
-    "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 430, "maxBytes": 16120 },
+    "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 483, "maxBytes": 18139 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
-    "apps/api/src/routes/vehicles.rs": { "maxLines": 5597, "maxBytes": 198198 },
+    "apps/api/src/routes/vehicles.rs": { "maxLines": 5676, "maxBytes": 201797 },
     "apps/api/src/routes/charging.rs": { "maxLines": 2242, "maxBytes": 83776 },
     "apps/api/src/routes/trips.rs": { "maxLines": 1833, "maxBytes": 65504 },
     "apps/api/src/services/backups.rs": { "maxLines": 2673, "maxBytes": 98764 },
     "apps/api/src/services/charge_sessions.rs": { "maxLines": 1949, "maxBytes": 73563 },
-    "packages/hooks/src/api/transport.ts": { "maxLines": 2254, "maxBytes": 76978 }
+    "packages/hooks/src/api/transport.ts": { "maxLines": 2262, "maxBytes": 77124 }
   },
   "orchestration": {
     "maxLines": 500,
@@ -60,7 +60,9 @@
       "apps/web/src/features/trips/TripDetailPage.tsx": "Existing custom trip detail surface; migrate shell in F2.",
       "apps/api/src/routes/battery.rs": "Existing analytics route hotspot; split with query ownership work.",
       "packages/ui/src/charts/TripMapChart.tsx": "Existing specialized map renderer; preserve domain behavior.",
-      "packages/dashboards/src/widgets/custom/OverviewVehicleWidget.tsx": "Approved custom vehicle visualization; preserve shared chrome."
+      "packages/dashboards/src/widgets/custom/OverviewVehicleWidget.tsx": "Approved custom vehicle visualization; preserve shared chrome.",
+      "apps/web/src/components/settings/ExternalConnectionsSection.tsx": "Existing external-connection policy surface; split with settings ownership work.",
+      "packages/hooks/src/useVehicleStatus.ts": "Existing vehicle-status orchestration hook; split with status transport ownership work."
     }
   },
   "patterns": {

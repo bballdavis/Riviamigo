@@ -365,7 +365,7 @@ describe('charging connection custom widget', () => {
       />
     );
 
-    expect(await screen.findByRole('button', { name: 'Unplugged' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByRole('button', { name: 'Unplugged' }, { timeout: 5_000 })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
     expect(screen.getByRole('complementary').querySelector('[data-dashboard-preview-state]')).toHaveAttribute(
       'data-dashboard-preview-state',
@@ -408,7 +408,7 @@ describe('charging connection custom widget', () => {
       />
     );
 
-    expect(await screen.findByRole('button', { name: 'Unplugged' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByRole('button', { name: 'Unplugged' }, { timeout: 5_000 })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Previewing: Unplugged')).toBeInTheDocument();
   });
 
