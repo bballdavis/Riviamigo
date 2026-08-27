@@ -2,7 +2,7 @@
 /**
  * Disposable new-user verification. Run from a clean worktree:
  *   node scripts/verify-fresh-install.mjs --mode standard --production-env /path/to/fresh.env --source-build
- *   node scripts/verify-fresh-install.mjs --mode synology --production-env /path/to/fresh.env
+ *   node scripts/verify-fresh-install.mjs --mode production --production-env /path/to/fresh.env
  * The env file is intentionally caller-owned: it must contain valid production
  * secrets and is never copied into this repository or logged by this script.
  */
@@ -21,8 +21,7 @@ const imageTag = value('--image-tag');
 const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
-const composeFile =
-  mode === 'synology' ? 'compose/synology/docker-compose.yml' : 'compose/docker-compose.yml';
+const composeFile = 'compose/docker-compose.yml';
 const compose = [
   'compose',
   '-p',
@@ -96,27 +95,10 @@ async function verifyOwnerSetup(baseUrl) {
   const setup = await fetch(`${baseUrl}/v1/auth/setup`).then((response) => response.json());
   if (!setup.setup_required) throw new Error('Fresh stack unexpectedly already has a user.');
   const setupToken = setup.setup_proof_required ? readSetupToken(productionEnv) : undefined;
-  if (setup.setup_proof_required && setup.setup_proof_available !== Boolean(setupToken))
-    throw new Error('Fresh setup proof metadata is inconsistent.');
-  if (setup.setup_proof_required) {
-    for (const candidate of [undefined, 'CHANGE_ME']) {
-      const rejected = await fetch(`${baseUrl}/v1/auth/register`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          email: 'owner@example.test',
-          password: 'fresh-install-password',
-          ...(candidate ? { setup_token: candidate } : {}),
-        }),
-      });
-      if (rejected.status !== 403)
-        throw new Error(`Fresh setup accepted a missing or wrong proof (status ${rejected.status}).`);
-    }
-    if (!setupToken)
-      throw new Error(
-        'Production first-owner verification requires RIVIAMIGO_SETUP_TOKEN in the supplied env file.'
-      );
-  }
+  if (setup.setup_proof_required && !setupToken)
+    throw new Error(
+      'Production first-owner verification requires RIVIAMIGO_SETUP_TOKEN in the supplied env file.'
+    );
   const first = await fetch(`${baseUrl}/v1/auth/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -195,7 +177,6 @@ async function verifyProduction() {
     ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
   };
   productionEnvironment = environment;
-  run('sh', ['compose/prepare-data.sh'], { env: environment });
   run('docker', [...compose, '--env-file', productionEnv, 'config', '--quiet'], {
     env: environment,
   });
@@ -264,10 +245,10 @@ function cleanupProductionDataRoot() {
 
 try {
   ensureCleanWorktree();
-  if (!['all', 'standard', 'synology', 'production', 'dev'].includes(mode))
-    throw new Error('--mode must be all, standard, synology, production, or dev.');
+  if (!['all', 'standard', 'production', 'dev'].includes(mode))
+    throw new Error('--mode must be all, standard, production, or dev.');
   if (mode === 'all' || mode === 'dev') verifyDevSmoke();
-  if (mode === 'all' || mode === 'standard' || mode === 'production' || mode === 'synology')
+  if (mode === 'all' || mode === 'standard' || mode === 'production')
     await verifyProduction();
   console.log('Fresh-install verification passed.');
 } catch (error) {

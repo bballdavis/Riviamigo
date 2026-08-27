@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -34,11 +34,8 @@ export function LoginPage() {
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
   const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
   const setupRequired = setup.data?.setup_required === true;
-  const setupProofRequired = setupRequired && setup.data?.setup_proof_required === true;
-  const setupProofAvailable = setupProofRequired && setup.data?.setup_proof_available === true;
-  const setupBlocked = setupProofRequired && !setupProofAvailable;
-
-  useEffect(() => () => setSetupToken(''), []);
+  const setupProofRequired = setup.data?.setup_proof_required === true;
+  const setupProofAvailable = setup.data?.setup_proof_available === true;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -46,10 +43,13 @@ export function LoginPage() {
     setLoading(true);
     try {
       if (setupRequired) {
-        if (setupBlocked) return;
-        if (setupToken) await register(email, password, setupToken);
-        else await register(email, password);
-        setSetupToken('');
+        if (setupProofRequired && !setupProofAvailable) {
+          setError(
+            'First-owner setup is not configured on this instance. Ask the administrator to set RIVIAMIGO_SETUP_TOKEN and recreate the app without deleting the database.'
+          );
+          return;
+        }
+        await register(email, password, setupProofRequired ? setupToken : undefined);
         navigate({ to: '/connect' });
         return;
       }
@@ -62,21 +62,20 @@ export function LoginPage() {
         message = 'Incorrect email or password. Please try again.';
       } else if (status === 429) {
         message = 'Too many sign-in attempts. Please wait a moment and try again.';
+      } else if ((err as { code?: string }).code === 'SETUP_PROOF_REQUIRED') {
+        message = 'Enter the instance setup token before creating the owner account.';
+      } else if ((err as { code?: string }).code === 'SETUP_PROOF_INVALID') {
+        message = 'The instance setup token is invalid. Check it and try again.';
       } else if (status === 422) {
         message = (err as { detail?: { message?: string } }).detail?.message
           ?? 'Check the password requirements and try again.';
-      } else if (setupRequired && status === 403) {
-        message = 'Owner setup could not be completed. Ask the operator to verify RIVIAMIGO_SETUP_TOKEN in the deployment environment.';
       } else if (status != null && status >= 500) {
         message = 'Something went wrong on our end. Please try again later.';
       } else {
         message = 'Unable to sign in. Please check your connection and try again.';
       }
       setError(message);
-      emitAuthError(
-        setupRequired && status === 403 ? 'Owner setup failed' : 'Sign-in failed',
-        setupRequired && status === 403 ? 'Unable to complete owner setup.' : message
-      );
+      emitAuthError('Sign-in failed', message);
     } finally {
       setLoading(false);
     }
@@ -130,11 +129,6 @@ export function LoginPage() {
               Password changed. Sign in with your new password.
             </p>
           )}
-          {setupBlocked && (
-            <p role="status" className="mb-4 rounded-lg border border-status-danger/20 bg-status-danger/10 px-3 py-2 text-xs text-fg-secondary">
-              First-owner setup is unavailable until the operator sets RIVIAMIGO_SETUP_TOKEN in the deployment environment and restarts Riviamigo.
-            </p>
-          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <Input
@@ -156,24 +150,29 @@ export function LoginPage() {
               minLength={setupRequired ? PASSWORD_MIN_LENGTH : undefined}
               autoComplete={setupRequired ? 'new-password' : 'current-password'}
             />
-            {setupRequired && <PasswordRequirements password={password} />}
-            {setupProofRequired && setupProofAvailable && (
+            {setupRequired && setupProofRequired && setupProofAvailable && (
               <Input
-                label="Setup token"
+                label="Instance setup token"
                 type="password"
                 value={setupToken}
                 onChange={(e) => setSetupToken(e.target.value)}
-                required
+                hint="Use the one-time RIVIAMIGO_SETUP_TOKEN configured for this instance."
                 autoComplete="off"
-                spellCheck={false}
+                required
               />
             )}
+            {setupRequired && setupProofRequired && !setupProofAvailable && (
+              <p role="alert" className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
+                This production instance needs a setup token before the first owner can be created. Configure RIVIAMIGO_SETUP_TOKEN, then recreate the app without deleting its database.
+              </p>
+            )}
+            {setupRequired && <PasswordRequirements password={password} />}
             {error && (
               <p className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
                 {error}
               </p>
             )}
-            <Button type="submit" loading={loading} disabled={setupBlocked} size="lg" className="mt-1 w-full">
+            <Button type="submit" loading={loading} size="lg" className="mt-1 w-full">
               {setupRequired ? 'Create owner account' : 'Sign in'}
             </Button>
           </form>

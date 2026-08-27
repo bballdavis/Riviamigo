@@ -512,7 +512,7 @@ export class AuthenticatedTransport {
     return this.request(
       'POST',
       '/v1/auth/register',
-      setupToken === undefined ? { email, password } : { email, password, setup_token: setupToken },
+      { email, password, ...(setupToken ? { setup_token: setupToken } : {}) },
       undefined,
       true,
       false

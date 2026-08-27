@@ -173,9 +173,12 @@ async fn register(
         return Err(AppError::Forbidden);
     }
     if state.config.is_production() {
-        let setup_token = body.setup_token.as_deref().ok_or(AppError::Forbidden)?;
+        let setup_token = body
+            .setup_token
+            .as_deref()
+            .ok_or(AppError::SetupProofRequired)?;
         if !state.config.verify_setup_token(setup_token)? {
-            return Err(AppError::Forbidden);
+            return Err(AppError::SetupProofInvalid);
         }
     }
     let role = "super_user";
