@@ -39,7 +39,7 @@ export { useMetricCatalog, useMetricValue, useMetricSeries, useMetricBatch } fro
 export { useVehicles, useDefaultVehicleId } from './useVehicles';
 export { useVehicleHealth } from './useHealth';
 export { useTelemetryLanes } from './useTelemetryLanes';
-export { useBasemapConfig } from './useBasemapConfig';
+export { BASEMAP_CONFIG_QUERY_KEY, useBasemapConfig } from './useBasemapConfig';
 export type { BasemapConfigPayload } from './useBasemapConfig';
 export { useDocumentTheme } from './useDocumentTheme';
 export { AuthenticatedVehicleArtwork, useVehicleArtwork } from './useVehicleArtwork';

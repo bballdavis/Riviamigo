@@ -578,8 +578,11 @@ struct TestConnectionCheck {
 struct BasemapConfigResponse {
     enabled: bool,
     carto_api_key_missing: bool,
-    light_url: &'static str,
-    dark_url: &'static str,
+    /// A non-secret revision of the persisted basemap setting. This gives the
+    /// browser and MapLibre a new tile identity after any basemap save.
+    revision: String,
+    light_url: String,
+    dark_url: String,
     attribution: Option<String>,
     attribution_url: Option<String>,
 }
@@ -589,6 +592,9 @@ async fn basemap_config(
     _auth: AuthUser,
 ) -> Result<Json<BasemapConfigResponse>, AppError> {
     let settings = connections::load(&state.pool, connections::BASEMAP).await?;
+    let revision = settings.updated_at.timestamp_millis().to_string();
+    let light_url = basemap_proxy_url("light", &revision);
+    let dark_url = basemap_proxy_url("dark", &revision);
     Ok(Json(BasemapConfigResponse {
         enabled: settings.is_active(),
         carto_api_key_missing: carto_api_key_missing(
@@ -596,11 +602,16 @@ async fn basemap_config(
             &settings.mode,
             settings.api_key_encrypted.is_some(),
         ),
-        light_url: "/v1/external/basemap/light/{z}/{x}/{y}.png",
-        dark_url: "/v1/external/basemap/dark/{z}/{x}/{y}.png",
+        revision,
+        light_url,
+        dark_url,
         attribution: settings.attribution,
         attribution_url: settings.attribution_url,
     }))
+}
+
+fn basemap_proxy_url(style: &str, revision: &str) -> String {
+    format!("/v1/external/basemap/{style}/{{z}}/{{x}}/{{y}}.png?v={revision}")
 }
 
 async fn test_connection(
@@ -701,7 +712,7 @@ async fn test_connection(
                 )?);
             if forward_carto_api_key {
                 if let Some(api_key) = api_key {
-                    request = request.query(&[("api_key", api_key)]);
+                    request = request.query(&[carto_basemap_key_query(&api_key)]);
                 }
             }
             let bearer_token = body
@@ -863,7 +874,7 @@ async fn proxy_basemap_tile(
         if let Some(api_key) =
             decrypt_secret(&state.age_key, settings.api_key_encrypted.as_deref())?
         {
-            request = request.query(&[("api_key", api_key)]);
+            request = request.query(&[carto_basemap_key_query(&api_key)]);
         }
     }
     if let Some(token) = decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
@@ -933,6 +944,12 @@ fn should_forward_carto_api_key(mode: &str, endpoint: &Url) -> bool {
     endpoint.host_str().is_some_and(|host| {
         host == "carto.com" || host.ends_with(".carto.com") || host.ends_with(".cartocdn.com")
     })
+}
+
+/// CARTO Basemaps authenticate with `key`; this is deliberately distinct from
+/// Open-Meteo's `apikey` query parameter and CARTO API access tokens.
+fn carto_basemap_key_query(key: &str) -> (&'static str, &str) {
+    ("key", key)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1478,8 +1495,9 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        carto_api_key_missing, endpoint_is_private, is_forbidden_ip, is_private_ip,
-        parse_private_network_allowlist, should_forward_carto_api_key, validate_tile_template,
+        basemap_proxy_url, carto_api_key_missing, carto_basemap_key_query, endpoint_is_private,
+        is_forbidden_ip, is_private_ip, parse_private_network_allowlist,
+        should_forward_carto_api_key, validate_tile_template,
     };
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use url::Url;
@@ -1547,5 +1565,17 @@ mod tests {
         assert!(should_forward_carto_api_key("remote", &carto));
         assert!(should_forward_carto_api_key("custom", &carto));
         assert!(!should_forward_carto_api_key("custom", &custom));
+    }
+
+    #[test]
+    fn uses_carto_basemap_key_parameter_and_versioned_first_party_proxy_urls() {
+        assert_eq!(
+            carto_basemap_key_query("stored-secret"),
+            ("key", "stored-secret")
+        );
+        assert_eq!(
+            basemap_proxy_url("light", "1724889600123"),
+            "/v1/external/basemap/light/{z}/{x}/{y}.png?v=1724889600123"
+        );
     }
 }
