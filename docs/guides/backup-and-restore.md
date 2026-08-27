@@ -79,7 +79,14 @@ The in-app flow and host command do not restore Rivian credentials or live sessi
 
 ## Persistent artifact storage
 
-Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, remote-staging, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. Restore never replaces or recreates the backup directory; startup and the Backups page rescan valid local packages and rebuild any missing catalog rows from disk. The retention count applies independently to generated Local and S3 packages. Imported and safety packages are never pruned by scheduled retention.
+New production installations mount the Docker-managed `riviamigo-backups`
+volume at `/backups` and use it for generated, imported, safety, remote-staging,
+and restore-job artifacts. PostgreSQL uses `riviamigo-db`, while artwork uses
+`riviamigo-cache`. Existing bind-mount installations keep their configured host
+paths. Restore never replaces or recreates backup storage; startup and the
+Backups page rescan valid local packages and rebuild any missing catalog rows
+from disk. The retention count applies independently to generated Local and S3
+packages. Imported and safety packages are never pruned by scheduled retention.
 
 ## Compatibility and verification
 

@@ -531,10 +531,23 @@ fn load_setup_token() -> anyhow::Result<Option<String>> {
         (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
     };
     let token = trim_one_trailing_line_ending(&token).to_owned();
+    validate_setup_token_value(&token)?;
+    Ok(Some(token))
+}
+
+fn validate_setup_token_value(token: &str) -> anyhow::Result<()> {
     if token.len() < MIN_SETUP_TOKEN_BYTES {
         anyhow::bail!("Riviamigo setup token must contain at least {MIN_SETUP_TOKEN_BYTES} bytes");
     }
-    Ok(Some(token))
+    if matches!(
+        token,
+        "CHANGE_ME_FIRST_OWNER_TOKEN_32_BYTES_MINIMUM"
+            | "replace-with-at-least-32-random-bytes"
+            | "fresh-install-setup-token-32-bytes-minimum"
+    ) {
+        anyhow::bail!("Riviamigo setup token must not use a documented example value");
+    }
+    Ok(())
 }
 
 fn trim_one_trailing_line_ending(value: &str) -> &str {
@@ -961,5 +974,22 @@ mod tests {
         config
             .validate()
             .expect("development bootstrap stays supported");
+    }
+
+    #[test]
+    fn setup_token_rejects_known_example_values() {
+        for token in [
+            "CHANGE_ME_FIRST_OWNER_TOKEN_32_BYTES_MINIMUM",
+            "replace-with-at-least-32-random-bytes",
+            "fresh-install-setup-token-32-bytes-minimum",
+        ] {
+            assert!(
+                validate_setup_token_value(token).is_err(),
+                "known setup-token example must fail closed"
+            );
+        }
+
+        validate_setup_token_value("f9cb612e4ab64c67bbf6eab1d9ab75ec")
+            .expect("a unique 32-byte setup token is valid");
     }
 }

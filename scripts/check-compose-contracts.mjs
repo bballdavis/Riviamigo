@@ -44,6 +44,10 @@ assert(
 );
 assert(!standardText.includes('pids:'), 'standard Compose must not set a host PID limit');
 assert(!standardText.includes('cpus:'), 'standard Compose must not set a host CPU quota');
-assert(!fs.existsSync(path.join(root, 'compose/docker-compose.synology.yml')), 'Synology must not have a second authored Compose file');
+assert(
+  !fs.existsSync(path.join(root, 'compose/docker-compose.synology.yml')) &&
+    !fs.existsSync(path.join(root, 'compose/synology/docker-compose.yml')),
+  'Synology must not have a second authored Compose file'
+);
 
 console.log('compose:check passed');

@@ -10,10 +10,11 @@ changes the requirements in this runbook.
 Riviamigo is not approved for direct Internet exposure. The standard production
 Compose stack publishes its web origin on port `8080` using normal Docker host
 publication; set `RIVIAMIGO_HOST_BIND_ADDRESS` to limit the host interface and
-runs the long-lived app as UID/GID `1001`, with a read-only root filesystem,
-all Linux capabilities dropped, `no-new-privileges`, and a bounded `/tmp`
-tmpfs. Its one-shot initialization service is intentionally the only root
-process. Do not weaken these defaults to make an origin public.
+runs the app as UID/GID `1001`, with a read-only root filesystem, all Linux
+capabilities dropped, `no-new-privileges`, and a bounded `/tmp` tmpfs. Database
+initialization and migrations run inside that same unprivileged app container;
+the production stack has no root init service. Do not weaken these defaults to
+make an origin public.
 
 Place an authenticated tunnel or identity-aware reverse proxy and host firewall
 rule in front of that origin. A tunnel that only publishes the port
