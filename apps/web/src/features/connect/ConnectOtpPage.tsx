@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { api, useAuth, useVehicles } from '@riviamigo/hooks';
+import { api, notifyVehicleCredentialsRefreshed, queryKeys, useAuth, useVehicles } from '@riviamigo/hooks';
 import type { ConnectedRivianVehicle, ConnectResult } from '@riviamigo/types';
 import { PageLayout, Button, Input, Card } from '@riviamigo/ui/primitives';
 import { AppLayout } from '../../components/layout/AppLayout';
@@ -56,14 +56,19 @@ export function ConnectOtpContent() {
         reportError('That Rivian account does not include this vehicle.');
         return;
       }
-      await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
+      const refreshed = await api.refreshVehicleCredentials(refreshVehicleId, refreshVehicle.rivian_vehicle_id);
       setDefaultVehicleId(refreshVehicleId);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
-        queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', refreshVehicleId] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(refreshVehicleId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.vehicle.health(refreshVehicleId) }),
       ]);
+      notifyVehicleCredentialsRefreshed(refreshVehicleId);
       setSuccessVehicleId(refreshVehicleId);
       setSuccessVehicleName(formatVehicleName(matchingVehicle));
+      if (refreshed.telemetry_status === 'waiting' && refreshed.telemetry_error) {
+        emitAuthError('Rivian login refreshed', refreshed.telemetry_error);
+      }
       setVehicles([]);
       return;
     }
@@ -91,8 +96,8 @@ export function ConnectOtpContent() {
     });
     setDefaultVehicleId(added.vehicle_id);
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['vehicles'] }),
-      queryClient.invalidateQueries({ queryKey: ['vehicles', 'status', added.vehicle_id] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(added.vehicle_id) }),
     ]);
     setSuccessVehicleId(added.vehicle_id);
     setSuccessVehicleName(formatVehicleName(vehicle));

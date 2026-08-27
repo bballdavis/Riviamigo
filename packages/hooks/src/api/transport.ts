@@ -28,6 +28,7 @@ import type {
   AuthTokens,
   AuthMeResponse,
   ConnectResult,
+  RefreshVehicleCredentialsResult,
   ApiError,
   AddVehicleBody,
   AddVehicleResult,
@@ -646,7 +647,7 @@ export class AuthenticatedTransport {
   async refreshVehicleCredentials(
     vehicleId: string,
     rivianVehicleId?: string
-  ): Promise<{ ok: boolean; vehicle_id: string }> {
+  ): Promise<RefreshVehicleCredentialsResult> {
     return this.request(
       'PUT',
       `/v1/vehicles/${vehicleId}/credentials`,

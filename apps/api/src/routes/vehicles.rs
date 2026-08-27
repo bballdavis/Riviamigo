@@ -1473,6 +1473,7 @@ async fn refresh_vehicle_credentials(
          VALUES ($1,$2,now(),now())
          ON CONFLICT (vehicle_id) DO UPDATE
          SET encrypted_tokens = EXCLUDED.encrypted_tokens,
+             token_created_at = EXCLUDED.token_created_at,
              last_refreshed_at = now()",
     )
     .bind(vid)

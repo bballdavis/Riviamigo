@@ -22,6 +22,12 @@ export type DriveMode =
   | 'unknown';
 export type ChargerType = 'ac' | 'dc' | 'dcfc';
 
+export type RivianCredentialRenewalState =
+  | 'healthy'
+  | 'renewal_soon'
+  | 'renewal_due'
+  | 'reauth_required';
+
 export interface LatLng {
   lat: number;
   lng: number;
@@ -49,6 +55,9 @@ export interface Vehicle {
   worker_health_msg?: string | null;
   auth_state?: string | null;
   auth_reason_code?: string | null;
+  credential_issued_at?: string | null;
+  expected_renewal_at?: string | null;
+  renewal_state?: RivianCredentialRenewalState | null;
   images?: VehicleImages | null;
   membership_role?: 'owner' | 'manager' | 'viewer';
 }
@@ -205,8 +214,12 @@ export interface VehicleStatus {
   last_charge_history_sync_at?: string | null;
   last_charge_history_success_at?: string | null;
   worker_health?: string | null;
+  worker_health_msg?: string | null;
   auth_state?: string | null;
   auth_reason_code?: string | null;
+  credential_issued_at?: string | null;
+  expected_renewal_at?: string | null;
+  renewal_state?: RivianCredentialRenewalState | null;
   battery_level_ts?: string | null;
   range_miles_ts?: string | null;
   battery_limit_ts?: string | null;

@@ -15,6 +15,15 @@ interface LiveStatusStore {
 
 type VehicleConnectionState = 'idle' | 'connecting' | 'online' | 'failed';
 
+export const VEHICLE_CREDENTIALS_REFRESHED_EVENT = 'riviamigo:vehicle-credentials-refreshed';
+
+export function notifyVehicleCredentialsRefreshed(vehicleId: string) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(VEHICLE_CREDENTIALS_REFRESHED_EVENT, {
+    detail: { vehicleId },
+  }));
+}
+
 export const useLiveStatusStore = create<LiveStatusStore>((set) => ({
   status: {},
   connected: {},
@@ -367,6 +376,14 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       if (document.visibilityState === 'visible') handleWake();
     };
 
+    const handleCredentialsRefreshed = (event: Event) => {
+      const refreshedVehicleId = (event as CustomEvent<{ vehicleId?: string }>).detail?.vehicleId;
+      if (refreshedVehicleId && refreshedVehicleId !== vehicleId) return;
+      backoffRef.current = 1000;
+      reconnectAttemptsRef.current = 0;
+      forceReconnect();
+    };
+
     const checkLiveness = () => {
       if (document.visibilityState !== 'visible') return;
       const ws = wsRef.current;
@@ -384,6 +401,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
     window.addEventListener('online', handleWake);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('focus', handleWake);
+    window.addEventListener(VEHICLE_CREDENTIALS_REFRESHED_EVENT, handleCredentialsRefreshed);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     livenessIntervalRef.current = setInterval(checkLiveness, CLIENT_LIVENESS_CHECK_INTERVAL_MS);
 
@@ -391,6 +409,7 @@ export function useVehicleStatus(vehicleId: string | null, accessToken: string |
       window.removeEventListener('online', handleWake);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('focus', handleWake);
+      window.removeEventListener(VEHICLE_CREDENTIALS_REFRESHED_EVENT, handleCredentialsRefreshed);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(livenessIntervalRef.current);
       livenessIntervalRef.current = undefined;
