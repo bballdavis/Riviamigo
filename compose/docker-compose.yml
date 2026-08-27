@@ -36,24 +36,6 @@ services:
       - ${RIVIAMIGO_BACKUPS_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/backups}:/backups
       - ${RIVIAMIGO_CACHE_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/cache}:/data/cache
 
-  parallax:
-    profiles: ['parallax']
-    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    entrypoint: ['/app/riviamigo-parallax-collector']
-    env_file:
-      - ${RIVIAMIGO_ENV_FILE:-../.env}
-    environment:
-      POSTGRES_HOST: timescaledb
-      POSTGRES_DB: riviamigo
-      POSTGRES_USER: ${POSTGRES_USER:-riviamigo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    networks:
-      - internal
-      - proxy
   timescaledb:
     image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
     restart: unless-stopped
