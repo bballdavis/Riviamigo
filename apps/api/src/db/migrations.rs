@@ -1,7 +1,10 @@
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{migrate::Migrator, Connection, PgConnection, PgPool, Row};
+use sqlx::{migrate::Migrator, Connection, PgConnection, PgPool, Postgres, Row, Transaction};
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const MIGRATION_CHAIN_ID: &str = "riviamigo-schema-v1";
 
@@ -154,15 +157,7 @@ async fn run_current_migrations_locked(
 
     let ledger_action = match (public_exists, legacy_exists) {
         (false, false) if !schema_has_users && database_is_empty(connection).await? => {
-            sqlx::raw_sql(BASELINE_SCHEMA_SQL)
-                .execute(&mut *connection)
-                .await
-                .context("apply immutable schema baseline")?;
-            // The baseline snapshot ends with Riviamigo first in search_path;
-            // all bookkeeping after it must be explicitly public.
-            set_public_search_path(connection).await?;
-            let baseline = baseline_migration()?;
-            replace_ledger(connection, &[baseline]).await?;
+            initialize_fresh_database(connection).await?;
             MigrationLedgerAction::InitializedFresh
         }
         (false, false) => {
@@ -238,6 +233,42 @@ async fn set_public_search_path(connection: &mut PgConnection) -> anyhow::Result
         .await
         .context("restore migration connection search_path")?;
     Ok(())
+}
+
+/// Fresh initialization is deliberately one transaction: the immutable
+/// baseline, its search-path restoration, and the canonical SQLx ledger must
+/// either all commit together or all roll back together. A failed bootstrap
+/// must not leave schema objects that the next startup would reject as
+/// untracked.
+async fn initialize_fresh_database(connection: &mut PgConnection) -> anyhow::Result<()> {
+    let fresh_ledger = fresh_initialization_ledger()?;
+    let mut transaction = connection
+        .begin()
+        .await
+        .context("begin fresh baseline initialization transaction")?;
+    sqlx::raw_sql(BASELINE_SCHEMA_SQL)
+        .execute(&mut *transaction)
+        .await
+        .context("apply immutable schema baseline")?;
+    // The baseline snapshot ends with Riviamigo first in search_path; all
+    // bookkeeping within this transaction must be explicitly public.
+    sqlx::query("SET search_path = public")
+        .execute(&mut *transaction)
+        .await
+        .context("restore fresh baseline transaction search_path")?;
+    if fail_fresh_initialization_before_ledger_insertion() {
+        bail!("test failpoint before fresh baseline ledger insertion");
+    }
+    replace_ledger_in_transaction(&mut transaction, &fresh_ledger).await?;
+    transaction
+        .commit()
+        .await
+        .context("commit fresh baseline initialization transaction")?;
+    Ok(())
+}
+
+fn fresh_initialization_ledger() -> anyhow::Result<Vec<MigrationIdentity>> {
+    Ok(vec![baseline_migration()?])
 }
 
 async fn database_is_empty(connection: &mut PgConnection) -> anyhow::Result<bool> {
@@ -317,8 +348,20 @@ async fn replace_ledger(
     connection: &mut PgConnection,
     source_ledger: &[MigrationIdentity],
 ) -> anyhow::Result<()> {
-    validate_ledger_prefix(source_ledger)?;
     let mut transaction = connection.begin().await?;
+    replace_ledger_in_transaction(&mut transaction, source_ledger).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Write the canonical ledger using a transaction owned by the caller. This
+/// lets fresh initialization include the baseline objects and bookkeeping in
+/// one atomic unit, while legacy relocation retains its own transaction.
+async fn replace_ledger_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    source_ledger: &[MigrationIdentity],
+) -> anyhow::Result<()> {
+    validate_ledger_prefix(source_ledger)?;
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS public._sqlx_migrations (
@@ -331,13 +374,13 @@ async fn replace_ledger(
         )
         "#,
     )
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query("DROP TABLE IF EXISTS riviamigo._sqlx_migrations")
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     sqlx::query("DELETE FROM public._sqlx_migrations")
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     for migration in source_ledger {
         let checksum = hex::decode(&migration.checksum_sha384)
@@ -352,11 +395,23 @@ async fn replace_ledger(
         .bind(migration.version)
         .bind(&migration.description)
         .bind(checksum)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     }
-    transaction.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+static FAIL_FRESH_INITIALIZATION_BEFORE_LEDGER_INSERTION: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn fail_fresh_initialization_before_ledger_insertion() -> bool {
+    FAIL_FRESH_INITIALIZATION_BEFORE_LEDGER_INSERTION.load(Ordering::SeqCst)
+}
+
+#[cfg(not(test))]
+fn fail_fresh_initialization_before_ledger_insertion() -> bool {
+    false
 }
 
 pub fn validate_ledger_prefix(ledger: &[MigrationIdentity]) -> Result<(), LedgerValidationError> {
@@ -505,6 +560,84 @@ pub async fn restore_baseline_ledger(pool: &PgPool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::{postgres::PgPoolOptions, Executor};
+    use uuid::Uuid;
+
+    struct DisposableDatabase {
+        admin: PgPool,
+        database_name: String,
+        pool: PgPool,
+    }
+
+    impl DisposableDatabase {
+        async fn new() -> Self {
+            let base_database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+                "postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo".into()
+            });
+            let admin_database_url = replace_database_name(&base_database_url, "postgres");
+            let database_name = format!("riviamigo_migrations_test_{}", Uuid::new_v4().simple());
+            let admin = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&admin_database_url)
+                .await
+                .expect("connect to disposable database administrator");
+            admin
+                .execute(sqlx::AssertSqlSafe(format!(
+                    "CREATE DATABASE \"{database_name}\""
+                )))
+                .await
+                .expect("create disposable migration test database");
+
+            let database_url = replace_database_name(&base_database_url, &database_name);
+            let pool = PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&database_url)
+                .await
+                .expect("connect to disposable migration test database");
+            Self {
+                admin,
+                database_name,
+                pool,
+            }
+        }
+
+        async fn cleanup(self) {
+            self.pool.close().await;
+            self.admin
+                .execute(sqlx::AssertSqlSafe(format!(
+                    "DROP DATABASE \"{}\"",
+                    self.database_name
+                )))
+                .await
+                .expect("drop disposable migration test database");
+            self.admin.close().await;
+        }
+    }
+
+    fn replace_database_name(url: &str, database_name: &str) -> String {
+        let (prefix, _) = url
+            .rsplit_once('/')
+            .expect("database URL should contain a database name");
+        format!("{prefix}/{database_name}")
+    }
+
+    struct FreshInitializationFailpoint;
+
+    impl FreshInitializationFailpoint {
+        fn enable() -> Self {
+            assert!(
+                !FAIL_FRESH_INITIALIZATION_BEFORE_LEDGER_INSERTION.swap(true, Ordering::SeqCst),
+                "fresh initialization failpoint is already enabled"
+            );
+            Self
+        }
+    }
+
+    impl Drop for FreshInitializationFailpoint {
+        fn drop(&mut self) {
+            FAIL_FRESH_INITIALIZATION_BEFORE_LEDGER_INSERTION.store(false, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn compiled_catalog_is_ordered_and_stable() {
@@ -514,6 +647,14 @@ mod tests {
         assert_eq!(catalog[0].checksum_sha384.len(), 96);
         assert_eq!(migration_catalog_digest().len(), 64);
         validate_complete_ledger(&catalog).expect("compiled catalog validates");
+    }
+
+    #[test]
+    fn fresh_initialization_records_only_the_canonical_baseline_before_forward_migrations() {
+        let fresh_ledger = fresh_initialization_ledger().expect("compile fresh baseline ledger");
+        let compiled = compiled_migration_ledger();
+        assert_eq!(fresh_ledger, compiled[..1]);
+        validate_ledger_prefix(&fresh_ledger).expect("fresh ledger is a valid compiled prefix");
     }
 
     #[test]
@@ -558,5 +699,127 @@ mod tests {
                 .kind,
             LedgerValidationKind::TooLong
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn fresh_initialization_rolls_back_before_ledger_insertion_and_retries_cleanly() {
+        let database = DisposableDatabase::new().await;
+
+        let initialization_error = {
+            let _failpoint = FreshInitializationFailpoint::enable();
+            let mut connection = database
+                .pool
+                .acquire()
+                .await
+                .expect("acquire test connection");
+            initialize_fresh_database(&mut connection)
+                .await
+                .expect_err("test failpoint must abort fresh initialization")
+        };
+        assert!(initialization_error
+            .to_string()
+            .contains("before fresh baseline ledger insertion"));
+
+        let users_after_failure: bool =
+            sqlx::query_scalar("SELECT to_regclass('riviamigo.users') IS NOT NULL")
+                .fetch_one(&database.pool)
+                .await
+                .expect("inspect rolled-back baseline users table");
+        let ledger_after_failure: bool =
+            sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+                .fetch_one(&database.pool)
+                .await
+                .expect("inspect rolled-back public ledger");
+        assert!(
+            !users_after_failure,
+            "failed bootstrap must roll back baseline objects"
+        );
+        assert!(
+            !ledger_after_failure,
+            "failed bootstrap must not create a ledger"
+        );
+
+        let summary = run_current_migrations(&database.pool)
+            .await
+            .expect("retry cleanly initializes the fresh database");
+        assert_eq!(
+            summary.ledger_action,
+            MigrationLedgerAction::InitializedFresh
+        );
+        assert_eq!(summary.latest_version, latest_migration_version());
+
+        let actual_rows: Vec<(i64, String, bool, String)> = sqlx::query_as(
+            "SELECT version, description, success, encode(checksum, 'hex') \
+             FROM public._sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&database.pool)
+        .await
+        .expect("read generated public SQLx ledger rows");
+        let expected = compiled_migration_ledger();
+        assert_eq!(actual_rows.len(), expected.len());
+        for (actual, expected) in actual_rows.iter().zip(&expected) {
+            assert_eq!(actual.0, expected.version, "ledger version ordering");
+            assert_eq!(actual.1, expected.description, "ledger description");
+            assert!(actual.2, "ledger row must be successful");
+            assert_eq!(
+                actual.3, expected.checksum_sha384,
+                "ledger checksum for migration {}",
+                expected.version
+            );
+        }
+        assert_eq!(
+            read_ledger(
+                &mut database
+                    .pool
+                    .acquire()
+                    .await
+                    .expect("acquire ledger connection"),
+                "public"
+            )
+            .await
+            .expect("read canonical public ledger"),
+            expected
+        );
+
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable PostgreSQL DATABASE_URL with CREATEDB permission"]
+    async fn untracked_objects_without_a_ledger_are_rejected_without_mutation() {
+        let database = DisposableDatabase::new().await;
+        sqlx::query("CREATE SCHEMA untracked")
+            .execute(&database.pool)
+            .await
+            .expect("create untracked schema");
+        sqlx::query("CREATE TABLE untracked.marker (id INTEGER PRIMARY KEY)")
+            .execute(&database.pool)
+            .await
+            .expect("create untracked object");
+
+        let error = run_current_migrations(&database.pool)
+            .await
+            .expect_err("object-bearing database without a ledger must be rejected");
+        assert!(error
+            .to_string()
+            .contains("database contains an untracked or pre-release schema"));
+        let marker_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('untracked.marker') IS NOT NULL")
+                .fetch_one(&database.pool)
+                .await
+                .expect("inspect original untracked object");
+        let public_ledger_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+                .fetch_one(&database.pool)
+                .await
+                .expect("inspect unexpected public ledger");
+        assert!(marker_exists, "rejected database must remain unchanged");
+        assert!(
+            !public_ledger_exists,
+            "rejected database must not receive a public ledger"
+        );
+
+        database.cleanup().await;
     }
 }
