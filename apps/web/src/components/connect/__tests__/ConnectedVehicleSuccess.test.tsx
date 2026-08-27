@@ -82,4 +82,18 @@ describe('ConnectedVehicleSuccess', () => {
     expect(screen.getByText('Vehicle saved')).toBeInTheDocument();
     expect(screen.getByText(/telemetry collector needs attention/i)).toBeInTheDocument();
   });
+
+  it('shows a recoverable waiting message while refreshed credentials await vehicle data', () => {
+    render(
+      <ConnectedVehicleSuccess
+        vehicleId="vehicle-1"
+        vehicleName="Launch Green"
+        initialWaitingMessage="Credentials were refreshed. Riviamigo is still waiting for vehicle data and will keep retrying."
+        onOpenDashboard={() => undefined}
+      />
+    );
+
+    expect(screen.getByText('Vehicle saved')).toBeInTheDocument();
+    expect(screen.getByText(/still waiting for vehicle data/i)).toHaveClass('text-status-warning');
+  });
 });

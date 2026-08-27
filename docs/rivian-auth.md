@@ -9,6 +9,8 @@ cloud API shape used by the unofficial Home Assistant Rivian integration and the
 - Home Assistant integration: `https://github.com/bretterer/home-assistant-rivian`
 - Client library pinned by that integration: `rivian-python-client[ble]==2.0.0`
 - Source file to compare when auth breaks: `rivian/rivian.py`
+- Rivian Roamer account-linking guide: `https://rivianroamer.com/guides/account-linking`
+- `rivian-ls` implementation notes: `https://github.com/pfrederiksen/rivian-ls/blob/main/CLAUDE.md`
 
 ## Current Endpoints
 
@@ -94,8 +96,8 @@ from routine WebSocket reconnects or short-lived session refreshes.
 
 The credential-refresh route verifies the selected Rivian vehicle before
 storage, starts the worker, and waits for runtime health plus vehicle discovery
-for a bounded interval. It returns `telemetry_status: ready` only after that
-proof. A bounded timeout returns `waiting` with a recoverable message while
+for a bounded interval. It returns `telemetry_status: connected` only after that
+proof. A bounded timeout returns `waiting_for_vehicle_data` with a recoverable message while
 retaining the valid encrypted credentials. The browser invalidates the vehicle,
 status, and health queries and explicitly reconnects the live vehicle socket
 after either result.

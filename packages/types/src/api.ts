@@ -379,6 +379,11 @@ export interface ExternalConnectionRecord {
   last_test_at: string | null;
   last_test_ok: boolean | null;
   last_test_error: string | null;
+  credential_issued_at?: string | null;
+  expected_renewal_at?: string | null;
+  renewal_state?: import('./vehicle').RivianCredentialRenewalState | null;
+  observed_health?: string | null;
+  observed_error?: string | null;
   cache: ExternalConnectionCacheSummary | null;
 }
 
@@ -1108,7 +1113,8 @@ export interface RefreshVehicleCredentialsResult {
   ok: boolean;
   vehicle_id: string;
   vehicle_saved: boolean;
-  telemetry_status: 'ready' | 'waiting';
+  connection_status: 'connected' | 'connected_waiting_for_vehicle_data';
+  telemetry_status: 'connected' | 'waiting_for_vehicle_data' | 'delayed';
   telemetry_error: string | null;
 }
 

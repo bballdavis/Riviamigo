@@ -32,7 +32,12 @@ use crate::{
     },
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
     routes::range_normalization::normalize_remaining_range_miles,
-    services::demo_seed::seed_demo_vehicle,
+    services::{
+        demo_seed::seed_demo_vehicle,
+        external_connections::{
+            rivian_renewal_state_for_auth, RivianRenewalState, RIVIAN_RENEWAL_INTERVAL,
+        },
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -309,6 +314,7 @@ struct VehicleListRow {
     worker_health_msg: Option<String>,
     auth_state: Option<String>,
     auth_reason_code: Option<String>,
+    token_created_at: Option<chrono::DateTime<chrono::Utc>>,
     membership_role: String,
 }
 
@@ -329,6 +335,7 @@ struct VehicleRuntimeStateRow {
     last_charge_history_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     last_charge_history_success_at: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
+    worker_health_msg: Option<String>,
     auth_state: Option<String>,
     auth_reason_code: Option<String>,
 }
@@ -434,8 +441,12 @@ struct VehicleStatusResponse {
     last_charge_history_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     last_charge_history_success_at: Option<chrono::DateTime<chrono::Utc>>,
     worker_health: Option<String>,
+    worker_health_msg: Option<String>,
     auth_state: Option<String>,
     auth_reason_code: Option<String>,
+    credential_issued_at: Option<chrono::DateTime<chrono::Utc>>,
+    expected_renewal_at: Option<chrono::DateTime<chrono::Utc>>,
+    renewal_state: Option<RivianRenewalState>,
     battery_level: Option<f64>,
     battery_level_ts: Option<chrono::DateTime<chrono::Utc>>,
     range_miles: Option<f64>,
@@ -1514,10 +1525,9 @@ async fn refresh_vehicle_credentials(
         .supervisor
         .send(SupervisorCommand::StartWorker { vehicle_id: vid })
         .await;
-    let telemetry_ready = telemetry_start_queued
-        && wait_for_vehicle_data(&state.pool, vid).await;
+    let telemetry_ready = telemetry_start_queued && wait_for_vehicle_data(&state.pool, vid).await;
     Ok(Json(serde_json::json!({
-        "ok": telemetry_ready,
+        "ok": true,
         "vehicle_id": vid,
         "vehicle_saved": true,
         "connection_status": if telemetry_ready { "connected" } else { "connected_waiting_for_vehicle_data" },
@@ -1532,22 +1542,28 @@ async fn refresh_vehicle_credentials(
 
 async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
     for _ in 0..10 {
-        let ready = sqlx::query_scalar::<_, bool>(
-            "SELECT worker_health = 'connected' AND auth_state = 'authorized'
+        let runtime = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT worker_health, auth_state
              FROM riviamigo.vehicle_runtime_state WHERE vehicle_id = $1",
         )
         .bind(vehicle_id)
         .fetch_optional(pool)
         .await
         .ok()
-        .flatten()
-        .unwrap_or(false);
-        if ready {
+        .flatten();
+        if runtime
+            .as_ref()
+            .is_some_and(|(health, auth)| vehicle_data_ready(health.as_deref(), auth.as_deref()))
+        {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     false
+}
+
+fn vehicle_data_ready(worker_health: Option<&str>, auth_state: Option<&str>) -> bool {
+    worker_health == Some("connected") && auth_state == Some("authorized")
 }
 
 async fn delete_vehicle(
@@ -2136,11 +2152,13 @@ async fn list_vehicles(
                 v.charge_port_type, v.battery_cell_type, v.supported_features, \
                 v.history_backfill_status, v.history_backfilled_at, v.history_session_count, \
                 vrs.worker_health, vrs.worker_health_msg, vrs.auth_state, vrs.auth_reason_code, \
+                vc.token_created_at, \
                 vm.role AS membership_role \
          FROM riviamigo.vehicles v \
          JOIN riviamigo.vehicle_memberships vm ON vm.vehicle_id = v.id \
          LEFT JOIN riviamigo.vehicle_user_settings vus ON vus.vehicle_id = v.id AND vus.user_id = vm.user_id \
          LEFT JOIN riviamigo.vehicle_runtime_state vrs ON vrs.vehicle_id = v.id \
+         LEFT JOIN riviamigo.vehicle_credentials vc ON vc.vehicle_id = v.id \
          WHERE vm.user_id = $1
            AND ($2::uuid IS NULL OR v.id = $2)
          ORDER BY v.created_at",
@@ -2153,6 +2171,12 @@ async fn list_vehicles(
     let mut vehicles = Vec::with_capacity(rows.len());
     for r in rows {
         let is_demo = is_demo_vehicle_key(&r.rivian_vehicle_id);
+        let credential_issued_at = (!is_demo).then_some(r.token_created_at).flatten();
+        let expected_renewal_at =
+            credential_issued_at.map(|issued| issued + RIVIAN_RENEWAL_INTERVAL);
+        let renewal_state = credential_issued_at.map(|issued| {
+            rivian_renewal_state_for_auth(issued, Utc::now(), r.auth_state.as_deref())
+        });
         if !is_demo {
             queue_vehicle_artwork_repair(&state, r.id).await;
         }
@@ -2193,6 +2217,9 @@ async fn list_vehicles(
             "worker_health_msg":        r.worker_health_msg,
             "auth_state":               r.auth_state,
             "auth_reason_code":         r.auth_reason_code,
+            "credential_issued_at":     credential_issued_at,
+            "expected_renewal_at":      expected_renewal_at,
+            "renewal_state":            renewal_state,
         }));
     }
 
@@ -2365,12 +2392,28 @@ async fn vehicle_status(
         "SELECT is_online, last_event_at, last_payload_at, last_heartbeat_at, \
                 last_ws_received_at, last_ws_payload_received_at, last_ws_heartbeat_received_at, \
                 last_charge_history_sync_at, last_charge_history_success_at, \
-                worker_health, auth_state, auth_reason_code FROM riviamigo.vehicle_runtime_state \
+                worker_health, worker_health_msg, auth_state, auth_reason_code FROM riviamigo.vehicle_runtime_state \
          WHERE vehicle_id = $1",
     )
     .bind(vid)
     .fetch_optional(&state.pool)
     .await?;
+
+    let credential_issued_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        "SELECT token_created_at FROM riviamigo.vehicle_credentials WHERE vehicle_id = $1",
+    )
+    .bind(vid)
+    .fetch_optional(&state.pool)
+    .await?;
+    let expected_renewal_at = credential_issued_at.map(|issued| issued + RIVIAN_RENEWAL_INTERVAL);
+    let renewal_state = credential_issued_at.map(|issued| {
+        rivian_renewal_state_for_auth(
+            issued,
+            Utc::now(),
+            row.as_ref()
+                .and_then(|runtime| runtime.auth_state.as_deref()),
+        )
+    });
 
     let latest = sqlx::query_as::<_, LatestVehicleTelemetry>(
         r#"
@@ -3097,8 +3140,12 @@ async fn vehicle_status(
         last_charge_history_sync_at: row.as_ref().and_then(|r| r.last_charge_history_sync_at),
         last_charge_history_success_at: row.as_ref().and_then(|r| r.last_charge_history_success_at),
         worker_health: effective_worker_health,
+        worker_health_msg: row.as_ref().and_then(|r| r.worker_health_msg.clone()),
         auth_state: row.as_ref().and_then(|r| r.auth_state.clone()),
         auth_reason_code: row.as_ref().and_then(|r| r.auth_reason_code.clone()),
+        credential_issued_at,
+        expected_renewal_at,
+        renewal_state,
         battery_level: latest.battery_level,
         battery_level_ts: latest.battery_level_ts.or(latest.ts),
         range_miles: normalized_range_miles,
@@ -5064,8 +5111,8 @@ mod tests {
         connect_otp, load_encrypted_redis, map_rivian_login_error, map_rivian_otp_error,
         parse_raw_fields, parse_telemetry_lanes, raw_field_coverage_query,
         raw_telemetry_where_clause, resolve_telemetry_resolution, store_encrypted_redis,
-        validate_raw_time_bounds, OtpBody, PendingOtpChallenge, RAW_TELEMETRY_FIELDS,
-        TELEMETRY_LANES_QUERY,
+        validate_raw_time_bounds, vehicle_data_ready, OtpBody, PendingOtpChallenge,
+        RAW_TELEMETRY_FIELDS, TELEMETRY_LANES_QUERY,
     };
     use axum::body::Body;
     use axum::extract::State;
@@ -5090,6 +5137,14 @@ mod tests {
             map_rivian_otp_error(crate::ingestion::rivian_auth::RivianAuthError::InvalidOtp),
             crate::errors::AppError::RivianOtpRejected
         ));
+    }
+
+    #[test]
+    fn requires_authorized_connected_runtime_before_reporting_refresh_ready() {
+        assert!(vehicle_data_ready(Some("connected"), Some("authorized")));
+        assert!(!vehicle_data_ready(Some("starting"), Some("authorized")));
+        assert!(!vehicle_data_ready(Some("connected"), Some("needs_reauth")));
+        assert!(!vehicle_data_ready(None, None));
     }
 
     // Run with: cargo test -- --ignored
