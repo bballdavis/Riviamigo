@@ -8,6 +8,8 @@ vi.mock('@riviamigo/ui/primitives', async () => import('../../test/mockPrimitive
 const mockNavigate = vi.fn();
 let mockSearch = {} as { redirect?: string };
 let setupRequired = false;
+let setupProofRequired = false;
+let setupProofAvailable = false;
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-router')>()),
   useNavigate: () => mockNavigate,
@@ -15,7 +17,11 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 }));
 vi.mock('@tanstack/react-query', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-query')>()),
-  useQuery: () => ({ data: { setup_required: setupRequired } }),
+  useQuery: () => ({ data: {
+    setup_required: setupRequired,
+    setup_proof_required: setupProofRequired,
+    setup_proof_available: setupProofAvailable,
+  } }),
 }));
 
 const mockLogin = vi.fn();
@@ -30,7 +36,7 @@ import { LoginPage } from '../login';
 
 beforeEach(() => {
   mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear();
-  mockSearch = {}; setupRequired = false;
+  mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false;
 });
 
 describe('LoginPage', () => {
@@ -94,5 +100,41 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /create owner account/i }));
     await waitFor(() => expect(mockRegister).toHaveBeenCalledWith('owner@example.com', 'fresh-install-password'));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/connect' });
+  });
+
+  it('forwards the ephemeral setup proof only when setup requires and provides it', async () => {
+    setupRequired = true; setupProofRequired = true; setupProofAvailable = true;
+    mockRegister.mockResolvedValue(undefined);
+    const user = userEvent.setup(); render(<LoginPage />);
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'owner@example.com');
+    await user.type(screen.getByLabelText('Password'), 'fresh-install-password');
+    await user.type(screen.getByLabelText('Setup token'), 'one-time-proof');
+    await user.click(screen.getByRole('button', { name: /create owner account/i }));
+    await waitFor(() => expect(mockRegister).toHaveBeenCalledWith(
+      'owner@example.com', 'fresh-install-password', 'one-time-proof'
+    ));
+    expect(window.location.href).not.toContain('one-time-proof');
+  });
+
+  it('blocks first-owner setup when proof is required but unavailable', async () => {
+    setupRequired = true; setupProofRequired = true; setupProofAvailable = false;
+    const user = userEvent.setup(); render(<LoginPage />);
+    expect(screen.getByText(/RIVIAMIGO_SETUP_TOKEN/)).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: /create owner account/i });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(mockRegister).not.toHaveBeenCalled();
+  });
+
+  it('gives setup-specific guidance when the proof is rejected', async () => {
+    setupRequired = true; setupProofRequired = true; setupProofAvailable = true;
+    mockRegister.mockRejectedValue({ status: 403 });
+    const user = userEvent.setup(); render(<LoginPage />);
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'owner@example.com');
+    await user.type(screen.getByLabelText('Password'), 'fresh-install-password');
+    await user.type(screen.getByLabelText('Setup token'), 'wrong-proof');
+    await user.click(screen.getByRole('button', { name: /create owner account/i }));
+    expect(await screen.findByText(/owner setup could not be completed/i)).toBeInTheDocument();
+    expect(screen.getByText(/RIVIAMIGO_SETUP_TOKEN/)).toBeInTheDocument();
   });
 });

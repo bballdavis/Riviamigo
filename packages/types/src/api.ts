@@ -1140,6 +1140,8 @@ export interface AuthMeResponse {
 
 export interface AuthSetupResponse {
   setup_required: boolean;
+  setup_proof_required: boolean;
+  setup_proof_available: boolean;
 }
 
 export interface ChangePasswordBody {
