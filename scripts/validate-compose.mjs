@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -7,12 +7,6 @@ const root = process.cwd();
 const temporaryRoot = mkdtempSync(path.join(tmpdir(), 'riviamigo-compose-check-'));
 const environmentFile = path.join(temporaryRoot, '.env');
 const dataRoot = path.join(temporaryRoot, 'data').replaceAll('\\', '/');
-const dsmProjectRoot = path.join(temporaryRoot, 'synology-project');
-const dsmComposeFile = path.join(dsmProjectRoot, 'docker-compose.yml');
-const dsmEnvFile = path.join(dsmProjectRoot, '.env.synology');
-mkdirSync(dsmProjectRoot, { recursive: true });
-copyFileSync(path.join(root, 'compose/synology/docker-compose.yml'), dsmComposeFile);
-copyFileSync(path.join(root, 'compose/synology/.env.synology.example'), dsmEnvFile);
 
 writeFileSync(
   environmentFile,
@@ -32,7 +26,7 @@ writeFileSync(
 );
 
 try {
-  for (const composeFile of ['compose/docker-compose.yml', 'compose/synology/docker-compose.yml', 'compose/docker-compose.synology.yml']) {
+  for (const composeFile of ['compose/docker-compose.yml']) {
     execFileSync(
       'docker',
       ['compose', '--env-file', environmentFile, '-f', composeFile, 'config', '--quiet'],
@@ -40,12 +34,6 @@ try {
     );
     console.log(`Rendered ${composeFile}`);
   }
-  execFileSync(
-    'docker',
-    ['compose', '--env-file', dsmEnvFile, '-f', dsmComposeFile, 'config', '--quiet'],
-    { cwd: root, stdio: 'inherit' }
-  );
-  console.log('Rendered disposable DSM project with sibling .env.synology');
   console.log('compose:render-check passed');
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true });
