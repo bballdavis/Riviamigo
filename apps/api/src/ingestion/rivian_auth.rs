@@ -798,8 +798,15 @@ mod tests {
             }]
         );
 
+        let original_created_at = tokens.created_at;
+        let refreshed = rivian_refresh_csrf(&client, &tokens).await.unwrap();
+        assert_eq!(refreshed.created_at, original_created_at);
+        assert_eq!(refreshed.access_token, tokens.access_token);
+        assert_eq!(refreshed.refresh_token, tokens.refresh_token);
+        assert_eq!(refreshed.user_session_token, tokens.user_session_token);
+
         let requests = recorded.lock().unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 5);
         assert_eq!(requests[0].operation_name, "CreateCSRFToken");
         assert!(requests[0].headers.get("csrf-token").is_none());
         assert!(requests[0].headers.get("a-sess").is_none());
@@ -826,6 +833,7 @@ mod tests {
         assert_eq!(requests[3].headers["a-sess"], "app-session-token");
         assert_eq!(requests[3].headers["u-sess"], "user-session-token");
         assert_eq!(requests[3].headers["authorization"], "Bearer access-token");
+        assert_eq!(requests[4].operation_name, "CreateCSRFToken");
 
         std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
     }

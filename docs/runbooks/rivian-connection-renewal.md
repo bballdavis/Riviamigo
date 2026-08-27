@@ -22,7 +22,7 @@ preventive maintenance and use runtime authentication evidence as authoritative.
 
 1. Open **Settings → Vehicles** and choose **Refresh Rivian login** for the affected vehicle.
 2. Complete Rivian MFA if requested. Do not copy passwords, OTP values, or tokens into logs or support records.
-3. Wait for the completion state. `ready` means the worker authenticated and vehicle discovery succeeded. `waiting` means the credentials were retained but runtime readiness did not arrive within the bounded check.
+3. Wait for the completion state. `connected` means the worker authenticated and vehicle discovery succeeded. `waiting_for_vehicle_data` means the credentials were retained but runtime readiness did not arrive within the bounded check.
 4. Confirm the vehicle card shows the new estimated date and no `reauth_required` state.
 5. Confirm the sidebar updates without a browser reload and live telemetry reconnects.
 6. Check application logs for the vehicle-scoped refresh and worker-health events. Do not enable payload or credential logging.

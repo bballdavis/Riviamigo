@@ -205,7 +205,8 @@ describe('ConnectContent', () => {
       ok: true,
       vehicle_id: 'local-vehicle-1',
       vehicle_saved: true,
-      telemetry_status: 'ready',
+      connection_status: 'connected',
+      telemetry_status: 'connected',
       telemetry_error: null,
     });
 
@@ -223,6 +224,46 @@ describe('ConnectContent', () => {
       expect(apiMocks.notifyVehicleCredentialsRefreshed).toHaveBeenCalledWith('local-vehicle-1');
       expect(screen.getByText(/Launch Green was saved/)).toBeInTheDocument();
     });
+  });
+
+  it('keeps refreshed credentials successful while vehicle data is still loading', async () => {
+    routerMocks.search = {
+      challenge_id: '',
+      email: 'driver@example.com',
+      mode: 'refresh',
+      vehicle_id: 'local-vehicle-1',
+    } as typeof routerMocks.search;
+    apiMocks.connectRivian.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [{
+        id: 'rivian-vehicle-1',
+        name: 'Launch Green',
+        vin: '7FCTGAAL0NN000001',
+        model: 'R1T',
+        model_year: 2022,
+      }],
+    });
+    apiMocks.refreshVehicleCredentials.mockResolvedValue({
+      ok: true,
+      vehicle_id: 'local-vehicle-1',
+      vehicle_saved: true,
+      connection_status: 'connected_waiting_for_vehicle_data',
+      telemetry_status: 'waiting_for_vehicle_data',
+      telemetry_error: 'Rivian credentials saved; vehicle data is still loading',
+    });
+
+    const user = userEvent.setup();
+    renderWithQueryClient(<ConnectContent />);
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
+    await user.type(screen.getByPlaceholderText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: /connect account/i }));
+
+    expect(await screen.findByText(/credentials saved; vehicle data is still loading/i))
+      .toHaveClass('text-status-warning');
+    expect(apiMocks.notifyVehicleCredentialsRefreshed).toHaveBeenCalledWith('local-vehicle-1');
   });
 
   it('shows an error when Rivian returns no vehicles', async () => {

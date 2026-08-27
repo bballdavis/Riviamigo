@@ -54,25 +54,49 @@ pub fn rivian_renewal_state(
     }
 }
 
+pub fn rivian_renewal_state_for_auth(
+    issued_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    auth_state: Option<&str>,
+) -> RivianRenewalState {
+    rivian_renewal_state(issued_at, now, auth_state == Some("needs_reauth"))
+}
+
 pub async fn rivian_status(pool: &PgPool) -> Result<RivianConnectionStatus, AppError> {
     let issued_at = sqlx::query_scalar::<_, DateTime<Utc>>(
         "SELECT MIN(token_created_at) FROM riviamigo.vehicle_credentials",
     )
     .fetch_optional(pool)
     .await?;
-    let runtime = sqlx::query_as::<_, (Option<String>, bool, Option<String>)>(
-        "SELECT MIN(worker_health), EXISTS(SELECT 1 FROM riviamigo.vehicle_runtime_state WHERE auth_state = 'needs_reauth'), MIN(worker_health_msg) FROM riviamigo.vehicle_runtime_state",
+    let auth_failed = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM riviamigo.vehicle_runtime_state WHERE auth_state = 'needs_reauth')",
     )
     .fetch_one(pool)
     .await?;
-    let auth_failed = runtime.1;
+    let runtime = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        r#"SELECT worker_health, worker_health_msg
+           FROM riviamigo.vehicle_runtime_state
+           ORDER BY CASE worker_health
+               WHEN 'error' THEN 5
+               WHEN 'degraded' THEN 4
+               WHEN 'stale' THEN 3
+               WHEN 'starting' THEN 2
+               WHEN 'connected' THEN 1
+               ELSE 0
+           END DESC, updated_at DESC
+           LIMIT 1"#,
+    )
+    .fetch_optional(pool)
+    .await?;
     let expected = issued_at.map(|at| at + RIVIAN_RENEWAL_INTERVAL);
     Ok(RivianConnectionStatus {
         credential_issued_at: issued_at,
         expected_renewal_at: expected,
-        renewal_state: issued_at.map(|at| rivian_renewal_state(at, Utc::now(), auth_failed)),
-        observed_health: runtime.0,
-        observed_error: runtime.2,
+        renewal_state: issued_at.map(|at| {
+            rivian_renewal_state_for_auth(at, Utc::now(), auth_failed.then_some("needs_reauth"))
+        }),
+        observed_health: runtime.as_ref().and_then(|row| row.0.clone()),
+        observed_error: runtime.and_then(|row| row.1),
     })
 }
 
@@ -331,7 +355,9 @@ fn sanitize_error(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{rivian_renewal_state, sanitize_error, RivianRenewalState};
+    use super::{
+        rivian_renewal_state, rivian_renewal_state_for_auth, sanitize_error, RivianRenewalState,
+    };
     use chrono::{Duration, TimeZone, Utc};
 
     #[test]
@@ -361,6 +387,10 @@ mod tests {
         ));
         assert!(matches!(
             rivian_renewal_state(issued, issued + Duration::days(1), true),
+            RivianRenewalState::ReauthRequired
+        ));
+        assert!(matches!(
+            rivian_renewal_state_for_auth(issued, issued + Duration::days(1), Some("needs_reauth")),
             RivianRenewalState::ReauthRequired
         ));
     }

@@ -25,6 +25,7 @@ export function ConnectContent() {
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
   const [successVehicleId, setSuccessVehicleId] = useState('');
+  const [successWaitingMessage, setSuccessWaitingMessage] = useState<string | null>(null);
   const currentStep = successVehicleName ? 2 : loading ? 1 : 0;
   const reportError = (message: string) => {
     setError(message);
@@ -80,9 +81,9 @@ export function ConnectContent() {
       notifyVehicleCredentialsRefreshed(refreshVehicleId);
       setSuccessVehicleId(refreshVehicleId);
       setSuccessVehicleName(formatVehicleName(matchingVehicle));
-      if (refreshed.telemetry_status === 'waiting' && refreshed.telemetry_error) {
-        emitAuthError('Rivian login refreshed', refreshed.telemetry_error);
-      }
+      setSuccessWaitingMessage(refreshed.telemetry_status !== 'connected'
+        ? refreshed.telemetry_error ?? 'Credentials were refreshed. Riviamigo is still waiting for vehicle data and will keep retrying.'
+        : null);
       setVehicles([]);
       return;
     }
@@ -116,6 +117,7 @@ export function ConnectContent() {
       ]);
       setSuccessVehicleId(added.vehicle_id);
       setSuccessVehicleName(formatVehicleName(vehicle));
+      setSuccessWaitingMessage(null);
       setVehicles([]);
     } finally {
       // Always clear the loading flag — even on error the button must re-enable.
@@ -142,6 +144,7 @@ export function ConnectContent() {
               <ConnectedVehicleSuccess
                 vehicleId={successVehicleId}
                 vehicleName={successVehicleName}
+                initialWaitingMessage={successWaitingMessage}
                 onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
               />
             ) : vehicles.length > 1 ? (

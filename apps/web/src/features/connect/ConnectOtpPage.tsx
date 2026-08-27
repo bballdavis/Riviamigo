@@ -24,6 +24,7 @@ export function ConnectOtpContent() {
   const [vehicles, setVehicles] = useState<ConnectedRivianVehicle[]>([]);
   const [successVehicleName, setSuccessVehicleName] = useState('');
   const [successVehicleId, setSuccessVehicleId] = useState('');
+  const [successWaitingMessage, setSuccessWaitingMessage] = useState<string | null>(null);
   const reportError = (message: string) => {
     setError(message);
     emitAuthError('Rivian connection failed', message);
@@ -66,9 +67,9 @@ export function ConnectOtpContent() {
       notifyVehicleCredentialsRefreshed(refreshVehicleId);
       setSuccessVehicleId(refreshVehicleId);
       setSuccessVehicleName(formatVehicleName(matchingVehicle));
-      if (refreshed.telemetry_status === 'waiting' && refreshed.telemetry_error) {
-        emitAuthError('Rivian login refreshed', refreshed.telemetry_error);
-      }
+      setSuccessWaitingMessage(refreshed.telemetry_status !== 'connected'
+        ? refreshed.telemetry_error ?? 'Credentials were refreshed. Riviamigo is still waiting for vehicle data and will keep retrying.'
+        : null);
       setVehicles([]);
       return;
     }
@@ -96,11 +97,12 @@ export function ConnectOtpContent() {
     });
     setDefaultVehicleId(added.vehicle_id);
     await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(added.vehicle_id) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.all }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.vehicles.status(added.vehicle_id) }),
     ]);
     setSuccessVehicleId(added.vehicle_id);
     setSuccessVehicleName(formatVehicleName(vehicle));
+    setSuccessWaitingMessage(null);
     setVehicles([]);
   }
 
@@ -123,6 +125,7 @@ export function ConnectOtpContent() {
               <ConnectedVehicleSuccess
                 vehicleId={successVehicleId}
                 vehicleName={successVehicleName}
+                initialWaitingMessage={successWaitingMessage}
                 onOpenDashboard={() => navigate({ to: refreshVehicle ? '/settings' : '/' })}
               />
             ) : vehicles.length > 1 ? (

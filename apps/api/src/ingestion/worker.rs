@@ -1368,7 +1368,7 @@ async fn handle_inbound_accounting(
         }
     }
     match inbound.message_type.as_deref() {
-        Some("connection_open") => {
+        Some("connection_ack") => {
             batch.increment("ws_connections_opened");
             // The account card reflects a successful authenticated Rivian
             // session, rather than only the time credentials were saved.
@@ -3097,8 +3097,16 @@ async fn upsert_health(
            SET is_online=$2,
                worker_health=$3,
                worker_health_msg=$4,
-               auth_state=COALESCE($5, riviamigo.vehicle_runtime_state.auth_state),
+               auth_state=CASE
+                   WHEN riviamigo.vehicle_runtime_state.auth_state = 'needs_reauth'
+                        AND $5 = 'authorized'
+                     THEN riviamigo.vehicle_runtime_state.auth_state
+                   ELSE COALESCE($5, riviamigo.vehicle_runtime_state.auth_state)
+               END,
                auth_reason_code=CASE
+                   WHEN riviamigo.vehicle_runtime_state.auth_state = 'needs_reauth'
+                        AND $5 = 'authorized'
+                     THEN riviamigo.vehicle_runtime_state.auth_reason_code
                    WHEN $5 IS NULL AND $6 IS NULL THEN riviamigo.vehicle_runtime_state.auth_reason_code
                    ELSE $6
                END,
