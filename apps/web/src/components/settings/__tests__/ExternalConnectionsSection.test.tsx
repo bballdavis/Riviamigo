@@ -2,6 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ExternalConnectionsResponse } from '@riviamigo/types';
 
 const apiMocks = vi.hoisted(() => ({
   getExternalConnections: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock('@riviamigo/hooks', () => ({ api: apiMocks }));
 
 import { ExternalConnectionsSection } from '../ExternalConnectionsSection';
 
-function response(canManage: boolean) {
+function response(canManage: boolean): ExternalConnectionsResponse {
   return {
     can_manage: canManage,
     connections: [{
@@ -110,5 +111,44 @@ describe('ExternalConnectionsSection', () => {
     expect(await screen.findByText(/24 entries/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Purge cache' }));
     await waitFor(() => expect(apiMocks.purgeExternalConnectionCache).toHaveBeenCalledWith('nominatim'));
+  });
+
+  it('lets administrators add a write-only CARTO API key for a remote basemap', async () => {
+    const data = response(true);
+    const connection = data.connections[0]!;
+    connection.id = 'basemap';
+    connection.name = 'Map basemap';
+    connection.mode = 'remote';
+    connection.light_url_template = 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+    connection.dark_url_template = 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png';
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    const apiKey = await screen.findByLabelText('CARTO API key');
+    fireEvent.change(apiKey, { target: { value: 'carto-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({
+      api_key: 'carto-secret',
+      mode: 'remote',
+    })));
+  });
+
+  it('lets administrators explicitly clear a stored CARTO API key', async () => {
+    const data = response(true);
+    const connection = data.connections[0]!;
+    connection.id = 'basemap';
+    connection.name = 'Map basemap';
+    connection.mode = 'remote';
+    connection.has_api_key = true;
+    apiMocks.getExternalConnections.mockResolvedValue(data);
+    apiMocks.updateExternalConnection.mockResolvedValue(data);
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Clear stored CARTO API key' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.updateExternalConnection).toHaveBeenCalledWith('basemap', expect.objectContaining({ clear_api_key: true })));
   });
 });

@@ -279,6 +279,28 @@ function ConnectionCard({
             </div>
 
             {custom ? <CustomFields connection={connection} draft={draft} setDraft={setDraft} apiKey={apiKey} setApiKey={setApiKey} bearerToken={bearerToken} setBearerToken={setBearerToken} /> : null}
+            {connection.id === 'basemap' && active ? (
+              <Field label={`CARTO API key${connection.has_api_key ? ' (stored)' : ''}`}>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={connection.has_api_key ? 'Leave blank to keep stored key' : 'Optional — removes CARTO watermark'}
+                  className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                />
+                {connection.has_api_key ? (
+                  <span className="mt-2 flex items-center gap-2 text-sm text-fg-secondary">
+                    <input
+                      type="checkbox"
+                      checked={draft.clear_api_key ?? false}
+                      onChange={(event) => setDraft((current) => ({ ...current, clear_api_key: event.target.checked }))}
+                      aria-label="Clear stored CARTO API key"
+                    />
+                    Clear stored key
+                  </span>
+                ) : null}
+              </Field>
+            ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" iconLeft={<Save className="h-3.5 w-3.5" />} loading={update.isPending} onClick={save}>Save</Button>

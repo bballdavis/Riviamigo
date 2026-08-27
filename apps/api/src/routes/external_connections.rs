@@ -556,6 +556,7 @@ struct TestConnectionCheck {
 #[derive(Debug, Serialize)]
 struct BasemapConfigResponse {
     enabled: bool,
+    carto_api_key_missing: bool,
     light_url: &'static str,
     dark_url: &'static str,
     attribution: Option<String>,
@@ -569,6 +570,11 @@ async fn basemap_config(
     let settings = connections::load(&state.pool, connections::BASEMAP).await?;
     Ok(Json(BasemapConfigResponse {
         enabled: settings.is_active(),
+        carto_api_key_missing: carto_api_key_missing(
+            settings.is_active(),
+            &settings.mode,
+            settings.api_key_encrypted.is_some(),
+        ),
         light_url: "/v1/external/basemap/light/{z}/{x}/{y}.png",
         dark_url: "/v1/external/basemap/dark/{z}/{x}/{y}.png",
         attribution: settings.attribution,
@@ -658,9 +664,25 @@ async fn test_connection(
             // z6/14/24 is a generic central-US tile and never uses trip data.
             let endpoint = Url::parse(&expand_tile_template(template, 6, 14, 24))
                 .map_err(|_| AppError::Validation("light tile template required".into()))?;
+            let forward_carto_api_key = should_forward_carto_api_key(&body.mode, &endpoint);
             let mut request = outbound_client_for_url(&endpoint, &private_network_allowlist)
                 .await?
                 .get(endpoint);
+            let api_key = body
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or(decrypt_secret(
+                    &state.age_key,
+                    settings.api_key_encrypted.as_deref(),
+                )?);
+            if forward_carto_api_key {
+                if let Some(api_key) = api_key {
+                    request = request.query(&[("api_key", api_key)]);
+                }
+            }
             let bearer_token = body
                 .bearer_token
                 .as_deref()
@@ -814,7 +836,15 @@ async fn proxy_basemap_tile(
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
     let url = Url::parse(&url).map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
     let allowlist = configured_private_network_allowlist(&settings)?;
+    let forward_carto_api_key = should_forward_carto_api_key(&settings.mode, &url);
     let mut request = outbound_client_for_url(&url, &allowlist).await?.get(url);
+    if forward_carto_api_key {
+        if let Some(api_key) =
+            decrypt_secret(&state.age_key, settings.api_key_encrypted.as_deref())?
+        {
+            request = request.query(&[("api_key", api_key)]);
+        }
+    }
     if let Some(token) = decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
     {
         request = request.bearer_auth(token);
@@ -868,6 +898,20 @@ async fn proxy_basemap_tile(
     }
     connections::record_success(&state.pool, connections::BASEMAP).await;
     tile_response(bytes, &content_type, cache_ttl)
+}
+
+fn carto_api_key_missing(enabled: bool, mode: &str, has_api_key: bool) -> bool {
+    enabled && mode == "remote" && !has_api_key
+}
+
+fn should_forward_carto_api_key(mode: &str, endpoint: &Url) -> bool {
+    if mode == "remote" {
+        return true;
+    }
+
+    endpoint.host_str().is_some_and(|host| {
+        host == "carto.com" || host.ends_with(".carto.com") || host.ends_with(".cartocdn.com")
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1413,10 +1457,11 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        endpoint_is_private, is_forbidden_ip, is_private_ip, parse_private_network_allowlist,
-        validate_tile_template,
+        carto_api_key_missing, endpoint_is_private, is_forbidden_ip, is_private_ip,
+        parse_private_network_allowlist, should_forward_carto_api_key, validate_tile_template,
     };
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use url::Url;
 
     #[tokio::test]
     async fn validates_xyz_template_and_requires_cidr_migration_for_private_targets() {
@@ -1464,5 +1509,22 @@ mod tests {
         assert!(is_private_ip(IpAddr::V6("fd00::1".parse().expect("ULA"))));
         assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn reports_missing_carto_key_only_for_active_remote_basemap() {
+        assert!(carto_api_key_missing(true, "remote", false));
+        assert!(!carto_api_key_missing(true, "remote", true));
+        assert!(!carto_api_key_missing(false, "remote", false));
+        assert!(!carto_api_key_missing(true, "custom", false));
+    }
+
+    #[test]
+    fn forwards_carto_api_keys_only_to_remote_or_carto_owned_templates() {
+        let carto = Url::parse("https://basemaps.cartocdn.com/light_all/6/14/24.png").unwrap();
+        let custom = Url::parse("https://tiles.example.test/6/14/24.png").unwrap();
+        assert!(should_forward_carto_api_key("remote", &carto));
+        assert!(should_forward_carto_api_key("custom", &carto));
+        assert!(!should_forward_carto_api_key("custom", &custom));
     }
 }
