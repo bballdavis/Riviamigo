@@ -1514,17 +1514,40 @@ async fn refresh_vehicle_credentials(
         .supervisor
         .send(SupervisorCommand::StartWorker { vehicle_id: vid })
         .await;
+    let telemetry_ready = telemetry_start_queued
+        && wait_for_vehicle_data(&state.pool, vid).await;
     Ok(Json(serde_json::json!({
-        "ok": true,
+        "ok": telemetry_ready,
         "vehicle_id": vid,
         "vehicle_saved": true,
-        "telemetry_status": if telemetry_start_queued { "starting" } else { "delayed" },
+        "connection_status": if telemetry_ready { "connected" } else { "connected_waiting_for_vehicle_data" },
+        "telemetry_status": if telemetry_ready { "connected" } else if telemetry_start_queued { "waiting_for_vehicle_data" } else { "delayed" },
         "telemetry_error": if telemetry_start_queued {
-            serde_json::Value::Null
+            if telemetry_ready { serde_json::Value::Null } else { serde_json::Value::String("Rivian credentials saved; vehicle data is still loading".into()) }
         } else {
             serde_json::Value::String("worker supervisor unavailable; retry telemetry start".into())
         },
     })))
+}
+
+async fn wait_for_vehicle_data(pool: &sqlx::PgPool, vehicle_id: Uuid) -> bool {
+    for _ in 0..10 {
+        let ready = sqlx::query_scalar::<_, bool>(
+            "SELECT worker_health = 'connected' AND auth_state = 'authorized'
+             FROM riviamigo.vehicle_runtime_state WHERE vehicle_id = $1",
+        )
+        .bind(vehicle_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+        if ready {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    false
 }
 
 async fn delete_vehicle(

@@ -25,6 +25,8 @@ const apiMocks = vi.hoisted(() => ({
   connectRivian: vi.fn(),
   connectRivianOtp: vi.fn(),
   addVehicle: vi.fn(),
+  refreshVehicleCredentials: vi.fn(),
+  notifyVehicleCredentialsRefreshed: vi.fn(),
   setDefaultVehicleId: vi.fn(),
 }));
 
@@ -46,10 +48,23 @@ vi.mock('@riviamigo/hooks', () => ({
     connectRivian: apiMocks.connectRivian,
     connectRivianOtp: apiMocks.connectRivianOtp,
     addVehicle: apiMocks.addVehicle,
+    refreshVehicleCredentials: apiMocks.refreshVehicleCredentials,
+  },
+  notifyVehicleCredentialsRefreshed: apiMocks.notifyVehicleCredentialsRefreshed,
+  queryKeys: {
+    vehicle: { health: (vehicleId: string) => ['vehicles', 'health', vehicleId] },
+    vehicles: {
+      all: ['vehicles'],
+      status: (vehicleId: string) => ['vehicles', 'status', vehicleId],
+    },
   },
   useAuth: (selector: (state: { setDefaultVehicleId: (vehicleId: string) => void }) => unknown) =>
     selector({ setDefaultVehicleId: apiMocks.setDefaultVehicleId }),
-  useVehicles: () => ({ data: [] }),
+  useVehicles: () => ({
+    data: (routerMocks.search as { mode?: string }).mode === 'refresh'
+      ? [{ id: 'local-vehicle-1', rivian_vehicle_id: 'rivian-vehicle-1', display_name: 'Launch Green' }]
+      : [],
+  }),
   useCurrentVehicleStatus: () => ({ data: null }),
 }));
 
@@ -72,6 +87,8 @@ beforeEach(() => {
   apiMocks.connectRivian.mockReset();
   apiMocks.connectRivianOtp.mockReset();
   apiMocks.addVehicle.mockReset();
+  apiMocks.refreshVehicleCredentials.mockReset();
+  apiMocks.notifyVehicleCredentialsRefreshed.mockReset();
   apiMocks.setDefaultVehicleId.mockClear();
   routerMocks.search = { challenge_id: 'challenge-123', email: 'driver@example.com' };
 });
@@ -160,6 +177,50 @@ describe('ConnectContent', () => {
         vin: '7FCTGAAL0NN000001',
       });
       expect(apiMocks.setDefaultVehicleId).toHaveBeenCalledWith('local-vehicle-1');
+      expect(screen.getByText(/Launch Green was saved/)).toBeInTheDocument();
+    });
+  });
+
+  it('refreshes cached vehicle state and the active live socket after credential repair', async () => {
+    routerMocks.search = {
+      challenge_id: '',
+      email: 'driver@example.com',
+      mode: 'refresh',
+      vehicle_id: 'local-vehicle-1',
+    } as typeof routerMocks.search;
+    apiMocks.connectRivian.mockResolvedValue({
+      status: 'connected',
+      requires_otp: false,
+      challenge_id: null,
+      vehicle_id: null,
+      vehicles: [{
+        id: 'rivian-vehicle-1',
+        name: 'Launch Green',
+        vin: '7FCTGAAL0NN000001',
+        model: 'R1T',
+        model_year: 2022,
+      }],
+    });
+    apiMocks.refreshVehicleCredentials.mockResolvedValue({
+      ok: true,
+      vehicle_id: 'local-vehicle-1',
+      vehicle_saved: true,
+      telemetry_status: 'ready',
+      telemetry_error: null,
+    });
+
+    const user = userEvent.setup();
+    renderWithQueryClient(<ConnectContent />);
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'driver@example.com');
+    await user.type(screen.getByPlaceholderText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: /connect account/i }));
+
+    await waitFor(() => {
+      expect(apiMocks.refreshVehicleCredentials).toHaveBeenCalledWith(
+        'local-vehicle-1',
+        'rivian-vehicle-1',
+      );
+      expect(apiMocks.notifyVehicleCredentialsRefreshed).toHaveBeenCalledWith('local-vehicle-1');
       expect(screen.getByText(/Launch Green was saved/)).toBeInTheDocument();
     });
   });

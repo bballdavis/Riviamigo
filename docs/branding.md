@@ -175,3 +175,11 @@ Runtime feed failures also emit an error toast with a 15-minute per-vehicle,
 per-reason cooldown. Persistent failures may remind the user after the cooldown,
 but status polling and page reloads must not create toast storms. Reauthentication
 messages direct the user to **Settings → Vehicles**.
+
+Estimated Rivian credential renewal is advisory chrome, not a feed-health
+failure. Within seven days of the 180-day estimate, show a warning-tone action
+in the expanded, collapsed, and mobile sidebar while preserving a healthy green
+**Online** state when telemetry is working. The vehicle settings card repeats
+the estimated date and recommendation beside the existing login-repair action.
+Copy must say **estimated**, **renewal**, or **recommended** rather than claiming
+that Rivian guarantees an expiration date.
