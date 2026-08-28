@@ -7,6 +7,7 @@ import {
   ChartDefinitionV1Schema,
   buildChartManagerEntries,
   resolveAssignedCharts,
+  resolveChartSourceCapabilities,
   exportChartYaml,
   parseChartYaml,
   parseSafeMathExpression,
@@ -24,6 +25,19 @@ describe('managed chart contracts', () => {
       expect(ChartDefinitionV1Schema.parse(definition)).toEqual(definition);
       expect(validateChartDefinitionAgainstSources(definition, [...CHART_SOURCE_MANIFESTS])).toEqual([]);
     }
+  });
+
+  it('assigns every bundled chart to Overview by default', () => {
+    for (const chart of BUNDLED_CHART_DEFINITIONS) {
+      expect(chart.placements).toContainEqual({ dashboardSlug: 'overview' });
+    }
+  });
+
+  it('expands metric series fields from the queryable metric catalog', () => {
+    const manifests = resolveChartSourceCapabilities([...CHART_SOURCE_MANIFESTS], [{ id: 'computed_metric', label: 'Computed Metric', unit: 'kWh', kind: 'energy', source: 'summary', supports_series: true, default_aggregation: 'sum' }]);
+    const metrics = manifests.find((manifest) => manifest.id === 'metrics.series');
+    expect(metrics?.fields).toContainEqual(expect.objectContaining({ id: 'computed_metric', roles: ['y', 'detail'] }));
+    expect(metrics?.parameters.find((parameter) => parameter.id === 'metric')?.options).toContain('computed_metric');
   });
 
   it('round-trips a definition without changing its portable shape', () => {

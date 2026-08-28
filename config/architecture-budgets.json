@@ -90,9 +90,10 @@
       "allow": [
         "apps/web/src/features/settings/SettingsPage.tsx",
         "apps/web/src/components/settings/BackupSection.tsx",
-        "packages/dashboards/src/editor/WidgetEditForm.tsx"
+        "packages/dashboards/src/editor/WidgetEditForm.tsx",
+        "packages/ui/src/primitives/Switch.tsx"
       ],
-      "maxMatches": 3,
+      "maxMatches": 4,
       "message": "Production switch semantics must use the shared Switch primitive"
     },
     "directPortal": {
@@ -105,9 +106,10 @@
         "packages/dashboards/src/widgets/chart/MobileChartViewer.tsx",
         "packages/dashboards/src/widgets/chart/DashboardChartWidget.tsx",
         "packages/dashboards/src/editor/EditorDrawer.tsx",
-        "packages/dashboards/src/editor/IconPicker.tsx"
+        "packages/dashboards/src/editor/IconPicker.tsx",
+        "packages/ui/src/primitives/ResponsiveDialog.tsx"
       ],
-      "maxMatches": 8,
+      "maxMatches": 9,
       "message": "Production overlays must use the shared overlay foundation"
     },
     "directToastDispatch": {

@@ -120,6 +120,16 @@ export interface RichTimeSeriesChartProps {
   height?: number;
   loading?: boolean;
   emptyTitle?: string | undefined;
+  emptyDescription?: string | undefined;
+  /** Accessible/displayed titles for the chart axes. */
+  xAxisLabel?: string | undefined;
+  yAxisLabel?: string | undefined;
+  yRightAxisLabel?: string | undefined;
+  /** Display controls used by definition-driven charts. Omitted values preserve legacy behavior. */
+  showLegend?: boolean | undefined;
+  showGrid?: boolean | undefined;
+  showTooltip?: boolean | undefined;
+  showPoints?: boolean | undefined;
   yUnit?: string | undefined;
   /** Unit label for the right Y axis (only shown when any series has yScale='y2'). */
   yRightUnit?: string | undefined;
@@ -476,6 +486,7 @@ export function buildRichTimeSeriesUPlotSeries(
     connectGaps = false,
     stepInterpolation = false,
     smoothness = DEFAULT_CURVE_SMOOTHNESS,
+    showPoints = false,
   }: {
     mode?: RichTimeSeriesChartProps['mode'];
     barCount?: number;
@@ -483,6 +494,7 @@ export function buildRichTimeSeriesUPlotSeries(
     connectGaps?: boolean;
     stepInterpolation?: boolean;
     smoothness?: CurveSmoothness;
+    showPoints?: boolean;
     timeFilter?: TimeFilterWindow;
   } = {},
 ): Series[] {
@@ -499,7 +511,7 @@ export function buildRichTimeSeriesUPlotSeries(
         scale: item.yScale ?? 'y',
         width: seriesMode === 'scatter' ? 0 : seriesMode === 'bar' ? 1 : item.strokeWidth ?? 2,
         points: {
-          show: seriesMode === 'scatter',
+          show: seriesMode === 'scatter' || showPoints,
           size: item.pointSize ?? 6,
           stroke: color,
           fill: color,
@@ -611,6 +623,14 @@ export function RichTimeSeriesChart({
   onIntervalClick,
   intervalBandRatio = 0.3,
   referenceLines = [],
+  emptyDescription,
+  xAxisLabel,
+  yAxisLabel,
+  yRightAxisLabel,
+  showLegend = true,
+  showGrid = true,
+  showTooltip = true,
+  showPoints = false,
 }: RichTimeSeriesChartProps) {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<uPlot | null>(null);
@@ -682,22 +702,22 @@ export function RichTimeSeriesChart({
 
   const hasData = alignedData.length > 1 && (alignedData[0]?.length ?? 0) > 0;
   const legendSeries = series.filter((item) => !item.tooltipOnly && item.showInLegend !== false);
-  const showLegend = legendSeries.length > 0;
-  const chartHeight = Math.max(120, height - (showLegend ? 34 : 0));
+  const legendVisible = showLegend && legendSeries.length > 0;
+  const chartHeight = Math.max(120, height - (legendVisible ? 34 : 0));
   const hiddenKeySignature = React.useMemo(() => [...hiddenKeys].sort().join('|'), [hiddenKeys]);
 
   const structureKey = React.useMemo(
     () =>
       `${chartHeight}|${xTime}|${xUnit ?? ''}|${mode}|${timeFilter}|${smoothness}|${stepInterpolation}|` +
       `${xRange ? xRange.join(',') : ''}|${yRange ? yRange.join(',') : ''}|${yRightRange ? yRightRange.join(',') : ''}|${xSplits ? xSplits.join(',') : ''}|` +
-      `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|` +
+      `${xSecondaryFormatter ? '1' : '0'}|${yRightUnit ?? ''}|${xAxisLabel ?? ''}|${yAxisLabel ?? ''}|${yRightAxisLabel ?? ''}|${showLegend ? '1' : '0'}|${showGrid ? '1' : '0'}|${showTooltip ? '1' : '0'}|${showPoints ? '1' : '0'}|` +
       `${cursorSyncKey ?? ''}|${connectGaps ? 'connect-gaps' : ''}|` +
       `${interactionMode}|${intervalBandRatio}|` +
       `${packedIntervals.map((item) => `${item.id}:${item.start}:${item.end}:${item.lane}`).join('|')}|` +
       `${referenceLines.map((line) => `${line.value}:${line.color ?? ''}`).join('|')}|` +
       series.map((s) => `${s.key}:${s.label}:${s.mode ?? ''}:${s.color ?? ''}:${s.strokeWidth ?? ''}:${s.yScale ?? ''}:${s.stackId ?? ''}:${s.tooltipOnly ? 'tooltip' : ''}`).join('|') +
       `|${hiddenKeySignature}`,
-    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, cursorSyncKey, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines],
+    [chartHeight, xTime, xUnit, mode, timeFilter, smoothness, stepInterpolation, xRange, yRange, yRightRange, xSplits, xSecondaryFormatter, yRightUnit, xAxisLabel, yAxisLabel, yRightAxisLabel, showLegend, showGrid, showTooltip, showPoints, cursorSyncKey, connectGaps, interactionMode, intervalBandRatio, series, hiddenKeySignature, packedIntervals, referenceLines],
   );
 
   React.useEffect(() => {
@@ -739,10 +759,11 @@ export function RichTimeSeriesChart({
 
     const xAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
-      grid: { stroke: CHART_COLORS.grid, width: 1 },
+      grid: showGrid ? { stroke: CHART_COLORS.grid, width: 1 } : { show: false },
       font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
       size: isBarChart ? 54 : 44,
       gap: 6,
+      ...(xAxisLabel ? { label: xAxisLabel, labelSize: 24, labelGap: 4 } : {}),
       ...(xSplits
         ? { splits: () => xSplits }
         : calendarDateSplits
@@ -782,13 +803,14 @@ export function RichTimeSeriesChart({
 
     const yAxisConfig: uPlot.Axis = {
       stroke: CHART_COLORS.muted,
-      grid: { stroke: CHART_COLORS.grid, width: 1 },
+      grid: showGrid ? { stroke: CHART_COLORS.grid, width: 1 } : { show: false },
       font: `${CHART_FONT.fontWeight} ${CHART_FONT.fontSize}px ${CHART_FONT.fontFamily}`,
       size: (_self, values) => {
         if (!values || values.length === 0) return 50;
         return estimateYLabelWidth(values as string[]);
       },
       gap: 8,
+      ...(yAxisLabel ? { label: yAxisLabel, labelSize: 24, labelGap: 4 } : {}),
       values: (_u, vals) => {
         const precision = getAdaptiveDecimalPrecision(vals);
         yPrecisionRef.current = precision;
@@ -817,6 +839,7 @@ export function RichTimeSeriesChart({
             return estimateYLabelWidth(values as string[]);
           },
           gap: 8,
+          ...(yRightAxisLabel ? { label: yRightAxisLabel, labelSize: 24, labelGap: 4 } : {}),
           values: (_u, vals) => {
             const precision = getAdaptiveDecimalPrecision(vals);
             yRightPrecisionRef.current = precision;
@@ -912,6 +935,7 @@ export function RichTimeSeriesChart({
         connectGaps,
         stepInterpolation,
         smoothness: normalizeCurveSmoothness(smoothness),
+        showPoints,
         timeFilter,
       }),
       hooks: {
@@ -927,6 +951,10 @@ export function RichTimeSeriesChart({
         ],
         setCursor: [
           (u) => {
+            if (!showTooltip) {
+              setTooltip(null);
+              return;
+            }
             const idx = u.cursor.idx;
             if (idx == null || idx < 0) {
               onCursorIndexChangeRef.current?.(null);
@@ -1042,6 +1070,7 @@ export function RichTimeSeriesChart({
         style={{ height }}
       >
         {emptyTitle}
+        {emptyDescription ? <span className="mt-1 block text-xs text-fg-tertiary">{emptyDescription}</span> : null}
       </div>
     );
   }
@@ -1181,7 +1210,7 @@ export function RichTimeSeriesChart({
           {tooltip.text}
         </div>
       ) : null}
-      {showLegend ? (
+      {legendVisible ? (
         <div className="flex h-[34px] shrink-0 items-center justify-center gap-3 border-t border-border/60 px-3 text-[11px] text-fg-tertiary">
           {legendSeries.map((item, index) => {
             const color = item.color ?? (index === 0 ? CHART_COLORS.accent : CHART_COLORS.emerald);
