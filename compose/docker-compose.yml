@@ -1,17 +1,4 @@
 services:
-  riviamigo-init:
-    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
-    user: "0:0"
-    env_file:
-      - ${RIVIAMIGO_ENV_FILE:-../.env}
-    entrypoint: ['/app/production-init.sh']
-    volumes:
-      - ${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups
-      - ${RIVIAMIGO_DATA_DIR:-../data}/cache:/data/cache
-    networks:
-      - internal
-    restart: 'no'
-
   riviamigo:
     image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
     restart: unless-stopped
@@ -22,8 +9,6 @@ services:
       # the documented private-network requirements are intentionally met.
       ALLOW_INSECURE_LAN_HTTP_AUTH: ${ALLOW_INSECURE_LAN_HTTP_AUTH:-false}
     depends_on:
-      riviamigo-init:
-        condition: service_completed_successfully
       timescaledb:
         condition: service_healthy
       redis:
@@ -46,46 +31,10 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 120s
     volumes:
-      - ${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups
-      - ${RIVIAMIGO_DATA_DIR:-../data}/cache:/data/cache
-    deploy:
-      resources:
-        limits:
-          memory: 640M
-          pids: 256
-          cpus: '1.00'
-        reservations:
-          memory: 160M
-          cpus: '0.25'
-
-  parallax:
-    profiles: ['parallax']
-    image: ${RIVIAMIGO_IMAGE_REGISTRY:-ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    entrypoint: ['/app/riviamigo-parallax-collector']
-    env_file:
-      - ${RIVIAMIGO_ENV_FILE:-../.env}
-    environment:
-      POSTGRES_HOST: timescaledb
-      POSTGRES_DB: riviamigo
-      POSTGRES_USER: ${POSTGRES_USER:-riviamigo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    networks:
-      - internal
-      - proxy
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: '0.50'
-        reservations:
-          memory: 48M
-          cpus: '0.10'
+      - ${RIVIAMIGO_BACKUPS_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/backups}:/backups
+      - ${RIVIAMIGO_CACHE_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/cache}:/data/cache
 
   timescaledb:
     image: timescale/timescaledb:2.28.3-pg18@sha256:2c718e700b1c75b93488085596f2254c991c3aa29584fc282ebbe62fd8335791
@@ -96,22 +45,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       PGDATA: /db
     volumes:
-      - ${RIVIAMIGO_DATA_DIR:-../data}/db:/db
+      - ${RIVIAMIGO_DB_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/db}:/db
     networks:
       - internal
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-riviamigo} -d riviamigo']
       interval: 10s
       timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '2.00'
-        reservations:
-          memory: 512M
-          cpus: '0.50'
+      retries: 30
+      start_period: 300s
 
   redis:
     image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
@@ -127,22 +69,20 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     volumes:
-      - ${RIVIAMIGO_DATA_DIR:-../data}/redis:/data
+      - ${RIVIAMIGO_REDIS_SOURCE:-${RIVIAMIGO_DATA_DIR:-../data}/redis}:/data
     networks:
       - internal
     healthcheck:
       test: ['CMD-SHELL', 'redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping']
       interval: 10s
       timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.50'
-        reservations:
-          memory: 64M
-          cpus: '0.10'
+      retries: 30
+
+volumes:
+  riviamigo-db:
+  riviamigo-redis:
+  riviamigo-backups:
+  riviamigo-cache:
 
 networks:
   internal:

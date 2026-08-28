@@ -1,13 +1,13 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@riviamigo/hooks';
+import { api, BASEMAP_CONFIG_QUERY_KEY } from '@riviamigo/hooks';
 import type {
   ExternalConnectionMode,
   ExternalConnectionRecord,
   UpdateExternalConnectionBody,
 } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker } from '@riviamigo/ui/primitives';
-import { ExternalLink, RefreshCw, Save, ShieldOff } from 'lucide-react';
+import { ExternalLink, RefreshCw, Save, ShieldOff, Trash2 } from 'lucide-react';
 import { formatAppDateTime } from '@riviamigo/ui/lib/dateTime';
 
 const CONNECTION_QUERY_KEY = ['external-connections'] as const;
@@ -138,6 +138,8 @@ function ConnectionCard({
 }) {
   const [draft, setDraft] = React.useState<UpdateExternalConnectionBody>(() => toDraft(connection));
   const [apiKey, setApiKey] = React.useState('');
+  const [isReplacingApiKey, setIsReplacingApiKey] = React.useState(false);
+  const [isClearingApiKey, setIsClearingApiKey] = React.useState(false);
   const [bearerToken, setBearerToken] = React.useState('');
   const [message, setMessage] = React.useState<string | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = React.useState<string | null>(null);
@@ -146,14 +148,22 @@ function ConnectionCard({
   React.useEffect(() => {
     setDraft(toDraft(connection));
     setApiKey('');
+    setIsReplacingApiKey(false);
+    setIsClearingApiKey(false);
     setBearerToken('');
     setPreviewDataUrl(null);
   }, [connection]);
 
   const update = useMutation({
     mutationFn: (body: UpdateExternalConnectionBody) => api.updateExternalConnection(connection.id, body),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       onUpdated(data);
+      if (connection.id === 'basemap') {
+        await queryClient.invalidateQueries({ queryKey: BASEMAP_CONFIG_QUERY_KEY });
+      }
+      setApiKey('');
+      setIsReplacingApiKey(false);
+      setIsClearingApiKey(false);
       setMessage('Saved.');
     },
     onError: (error) => setMessage(error instanceof Error ? error.message : 'Could not save connection.'),
@@ -165,6 +175,9 @@ function ConnectionCard({
       setPreviewDataUrl(result.preview_data_url);
     },
     onError: (error) => setMessage(error instanceof Error ? error.message : 'Connection test failed.'),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: CONNECTION_QUERY_KEY });
+    },
   });
   const purgeCache = useMutation({
     mutationFn: () => api.purgeExternalConnectionCache(connection.id),
@@ -193,6 +206,10 @@ function ConnectionCard({
       ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
       ...(bearerToken.trim() ? { bearer_token: bearerToken.trim() } : {}),
     });
+  }
+
+  function clearStoredBasemapKey() {
+    update.mutate({ ...draft, clear_api_key: true });
   }
 
   return (
@@ -279,10 +296,72 @@ function ConnectionCard({
             </div>
 
             {custom ? <CustomFields connection={connection} draft={draft} setDraft={setDraft} apiKey={apiKey} setApiKey={setApiKey} bearerToken={bearerToken} setBearerToken={setBearerToken} /> : null}
+            {connection.id === 'basemap' && active ? (
+              connection.has_api_key && !isReplacingApiKey ? (
+                <div className="grid gap-2">
+                  <span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">CARTO Basemap key</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="h-7" variant="success">Key saved</Badge>
+                    <BasemapVerificationStatus connection={connection} />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      loading={test.isPending}
+                      onClick={testDraft}
+                    >
+                      Verify key
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 w-7 px-0"
+                      aria-label="Replace stored CARTO Basemap key"
+                      iconLeft={<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
+                      onClick={() => {
+                        setDraft((current) => ({ ...current, clear_api_key: false }));
+                        setIsReplacingApiKey(true);
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      className="h-7 w-7 px-0"
+                      aria-label="Clear stored CARTO Basemap key"
+                      title="Clear stored key"
+                      loading={update.isPending}
+                      iconLeft={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
+                      onClick={() => setIsClearingApiKey(true)}
+                    />
+                  </div>
+                  {isClearingApiKey ? (
+                    <div className="flex flex-col gap-3 rounded-lg border border-status-danger/30 bg-status-danger/10 p-3 sm:flex-row sm:items-center">
+                      <p className="text-sm text-fg sm:mr-auto">Clear the saved key? Map tiles will be watermarked until a new key is saved.</p>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="secondary" size="sm" onClick={() => setIsClearingApiKey(false)}>Keep key</Button>
+                        <Button type="button" variant="danger" size="sm" loading={update.isPending} onClick={clearStoredBasemapKey}>Clear key</Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <Field label={connection.has_api_key ? 'Replace CARTO Basemap key' : 'CARTO Basemap key'}>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder={connection.has_api_key ? 'Enter a replacement Basemap key' : 'Optional — removes CARTO watermark'}
+                    className="h-9 w-full rounded-lg border border-border bg-bg-elevated px-3 text-sm text-fg outline-none focus:border-accent"
+                  />
+                </Field>
+              )
+            ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" iconLeft={<Save className="h-3.5 w-3.5" />} loading={update.isPending} onClick={save}>Save</Button>
-              {active ? <Button variant="secondary" size="sm" loading={test.isPending} onClick={testDraft}>Test with synthetic data</Button> : null}
+              {active && !(connection.id === 'basemap' && connection.has_api_key && !isReplacingApiKey) ? <Button variant="secondary" size="sm" loading={test.isPending} onClick={testDraft}>Test with synthetic data</Button> : null}
             </div>
             {previewDataUrl ? (
               <div className="overflow-hidden rounded-xl border border-border bg-bg-elevated/40">
@@ -311,6 +390,24 @@ function ConnectionCard({
       </CardContent>
     </Card>
   );
+}
+
+function BasemapVerificationStatus({ connection }: { connection: ExternalConnectionRecord }) {
+  const status = getBasemapVerificationStatus(connection);
+  return <Badge className="h-7" variant={status.variant}>{status.label}</Badge>;
+}
+
+function getBasemapVerificationStatus(connection: ExternalConnectionRecord): { label: string; variant: 'default' | 'success' | 'danger' } {
+  if (!connection.last_test_at || !isCurrentVerification(connection)) return { label: 'Not verified', variant: 'default' };
+  if (connection.last_test_ok) return { label: 'Key verified', variant: 'success' };
+  if (/\bHTTP\s+(401|403)\b/i.test(connection.last_test_error ?? '')) return { label: 'Key rejected', variant: 'danger' };
+  return { label: 'Verification failed', variant: 'danger' };
+}
+
+function isCurrentVerification(connection: ExternalConnectionRecord) {
+  const testedAt = Date.parse(connection.last_test_at ?? '');
+  const updatedAt = Date.parse(connection.updated_at);
+  return Number.isFinite(testedAt) && Number.isFinite(updatedAt) && testedAt >= updatedAt;
 }
 
 function CustomFields({ connection, draft, setDraft, apiKey, setApiKey, bearerToken, setBearerToken }: {

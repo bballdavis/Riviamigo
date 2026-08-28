@@ -98,6 +98,11 @@ struct ConnectionResponse {
     last_test_at: Option<DateTime<Utc>>,
     last_test_ok: Option<bool>,
     last_test_error: Option<String>,
+    credential_issued_at: Option<DateTime<Utc>>,
+    expected_renewal_at: Option<DateTime<Utc>>,
+    renewal_state: Option<connections::RivianRenewalState>,
+    observed_health: Option<String>,
+    observed_error: Option<String>,
     cache: Option<ConnectionCacheResponse>,
 }
 
@@ -152,6 +157,7 @@ async fn build_response(
     .await?
     .unwrap_or((false, None));
     let mut result = Vec::with_capacity(rows.len());
+    let rivian_status = connections::rivian_status(&state.pool).await?;
     for (settings, activity) in rows {
         let Some(definition) = DEFINITIONS.iter().find(|item| item.id == settings.id) else {
             continue;
@@ -211,6 +217,21 @@ async fn build_response(
             last_test_at: activity.last_test_at,
             last_test_ok: activity.last_test_ok,
             last_test_error: activity.last_test_error,
+            credential_issued_at: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.credential_issued_at)
+                .flatten(),
+            expected_renewal_at: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.expected_renewal_at)
+                .flatten(),
+            renewal_state: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.renewal_state.clone())
+                .flatten(),
+            observed_health: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.observed_health.clone())
+                .flatten(),
+            observed_error: (settings.id == connections::RIVIAN_ACCOUNT)
+                .then_some(rivian_status.observed_error.clone())
+                .flatten(),
             cache,
         });
     }
@@ -556,8 +577,12 @@ struct TestConnectionCheck {
 #[derive(Debug, Serialize)]
 struct BasemapConfigResponse {
     enabled: bool,
-    light_url: &'static str,
-    dark_url: &'static str,
+    carto_api_key_missing: bool,
+    /// A non-secret revision of the persisted basemap setting. This gives the
+    /// browser and MapLibre a new tile identity after any basemap save.
+    revision: String,
+    light_url: String,
+    dark_url: String,
     attribution: Option<String>,
     attribution_url: Option<String>,
 }
@@ -567,13 +592,26 @@ async fn basemap_config(
     _auth: AuthUser,
 ) -> Result<Json<BasemapConfigResponse>, AppError> {
     let settings = connections::load(&state.pool, connections::BASEMAP).await?;
+    let revision = settings.updated_at.timestamp_millis().to_string();
+    let light_url = basemap_proxy_url("light", &revision);
+    let dark_url = basemap_proxy_url("dark", &revision);
     Ok(Json(BasemapConfigResponse {
         enabled: settings.is_active(),
-        light_url: "/v1/external/basemap/light/{z}/{x}/{y}.png",
-        dark_url: "/v1/external/basemap/dark/{z}/{x}/{y}.png",
+        carto_api_key_missing: carto_api_key_missing(
+            settings.is_active(),
+            &settings.mode,
+            settings.api_key_encrypted.is_some(),
+        ),
+        revision,
+        light_url,
+        dark_url,
         attribution: settings.attribution,
         attribution_url: settings.attribution_url,
     }))
+}
+
+fn basemap_proxy_url(style: &str, revision: &str) -> String {
+    format!("/v1/external/basemap/{style}/{{z}}/{{x}}/{{y}}.png?v={revision}")
 }
 
 async fn test_connection(
@@ -658,9 +696,25 @@ async fn test_connection(
             // z6/14/24 is a generic central-US tile and never uses trip data.
             let endpoint = Url::parse(&expand_tile_template(template, 6, 14, 24))
                 .map_err(|_| AppError::Validation("light tile template required".into()))?;
+            let forward_carto_api_key = should_forward_carto_api_key(&body.mode, &endpoint);
             let mut request = outbound_client_for_url(&endpoint, &private_network_allowlist)
                 .await?
                 .get(endpoint);
+            let api_key = body
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or(decrypt_secret(
+                    &state.age_key,
+                    settings.api_key_encrypted.as_deref(),
+                )?);
+            if forward_carto_api_key {
+                if let Some(api_key) = api_key {
+                    request = request.query(&[carto_basemap_key_query(&api_key)]);
+                }
+            }
             let bearer_token = body
                 .bearer_token
                 .as_deref()
@@ -814,7 +868,15 @@ async fn proxy_basemap_tile(
     connections::record_attempt(&state.pool, connections::BASEMAP).await;
     let url = Url::parse(&url).map_err(|_| AppError::Validation("invalid tile endpoint".into()))?;
     let allowlist = configured_private_network_allowlist(&settings)?;
+    let forward_carto_api_key = should_forward_carto_api_key(&settings.mode, &url);
     let mut request = outbound_client_for_url(&url, &allowlist).await?.get(url);
+    if forward_carto_api_key {
+        if let Some(api_key) =
+            decrypt_secret(&state.age_key, settings.api_key_encrypted.as_deref())?
+        {
+            request = request.query(&[carto_basemap_key_query(&api_key)]);
+        }
+    }
     if let Some(token) = decrypt_secret(&state.age_key, settings.bearer_token_encrypted.as_deref())?
     {
         request = request.bearer_auth(token);
@@ -868,6 +930,26 @@ async fn proxy_basemap_tile(
     }
     connections::record_success(&state.pool, connections::BASEMAP).await;
     tile_response(bytes, &content_type, cache_ttl)
+}
+
+fn carto_api_key_missing(enabled: bool, mode: &str, has_api_key: bool) -> bool {
+    enabled && mode == "remote" && !has_api_key
+}
+
+fn should_forward_carto_api_key(mode: &str, endpoint: &Url) -> bool {
+    if mode == "remote" {
+        return true;
+    }
+
+    endpoint.host_str().is_some_and(|host| {
+        host == "carto.com" || host.ends_with(".carto.com") || host.ends_with(".cartocdn.com")
+    })
+}
+
+/// CARTO Basemaps authenticate with `key`; this is deliberately distinct from
+/// Open-Meteo's `apikey` query parameter and CARTO API access tokens.
+fn carto_basemap_key_query(key: &str) -> (&'static str, &str) {
+    ("key", key)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1413,10 +1495,12 @@ fn decrypt_secret(age_key: &str, encrypted: Option<&[u8]>) -> Result<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        endpoint_is_private, is_forbidden_ip, is_private_ip, parse_private_network_allowlist,
-        validate_tile_template,
+        basemap_proxy_url, carto_api_key_missing, carto_basemap_key_query, endpoint_is_private,
+        is_forbidden_ip, is_private_ip, parse_private_network_allowlist,
+        should_forward_carto_api_key, validate_tile_template,
     };
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use url::Url;
 
     #[tokio::test]
     async fn validates_xyz_template_and_requires_cidr_migration_for_private_targets() {
@@ -1464,5 +1548,34 @@ mod tests {
         assert!(is_private_ip(IpAddr::V6("fd00::1".parse().expect("ULA"))));
         assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn reports_missing_carto_key_only_for_active_remote_basemap() {
+        assert!(carto_api_key_missing(true, "remote", false));
+        assert!(!carto_api_key_missing(true, "remote", true));
+        assert!(!carto_api_key_missing(false, "remote", false));
+        assert!(!carto_api_key_missing(true, "custom", false));
+    }
+
+    #[test]
+    fn forwards_carto_api_keys_only_to_remote_or_carto_owned_templates() {
+        let carto = Url::parse("https://basemaps.cartocdn.com/light_all/6/14/24.png").unwrap();
+        let custom = Url::parse("https://tiles.example.test/6/14/24.png").unwrap();
+        assert!(should_forward_carto_api_key("remote", &carto));
+        assert!(should_forward_carto_api_key("custom", &carto));
+        assert!(!should_forward_carto_api_key("custom", &custom));
+    }
+
+    #[test]
+    fn uses_carto_basemap_key_parameter_and_versioned_first_party_proxy_urls() {
+        assert_eq!(
+            carto_basemap_key_query("stored-secret"),
+            ("key", "stored-secret")
+        );
+        assert_eq!(
+            basemap_proxy_url("light", "1724889600123"),
+            "/v1/external/basemap/light/{z}/{x}/{y}.png?v=1724889600123"
+        );
     }
 }

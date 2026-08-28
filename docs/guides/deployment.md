@@ -13,11 +13,10 @@ Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of 
 
 ## Initial deployment
 
-1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords plus your exact public HTTPS `ALLOWED_ORIGINS` value. Internal service URLs and persistent application keys are generated automatically.
-2. Create the bind-mount directories, then start the stack:
+1. Copy `compose/.env.example` to `.env`. Set separate strong database and Redis passwords, your exact public HTTPS `ALLOWED_ORIGINS` value, and a one-time `RIVIAMIGO_SETUP_TOKEN` of at least 32 bytes.
+2. Start the stack. The example uses Docker-managed volumes, so no host preparation script is required:
 
    ```bash
-   ./compose/prepare-data.sh
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
@@ -33,29 +32,27 @@ Place an authenticated HTTPS tunnel or identity-aware reverse proxy in front of 
 
 ## Persistent files
 
-The standard stack keeps operator-visible files under `./data`:
+New installations use Docker-managed volumes:
 
-| Host directory | Container path | Contents                                           |
-| -------------- | -------------- | -------------------------------------------------- |
-| `data/db`      | `/db`          | PostgreSQL data                                    |
-| `data/redis`   | `/data`        | Redis append-only state                            |
-| `data/backups` | `/backups`     | Downloadable recovery packages                     |
-| `data/cache`   | `/data/cache`  | Application cache files, including vehicle artwork |
+| Docker volume       | Container path | Contents                                           |
+| ------------------- | -------------- | -------------------------------------------------- |
+| `riviamigo-db`      | `/db`          | PostgreSQL data                                    |
+| `riviamigo-redis`   | `/data`        | Redis append-only state                            |
+| `riviamigo-backups` | `/backups`     | Downloadable recovery packages                     |
+| `riviamigo-cache`   | `/data/cache`  | Application cache files, including vehicle artwork |
 
-Do not delete `data` during updates. Copy recovery packages off-host for disaster recovery.
+Do not delete Docker volumes during updates. Copy recovery packages off-host for disaster recovery. Existing installations that omit the four `*_SOURCE` variables continue using their existing `RIVIAMIGO_DATA_DIR` bind paths.
 
-Some NAS container managers do not create bind-mount source directories or grant
-container access automatically. On those systems, create all four directories
-before the first deployment and grant the Container Manager service read/write
-access to them. `compose/prepare-data.sh` creates the directories; NAS ACLs may
-still need to be assigned through the host's administration UI.
+If an existing installation uses bind paths, preserve its `RIVIAMIGO_DATA_DIR`
+and grant the application user write access to its backup and cache directories.
+The app performs a writable-storage probe before starting and reports the exact
+container path when the host ACL is insufficient.
 
 ## Synology DSM
 
-Use the dedicated [Synology DSM installation guide](./synology.md). It uses a
-generated standalone Compose file with the same services and images, a
-loopback-only host publication for DSM Reverse Proxy, absolute data paths, and
-no CPU quota fields. Do not edit the standard Compose file to accommodate DSM.
+Use the dedicated [Synology DSM installation guide](./synology.md). It uses the
+same universal Compose file and Docker-managed volumes; no Synology-specific
+Compose file or generator is required.
 
 ## Logs and updates
 
@@ -105,22 +102,13 @@ docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-c
 
 Local development continues to use `pnpm dev:stack` and `compose/docker-compose.dev.yml`; production image consolidation does not change that workflow.
 
-## Upgrade from the former named volumes
-
-Before the first start with the host-visible layout, stop the old stack and create a current recovery package. Then migrate the old volumes:
-
-```bash
-docker compose --env-file .env -f compose/docker-compose.yml down
-node scripts/migrate-production-storage.mjs --project riviamigo
-docker compose --env-file .env -f compose/docker-compose.yml up -d
-```
-
-The migration refuses running source volumes and non-empty destinations, verifies copied file counts, and retains the old volumes for rollback. Pass the prior Compose project name through `--project` if it was not `riviamigo`.
-
 ## Stopping and recovery
 
 ```bash
 docker compose --env-file .env -f compose/docker-compose.yml down
 ```
 
-`down` retains `./data`. Removing the containers does not remove bind-mounted application data. See [backup and restore](./backup-and-restore.md) before replacing or deleting the data directory.
+`down` retains Docker-managed volumes and existing bind-mounted application
+data. Do not add `--volumes` during a routine stop or update. See
+[backup and restore](./backup-and-restore.md) before replacing or deleting any
+persistent storage.

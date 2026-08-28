@@ -27,12 +27,15 @@ export function LoginPage() {
   const { login, register } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const isDark = useDocumentTheme();
   const redirectTarget = normalizeLoginRedirectTarget(search.redirect);
   const setup = useQuery({ queryKey: ['auth-setup'], queryFn: () => api.setup(), retry: false });
   const setupRequired = setup.data?.setup_required === true;
+  const setupProofRequired = setup.data?.setup_proof_required === true;
+  const setupProofAvailable = setup.data?.setup_proof_available === true;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -40,7 +43,13 @@ export function LoginPage() {
     setLoading(true);
     try {
       if (setupRequired) {
-        await register(email, password);
+        if (setupProofRequired && !setupProofAvailable) {
+          setError(
+            'First-owner setup is not configured on this instance. Ask the administrator to set RIVIAMIGO_SETUP_TOKEN and recreate the app without deleting the database.'
+          );
+          return;
+        }
+        await register(email, password, setupProofRequired ? setupToken : undefined);
         navigate({ to: '/connect' });
         return;
       }
@@ -53,6 +62,10 @@ export function LoginPage() {
         message = 'Incorrect email or password. Please try again.';
       } else if (status === 429) {
         message = 'Too many sign-in attempts. Please wait a moment and try again.';
+      } else if ((err as { code?: string }).code === 'SETUP_PROOF_REQUIRED') {
+        message = 'Enter the instance setup token before creating the owner account.';
+      } else if ((err as { code?: string }).code === 'SETUP_PROOF_INVALID') {
+        message = 'The instance setup token is invalid. Check it and try again.';
       } else if (status === 422) {
         message = (err as { detail?: { message?: string } }).detail?.message
           ?? 'Check the password requirements and try again.';
@@ -137,6 +150,22 @@ export function LoginPage() {
               minLength={setupRequired ? PASSWORD_MIN_LENGTH : undefined}
               autoComplete={setupRequired ? 'new-password' : 'current-password'}
             />
+            {setupRequired && setupProofRequired && setupProofAvailable && (
+              <Input
+                label="Instance setup token"
+                type="password"
+                value={setupToken}
+                onChange={(e) => setSetupToken(e.target.value)}
+                hint="Use the one-time RIVIAMIGO_SETUP_TOKEN configured for this instance."
+                autoComplete="off"
+                required
+              />
+            )}
+            {setupRequired && setupProofRequired && !setupProofAvailable && (
+              <p role="alert" className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">
+                This production instance needs a setup token before the first owner can be created. Configure RIVIAMIGO_SETUP_TOKEN, then recreate the app without deleting its database.
+              </p>
+            )}
             {setupRequired && <PasswordRequirements password={password} />}
             {error && (
               <p className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/20 rounded-lg px-3 py-2">

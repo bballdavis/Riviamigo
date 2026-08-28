@@ -197,6 +197,26 @@ describe('AppLayout sidebar collapse', () => {
     window.removeEventListener('riviamigo:toast', toast as EventListener);
   });
 
+  it('shows an advisory Rivian renewal action without marking a healthy feed unhealthy', () => {
+    currentStatusData = {
+      worker_health: 'connected',
+      renewal_state: 'renewal_soon',
+      expected_renewal_at: '2027-02-23T12:00:00Z',
+    };
+
+    render(
+      <AppLayout activeKey="dashboard">
+        <div>Dashboard content</div>
+      </AppLayout>
+    );
+
+    expect(screen.getByLabelText('Vehicle status: Online')).toBeInTheDocument();
+    const renewalAction = screen.getByRole('button', { name: /renew rivian by/i });
+    expect(renewalAction).toBeInTheDocument();
+    fireEvent.click(renewalAction);
+    expect(navigate).toHaveBeenCalledWith({ to: '/settings' });
+  });
+
   it('shows a degraded collector as an unhealthy feed', () => {
     currentStatusData = {
       worker_health: 'degraded',

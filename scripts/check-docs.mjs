@@ -113,7 +113,6 @@ function collectEnvVars() {
   const envFiles = [
     "compose/.env.example",
     "compose/.env.full.example",
-    "compose/.env.synology.example",
   ];
   const names = new Set();
 
@@ -385,13 +384,19 @@ function checkProductionDeploymentContract() {
   const productionCompose = readFile("compose/docker-compose.yml");
   const buildCompose = readFile("compose/docker-compose.build.yml");
   const nginxConfig = readFile("compose/nginx/nginx.conf");
+  const compactEnv = readFile("compose/.env.example");
+
+  if (/^RIVIAMIGO_SETUP_TOKEN=/m.test(compactEnv)) {
+    fail("compact production env must not ship an active first-owner setup token");
+  }
 
   for (const requiredSnippet of [
     '"${RIVIAMIGO_HOST_BIND_ADDRESS:-0.0.0.0}:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080"',
     "ghcr.io/bballdavis}/riviamigo:${IMAGE_TAG:-latest}",
-    "${RIVIAMIGO_DATA_DIR:-../data}/db:/db",
-    "${RIVIAMIGO_DATA_DIR:-../data}/backups:/backups",
-    "${RIVIAMIGO_DATA_DIR:-../data}/cache:/data/cache",
+    "RIVIAMIGO_DB_SOURCE",
+    "RIVIAMIGO_BACKUPS_SOURCE",
+    "RIVIAMIGO_CACHE_SOURCE",
+    "start_period: 300s",
     "redis:",
   ]) {
     if (!productionCompose.includes(requiredSnippet)) {
@@ -415,10 +420,6 @@ function checkProductionDeploymentContract() {
     fail("standard Compose must pull published images instead of defining build contexts");
   }
 
-  if (!productionCompose.includes("cpus: '1.00'") || !productionCompose.includes("cpus: '2.00'")) {
-    fail("standard Compose must retain general CPU controls");
-  }
-
   for (const requiredSnippet of ["http://127.0.0.1:3001", "listen 8080;"]) {
     if (!nginxConfig.includes(requiredSnippet)) {
       fail(`nginx must use the internal secure-deployment topology: ${requiredSnippet}`);
@@ -426,23 +427,14 @@ function checkProductionDeploymentContract() {
   }
 }
 
-function checkSynologyDeploymentContract() {
-  const synologyCompose = readFile("compose/docker-compose.synology.yml");
-  for (const requiredSnippet of [
-    "# GENERATED FILE — DO NOT EDIT DIRECTLY.",
-    "127.0.0.1:${RIVIAMIGO_ORIGIN_PORT:-8080}:8080",
-    "${RIVIAMIGO_DATA_DIR:?Set RIVIAMIGO_DATA_DIR to an absolute Synology path}",
-    "${RIVIAMIGO_ENV_FILE:-.env.synology}",
-  ]) {
-    if (!synologyCompose.includes(requiredSnippet)) {
-      fail(`Synology Compose is missing required deployment contract: ${requiredSnippet}`);
-    }
-  }
-
-  for (const forbiddenSnippet of ["cpus:", "cpu_period:", "cpu_quota:"]) {
-    if (synologyCompose.includes(forbiddenSnippet)) {
-      fail(`Synology Compose must not include CPU quota setting: ${forbiddenSnippet}`);
-    }
+function checkUniversalSynologyContract() {
+  if (
+    fileExists("compose/docker-compose.synology.yml") ||
+    fileExists("compose/.env.synology.example") ||
+    fileExists("compose/synology/docker-compose.yml") ||
+    fileExists("compose/synology/.env.synology.example")
+  ) {
+    fail("Synology must use the universal Compose file instead of a second deployment definition");
   }
 }
 
@@ -456,7 +448,7 @@ checkApiContracts();
 checkEnvVarReferences();
 checkEnvironmentReferenceCoverage();
 checkProductionDeploymentContract();
-checkSynologyDeploymentContract();
+checkUniversalSynologyContract();
 
 if (process.exitCode) {
   process.exit(process.exitCode);

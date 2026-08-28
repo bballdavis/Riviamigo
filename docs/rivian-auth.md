@@ -9,6 +9,8 @@ cloud API shape used by the unofficial Home Assistant Rivian integration and the
 - Home Assistant integration: `https://github.com/bretterer/home-assistant-rivian`
 - Client library pinned by that integration: `rivian-python-client[ble]==2.0.0`
 - Source file to compare when auth breaks: `rivian/rivian.py`
+- Rivian Roamer account-linking guide: `https://rivianroamer.com/guides/account-linking`
+- `rivian-ls` implementation notes: `https://github.com/pfrederiksen/rivian-ls/blob/main/CLAUDE.md`
 
 ## Current Endpoints
 
@@ -77,6 +79,28 @@ an actionable `needs_reauth` status. After the user reconnects the Rivian
 account, the supervisor replaces that completed worker and starts ingestion
 immediately. A successful refresh should therefore be followed by worker health
 and telemetry-timestamp checks, not only by an `authorized` database state.
+
+## Advisory Renewal Policy
+
+Riviamigo treats the durable token bundle creation time as the most recent full
+Rivian authentication. The API derives `expected_renewal_at` at 180 days and a
+typed `renewal_state`: `healthy`, `renewal_soon`, `renewal_due`, or
+`reauth_required`. The seven-day `renewal_soon` threshold is an application
+policy informed by current unofficial-client behavior, not an official Rivian
+expiry guarantee. Observed credential rejection always overrides the timer.
+
+A successful full login or OTP credential refresh resets the creation time.
+Automatic CSRF/app-session renewal preserves it because that rotation does not
+represent a new long-lived Rivian authorization. Do not move the advisory date
+from routine WebSocket reconnects or short-lived session refreshes.
+
+The credential-refresh route verifies the selected Rivian vehicle before
+storage, starts the worker, and waits for runtime health plus vehicle discovery
+for a bounded interval. It returns `telemetry_status: connected` only after that
+proof. A bounded timeout returns `waiting_for_vehicle_data` with a recoverable message while
+retaining the valid encrypted credentials. The browser invalidates the vehicle,
+status, and health queries and explicitly reconnects the live vehicle socket
+after either result.
 
 ## Local Riviamigo Auth Gotcha
 

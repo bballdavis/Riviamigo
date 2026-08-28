@@ -79,7 +79,14 @@ The in-app flow and host command do not restore Rivian credentials or live sessi
 
 ## Persistent artifact storage
 
-Production Compose mounts the host-visible `./data/backups` directory at `/backups` and uses it for generated, imported, safety, remote-staging, and restore-job artifacts. PostgreSQL lives in `./data/db`, while artwork is under `./data/cache`. Restore never replaces or recreates the backup directory; startup and the Backups page rescan valid local packages and rebuild any missing catalog rows from disk. The retention count applies independently to generated Local and S3 packages. Imported and safety packages are never pruned by scheduled retention.
+New production installations mount the Docker-managed `riviamigo-backups`
+volume at `/backups` and use it for generated, imported, safety, remote-staging,
+and restore-job artifacts. PostgreSQL uses `riviamigo-db`, while artwork uses
+`riviamigo-cache`. Existing bind-mount installations keep their configured host
+paths. Restore never replaces or recreates backup storage; startup and the
+Backups page rescan valid local packages and rebuild any missing catalog rows
+from disk. The retention count applies independently to generated Local and S3
+packages. Imported and safety packages are never pruned by scheduled retention.
 
 ## Compatibility and verification
 
@@ -88,6 +95,8 @@ Recovery is forward-compatible through the versioned v3 schema contract. A recog
 The former five-migration pre-release chain remains a rollback path when a matching historical application image is available. A v3 archive from that era can be considered by the current restore engine only through the same candidate schema proof above; an incompatible candidate is rejected before activation. The explicit adoption command remains an operator action for a stopped installation: it verifies a recovery dump and complete canonical schema against a scratch baseline, then replaces only SQLx bookkeeping. It never replays baseline SQL on populated data and is never run automatically at startup, backup, or restore.
 
 Matching migration numbers or visibly matching tables do not prove migration identity. The raw migration bytes, ordered catalog, chain identifier, and schema contract must all agree.
+
+The temporary custom chart-definition migration is forward-cleaned by `0012_remove_chart_definitions.sql`. A database that applied `0011_chart_definitions.sql` drops the unused `riviamigo.charts` table during the normal forward migration; static dashboard charts are retained.
 
 Before relying on a package, restore it into an isolated installation and verify users, dashboards, vehicles, telemetry, trips, charging history, artwork, and application health. Treat packages as sensitive because they contain account, location, and vehicle history.
 

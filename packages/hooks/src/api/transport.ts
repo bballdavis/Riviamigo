@@ -28,6 +28,7 @@ import type {
   AuthTokens,
   AuthMeResponse,
   ConnectResult,
+  RefreshVehicleCredentialsResult,
   ApiError,
   AddVehicleBody,
   AddVehicleResult,
@@ -508,8 +509,15 @@ export class AuthenticatedTransport {
     return this.request('POST', '/v1/auth/login', { email, password }, undefined, true, false);
   }
 
-  async register(email: string, password: string): Promise<AuthTokens> {
-    return this.request('POST', '/v1/auth/register', { email, password }, undefined, true, false);
+  async register(email: string, password: string, setupToken?: string): Promise<AuthTokens> {
+    return this.request(
+      'POST',
+      '/v1/auth/register',
+      { email, password, ...(setupToken ? { setup_token: setupToken } : {}) },
+      undefined,
+      true,
+      false
+    );
   }
 
   async logout(): Promise<void> {
@@ -639,7 +647,7 @@ export class AuthenticatedTransport {
   async refreshVehicleCredentials(
     vehicleId: string,
     rivianVehicleId?: string
-  ): Promise<{ ok: boolean; vehicle_id: string }> {
+  ): Promise<RefreshVehicleCredentialsResult> {
     return this.request(
       'PUT',
       `/v1/vehicles/${vehicleId}/credentials`,

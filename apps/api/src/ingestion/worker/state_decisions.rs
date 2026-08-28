@@ -10,6 +10,7 @@ pub(super) fn is_synthetic_control(message_type: Option<&str>) -> bool {
         message_type,
         Some(
             "connection_open"
+                | "connection_ack"
                 | "connection_init"
                 | "subscribe"
                 | "reconnect"
@@ -36,6 +37,13 @@ pub(super) fn runtime_health_update_for_ws_control(
     match inbound.message_type.as_deref() {
         Some("connection_open") => Some(RuntimeHealthUpdate {
             online: true,
+            worker_health: "starting",
+            worker_health_msg: "Rivian telemetry socket opened; waiting for authentication".into(),
+            auth_state: "authorized",
+            auth_reason_code: None,
+        }),
+        Some("connection_ack") => Some(RuntimeHealthUpdate {
+            online: true,
             worker_health: "connected",
             worker_health_msg: String::new(),
             auth_state: "authorized",
@@ -48,14 +56,25 @@ pub(super) fn runtime_health_update_for_ws_control(
             auth_state: "authorized",
             auth_reason_code: None,
         }),
-        Some("ws_handshake_rejected") => Some(RuntimeHealthUpdate {
-            online: false,
-            worker_health: "error",
-            worker_health_msg: read_ws_detail_message(&inbound.raw)
-                .unwrap_or_else(|| "Rivian WS handshake rejected".into()),
-            auth_state: "authorized",
-            auth_reason_code: Some("rivian_ws_handshake_rejected"),
-        }),
+        Some("ws_handshake_rejected") => {
+            let auth_rejected = ws_handshake_auth_rejected(&inbound.raw);
+            Some(RuntimeHealthUpdate {
+                online: false,
+                worker_health: "error",
+                worker_health_msg: read_ws_detail_message(&inbound.raw)
+                    .unwrap_or_else(|| "Rivian WS handshake rejected".into()),
+                auth_state: if auth_rejected {
+                    "needs_reauth"
+                } else {
+                    "authorized"
+                },
+                auth_reason_code: Some(if auth_rejected {
+                    "rivian_ws_auth_rejected"
+                } else {
+                    "rivian_ws_handshake_rejected"
+                }),
+            })
+        }
         Some("ws_schema_rejected") => Some(RuntimeHealthUpdate {
             online: false,
             worker_health: "degraded",
@@ -91,6 +110,17 @@ fn read_ws_detail_message(raw: &str) -> Option<String> {
         .get("reason")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
+}
+
+fn ws_handshake_auth_rejected(raw: &str) -> bool {
+    let value = serde_json::from_str::<serde_json::Value>(raw).ok();
+    matches!(
+        value
+            .as_ref()
+            .and_then(|value| value.get("http_status"))
+            .and_then(serde_json::Value::as_u64),
+        Some(401 | 403)
+    )
 }
 
 #[cfg(test)]
@@ -130,6 +160,20 @@ mod tests {
     }
 
     #[test]
+    fn rejected_credentials_require_reauthentication() {
+        for status in [401, 403] {
+            let inbound = control(
+                "ws_handshake_rejected",
+                serde_json::json!({"http_status": status}),
+            );
+            let update = runtime_health_update_for_ws_control(&inbound).expect("health update");
+
+            assert_eq!(update.auth_state, "needs_reauth");
+            assert_eq!(update.auth_reason_code, Some("rivian_ws_auth_rejected"));
+        }
+    }
+
+    #[test]
     fn reconnect_is_non_healthy_until_connection_reopens() {
         let reconnect = control("reconnect", serde_json::json!({"backoff_seconds": 5}));
         let reconnect_update =
@@ -141,6 +185,12 @@ mod tests {
         let opened_update =
             runtime_health_update_for_ws_control(&opened).expect("connection health update");
         assert!(opened_update.online);
-        assert_eq!(opened_update.worker_health, "connected");
+        assert_eq!(opened_update.worker_health, "starting");
+
+        let acknowledged = control("connection_ack", serde_json::Value::Null);
+        let acknowledged_update =
+            runtime_health_update_for_ws_control(&acknowledged).expect("ack health update");
+        assert!(acknowledged_update.online);
+        assert_eq!(acknowledged_update.worker_health, "connected");
     }
 }
