@@ -5,6 +5,10 @@ from Riviamigo's canonical vehicle-state acquisition: it owns a second,
 allowlisted GraphQL WebSocket and can stop or restart without affecting normal
 telemetry, trip detection, charging, or vehicle freshness.
 
+The collector remains available from source and through the opt-in development
+Compose profile. It is intentionally excluded from the published production
+image so normal releases do not compile or ship this development-only process.
+
 ## Data collected
 
 The collector decodes a small set of verified protobuf topics:

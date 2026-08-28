@@ -63,9 +63,11 @@ docker compose --env-file .env -f compose/docker-compose.yml pull
 docker compose --env-file .env -f compose/docker-compose.yml up -d
 ```
 
-The app applies immutable, forward-only database migrations on startup. Pin
-`IMAGE_TAG` to an exact Calendar Version for repeatable deployments. Existing
-pre-release installations must complete the one-time explicit baseline
+The app applies immutable, forward-only database migrations on startup. Set
+`RIVIAMIGO_IMAGE` to the digest-qualified reference in the release's
+`images.lock` for an exact deployment, or pin `IMAGE_TAG` to a Calendar Version
+for normal version-level stability. Existing pre-release installations must
+complete the one-time explicit baseline
 adoption in the [release database cutover runbook](../runbooks/release-database-cutover.md)
 before starting the flattened public release; startup never edits migration
 bookkeeping automatically.
