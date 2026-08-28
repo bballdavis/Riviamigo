@@ -12,3 +12,13 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^eyJhbGciOiJub25lIn0\.eyJzdWIiOiJlMmUtdXNlciJ9\.$''']
 paths = ['''^apps/web/tests/e2e/chart-management\.spec\.ts$''']
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Known non-signable JWT-shaped token in the chart E2E fixture history"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJub25lIn0\.eyJzdWIiOiJlMmUtdXNlciJ9\.$''']
+paths = ['''^apps/web/tests/e2e/chart-management\.spec\.ts$''']
