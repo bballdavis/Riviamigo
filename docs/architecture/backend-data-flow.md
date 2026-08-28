@@ -44,6 +44,9 @@ payloads, network identifiers, credentials, or canonical
 the main telemetry worker. The API reads the normalized tables for the Health
 page and Rivian-reported Parked Energy panel; the existing Phantom Drain
 battery-change estimate remains an independent derived data source.
+The collector executable is built only by the source-development paths and the
+opt-in development Compose profile; `compose/Dockerfile` deliberately excludes
+it from published production images.
 
 ## Major Backend Areas
 

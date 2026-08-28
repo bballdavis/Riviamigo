@@ -6,6 +6,7 @@ export { DashboardGrid } from './DashboardGrid';
 export { WidgetHost } from './WidgetHost';
 export { WidgetChrome } from './WidgetChrome';
 export { DashboardChartWidget, DashboardChartRenderer } from './widgets/chart/DashboardChartWidget';
+export { ChartDefinitionRenderer } from './widgets/chart/ChartDefinitionRenderer';
 export { TripTagPicker } from './widgets/table/TripTagPicker';
 export { PhantomDrainChart, buildPhantomDrainDailySeries } from './widgets/chart/PhantomDrainChart';
 export type { PhantomDrainChartProps, PhantomDrainDailyPoint } from './widgets/chart/PhantomDrainChart';
@@ -18,6 +19,38 @@ export * from './api';
 export * from './dashboardModel';
 export * from './dashboardVisibility';
 export { getChartDefinition, getChartDefinitions, getChartOptions, getChartSettingsCapabilities } from './charts/catalog';
+export { parseSafeMathExpression, resolveSafeExpression, resolveSafeNumberPath } from './charts/expressions';
+export { BUNDLED_CHART_DEFINITIONS, BUNDLED_CHART_SLUGS, getBundledChartDefinition } from './charts/defaults';
+export { CHART_SOURCE_MANIFESTS, getChartSourceManifest } from './charts/sources';
+export { CHART_RENDERER_PLUGINS, getChartRenderer } from './charts/rendererRegistry';
+export {
+  buildChartManagerEntries,
+  chartHasPlacement,
+  chartOrigin,
+  defaultChartPermissions,
+  resolveAssignedCharts,
+  withChartPlacement,
+} from './charts/model';
+export { CHART_EXPORT_KIND, CHART_EXPORT_VERSION, downloadChartYaml, exportChartYaml, importChartYaml, parseChartYaml } from './charts/yaml';
+export {
+  ChartAnnotationDefinitionSchema,
+  ChartAxesDefinitionSchema,
+  ChartColorDefinitionSchema,
+  ChartDefinitionV1Schema,
+  ChartFieldEncodingSchema,
+  ChartFieldRefSchema,
+  ChartInteractionDefaultsSchema,
+  ChartPlacementSchema,
+  ChartRecordSchema,
+  ChartSeriesDefinitionSchema,
+  ChartSourceBindingSchema,
+  ChartSourceFilterSchema,
+  ChartTimeframePolicySchema,
+  ChartTransformDefinitionSchema,
+  PortableChartDocumentSchema,
+  parseChartDefinitionV1,
+  validateChartDefinitionAgainstSources,
+} from './charts/schema';
 export type {
   DashboardChartAxisCapability,
   DashboardChartAxisId,

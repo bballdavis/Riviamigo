@@ -100,7 +100,12 @@ Redis 8 can read the tested Redis 7 append-only snapshot format. Preserve a copy
 docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-compose.build.yml up -d --build
 ```
 
-Local development continues to use `pnpm dev:stack` and `compose/docker-compose.dev.yml`; production image consolidation does not change that workflow.
+Local development continues to use `pnpm dev:stack` and
+`compose/docker-compose.dev.yml`; production image consolidation does not
+change that workflow. The optional Parallax collector is available through the
+source-development commands and the `parallax` development Compose profile,
+but it is intentionally absent from both published and locally built
+production images.
 
 ## Stopping and recovery
 

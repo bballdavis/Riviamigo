@@ -1,6 +1,6 @@
 {
   "hotspots": {
-    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1892, "maxBytes": 100100 },
+    "apps/web/src/features/settings/SettingsPage.tsx": { "maxLines": 1905, "maxBytes": 100100 },
     "apps/web/src/components/settings/BackupSection.tsx": { "maxLines": 1700, "maxBytes": 71666 },
     "apps/web/src/components/layout/AppLayout.tsx": { "maxLines": 483, "maxBytes": 18139 },
     "apps/web/src/components/dashboard/DashboardPageShell.tsx": { "maxLines": 485, "maxBytes": 18178 },
@@ -42,6 +42,7 @@
       "packages/ui/src/charts/RichTimeSeriesChart.tsx": "Existing specialized renderer; split only after F7 regression coverage.",
       "apps/api/src/services/demo_seed.rs": "Existing maintenance/data fixture service; keep behavior explicit.",
       "apps/api/src/routes/dashboards.rs": "Existing dashboard contract route; split with dashboard ownership work.",
+      "apps/api/src/services/chart_validation.rs": "Chart definition validation registry; split after chart schema stabilizes.",
       "apps/api/src/services/trip_enrichment.rs": "Existing trip enrichment service; split after route extraction.",
       "apps/api/src/services/restore_compatibility.rs": "Existing restore safety service; preserve compatibility contract.",
       "apps/api/src/routes/idle_drain.rs": "Existing analytics route hotspot; split with query ownership work.",
@@ -146,9 +147,11 @@
         "packages/hooks/src/useStats.ts",
         "packages/hooks/src/useTelemetryLanes.ts",
         "packages/hooks/src/useTrips.ts",
-        "packages/hooks/src/useVehicleArtwork.tsx"
+        "packages/hooks/src/useVehicleArtwork.tsx",
+        "packages/hooks/src/useCharts.ts",
+        "packages/hooks/src/chartSources.ts"
       ],
-      "maxMatches": 116,
+      "maxMatches": 123,
       "message": "Domain queries must migrate from raw queryKey arrays to query factories"
     },
     "resolveTimeBounds": {
