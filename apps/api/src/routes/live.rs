@@ -9,6 +9,7 @@ use axum::{
     routing::get,
     Router,
 };
+use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, Algorithm, Validation};
 use serde::Deserialize;
@@ -107,8 +108,119 @@ async fn live_session_handler(
     let key = format!("vehicle:{vehicle_id}:live_session");
     let mut conn = state.redis.get_multiplexed_async_connection().await?;
     let raw: Option<String> = redis::AsyncCommands::get(&mut conn, &key).await?;
+    let active = sqlx::query_as::<_, ActiveLiveSession>(
+        r#"SELECT parallax_live_power_kw,parallax_total_charged_kwh,
+                  parallax_pack_energy_kwh,parallax_thermal_energy_kwh,
+                  parallax_time_remaining_minutes,parallax_power_observed_at,
+                  parallax_total_energy_observed_at,parallax_pack_energy_observed_at,
+                  parallax_thermal_energy_observed_at,parallax_time_observed_at
+           FROM riviamigo.charge_sessions
+           WHERE vehicle_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1"#,
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&state.pool)
+    .await?;
 
-    Ok(live_session_response(raw))
+    Ok(live_session_response(merge_live_session(
+        raw,
+        active,
+        Utc::now(),
+    )))
+}
+
+#[derive(sqlx::FromRow)]
+struct ActiveLiveSession {
+    parallax_live_power_kw: Option<f64>,
+    parallax_total_charged_kwh: Option<f64>,
+    parallax_pack_energy_kwh: Option<f64>,
+    parallax_thermal_energy_kwh: Option<f64>,
+    parallax_time_remaining_minutes: Option<i32>,
+    parallax_power_observed_at: Option<DateTime<Utc>>,
+    parallax_total_energy_observed_at: Option<DateTime<Utc>>,
+    parallax_pack_energy_observed_at: Option<DateTime<Utc>>,
+    parallax_thermal_energy_observed_at: Option<DateTime<Utc>>,
+    parallax_time_observed_at: Option<DateTime<Utc>>,
+}
+
+fn merge_live_session(
+    raw: Option<String>,
+    active: Option<ActiveLiveSession>,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    let active = active?;
+    let mut value = raw
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let object = value.as_object_mut().expect("object initialized above");
+    let legacy_at = object
+        .get("ts")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let mut provenance = serde_json::Map::new();
+    for field in ["power_kw", "energy_kwh", "time_remaining_min"] {
+        if object.get(field).is_some_and(|value| !value.is_null()) {
+            provenance.insert(
+                field.into(),
+                serde_json::json!({"source":"legacy_charging_session","observed_at":legacy_at}),
+            );
+        }
+    }
+    let fresh = |observed: Option<DateTime<Utc>>| {
+        observed.filter(|ts| *ts >= now - chrono::Duration::seconds(120))
+    };
+    if let Some(observed) = fresh(active.parallax_power_observed_at) {
+        if let Some(power) = active.parallax_live_power_kw {
+            object.insert("power_kw".into(), serde_json::json!(power));
+            provenance.insert(
+                "power_kw".into(),
+                serde_json::json!({"source":"parallax","observed_at":observed}),
+            );
+        }
+    }
+    for (field, field_value, observed_at) in [
+        (
+            "energy_kwh",
+            active.parallax_total_charged_kwh,
+            active.parallax_total_energy_observed_at,
+        ),
+        (
+            "pack_energy_kwh",
+            active.parallax_pack_energy_kwh,
+            active.parallax_pack_energy_observed_at,
+        ),
+        (
+            "thermal_energy_kwh",
+            active.parallax_thermal_energy_kwh,
+            active.parallax_thermal_energy_observed_at,
+        ),
+    ] {
+        if let (Some(field_value), Some(observed)) = (field_value, fresh(observed_at)) {
+            object.insert(field.into(), serde_json::json!(field_value));
+            provenance.insert(
+                field.into(),
+                serde_json::json!({"source":"parallax","observed_at":observed}),
+            );
+        }
+    }
+    if let Some(observed) = fresh(active.parallax_time_observed_at) {
+        if let Some(minutes) = active.parallax_time_remaining_minutes {
+            object.insert("time_remaining_min".into(), serde_json::json!(minutes));
+            provenance.insert(
+                "time_remaining_min".into(),
+                serde_json::json!({"source":"parallax","observed_at":observed}),
+            );
+        }
+    }
+    if !provenance.is_empty() {
+        object.insert("provenance".into(), provenance.into());
+    }
+    if object.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&value).ok()
+    }
 }
 
 fn live_session_response(raw: Option<String>) -> axum::response::Response {
@@ -310,5 +422,58 @@ mod tests {
     fn live_session_response_returns_204_without_a_snapshot() {
         let response = live_session_response(None);
         assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
+    }
+
+    #[test]
+    fn fresh_parallax_fields_override_legacy_individually() {
+        let now = Utc::now();
+        let merged = merge_live_session(
+            Some(r#"{"power_kw":7.2,"energy_kwh":3.1,"ts":"2026-08-28T10:00:00Z"}"#.into()),
+            Some(ActiveLiveSession {
+                parallax_live_power_kw: Some(11.4),
+                parallax_total_charged_kwh: None,
+                parallax_pack_energy_kwh: Some(2.8),
+                parallax_thermal_energy_kwh: None,
+                parallax_time_remaining_minutes: Some(42),
+                parallax_power_observed_at: Some(now),
+                parallax_total_energy_observed_at: Some(now),
+                parallax_pack_energy_observed_at: Some(now),
+                parallax_thermal_energy_observed_at: None,
+                parallax_time_observed_at: Some(now),
+            }),
+            now,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["power_kw"], 11.4);
+        assert_eq!(value["energy_kwh"], 3.1);
+        assert_eq!(value["pack_energy_kwh"], 2.8);
+        assert_eq!(value["provenance"]["power_kw"]["source"], "parallax");
+        assert_eq!(
+            value["provenance"]["energy_kwh"]["source"],
+            "legacy_charging_session"
+        );
+    }
+
+    #[test]
+    fn stale_parallax_never_replaces_legacy_and_no_active_session_returns_none() {
+        let now = Utc::now();
+        let active = ActiveLiveSession {
+            parallax_live_power_kw: Some(99.0),
+            parallax_total_charged_kwh: None,
+            parallax_pack_energy_kwh: None,
+            parallax_thermal_energy_kwh: None,
+            parallax_time_remaining_minutes: None,
+            parallax_power_observed_at: Some(now - chrono::Duration::minutes(3)),
+            parallax_total_energy_observed_at: None,
+            parallax_pack_energy_observed_at: None,
+            parallax_thermal_energy_observed_at: None,
+            parallax_time_observed_at: None,
+        };
+        let merged =
+            merge_live_session(Some(r#"{"power_kw":6.6}"#.into()), Some(active), now).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["power_kw"], 6.6);
+        assert!(merge_live_session(Some(r#"{"power_kw":6.6}"#.into()), None, now).is_none());
     }
 }

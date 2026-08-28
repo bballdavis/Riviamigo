@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Path, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -11,13 +11,32 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    db::vehicles::require_vehicle_read_access,
+    db::{users::require_admin_or_super_user, vehicles::require_vehicle_read_access},
     errors::AppError,
     middleware::auth::{require_vehicle_access, AppState, AuthUser},
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/vehicles/{vehicle_id}/health", get(health))
+    Router::new()
+        .route("/vehicles/{vehicle_id}/health", get(health))
+        .route(
+            "/admin/charge-session-repairs/{journal_id}/rollback",
+            post(rollback_repair),
+        )
+}
+
+async fn rollback_repair(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(journal_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin_or_super_user(&state.pool, auth.user_id).await?;
+    crate::services::charge_session_repair::rollback_repair(&state.pool, journal_id)
+        .await
+        .map_err(|error| AppError::Conflict(error.to_string()))?;
+    Ok(Json(
+        serde_json::json!({ "journal_id": journal_id, "status": "reverted" }),
+    ))
 }
 
 #[derive(Serialize)]
@@ -39,10 +58,44 @@ struct HealthResponse {
 #[derive(Serialize)]
 struct ExtendedTelemetry {
     collector: Option<CollectorHealth>,
+    parallax: Option<ParallaxHealth>,
+    legacy_charging_session: LegacyChargingHealth,
+    session_repair: Option<RepairHealth>,
     network: Option<NetworkHealth>,
     efficiency: Option<EfficiencyHealth>,
     mass: Option<MassHealth>,
     cold_weather: Option<ColdWeatherHealth>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ParallaxHealth {
+    status: String,
+    last_frame_at: Option<DateTime<Utc>>,
+    last_meaningful_frame_at: Option<DateTime<Utc>>,
+    reconnect_count: i64,
+    decode_error_count: i64,
+    empty_frame_count: i64,
+    ambiguity_count: i64,
+    last_error: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct LegacyChargingHealth {
+    classification: String,
+    last_frame_at: Option<DateTime<Utc>>,
+    last_meaningful_frame_at: Option<DateTime<Utc>>,
+    null_count: i64,
+    missing_count: i64,
+    malformed_count: i64,
+    all_null_count: i64,
+    meaningful_count: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct RepairHealth {
+    repair_key: String,
+    reason: String,
+    created_at: DateTime<Utc>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -200,17 +253,33 @@ async fn fetch_extended_telemetry(
     pool: &sqlx::PgPool,
     vid: Uuid,
 ) -> Result<ExtendedTelemetry, AppError> {
-    let (collector, network, efficiency, mass, cold_weather) = tokio::try_join!(
+    let (collector, parallax, legacy, repair, network, efficiency, mass, cold_weather) = tokio::try_join!(
         sqlx::query_as::<_, CollectorHealth>(
             // updated_at is the collector heartbeat; two minutes allows for
             // transient scheduling delays while making stale connected rows false.
-            r#"SELECT status,
-                      status = 'connected' AND updated_at >= now() - interval '2 minutes' AS running,
+            r#"SELECT CASE
+                        WHEN owner_kind IS NULL AND updated_at >= now()-interval '2 minutes' THEN 'duplicate_owner'
+                        WHEN status='connected' AND updated_at < now()-interval '2 minutes' THEN 'stale'
+                        ELSE status END AS status,
+                      status = 'connected' AND owner_kind='in_process' AND updated_at >= now() - interval '2 minutes' AS running,
                       connected_at, last_event_at, last_error, updated_at
                FROM riviamigo.parallax_collector_state WHERE vehicle_id = $1"#,
         )
         .bind(vid)
         .fetch_optional(pool),
+        sqlx::query_as::<_, ParallaxHealth>(r#"SELECT CASE WHEN status='connected' AND updated_at < now()-interval '2 minutes' THEN 'stale' ELSE status END AS status,last_frame_at,last_meaningful_frame_at,reconnect_count,decode_error_count,empty_frame_count,ambiguity_count,last_error FROM riviamigo.parallax_collector_state WHERE vehicle_id=$1"#)
+            .bind(vid).fetch_optional(pool),
+        sqlx::query_as::<_, LegacyChargingHealth>(r#"SELECT
+            COALESCE(legacy_last_classification,'not_observed') AS classification,
+            legacy_last_frame_at AS last_frame_at,
+            legacy_last_meaningful_frame_at AS last_meaningful_frame_at,
+            legacy_null_count AS null_count,legacy_missing_count AS missing_count,
+            legacy_malformed_count AS malformed_count,legacy_all_null_count AS all_null_count,
+            legacy_meaningful_count AS meaningful_count
+            FROM riviamigo.parallax_collector_state WHERE vehicle_id=$1"#)
+            .bind(vid).fetch_optional(pool),
+        sqlx::query_as::<_, RepairHealth>(r#"SELECT repair_key,reason,created_at FROM riviamigo.charge_session_repair_journal WHERE vehicle_id=$1 ORDER BY created_at DESC LIMIT 1"#)
+            .bind(vid).fetch_optional(pool),
         sqlx::query_as::<_, NetworkHealth>(
             r#"SELECT source_at, wifi_connected, wifi_rssi_dbm, wifi_link_speed_mbps,
                       wifi_frequency_mhz, wifi_channel_width_mhz,
@@ -246,6 +315,18 @@ async fn fetch_extended_telemetry(
     )?;
     Ok(ExtendedTelemetry {
         collector,
+        parallax,
+        legacy_charging_session: legacy.unwrap_or(LegacyChargingHealth {
+            classification: "not_observed".into(),
+            last_frame_at: None,
+            last_meaningful_frame_at: None,
+            null_count: 0,
+            missing_count: 0,
+            malformed_count: 0,
+            all_null_count: 0,
+            meaningful_count: 0,
+        }),
+        session_repair: repair,
         network,
         efficiency,
         mass,

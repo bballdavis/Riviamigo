@@ -535,7 +535,8 @@ const CHARGING_SESSION_SUBSCRIPTION: &str = r#"subscription chargingSession($veh
 pub async fn run_ws_loop(
     vehicle_id: Uuid,
     rivian_veh_id: String,
-    tokens: RivianTokenBundle,
+    pool: sqlx::PgPool,
+    age_key: String,
     tx: mpsc::Sender<WsInboundEvent>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     config: Config,
@@ -553,6 +554,22 @@ pub async fn run_ws_loop(
     }
 
     loop {
+        let tokens = match crate::ingestion::rivian_poll::load_vehicle_tokens(
+            vehicle_id, &pool, &age_key,
+        )
+        .await
+        {
+            Ok((_, tokens)) => tokens,
+            Err(error) => {
+                tracing::warn!(vehicle_id=%vehicle_id, err=%error, "could not load current Rivian credentials for WS reconnect");
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)) => {}
+                    _ = shutdown.recv() => { break; }
+                }
+                backoff_secs = next_backoff_secs(backoff_secs, max_backoff);
+                continue;
+            }
+        };
         let subscription_query = subscription_health.build_query();
         match connect_and_subscribe(
             &vehicle_id,

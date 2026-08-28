@@ -16,10 +16,6 @@ path = "src/main.rs"
 name = "riviamigo-restore-agent"
 path = "src/bin/riviamigo-restore-agent.rs"
 
-[[bin]]
-name = "riviamigo-parallax-collector"
-path = "src/bin/riviamigo-parallax-collector.rs"
-
 [dependencies]
 # Web framework
 axum            = { version = "0.8", features = ["macros", "ws"] }
