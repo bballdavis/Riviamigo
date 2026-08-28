@@ -1,7 +1,8 @@
 //! Restart-safe backfill for semantic charge-payload identities.
 //!
-//! Migration 0007 only adds the identity schema. This worker fills historical
-//! rows after the API is healthy, one bounded transaction at a time.
+//! Migration 0007 adds the durable identity schema. This worker fills
+//! historical rows and periodically clears cache pointers to JSON evidence
+//! that TimescaleDB retention has expired.
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -16,6 +17,8 @@ const MIN_BATCH_SIZE: i64 = 100;
 const MAX_BATCH_SIZE: i64 = 10_000;
 const MAX_PAUSE_MS: u64 = 5_000;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+const RETENTION_RECONCILE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const RETENTION_RECONCILE_BATCH_SIZE: i64 = 1_000;
 const DROP_PENDING_INDEX_SQL: &str =
     "DROP INDEX CONCURRENTLY IF EXISTS riviamigo.rivian_charge_payloads_identity_pending_idx";
 const DROP_PENDING_INDEX_LOCKING_SQL: &str =
@@ -90,7 +93,10 @@ pub fn start_worker(pool: PgPool, config: BackfillConfig) -> tokio::task::JoinHa
         let mut retry_delay = Duration::from_secs(1);
         loop {
             match run_until_complete(&pool, config).await {
-                Ok(WorkerResult::Complete) => return,
+                Ok(WorkerResult::Complete) => {
+                    retry_delay = Duration::from_secs(1);
+                    tokio::time::sleep(RETENTION_RECONCILE_INTERVAL).await;
+                }
                 Ok(WorkerResult::Busy) => {
                     retry_delay = Duration::from_secs(1);
                     tokio::time::sleep(Duration::from_secs(30)).await;
@@ -100,7 +106,7 @@ pub fn start_worker(pool: PgPool, config: BackfillConfig) -> tokio::task::JoinHa
                     tracing::error!(
                         error = %error,
                         retry_in_ms = retry_delay.as_millis() as u64,
-                        "charge_payload_identity_backfill_failed"
+                        "charge_payload_identity_worker_failed"
                     );
                     if let Err(status_error) = mark_error(&pool, &error_text).await {
                         tracing::error!(error = %status_error, "charge_payload_identity_backfill_status_failed");
@@ -158,6 +164,7 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
     let initial_pending = pending_count(pool).await?;
     if initial_pending == 0 {
         mark_complete(pool).await?;
+        reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
         return Ok(WorkerResult::Complete);
     }
 
@@ -177,6 +184,7 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
             // estimate alone must never mark the job complete.
             if pending_count(pool).await? == 0 {
                 mark_complete(pool).await?;
+                reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
                 tracing::info!("charge_payload_identity_backfill_complete");
                 return Ok(WorkerResult::Complete);
             }
@@ -202,6 +210,7 @@ async fn run_locked(pool: &PgPool, config: BackfillConfig) -> Result<WorkerResul
             // rows held by another writer.
             if pending_count(pool).await? == 0 {
                 mark_complete(pool).await?;
+                reconcile_retained_payload_references(pool, RETENTION_RECONCILE_BATCH_SIZE).await?;
                 tracing::info!("charge_payload_identity_backfill_complete");
                 return Ok(WorkerResult::Complete);
             }
@@ -328,6 +337,68 @@ async fn process_batch(pool: &PgPool, batch_size: i64) -> Result<(i64, i64)> {
 
     transaction.commit().await?;
     Ok((rows_filled, identities_inserted))
+}
+
+/// Clear only cache pointers whose target JSON has already disappeared. This
+/// never creates payloads or deletes identities: the identity key and
+/// fingerprint are the durable replay ledger after retention expiry.
+pub(crate) async fn reconcile_retained_payload_references(
+    pool: &PgPool,
+    batch_size: i64,
+) -> Result<(i64, i64)> {
+    let mut transaction = pool.begin().await?;
+    let (identities_cleared, aliases_cleared): (i64, i64) = sqlx::query_as(
+        r#"WITH orphaned_identities AS MATERIALIZED (
+               SELECT identity.identity_key, identity.canonical_payload_id
+               FROM riviamigo.rivian_charge_payload_identities identity
+               LEFT JOIN riviamigo.rivian_charge_payloads payload
+                 ON payload.id = identity.canonical_payload_id
+               WHERE identity.canonical_payload_id IS NOT NULL
+                 AND payload.id IS NULL
+               ORDER BY identity.created_at, identity.identity_key
+               FOR UPDATE OF identity SKIP LOCKED
+               LIMIT $1
+           ), orphaned_aliases AS MATERIALIZED (
+               SELECT alias.charge_session_id, alias.external_id
+               FROM riviamigo.charge_session_external_aliases alias
+               LEFT JOIN riviamigo.rivian_charge_payloads payload
+                 ON payload.id = alias.latest_payload_id
+               WHERE alias.latest_payload_id IS NOT NULL
+                 AND payload.id IS NULL
+               ORDER BY alias.updated_at, alias.charge_session_id, alias.external_id
+               FOR UPDATE OF alias SKIP LOCKED
+               LIMIT $2
+           ), cleared_identities AS (
+               UPDATE riviamigo.rivian_charge_payload_identities identity
+               SET canonical_payload_id = NULL
+               FROM orphaned_identities orphaned
+               WHERE identity.identity_key = orphaned.identity_key
+               RETURNING 1
+           ), cleared_aliases AS (
+               UPDATE riviamigo.charge_session_external_aliases alias
+               SET latest_payload_id = NULL,
+                   latest_payload_captured_at = NULL
+               FROM orphaned_aliases orphaned
+               WHERE alias.charge_session_id = orphaned.charge_session_id
+                 AND alias.external_id = orphaned.external_id
+               RETURNING 1
+           )
+           SELECT
+               (SELECT count(*) FROM cleared_identities)::bigint,
+               (SELECT count(*) FROM cleared_aliases)::bigint"#,
+    )
+    .bind(batch_size)
+    .bind(batch_size)
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+
+    tracing::info!(
+        identities_cleared,
+        aliases_cleared,
+        "charge_payload_retention_reconciled"
+    );
+    Ok((identities_cleared, aliases_cleared))
 }
 
 async fn pending_count(pool: &PgPool) -> Result<i64> {
