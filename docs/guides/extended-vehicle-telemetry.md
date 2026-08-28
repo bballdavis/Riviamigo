@@ -5,29 +5,15 @@ description: Enable Rivian-reported connectivity, efficiency, mass, and parked-e
 
 # Extended Vehicle Telemetry
 
-Riviamigo can optionally run a separate Parallax telemetry collector. It adds
+Riviamigo runs an isolated Parallax companion inside each vehicle worker. It adds
 privacy-filtered vehicle readings to the Health page and a Rivian-reported
 Parked Energy breakdown to Phantom Drain.
 
-The feature is opt-in and does not replace normal vehicle acquisition. If the
-collector is stopped, all existing dashboards and Riviamigo's derived Phantom
-Drain history continue to work.
-
-The collector is a source-development tool and is intentionally not included
-in Riviamigo's published production image. Run it from a source checkout or the
-opt-in development Compose profile below.
-
-For a source checkout:
-
-```powershell
-pnpm run dev:stack:parallax
-```
-
-For a development Compose installation:
-
-```powershell
-docker compose -f compose/docker-compose.dev.yml --profile parallax up -d
-```
+The companion is enabled by default and ships in the normal API process. It
+uses its own WebSocket, persistence path, reconnect loop, health state, and
+bounded lease, so failure cannot block canonical vehicle acquisition. Set
+`PARALLAX_ENABLED=false` only as an emergency rollback; no separate container
+or launcher is required.
 
 The Parked Energy card distinguishes the two available perspectives:
 
@@ -39,10 +25,10 @@ The Parked Energy card distinguishes the two available perspectives:
 The two sources are displayed separately because their windows and measurement
 methods differ. Riviamigo does not silently substitute one for the other.
 
-The Parked Energy card is shown only while the Parallax collector reports a
-fresh connected heartbeat. When the optional collector is stopped or
-unavailable, Phantom Drain continues to show Riviamigo's derived battery-change
-estimate without the Parked Energy card.
+Health always shows Extended Vehicle Telemetry, including never-observed,
+starting, connected, reconnecting, stale, disabled, duplicate-owner, and error
+states. When the companion is unavailable, canonical telemetry and Riviamigo's
+derived Phantom Drain history continue normally.
 
 Connectivity collection excludes network names and hardware identifiers.
 Values such as mass and learned efficiency are labeled as Rivian estimates,

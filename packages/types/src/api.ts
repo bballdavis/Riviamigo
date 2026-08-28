@@ -689,12 +689,45 @@ export interface VehicleHealth {
   thermal_events_30d: number;
   extended_telemetry: {
     collector: {
-      status: 'starting' | 'connected' | 'disconnected' | 'error';
+      status:
+        | 'starting'
+        | 'connected'
+        | 'reconnecting'
+        | 'stale'
+        | 'disconnected'
+        | 'disabled'
+        | 'duplicate_owner'
+        | 'error';
       running: boolean;
       connected_at: string | null;
       last_event_at: string | null;
       last_error: string | null;
       updated_at: string;
+    } | null;
+    parallax: {
+      status: string;
+      last_frame_at: string | null;
+      last_meaningful_frame_at: string | null;
+      reconnect_count: number;
+      decode_error_count: number;
+      empty_frame_count: number;
+      ambiguity_count: number;
+      last_error: string | null;
+    } | null;
+    legacy_charging_session: {
+      classification: 'not_observed' | 'null' | 'missing' | 'malformed' | 'all_null' | 'meaningful';
+      last_frame_at: string | null;
+      last_meaningful_frame_at: string | null;
+      null_count: number;
+      missing_count: number;
+      malformed_count: number;
+      all_null_count: number;
+      meaningful_count: number;
+    };
+    session_repair: {
+      repair_key: string;
+      reason: string;
+      created_at: string;
     } | null;
     network: {
       source_at: string;
