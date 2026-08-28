@@ -14,6 +14,10 @@ export type MapStyleMode = 'dark' | 'light';
 /** Resolved by the application data layer before the chart is rendered. */
 export interface BasemapConfig {
   enabled: boolean;
+  /** The configured Remote CARTO basemap has no server-side API key. */
+  carto_api_key_missing: boolean;
+  /** Non-secret persisted configuration revision for cache-safe tile replacement. */
+  revision: string;
   light_url: string;
   dark_url: string;
   attribution: string | null;
@@ -81,6 +85,8 @@ const ROUTE_HIT_LAYER_ID = 'trip-routes-hit';
 
 export const NEUTRAL_BASEMAP_CONFIG: BasemapConfig = {
   enabled: false,
+  carto_api_key_missing: false,
+  revision: 'neutral',
   dark_url: '',
   light_url: '',
   attribution: null,
@@ -114,7 +120,7 @@ function buildMapLibreStyle(mode: MapStyleMode, basemap: BasemapConfig) {
 }
 
 function basemapSignature(basemap: BasemapConfig, mode: MapStyleMode) {
-  return `${mode}|${basemap.enabled}|${basemap.light_url}|${basemap.dark_url}`;
+  return `${mode}|${basemap.enabled}|${basemap.revision}|${basemap.light_url}|${basemap.dark_url}`;
 }
 
 export async function loadMapLibre() {
@@ -472,6 +478,12 @@ export function TripMapChart({
           ) : (
             <span className="absolute bottom-1 right-1 rounded bg-bg/80 px-1.5 py-0.5 text-[10px] text-fg-tertiary">{basemap.attribution}</span>
           )
+        ) : null}
+        {basemap.carto_api_key_missing ? (
+          <div className="pointer-events-none absolute left-1/2 top-3 z-10 w-[min(22rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-lg border border-status-warning/30 bg-bg-elevated/95 px-3 py-2 text-center text-xs text-fg-secondary shadow-lg" role="status">
+            <span className="font-medium text-fg">CARTO Basemap key required</span>
+            <span className="ml-1">The map remains available with CARTO watermarking until an administrator adds a key in External Connections.</span>
+          </div>
         ) : null}
         {mapError || basemapError ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/70 p-4 text-center">

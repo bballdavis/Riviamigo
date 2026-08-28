@@ -106,6 +106,7 @@ jobs:
           sed -i 's|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=prerelease-smoke-password|' "$smoke_env"
           sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=prerelease-smoke-redis-password|' "$smoke_env"
           sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://prerelease-smoke.example.test|' "$smoke_env"
+          echo "RIVIAMIGO_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
           echo "PRERELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
       - name: Exercise published pre-release image stack
         run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-tag "${{ needs.validate.outputs.version }}"
@@ -182,6 +183,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
       - name: Verify published multi-architecture image
         run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.image.outputs.digest }}"
       - name: Create digest lock and GitHub pre-release
@@ -193,4 +197,6 @@ jobs:
         shell: bash
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock
-          gh release create "$VERSION" images.lock#images.lock --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$VERSION" --prerelease --generate-notes
+          cp compose/docker-compose.yml docker-compose.yml
+          cp compose/.env.example example.env
+          gh release create "$VERSION" images.lock#images.lock docker-compose.yml#docker-compose.yml example.env#example.env --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "$VERSION" --prerelease --generate-notes

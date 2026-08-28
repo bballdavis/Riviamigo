@@ -2,7 +2,7 @@
 /**
  * Disposable new-user verification. Run from a clean worktree:
  *   node scripts/verify-fresh-install.mjs --mode standard --production-env /path/to/fresh.env --source-build
- *   node scripts/verify-fresh-install.mjs --mode synology --production-env /path/to/fresh.env
+ *   node scripts/verify-fresh-install.mjs --mode production --production-env /path/to/fresh.env
  * The env file is intentionally caller-owned: it must contain valid production
  * secrets and is never copied into this repository or logged by this script.
  */
@@ -21,8 +21,7 @@ const imageTag = value('--image-tag');
 const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
-const composeFile =
-  mode === 'synology' ? 'compose/docker-compose.synology.yml' : 'compose/docker-compose.yml';
+const composeFile = 'compose/docker-compose.yml';
 const compose = [
   'compose',
   '-p',
@@ -178,7 +177,6 @@ async function verifyProduction() {
     ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
   };
   productionEnvironment = environment;
-  run('sh', ['compose/prepare-data.sh'], { env: environment });
   run('docker', [...compose, '--env-file', productionEnv, 'config', '--quiet'], {
     env: environment,
   });
@@ -247,10 +245,10 @@ function cleanupProductionDataRoot() {
 
 try {
   ensureCleanWorktree();
-  if (!['all', 'standard', 'synology', 'production', 'dev'].includes(mode))
-    throw new Error('--mode must be all, standard, synology, production, or dev.');
+  if (!['all', 'standard', 'production', 'dev'].includes(mode))
+    throw new Error('--mode must be all, standard, production, or dev.');
   if (mode === 'all' || mode === 'dev') verifyDevSmoke();
-  if (mode === 'all' || mode === 'standard' || mode === 'production' || mode === 'synology')
+  if (mode === 'all' || mode === 'standard' || mode === 'production')
     await verifyProduction();
   console.log('Fresh-install verification passed.');
 } catch (error) {

@@ -19,10 +19,10 @@ For a source checkout:
 pnpm run dev:stack:parallax
 ```
 
-For a Compose installation:
+For a development Compose installation:
 
 ```powershell
-docker compose -f compose/docker-compose.yml --profile parallax up -d
+docker compose -f compose/docker-compose.dev.yml --profile parallax up -d
 ```
 
 The Parked Energy card distinguishes the two available perspectives:

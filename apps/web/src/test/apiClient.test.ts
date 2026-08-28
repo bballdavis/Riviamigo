@@ -444,6 +444,25 @@ describe('api client dashboard contracts', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/v1/auth/login');
   });
 
+  it('sends setup proof in the register JSON body and never in the URL', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ access_token: 'owner-token', expires_in: 900, default_vehicle_id: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }) as Response
+    );
+
+    await api.register('owner@example.com', 'owner-password', 'ephemeral-proof');
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).not.toContain('ephemeral-proof');
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+      email: 'owner@example.com',
+      password: 'owner-password',
+      setup_token: 'ephemeral-proof',
+    });
+  });
+
   it('omits the stale access token when logging in', async () => {
     api.setToken('old-access-token');
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(

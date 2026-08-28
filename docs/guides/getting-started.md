@@ -28,20 +28,25 @@ You will need Docker Compose v2, Git, and a trusted host. Read the [prerequisite
    cp compose/.env.example .env
    ```
 
-3. Start the stack:
+3. Replace every `CHANGE_ME` value before starting the stack. In particular,
+   set a random 32-byte-or-longer first-owner proof in
+   `RIVIAMIGO_SETUP_TOKEN` (or configure `RIVIAMIGO_SETUP_TOKEN_FILE`), strong
+   database and Redis passwords, and your exact public HTTPS origin.
+
+4. Start the stack:
 
    ```bash
    docker compose --env-file .env -f compose/docker-compose.yml up -d
    ```
 
-4. Before exposing the service, set a 32-byte-or-longer first-owner proof in
-   `.env` (`RIVIAMIGO_SETUP_TOKEN`) or, preferably, mount it through
-   `RIVIAMIGO_SETUP_TOKEN_FILE`. Then put an authenticated HTTPS gateway and
-   host firewall rule in front of the loopback-bound origin, open the gateway
-   address, and create the first account with that proof. The first account
-   becomes the instance owner and can connect the first Rivian. Remove or
-   rotate the bootstrap proof after setup. Use a password with at least 12
-   characters; the setup screen shows the live requirement as you type.
+5. Before exposing the service, put an authenticated HTTPS gateway and host
+   firewall rule in front of the origin, open the gateway address, and create
+   the first account with the configured proof. The first account becomes the
+   instance owner and can connect the first Rivian. Remove or rotate the
+   bootstrap proof after setup, then recreate the app with
+   `docker compose --env-file .env -f compose/docker-compose.yml up -d`.
+   Use a password with at least 12 characters; the setup screen shows the live
+   requirement as you type.
 
 The standard stack defaults to production mode and publishes port `8080` only
 using the normal Docker host publication. Set `RIVIAMIGO_HOST_BIND_ADDRESS`
@@ -49,6 +54,8 @@ when a specific host interface is required, and follow [secure deployment](./sec
 before making it available outside your local network.
 
 Using Synology DSM? Follow the dedicated [Synology installation guide](./synology.md).
+The DSM guide includes the setup-token template, first-boot delay, and shared
+folder ACL checks required for a fresh install.
 
 ## Copy the standard Compose file
 

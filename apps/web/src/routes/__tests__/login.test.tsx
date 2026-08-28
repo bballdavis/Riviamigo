@@ -8,6 +8,8 @@ vi.mock('@riviamigo/ui/primitives', async () => import('../../test/mockPrimitive
 const mockNavigate = vi.fn();
 let mockSearch = {} as { redirect?: string };
 let setupRequired = false;
+let setupProofRequired = false;
+let setupProofAvailable = false;
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-router')>()),
   useNavigate: () => mockNavigate,
@@ -15,7 +17,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 }));
 vi.mock('@tanstack/react-query', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@tanstack/react-query')>()),
-  useQuery: () => ({ data: { setup_required: setupRequired } }),
+  useQuery: () => ({ data: { setup_required: setupRequired, setup_proof_required: setupProofRequired, setup_proof_available: setupProofAvailable } }),
 }));
 
 const mockLogin = vi.fn();
@@ -30,7 +32,7 @@ import { LoginPage } from '../login';
 
 beforeEach(() => {
   mockNavigate.mockClear(); mockLogin.mockClear(); mockRegister.mockClear();
-  mockSearch = {}; setupRequired = false;
+  mockSearch = {}; setupRequired = false; setupProofRequired = false; setupProofAvailable = false;
 });
 
 describe('LoginPage', () => {
@@ -92,7 +94,29 @@ describe('LoginPage', () => {
     await user.type(screen.getByPlaceholderText('you@example.com'), 'owner@example.com');
     await user.type(document.querySelector('input[type="password"]')!, 'fresh-install-password');
     await user.click(screen.getByRole('button', { name: /create owner account/i }));
-    await waitFor(() => expect(mockRegister).toHaveBeenCalledWith('owner@example.com', 'fresh-install-password'));
+    await waitFor(() => expect(mockRegister).toHaveBeenCalledWith('owner@example.com', 'fresh-install-password', undefined));
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/connect' });
+  });
+
+  it('collects the configured setup token for production first-owner setup', async () => {
+    setupRequired = true; setupProofRequired = true; setupProofAvailable = true;
+    mockRegister.mockResolvedValue(undefined);
+    const user = userEvent.setup(); render(<LoginPage />);
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'owner@example.com');
+    await user.type(document.querySelector('input[type="password"]')!, 'fresh-install-password');
+    await user.type(screen.getByLabelText('Instance setup token'), 'correct-setup-token');
+    await user.click(screen.getByRole('button', { name: /create owner account/i }));
+    await waitFor(() => expect(mockRegister).toHaveBeenCalledWith('owner@example.com', 'fresh-install-password', 'correct-setup-token'));
+  });
+
+  it('explains when production setup has no configured proof', async () => {
+    setupRequired = true; setupProofRequired = true; setupProofAvailable = false;
+    const user = userEvent.setup(); render(<LoginPage />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/needs a setup token/i);
+    await user.type(screen.getByPlaceholderText('you@example.com'), 'owner@example.com');
+    await user.type(document.querySelector('input[type="password"]')!, 'fresh-install-password');
+    await user.click(screen.getByRole('button', { name: /create owner account/i }));
+    expect(mockRegister).not.toHaveBeenCalled();
+    expect(screen.getByText(/recreate the app without deleting the database/i)).toBeInTheDocument();
   });
 });

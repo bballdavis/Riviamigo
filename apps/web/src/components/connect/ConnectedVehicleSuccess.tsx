@@ -7,6 +7,7 @@ import { ArrowRight } from 'lucide-react';
 interface ConnectedVehicleSuccessProps {
   vehicleId: string;
   vehicleName: string;
+  initialWaitingMessage?: string | null;
   onOpenDashboard: () => void;
 }
 
@@ -18,6 +19,7 @@ const MOTION_DURATION = '2.2s';
 export function ConnectedVehicleSuccess({
   vehicleId,
   vehicleName,
+  initialWaitingMessage,
   onOpenDashboard,
 }: ConnectedVehicleSuccessProps) {
   const hillPathId = `rm-success-hills-${useId().replace(/:/g, '')}`;
@@ -29,11 +31,12 @@ export function ConnectedVehicleSuccess({
     Boolean(status?.last_event_at || status?.last_payload_at);
 
   const title = telemetryAvailable ? 'Vehicle connected' : 'Vehicle saved';
-  const readinessMessage = needsAttention
-    ? `${vehicleName} was saved, but its telemetry collector needs attention. Open the dashboard to review vehicle health.`
-    : telemetryAvailable
-      ? `${vehicleName} is connected and telemetry is available.`
-      : `${vehicleName} was saved. Riviamigo is starting its telemetry collector; a sleeping vehicle may take a little while to report.`;
+  const readinessMessage = telemetryAvailable
+    ? `${vehicleName} is connected and telemetry is available.`
+    : needsAttention
+      ? `${vehicleName} was saved, but its telemetry collector needs attention. Open the dashboard to review vehicle health.`
+      : initialWaitingMessage
+        ?? `${vehicleName} was saved. Riviamigo is starting its telemetry collector; a sleeping vehicle may take a little while to report.`;
 
   return (
     <div className="py-3 text-center">
@@ -109,7 +112,9 @@ export function ConnectedVehicleSuccess({
 
       <div className="mx-auto mt-7 max-w-sm" aria-live="polite">
         <p className="font-display text-xl font-semibold text-fg">{title}</p>
-        <p className="mt-2 text-sm leading-6 text-fg-secondary">{readinessMessage}</p>
+        <p className={`mt-2 text-sm leading-6 ${initialWaitingMessage && !telemetryAvailable ? 'text-status-warning' : 'text-fg-secondary'}`}>
+          {readinessMessage}
+        </p>
       </div>
 
       <Button

@@ -3,7 +3,12 @@ import { renderHook, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { VehicleStatus } from '@riviamigo/types';
-import { useVehicleStatus, useCurrentVehicleStatus, useLiveStatusStore } from '@riviamigo/hooks';
+import {
+  notifyVehicleCredentialsRefreshed,
+  useVehicleStatus,
+  useCurrentVehicleStatus,
+  useLiveStatusStore,
+} from '@riviamigo/hooks';
 
 // ---------------------------------------------------------------------------
 // Manual WebSocket mock — controls open/message/close from the test
@@ -483,6 +488,21 @@ describe('useVehicleStatus', () => {
 
     expect(result.current.connectionState).toBe('connecting');
     expect(latestWs().protocols).toContain('bearer.fresh-token');
+  });
+
+  it('reconnects the active live socket after that vehicle refreshes Rivian credentials', async () => {
+    renderHook(() => useVehicleStatus('vid-1', 'tok'));
+    act(() => wsAt(0)._open());
+
+    act(() => notifyVehicleCredentialsRefreshed('another-vehicle'));
+    expect(MockWS.instances).toHaveLength(1);
+
+    act(() => notifyVehicleCredentialsRefreshed('vid-1'));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(MockWS.instances).toHaveLength(2);
   });
 
   // ---- cleanup ----

@@ -10,6 +10,8 @@ storybook-static
 .env.*
 !.env.example
 !compose/.env.full.example
+!compose/.env.synology.example
+!compose/synology/.env.synology.example
 jwt_private.pem
 jwt_public.pem
 age_key.txt

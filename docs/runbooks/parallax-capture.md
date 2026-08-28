@@ -32,10 +32,10 @@ selected development database port. If the normal stack is already running,
 `pnpm run dev:parallax` can be used in a second terminal with
 `PARALLAX_DATABASE_URL` set to the database URL printed by `dev:stack`.
 
-For a Compose installation, enable the opt-in profile:
+For a development Compose installation, enable the opt-in profile:
 
 ```powershell
-docker compose -f compose/docker-compose.yml --profile parallax up -d
+docker compose -f compose/docker-compose.dev.yml --profile parallax up -d
 ```
 
 It uses `PARALLAX_DATABASE_URL` when supplied and otherwise uses

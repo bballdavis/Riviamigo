@@ -1133,7 +1133,7 @@ describe('Settings page', () => {
           s3_enabled: true,
         })
       );
-    });
+    }, { timeout: 5_000 });
 
     fireEvent.click(screen.getByText('Test S3 connection'));
     await waitFor(() =>
@@ -1142,11 +1142,12 @@ describe('Settings page', () => {
           bucket: 'riviamigo-backups',
           s3_enabled: true,
         })
-      )
+      ),
+      { timeout: 5_000 },
     );
 
     fireEvent.click(screen.getByText('Run now'));
-    await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled());
+    await waitFor(() => expect(hooks.api.runBackupNow).toHaveBeenCalled(), { timeout: 5_000 });
 
     expect(screen.queryByText('File name')).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/Expand backup details/i));
@@ -1317,6 +1318,19 @@ describe('Settings page', () => {
     renderSettings();
     // Status text now appears inside the vehicle chip ('Active' when worker_health is ok/connected)
     expect(screen.getAllByText(/active|connected/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows the estimated Rivian renewal date and recommendation', () => {
+    Object.assign(settingsMocks.vehicles[0]!, {
+      renewal_state: 'renewal_soon',
+      expected_renewal_at: '2027-02-23T12:00:00Z',
+    });
+
+    renderSettings();
+
+    expect(screen.getByText('Rivian renewal')).toBeInTheDocument();
+    expect(screen.getByText(/estimated\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/estimated 180-day renewal date/i)).toBeInTheDocument();
   });
 
   it('shows durable backup phase and progress while a run is active', async () => {

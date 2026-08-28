@@ -74,6 +74,7 @@ const sidebars: SidebarsConfig = {
         'runbooks/release-database-cutover',
         'runbooks/vehicle-history-rebuild',
         'runbooks/parallax-capture',
+        'runbooks/rivian-connection-renewal',
         'runbooks/charge-payload-cleanup',
       ],
     },
@@ -90,7 +91,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Architecture',
       collapsed: false,
-      items: ['architecture/backend-data-flow', 'frontend/dashboard-architecture', 'rivian-auth'],
+      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'frontend/dashboard-architecture', 'rivian-auth'],
     },
     {
       type: 'category',

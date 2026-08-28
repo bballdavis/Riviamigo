@@ -44,6 +44,10 @@ import { canManageSystemDashboards } from '../../components/dashboard/DashboardP
 import { useDashboardEditButtonPreference } from '../../components/dashboard/useDashboardEditButtonPreference';
 import { PASSWORD_MIN_LENGTH, PasswordRequirements } from '../../components/auth/PasswordRequirements';
 import {
+  formatRivianRenewalDate,
+  getRivianCredentialRenewalNotice,
+} from '../../lib/rivianCredentialRenewal';
+import {
   Car, Clipboard, Database, DatabaseBackup, Download, ExternalLink, Globe2, KeyRound, ListChecks, Lock, LogOut, MapPin, Pencil, Plus, RefreshCw, RotateCcw, Ruler, Save, Search, ShieldCheck, Star, Trash2, Unlock, Users, X, Zap,
 } from 'lucide-react';
 
@@ -1016,6 +1020,12 @@ export function SettingsContent() {
                       const isDemo = v.is_demo ?? v.rivian_vehicle_id?.startsWith('demo-') ?? false;
 
                       const needsReauth = !isDemo && v.auth_state === 'needs_reauth';
+                      const renewalNotice = !isDemo && !needsReauth
+                        ? getRivianCredentialRenewalNotice(v)
+                        : null;
+                      const expectedRenewalDate = !isDemo
+                        ? formatRivianRenewalDate(v.expected_renewal_at)
+                        : null;
                       const collectorHealthy = v.worker_health === 'ok' || v.worker_health === 'connected';
                       const collectorPassive = v.worker_health === 'passive';
                       const healthColor = isDemo
@@ -1087,6 +1097,9 @@ export function SettingsContent() {
                                 {needsReauth && (
                                   <Badge variant="warning" size="sm" dot>Refresh Rivian login required</Badge>
                                 )}
+                                {renewalNotice && (
+                                  <Badge variant="warning" size="sm" dot>{renewalNotice.label}</Badge>
+                                )}
                                 {isAdmin && !isDemo && v.images?.cache && (
                                   <Badge
                                     variant={v.images.cache.status === 'ready' ? 'success' : v.images.cache.status === 'failed' ? 'warning' : 'default'}
@@ -1104,7 +1117,20 @@ export function SettingsContent() {
                                 <span className="font-mono text-fg">{v.vin ?? 'Not reported'}</span>
                                 <span className="text-fg-tertiary">Rivian ID</span>
                                 <span className="font-mono text-fg">{v.rivian_vehicle_id}</span>
+                                {!isDemo && (
+                                  <>
+                                    <span className="text-fg-tertiary">Rivian renewal</span>
+                                    <span className="text-fg">
+                                      {expectedRenewalDate ? `${expectedRenewalDate} (estimated)` : 'Estimate unavailable'}
+                                    </span>
+                                  </>
+                                )}
                               </div>
+                              {renewalNotice ? (
+                                <p className="mt-2 max-w-[65ch] text-sm leading-5 text-status-warning">
+                                  {renewalNotice.message}
+                                </p>
+                              ) : null}
                             </div>
 
                             {/* Action buttons */}
