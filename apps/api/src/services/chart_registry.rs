@@ -68,7 +68,6 @@ pub struct ChartPermissions {
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-
 pub struct ChartManagerEntry {
     pub effective: ChartRecord,
     pub system_base: Option<ChartRecord>,
