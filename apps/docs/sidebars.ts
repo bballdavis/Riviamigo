@@ -43,7 +43,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Personalize your dashboard',
       collapsed: false,
-      items: ['guides/dashboard-customization'],
+      items: ['guides/dashboard-customization', 'guides/chart-customization'],
     },
     {
       type: 'category',
@@ -91,7 +91,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Architecture',
       collapsed: false,
-      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'frontend/dashboard-architecture', 'rivian-auth'],
+      items: ['architecture/backend-data-flow', 'architecture/unification-baseline', 'frontend/dashboard-architecture', 'frontend/chart-architecture', 'rivian-auth'],
     },
     {
       type: 'category',

@@ -9,6 +9,8 @@ import {
   useChargingChartSeries,
   useDegradation,
   useDashboardChartFavorites,
+  useChartDatasets,
+  useEffectiveCharts,
   useEfficiencyByMode,
   useEfficiencyByTag,
   useEfficiencyTrend,
@@ -56,6 +58,7 @@ import {
 } from '@riviamigo/ui/lib/utils';
 import { DEFAULT_TARGET_TIRE_PRESSURE_PSI } from '@riviamigo/ui/lib/vehicleTires';
 import type { ChargeCurveAnalysisPoint, ChargeCurvePoint } from '@riviamigo/types';
+import type { ChartDefinitionV1, ChartRecord } from '@riviamigo/types';
 import {
   getChartDefinition,
   getChartDefinitions,
@@ -68,6 +71,7 @@ import {
   type DashboardChartPage,
   type DashboardChartSettingsCapabilities,
 } from '../../charts/catalog';
+import { ChartDefinitionRenderer } from './ChartDefinitionRenderer';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
@@ -83,6 +87,8 @@ interface DashboardChartOptions {
   showPicker?: boolean;
   /** The widget keeps its layout, but its available charts come from the page catalog. */
   managed?: boolean;
+  catalogMode?: 'assigned' | 'fixed' | 'legacy';
+  requiredChartSlugs?: string[];
   timeFilter?: TimeFilterWindow;
   smoothness?: CurveSmoothness;
   curveSmoothing?: number | boolean;
@@ -118,6 +124,8 @@ interface ResolvedDashboardChartOptions {
   legacySmoothness: CurveSmoothness;
   chartSettings: Record<string, DashboardChartDisplaySettings>;
   headerSubtitle?: string;
+  catalogMode: 'assigned' | 'fixed' | 'legacy';
+  requiredChartSlugs: string[];
 }
 
 const LEGACY_CHART_ID_ALIASES: Record<string, string> = {
@@ -137,6 +145,7 @@ function chartDefaultStorageKey(ctx: WidgetCtx, instance: WidgetInstance) {
 function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
   const options = (instance.options ?? {}) as DashboardChartOptions;
   const managed = instance.managed === true || options.managed === true;
+  const catalogMode = options.catalogMode ?? (managed ? 'assigned' : options.chartIds ? 'fixed' : 'legacy');
   const page = isDashboardChartPage(options.page) ? options.page : undefined;
   const pageDefinitions = getChartDefinitions(page);
   const validIds = new Set(pageDefinitions.map((definition) => definition.id));
@@ -170,6 +179,8 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
     chartSettings: normalizeChartSettingsMap(options.chartSettings),
     ...(page ? { page } : {}),
     ...(typeof options.headerSubtitle === 'string' ? { headerSubtitle: options.headerSubtitle } : {}),
+    catalogMode,
+    requiredChartSlugs: Array.isArray(options.requiredChartSlugs) ? options.requiredChartSlugs.filter((slug): slug is string => typeof slug === 'string') : [],
   };
 }
 
@@ -182,6 +193,7 @@ const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
 
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
+  const assignedCatalog = useEffectiveCharts(options.catalogMode === 'assigned' ? ctx.dashboardSlug ?? null : null);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
   const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
@@ -229,6 +241,10 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
   React.useEffect(() => {
     setActiveAxisRanges((current) => Object.keys(current).length === 0 ? current : {});
   }, [activeChartId]);
+
+  if (options.catalogMode === 'assigned' && assignedCatalog.isSuccess) {
+    return <AssignedChartRuntime instance={instance} ctx={ctx} options={options} charts={assignedCatalog.data} />;
+  }
 
   function updateActiveChartSettings(
     updater: (current: DashboardChartDisplaySettings) => DashboardChartDisplaySettings,
@@ -402,6 +418,79 @@ export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstan
           )}
         </MobileChartViewer>
       ) : null}
+    </div>
+  );
+}
+
+function AssignedChartRuntime({
+  instance,
+  ctx,
+  options,
+  charts,
+}: {
+  instance: WidgetInstance;
+  ctx: WidgetCtx;
+  options: ResolvedDashboardChartOptions;
+  charts: ChartRecord[];
+}) {
+  const available = charts.filter((chart) => chart.isEnabled || options.requiredChartSlugs.includes(chart.slug));
+  const chartOptions = available.map((chart) => ({ value: chart.slug, label: chart.name }));
+  const defaultChartId = options.chartId && available.some((chart) => chart.slug === options.chartId)
+    ? options.chartId
+    : available[0]?.slug ?? '';
+  const [chartId, setChartId] = React.useState(defaultChartId);
+  const [defaultChartIdState, setDefaultChartId] = React.useState(defaultChartId);
+  const [search, setSearch] = React.useState('');
+  const [viewerOpen, setViewerOpen] = React.useState(false);
+  const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
+  const updateFavorite = useUpdateDashboardChartFavorite();
+  const { ref, height } = useMeasuredWidgetHeight(260, 160);
+  const storageKey = chartDefaultStorageKey(ctx, instance);
+  const favorite = favoriteResponse?.chart_favorites?.[storageKey];
+
+  React.useEffect(() => {
+    if (!available.length) return;
+    const next = favoritesLoaded && favorite && available.some((chart) => chart.slug === favorite)
+      ? favorite
+      : defaultChartId;
+    setChartId(next);
+    setDefaultChartId(next);
+  }, [available, defaultChartId, favorite, favoritesLoaded]);
+
+  const active = available.find((chart) => chart.slug === chartId) ?? available[0];
+  const settings = resolveChartDisplaySettings(options.chartSettings, active?.slug ?? '', options.legacyTimeFilter, options.legacySmoothness);
+  const definition = active ? ({
+    ...active.config,
+    display: {
+      ...active.config.display,
+      ...(settings.timeFilter ? { timeFilter: settings.timeFilter as ChartDefinitionV1['display']['timeFilter'] } : {}),
+      ...(settings.smoothness ? { curveSmoothness: settings.smoothness as ChartDefinitionV1['display']['curveSmoothness'] } : {}),
+    },
+  } satisfies ChartDefinitionV1) : null;
+  const datasetState = useChartDatasets(definition, {
+    vehicleId: ctx.vehicleId,
+    from: ctx.from,
+    to: ctx.to,
+    lifetime: definition?.timeframe.mode === 'lifetime',
+    ...(ctx.chargeSessionId !== undefined ? { chargeSessionId: ctx.chargeSessionId } : {}),
+    ...(ctx.tripTagFilter ? { tripTagFilter: ctx.tripTagFilter } : {}),
+  });
+
+  function setChartAsDefault(next: string) {
+    setDefaultChartId(next);
+    updateFavorite.mutate({ key: storageKey, chartId: next });
+  }
+
+  if (!active) {
+    return <div className="flex h-full min-h-32 items-center justify-center rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">No enabled charts are assigned to this dashboard.</div>;
+  }
+
+  const renderedChart = definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={height} loading={datasetState.isLoading} /> : null;
+  return (
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+      {options.showPicker && chartOptions.length > 1 ? <ChartPicker value={active.slug} options={chartOptions} onChange={setChartId} searchValue={search} onSearchChange={setSearch} defaultValue={defaultChartIdState} onSetDefault={setChartAsDefault} /> : <div className="mb-2 flex shrink-0 items-center justify-between"><p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">{active.name}</p><button type="button" aria-label="Expand chart" onClick={() => setViewerOpen(true)} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-fg-tertiary sm:hidden"><Maximize2 className="h-4 w-4" /></button></div>}
+      {!viewerOpen ? <div ref={ref} className="min-h-0 flex-1 overflow-hidden">{renderedChart}</div> : null}
+      {viewerOpen ? <MobileChartViewer chartId={active.slug} chartTitle={active.name} chartOptions={chartOptions} onChartChange={setChartId} defaultChartId={defaultChartIdState} onSetDefault={setChartAsDefault} onClose={() => setViewerOpen(false)}>{(viewerHeight) => definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={viewerHeight} loading={datasetState.isLoading} presentation="mobile-viewer" /> : null}</MobileChartViewer> : null}
     </div>
   );
 }
