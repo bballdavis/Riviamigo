@@ -345,7 +345,7 @@ fn build_fallback_curve_samples(
                 minutes_elapsed: elapsed_minutes.clamp(0.0, span_minutes),
                 charge_rate_kw: row.power_kw.unwrap_or(0.0).clamp(0.0, cap_kw),
                 soc,
-                sample_source: "rivian_charge_curve_points",
+                sample_source: row.sample_source.clone(),
                 charger_type: charger_type.map(ToOwned::to_owned),
                 power_method: "recorded",
             }
@@ -391,6 +391,8 @@ struct CurveRow {
     soc: Option<f64>,
     #[sqlx(default)]
     power_method: Option<String>,
+    #[sqlx(default)]
+    sample_source: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -409,7 +411,7 @@ struct CurveSampleRow {
     minutes_elapsed: f64,
     charge_rate_kw: f64,
     soc: Option<f64>,
-    sample_source: &'static str,
+    sample_source: String,
     charger_type: Option<String>,
     power_method: &'static str,
 }
@@ -418,6 +420,7 @@ struct CurveSampleRow {
 struct RawCurvePointRow {
     ts: DateTime<Utc>,
     power_kw: Option<f64>,
+    sample_source: String,
 }
 
 #[allow(dead_code)]
@@ -1716,10 +1719,12 @@ mod tests {
             super::RawCurvePointRow {
                 ts: Utc.with_ymd_and_hms(2026, 6, 1, 8, 2, 0).unwrap(),
                 power_kw: Some(160.0),
+                sample_source: "rivian_charge_curve_points".to_string(),
             },
             super::RawCurvePointRow {
                 ts: Utc.with_ymd_and_hms(2026, 6, 1, 8, 10, 0).unwrap(),
                 power_kw: Some(120.0),
+                sample_source: "parallax_charge_curve_points".to_string(),
             },
         ];
 
@@ -1908,22 +1913,29 @@ async fn load_curve(
     };
 
     if rows.len() < 2 {
-        // Fallback: use Rivian live-session history points stored during active
-        // polling.  Filter strictly by charge_session_id — querying by time
-        // window would pull in DC fast-charge data from other sessions that
-        // happen to overlap this session's timestamps, producing wildly
-        // inflated power readings on home AC sessions.  Apply the same
-        // context-aware cap as the primary path.
+        // Fallback: combine the two explicitly associated curve stores. A
+        // Parallax point wins an exact timestamp collision because it carries
+        // the richer graph sample; canonical telemetry still owns lifecycle.
         let fallback = sqlx::query_as::<_, CurveRow>(
-            r#"SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
+            r#"WITH candidates AS (
+                   SELECT ts,power_kw,NULL::float8 AS soc,'rivian_charge_curve_points'::text AS sample_source,1 AS precedence
+                   FROM riviamigo.rivian_charge_curve_points
+                   WHERE vehicle_id=$1 AND charge_session_id=$3 AND power_kw IS NOT NULL AND power_kw > 0
+                   UNION ALL
+                   SELECT source_at AS ts,power_kw,soc,'parallax_charge_curve_points'::text AS sample_source,2 AS precedence
+                   FROM timeseries.parallax_charge_curve_points
+                   WHERE vehicle_id=$1 AND charge_session_id=$3 AND power_kw IS NOT NULL AND power_kw > 0
+               ), resolved AS (
+                   SELECT DISTINCT ON (ts) ts,power_kw,soc,sample_source
+                   FROM candidates ORDER BY ts,precedence DESC
+               )
+               SELECT EXTRACT(EPOCH FROM (ts - $2))::float8 / 60.0 AS minutes_elapsed,
                       LEAST(CASE WHEN $4 THEN 300.0 ELSE 22.0 END,
                             GREATEST(0.0, power_kw)) AS charge_rate_kw,
-                      NULL::float8 AS soc,
-                      'recorded'::text AS power_method
-               FROM riviamigo.rivian_charge_curve_points
-               WHERE charge_session_id = $3
-                 AND power_kw IS NOT NULL
-                 AND power_kw > 0
+                      soc,
+                      'recorded'::text AS power_method,
+                      sample_source
+               FROM resolved
                ORDER BY ts"#,
         )
         .bind(vehicle_id)
@@ -1940,7 +1952,7 @@ async fn load_curve(
                         "minutes_elapsed": r.minutes_elapsed,
                         "charge_rate_kw": r.charge_rate_kw,
                         "soc": r.soc,
-                        "sample_source": "rivian_charge_curve_points",
+                        "sample_source": r.sample_source.as_deref().unwrap_or("rivian_charge_curve_points"),
                         "power_method": r.power_method,
                     })
                 })
@@ -2102,7 +2114,7 @@ async fn load_curve_analysis_samples(
                 minutes_elapsed: row.minutes_elapsed,
                 charge_rate_kw: row.charge_rate_kw.unwrap_or(0.0),
                 soc: row.soc,
-                sample_source: "telemetry",
+                sample_source: "telemetry".to_string(),
                 charger_type: charger_type.clone(),
                 power_method: if row.power_method.as_deref() == Some("recorded") {
                     "recorded"
@@ -2197,7 +2209,7 @@ async fn load_curve_analysis_samples(
                 minutes_elapsed: row.minutes_elapsed,
                 charge_rate_kw: row.charge_rate_kw.unwrap_or(0.0),
                 soc: row.soc,
-                sample_source: "telemetry_1min",
+                sample_source: "telemetry_1min".to_string(),
                 charger_type: charger_type.clone(),
                 power_method: if row.power_method.as_deref() == Some("recorded") {
                     "recorded"
@@ -2209,13 +2221,17 @@ async fn load_curve_analysis_samples(
     }
 
     let fallback = sqlx::query_as::<_, RawCurvePointRow>(
-        r#"SELECT ts, power_kw
-           FROM riviamigo.rivian_charge_curve_points
-           WHERE vehicle_id=$1
-             AND charge_session_id=$2
-             AND power_kw IS NOT NULL
-             AND power_kw > 0
-           ORDER BY ts"#,
+        r#"WITH candidates AS (
+               SELECT ts,power_kw,'rivian_charge_curve_points'::text AS sample_source,1 AS precedence
+               FROM riviamigo.rivian_charge_curve_points
+               WHERE vehicle_id=$1 AND charge_session_id=$2 AND power_kw IS NOT NULL AND power_kw > 0
+               UNION ALL
+               SELECT source_at AS ts,power_kw,'parallax_charge_curve_points'::text AS sample_source,2 AS precedence
+               FROM timeseries.parallax_charge_curve_points
+               WHERE vehicle_id=$1 AND charge_session_id=$2 AND power_kw IS NOT NULL AND power_kw > 0
+           )
+           SELECT DISTINCT ON (ts) ts,power_kw,sample_source
+           FROM candidates ORDER BY ts,precedence DESC"#,
     )
     .bind(vehicle_id)
     .bind(session_id)

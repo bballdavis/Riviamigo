@@ -44,6 +44,60 @@ const STATE_PERIOD_RECONCILE_LOOKBACK_HOURS: i64 = 24;
 const STATE_PERIOD_RECONCILE_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(15 * 60);
 
+/// Lifecycle context shared with isolated enrichment consumers.  Canonical
+/// telemetry is the only producer; consumers may associate samples but never
+/// create or close a session.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveSessionContext {
+    pub session_id: Option<Uuid>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyChargingSessionClass {
+    Null,
+    Missing,
+    Malformed,
+    AllNull,
+    Meaningful,
+}
+
+impl LegacyChargingSessionClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Missing => "missing",
+            Self::Malformed => "malformed",
+            Self::AllNull => "all_null",
+            Self::Meaningful => "meaningful",
+        }
+    }
+}
+
+/// Classify legacy frames without treating empty frames as fresh data.
+pub fn classify_legacy_charging_session(
+    value: Option<&serde_json::Value>,
+) -> LegacyChargingSessionClass {
+    let Some(value) = value else {
+        return LegacyChargingSessionClass::Missing;
+    };
+    if value.is_null() {
+        return LegacyChargingSessionClass::Null;
+    }
+    let Some(object) = value.as_object() else {
+        return LegacyChargingSessionClass::Malformed;
+    };
+    if object.is_empty() {
+        return LegacyChargingSessionClass::AllNull;
+    }
+    if object.values().all(serde_json::Value::is_null) {
+        LegacyChargingSessionClass::AllNull
+    } else {
+        LegacyChargingSessionClass::Meaningful
+    }
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct ActiveChargeDetectorRow {
     session_id: Uuid,
@@ -110,7 +164,7 @@ pub async fn run_vehicle_worker(
     .fetch_optional(&pool)
     .await;
 
-    let tokens: RivianTokenBundle = match creds_row {
+    let _tokens: RivianTokenBundle = match creds_row {
         Ok(Some(encrypted_tokens)) => match decrypt_tokens(&encrypted_tokens, &identity) {
             Ok(t) => t,
             Err(e) => {
@@ -241,14 +295,16 @@ pub async fn run_vehicle_worker(
     let spawn_ws_loop = || {
         let ws_shutdown = shutdown.resubscribe();
         let ev_tx_ws = ev_tx.clone();
-        let tokens_clone = tokens.clone();
         let riv_id_clone = rivian_vehicle_id.clone();
         let ws_config = config.clone();
+        let ws_pool = pool.clone();
+        let ws_age_key = age_key.clone();
         tokio::spawn(async move {
             ws_client::run_ws_loop(
                 vehicle_id,
                 riv_id_clone,
-                tokens_clone,
+                ws_pool,
+                ws_age_key,
                 ev_tx_ws,
                 ws_shutdown,
                 ws_config,
@@ -256,8 +312,6 @@ pub async fn run_vehicle_worker(
             .await;
         })
     };
-    let mut ws_handle = spawn_ws_loop();
-
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -267,8 +321,63 @@ pub async fn run_vehicle_worker(
     // Channel to push PowerState changes from the main event loop to the poll loop.
     let (power_state_tx, power_state_rx) = watch::channel::<Option<PowerState>>(None);
     let (charging_tx, charging_rx) = watch::channel(false);
+    let (active_session_tx, active_session_rx) =
+        watch::channel::<ActiveSessionContext>(ActiveSessionContext::default());
 
-    // Fire-and-forget startup enrichment (runs once; errors are non-fatal).
+    // Repair only the bounded active tail before detector rehydration.  The
+    // service is transactional and journal-idempotent; broad historical
+    // canonicalization is intentionally not part of worker startup.
+    if let Err(error) =
+        crate::services::charge_session_repair::heal_active_tail(&pool, vehicle_id).await
+    {
+        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "active charge-session startup healing failed");
+    }
+
+    let mut trip_det = TripDetectorState::new(vehicle_id);
+    let mut active_session_started_at = None;
+    let mut charge_det =
+        if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await {
+            tracing::info!(
+                vehicle_id=%vehicle_id,
+                charge_session_id=%snapshot.session_id,
+                started_at=%snapshot.started_at,
+                "rehydrated active charge detector state from stamped telemetry"
+            );
+            active_session_started_at = Some(snapshot.started_at);
+            ChargeDetectorState::from_snapshot(vehicle_id, snapshot)
+        } else {
+            ChargeDetectorState::new(vehicle_id)
+        };
+    let _ = active_session_tx.send(ActiveSessionContext {
+        session_id: charge_det.active_session_id(),
+        started_at: active_session_started_at,
+        ended_at: None,
+    });
+
+    // Historical association is deliberately detached and chunked. It may
+    // enrich old graph samples, but cannot delay or drive canonical ingestion.
+    {
+        let pool2 = pool.clone();
+        tokio::spawn(async move {
+            for _ in 0..10 {
+                match crate::services::charge_session_repair::reconcile_unassociated_parallax_samples(
+                    &pool2, vehicle_id, 250,
+                )
+                .await
+                {
+                    Ok(stats) if stats.scanned == 250 => continue,
+                    Ok(_) => break,
+                    Err(error) => {
+                        tracing::warn!(vehicle_id=%vehicle_id, err=%error, "historical Parallax session reconciliation failed");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // Start all acquisition companions only after repair and detector
+    // rehydration have published the canonical active-session context.
     {
         let uid = user_id.unwrap_or(Uuid::nil());
         let pool2 = pool.clone();
@@ -278,8 +387,6 @@ pub async fn run_vehicle_worker(
             rivian_poll::run_startup_polls(vehicle_id, uid, pool2, client2, age_key2).await;
         });
     }
-
-    // Adaptive periodic poll loop (live session data while charging, etc.).
     {
         let pool2 = pool.clone();
         let client2 = http_client.clone();
@@ -302,21 +409,30 @@ pub async fn run_vehicle_worker(
             .await;
         });
     }
+    let mut parallax_handle = if parallax_enabled() {
+        Some(crate::parallax::spawn_in_process(
+            pool.clone(),
+            vehicle_id,
+            rivian_vehicle_id.clone(),
+            age_key.clone(),
+            active_session_rx,
+            shutdown.resubscribe(),
+        ))
+    } else {
+        let _ = sqlx::query(
+            "INSERT INTO riviamigo.parallax_collector_state(vehicle_id,status,last_error,schema_version) VALUES($1,'disabled','PARALLAX_ENABLED=false',1) ON CONFLICT(vehicle_id) DO UPDATE SET status='disabled',last_error='PARALLAX_ENABLED=false',updated_at=now()",
+        )
+        .bind(vehicle_id)
+        .execute(&pool)
+        .await;
+        None
+    };
     // ────────────────────────────────────────────────────────────────────────
 
-    let mut trip_det = TripDetectorState::new(vehicle_id);
-    let mut charge_det =
-        if let Some(snapshot) = load_active_charge_snapshot(&pool, vehicle_id).await {
-            tracing::info!(
-                vehicle_id=%vehicle_id,
-                charge_session_id=%snapshot.session_id,
-                started_at=%snapshot.started_at,
-                "rehydrated active charge detector state from stamped telemetry"
-            );
-            ChargeDetectorState::from_snapshot(vehicle_id, snapshot)
-        } else {
-            ChargeDetectorState::new(vehicle_id)
-        };
+    // Rehydrate the detector before opening the socket.  This ordering is
+    // important on restart: the first frame must be evaluated against the
+    // existing session UUID instead of racing startup with a fresh detector.
+    let mut ws_handle = spawn_ws_loop();
     // State periods are durable state, not a best-effort in-memory overlay.
     // Rehydrate before processing any new payload so a worker restart can close
     // the existing period instead of colliding with the partial unique index.
@@ -343,6 +459,11 @@ pub async fn run_vehicle_worker(
     // Shared counter batch — flushed every 50 events to amortize DB upserts.
     let mut counter_batch = CounterBatch::new(vehicle_id);
     let mut counter_flush_tick: u64 = 0;
+    let mut legacy_counts = [0_i64; 5];
+    let mut legacy_last_class: Option<LegacyChargingSessionClass> = None;
+    let mut legacy_last_frame_at: Option<DateTime<Utc>> = None;
+    let mut legacy_last_meaningful_at: Option<DateTime<Utc>> = None;
+    let mut legacy_last_log = tokio::time::Instant::now() - std::time::Duration::from_secs(60);
 
     // Track the most recent inbound WS/control event so we can restart a
     // connection that stays silently wedged while still holding the worker lock.
@@ -421,6 +542,41 @@ pub async fn run_vehicle_worker(
         }
         if counter_flush_tick.is_multiple_of(50) {
             counter_batch.flush(&pool).await;
+            flush_legacy_charging_diagnostics(
+                &pool,
+                vehicle_id,
+                &mut legacy_counts,
+                legacy_last_class,
+                legacy_last_frame_at,
+                legacy_last_meaningful_at,
+            )
+            .await;
+        }
+
+        if inbound.kind == WsInboundKind::ChargingSession {
+            if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&inbound.raw) {
+                let class =
+                    classify_legacy_charging_session(raw.pointer("/payload/data/chargingSession"));
+                legacy_counts[match class {
+                    LegacyChargingSessionClass::Null => 0,
+                    LegacyChargingSessionClass::Missing => 1,
+                    LegacyChargingSessionClass::Malformed => 2,
+                    LegacyChargingSessionClass::AllNull => 3,
+                    LegacyChargingSessionClass::Meaningful => 4,
+                }] += 1;
+                legacy_last_frame_at = Some(inbound.received_at);
+                if class == LegacyChargingSessionClass::Meaningful {
+                    legacy_last_meaningful_at = Some(inbound.received_at);
+                }
+                if legacy_last_class != Some(class)
+                    && legacy_last_log.elapsed() >= std::time::Duration::from_secs(60)
+                {
+                    tracing::debug!(vehicle_id=%vehicle_id, classification=class.as_str(),
+                        "legacy chargingSession frame classification changed");
+                    legacy_last_log = tokio::time::Instant::now();
+                }
+                legacy_last_class = Some(class);
+            }
         }
 
         if let Some(battery_cell_type) = inbound.battery_cell_type.as_deref() {
@@ -461,6 +617,25 @@ pub async fn run_vehicle_worker(
 
         let trip_id = trip_det.active_trip_id();
         let charge_event = charge_det.process(&event);
+        if matches!(charge_event, ChargeEvent::SessionStarted) {
+            active_session_started_at = Some(event.ts);
+        }
+        let context = match &charge_event {
+            ChargeEvent::SessionEnded(session) => ActiveSessionContext {
+                session_id: None,
+                started_at: Some(session.started_at),
+                ended_at: Some(event.ts),
+            },
+            _ => ActiveSessionContext {
+                session_id: charge_det.active_session_id(),
+                started_at: active_session_started_at,
+                ended_at: None,
+            },
+        };
+        let _ = active_session_tx.send(context);
+        if matches!(charge_event, ChargeEvent::SessionEnded(_)) {
+            active_session_started_at = None;
+        }
         let session_id = match &charge_event {
             ChargeEvent::SessionEnded(session) => Some(session.session_id),
             _ => charge_det.active_session_id(),
@@ -579,6 +754,13 @@ pub async fn run_vehicle_worker(
 
         // ── Charge detection ─────────────────────────────────────────────────
         if let ChargeEvent::SessionEnded(session) = charge_event {
+            // Canonical vehicle-state telemetry owns lifecycle.  Remove the
+            // live projection immediately so a late/empty chargingSession
+            // frame cannot resurrect a closed session.
+            let live_key = rivian_poll::live_session_redis_key(vehicle_id);
+            if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
+                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session Redis delete on canonical end failed");
+            }
             let _ = persist_charge_session(&pool, &session).await;
             // Trigger incremental charge history sync to enrich the new session
             // with Rivian API fields (network vendor, range added, etc.).
@@ -610,9 +792,77 @@ pub async fn run_vehicle_worker(
 
     // Flush any remaining accumulated counters before the worker exits.
     counter_batch.flush(&pool).await;
+    flush_legacy_charging_diagnostics(
+        &pool,
+        vehicle_id,
+        &mut legacy_counts,
+        legacy_last_class,
+        legacy_last_frame_at,
+        legacy_last_meaningful_at,
+    )
+    .await;
     ws_handle.abort();
     let _ = (&mut ws_handle).await;
+    if let Some(mut handle) = parallax_handle.take() {
+        tokio::select! {
+            _ = &mut handle => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                handle.abort();
+                let _ = handle.await;
+            }
+        }
+    }
     let _ = release_collector_lock(&mut lock_conn, vehicle_id).await;
+}
+
+async fn flush_legacy_charging_diagnostics(
+    pool: &PgPool,
+    vehicle_id: Uuid,
+    counts: &mut [i64; 5],
+    last_class: Option<LegacyChargingSessionClass>,
+    last_frame_at: Option<DateTime<Utc>>,
+    last_meaningful_at: Option<DateTime<Utc>>,
+) {
+    if counts.iter().all(|count| *count == 0) {
+        return;
+    }
+    let result = sqlx::query(
+        r#"INSERT INTO riviamigo.parallax_collector_state (
+               vehicle_id,status,schema_version,legacy_last_frame_at,
+               legacy_last_meaningful_frame_at,legacy_last_classification,
+               legacy_null_count,legacy_missing_count,legacy_malformed_count,
+               legacy_all_null_count,legacy_meaningful_count)
+           VALUES ($1,'starting',1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT(vehicle_id) DO UPDATE SET
+               legacy_last_frame_at=GREATEST(riviamigo.parallax_collector_state.legacy_last_frame_at,EXCLUDED.legacy_last_frame_at),
+               legacy_last_meaningful_frame_at=GREATEST(riviamigo.parallax_collector_state.legacy_last_meaningful_frame_at,EXCLUDED.legacy_last_meaningful_frame_at),
+               legacy_last_classification=EXCLUDED.legacy_last_classification,
+               legacy_null_count=riviamigo.parallax_collector_state.legacy_null_count+EXCLUDED.legacy_null_count,
+               legacy_missing_count=riviamigo.parallax_collector_state.legacy_missing_count+EXCLUDED.legacy_missing_count,
+               legacy_malformed_count=riviamigo.parallax_collector_state.legacy_malformed_count+EXCLUDED.legacy_malformed_count,
+               legacy_all_null_count=riviamigo.parallax_collector_state.legacy_all_null_count+EXCLUDED.legacy_all_null_count,
+               legacy_meaningful_count=riviamigo.parallax_collector_state.legacy_meaningful_count+EXCLUDED.legacy_meaningful_count"#,
+    ).bind(vehicle_id).bind(last_frame_at).bind(last_meaningful_at)
+     .bind(last_class.map(LegacyChargingSessionClass::as_str))
+     .bind(counts[0]).bind(counts[1]).bind(counts[2]).bind(counts[3]).bind(counts[4])
+     .execute(pool).await;
+    if let Err(error) = result {
+        tracing::debug!(vehicle_id=%vehicle_id, err=%error, "legacy charging diagnostics flush failed");
+    } else {
+        *counts = [0; 5];
+    }
+}
+
+fn parallax_enabled() -> bool {
+    !matches!(
+        std::env::var("PARALLAX_ENABLED")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("false" | "0" | "no" | "off")
+    )
 }
 
 async fn upsert_battery_cell_type(
@@ -655,7 +905,10 @@ async fn ensure_active_charge_session(
            FROM timeseries.telemetry t
            WHERE t.vehicle_id = $2
              AND t.charge_session_id = $1
-           ON CONFLICT (id) DO NOTHING"#,
+           ON CONFLICT (id) DO UPDATE SET
+             started_at = COALESCE(riviamigo.charge_sessions.started_at, EXCLUDED.started_at),
+             soc_start = COALESCE(riviamigo.charge_sessions.soc_start, EXCLUDED.soc_start),
+             charge_limit = COALESCE(riviamigo.charge_sessions.charge_limit, EXCLUDED.charge_limit)"#,
     )
     .bind(session_id)
     .bind(vehicle_id)
@@ -679,7 +932,7 @@ async fn apply_charging_session_update(
     let live = rivian_poll::normalize_charging_session(event, received_at);
 
     match live {
-        Some(live) => {
+        Some(live) if active_session_id.is_some() => {
             if let Ok(json) = serde_json::to_string(&live) {
                 if let Err(error) = redis_conn
                     .set_ex::<_, _, ()>(&live_key, json, rivian_poll::LIVE_SESSION_TTL_SECONDS)
@@ -694,14 +947,14 @@ async fn apply_charging_session_update(
                 tracing::warn!(vehicle_id=%vehicle_id, err=%error, "live session database update failed");
             }
         }
-        None if event.live_data_present && event.live_data.is_none() => {
+        Some(_) => {
+            // A late legacy frame cannot recreate state after canonical
+            // vehicleState ended the session.
             if let Err(error) = redis_conn.del::<_, ()>(&live_key).await {
-                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "live session Redis delete failed");
+                tracing::debug!(vehicle_id=%vehicle_id, err=%error, "late live session Redis cleanup failed");
             }
         }
-        None => {
-            tracing::debug!(vehicle_id=%vehicle_id, "empty chargingSession payload; retaining live session snapshot until TTL");
-        }
+        None => {}
     }
 
     if let Err(error) = rivian_poll::persist_charging_session_chart(
@@ -1545,7 +1798,10 @@ async fn load_active_charge_snapshot(
               ON cs.id = t.charge_session_id
             WHERE t.vehicle_id = $1
               AND t.charge_session_id IS NOT NULL
-              AND cs.id IS NULL
+              -- Both materialized and not-yet-materialized sessions are
+              -- eligible.  The old cs.id IS NULL predicate discarded the
+              -- exact row ensure_active_charge_session had just created.
+              AND (cs.id IS NULL OR cs.ended_at IS NULL)
               AND t.ts >= now() - ($2::int * interval '1 hour')
         ),
         candidate_sessions AS (

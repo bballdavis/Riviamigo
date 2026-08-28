@@ -2,6 +2,7 @@ pub mod app_settings;
 pub mod backups;
 pub mod charge_backfill;
 pub mod charge_payload_identity;
+pub mod charge_session_repair;
 pub mod charge_sessions;
 pub mod charging;
 pub mod chart_registry;

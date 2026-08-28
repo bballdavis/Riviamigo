@@ -54,20 +54,37 @@ fn is_auth_error(e: &anyhow::Error) -> bool {
 /// The access token is preserved unchanged — only the short-lived CSRF pair rotates.
 async fn try_refresh_csrf(
     vehicle_id: Uuid,
-    current_tokens: &RivianTokenBundle,
+    rejected_tokens: &RivianTokenBundle,
     client: &reqwest::Client,
     pool: &PgPool,
     age_key: &str,
 ) -> Result<RivianTokenBundle> {
     tracing::info!(vehicle_id=%vehicle_id, "refreshing Rivian CSRF session");
-
-    let new_tokens = rivian_refresh_csrf(client, current_tokens)
-        .await
-        .map_err(|e| anyhow!("CSRF refresh failed: {e}"))?;
-
     let identity = age_key
         .parse::<age::x25519::Identity>()
         .map_err(|e| anyhow!("bad age key: {e}"))?;
+
+    // The credential row is the per-vehicle refresh coordinator. Holding its
+    // row lock across refresh prevents concurrent REST callers from persisting
+    // an older token bundle over a newer one.
+    let mut tx = pool.begin().await?;
+    let encrypted_current = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id=$1 FOR UPDATE",
+    )
+    .bind(vehicle_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let current_tokens = decrypt_tokens(&encrypted_current, &identity)?;
+    if session_token_snapshot_changed(rejected_tokens, &current_tokens) {
+        // Another request refreshed while this caller waited for the row lock.
+        // Reuse that newer bundle instead of rotating a second time.
+        tx.commit().await?;
+        tracing::debug!(vehicle_id=%vehicle_id, "reusing concurrently refreshed Rivian session");
+        return Ok(current_tokens);
+    }
+    let new_tokens = rivian_refresh_csrf(client, &current_tokens)
+        .await
+        .map_err(|e| anyhow!("CSRF refresh failed: {e}"))?;
 
     let encrypted = encrypt_tokens(&new_tokens, &identity)?;
 
@@ -82,14 +99,22 @@ async fn try_refresh_csrf(
     .bind(vehicle_id)
     .bind(&encrypted)
     .bind(new_tokens.created_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     tracing::info!(vehicle_id=%vehicle_id, "Rivian CSRF session refreshed");
     Ok(new_tokens)
 }
 
-async fn load_vehicle_tokens(
+fn session_token_snapshot_changed(left: &RivianTokenBundle, right: &RivianTokenBundle) -> bool {
+    left.app_session_token != right.app_session_token
+        || left.user_session_token != right.user_session_token
+        || left.csrf_token != right.csrf_token
+        || left.created_at != right.created_at
+}
+
+pub(crate) async fn load_vehicle_tokens(
     vehicle_id: Uuid,
     pool: &PgPool,
     age_key: &str,
@@ -2571,12 +2596,20 @@ mod tests {
         ChargePayloadRecordOutcome, LIVE_SESSION_HISTORY_QUERY, LIVE_SESSION_TTL_SECONDS,
     };
     use crate::ingestion::parser::parse_charging_session_message;
+    use crate::ingestion::session_store::{decrypt_tokens, encrypt_tokens, RivianTokenBundle};
     use crate::services::charge_payload_identity::reconcile_retained_payload_references;
     use crate::services::charge_sessions::{
         infer_is_rivian_network, normalize_api_charger_type, ChargeSessionPayloadRef,
     };
+    use age::secrecy::ExposeSecret;
+    use axum::{extract::State, routing::post, Json, Router};
     use chrono::Utc;
+    use serde_json::json;
     use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     fn recorded_payload(outcome: ChargePayloadRecordOutcome) -> (ChargeSessionPayloadRef, bool) {
         match outcome {
@@ -2679,6 +2712,79 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("seed charge session")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable TimescaleDB DATABASE_URL with CREATEDB permission"]
+    async fn concurrent_auth_rejections_refresh_once_without_stale_overwrite() {
+        let db = DisposableDatabase::new().await;
+        let vehicle_id = seed_vehicle(&db.pool).await;
+        let identity = age::x25519::Identity::generate();
+        let age_key = identity.to_string().expose_secret().to_owned();
+        let rejected = RivianTokenBundle {
+            access_token: "access".into(),
+            refresh_token: "refresh".into(),
+            app_session_token: "rejected-app".into(),
+            user_session_token: "user".into(),
+            csrf_token: "rejected-csrf".into(),
+            created_at: Utc::now(),
+        };
+        let encrypted = encrypt_tokens(&rejected, &identity).unwrap();
+        sqlx::query(
+            "INSERT INTO riviamigo.vehicle_credentials(vehicle_id,encrypted_tokens,token_created_at) VALUES($1,$2,$3)",
+        )
+        .bind(vehicle_id)
+        .bind(encrypted)
+        .bind(rejected.created_at)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/graphql",
+                post(
+                    |State(count): State<Arc<AtomicUsize>>, Json(_body): Json<serde_json::Value>| async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({"data":{"createCsrfToken":{"csrfToken":"fresh-csrf","appSessionToken":"fresh-app"}}}))
+                    },
+                ),
+            )
+            .with_state(refresh_count.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        std::env::set_var(
+            "RIVIAN_GRAPHQL_GATEWAY_URL",
+            format!("http://{address}/graphql"),
+        );
+
+        let client = reqwest::Client::new();
+        let (left, right) = tokio::join!(
+            super::try_refresh_csrf(vehicle_id, &rejected, &client, &db.pool, &age_key),
+            super::try_refresh_csrf(vehicle_id, &rejected, &client, &db.pool, &age_key),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_eq!(refresh_count.load(Ordering::SeqCst), 1);
+        assert_eq!(left.csrf_token, "fresh-csrf");
+        assert_eq!(right.csrf_token, "fresh-csrf");
+
+        let persisted = sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT encrypted_tokens FROM riviamigo.vehicle_credentials WHERE vehicle_id=$1",
+        )
+        .bind(vehicle_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        let persisted = decrypt_tokens(&persisted, &identity).unwrap();
+        assert_eq!(persisted.csrf_token, "fresh-csrf");
+        assert_eq!(persisted.app_session_token, "fresh-app");
+
+        std::env::remove_var("RIVIAN_GRAPHQL_GATEWAY_URL");
+        server.abort();
+        db.cleanup().await;
     }
 
     #[tokio::test]
