@@ -13,6 +13,10 @@ The feature is opt-in and does not replace normal vehicle acquisition. If the
 collector is stopped, all existing dashboards and Riviamigo's derived Phantom
 Drain history continue to work.
 
+The collector is a source-development tool and is intentionally not included
+in Riviamigo's published production image. Run it from a source checkout or the
+opt-in development Compose profile below.
+
 For a source checkout:
 
 ```powershell

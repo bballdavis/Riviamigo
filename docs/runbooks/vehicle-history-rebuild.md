@@ -47,6 +47,15 @@ per run by default to bound WAL and disk pressure on NAS storage; repeat the
 command until the dry-run report reaches zero, or choose a smaller batch with
 `--batch-size`.
 
+Charge-payload JSON is retained for 90 days. A replayed completed session whose
+matching payload evidence has expired is represented by a durable identity
+tombstone, not a new JSON payload. This is expected for older history: it does
+not block rebuilding canonical `charge_sessions`, but it means no retained raw
+payload can be linked to that replay. Do not change the retention policy or
+rerun cleanup to resolve this condition. Investigate only if a recent session
+reports `payload_audit_failures`; normal expiration is reported as an
+aggregated `payloads_evidence_expired` poll count.
+
 ## Diagnostics First
 
 Before changing live history, capture the current enrichment gap report for the affected vehicle:
