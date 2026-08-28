@@ -125,4 +125,4 @@ precise vehicle locations in public issues.
 - [ ] Host firewall rules restrict direct access to port 8080
 - [ ] Redis is reachable only on a private/internal network
 - [ ] Firewall blocks API, PostgreSQL, Redis, and origin ports from external access
-- [ ] `IMAGE_TAG` is pinned to an exact Calendar Version when repeatability matters
+- [ ] `RIVIAMIGO_IMAGE` uses the digest-qualified `images.lock` reference when exact repeatability matters, or `IMAGE_TAG` is pinned to a Calendar Version for version-level stability
