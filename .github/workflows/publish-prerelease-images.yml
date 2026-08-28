@@ -41,9 +41,84 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  image:
-    name: Build image
+  build-image:
+    name: Build ${{ matrix.pair }} image
     needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            pair: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            pair: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Start platform timing
+        run: echo "BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ./compose/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo,push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-${{ matrix.pair }}
+            type=gha,scope=riviamigo-container-image-${{ matrix.pair }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:buildcache-${{ matrix.pair }},mode=max,compression=zstd,oci-mediatypes=true,image-manifest=true,ignore-error=true
+            type=gha,scope=riviamigo-container-image-${{ matrix.pair }},mode=min,ignore-error=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
+            org.opencontainers.image.revision=${{ needs.validate.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+      - name: Write platform digest and timing
+        if: always()
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          mkdir -p "$RUNNER_TEMP/prerelease-image-artifacts/digests" "$RUNNER_TEMP/prerelease-image-artifacts/timings"
+          echo "$DIGEST" > "$RUNNER_TEMP/prerelease-image-artifacts/digests/${{ matrix.pair }}.digest"
+          node -e 'const fs = require("node:fs"); const started = Number(process.env.BUILD_STARTED_AT); const finished = Math.floor(Date.now() / 1000); fs.writeFileSync(process.argv[1], JSON.stringify({ platform: process.argv[2], startedAt: started, finishedAt: finished, durationSeconds: Math.max(0, finished - started) }) + "\n");' "$RUNNER_TEMP/prerelease-image-artifacts/timings/${{ matrix.pair }}.json" "${{ matrix.platform }}"
+      - name: Upload platform digest and timing
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: prerelease-image-${{ matrix.pair }}
+          path: ${{ runner.temp }}/prerelease-image-artifacts
+          if-no-files-found: error
+          retention-days: 1
+      - name: Summarize platform timing
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/prerelease-image-artifacts/timings/${{ matrix.pair }}.json" ]]; then
+            echo "${{ matrix.platform }} build timing: $(node -p "require('$RUNNER_TEMP/prerelease-image-artifacts/timings/${{ matrix.pair }}.json').durationSeconds") seconds" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "${{ matrix.platform }} build timing: unavailable" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  merge-image:
+    name: Merge pre-release image
+    needs: [validate, build-image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -52,41 +127,55 @@ jobs:
       attestations: write
       id-token: write
     outputs:
-      digest: ${{ steps.push.outputs.digest }}
+      digest: ${{ steps.merge.outputs.digest }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
-          ref: ${{ needs.validate.outputs.source_sha }}
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+          pattern: prerelease-image-*
+          path: ${{ runner.temp }}/prerelease-image-artifacts
+          merge-multiple: true
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          file: ./compose/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo:${{ needs.validate.outputs.version }}
-          cache-from: type=gha,scope=riviamigo-container-image
-          cache-to: type=gha,mode=max,scope=riviamigo-container-image
-          labels: |
-            org.opencontainers.image.source=https://github.com/bballdavis/Riviamigo
-            org.opencontainers.image.revision=${{ needs.validate.outputs.source_sha }}
-            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+      - id: merge
+        name: Merge platform manifests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          mapfile -t digest_files < <(find "$RUNNER_TEMP/prerelease-image-artifacts/digests" -type f -name '*.digest' | sort)
+          mapfile -t timing_files < <(find "$RUNNER_TEMP/prerelease-image-artifacts/timings" -type f -name '*.json' | sort)
+          test "${#digest_files[@]}" -eq 2
+          test "${#timing_files[@]}" -eq 2
+          digests=()
+          for file in "${digest_files[@]}"; do
+            digest=$(tr -d '[:space:]' < "$file")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            digests+=("$IMAGE@$digest")
+          done
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/prerelease-image-metadata.json" \
+            --tag "$IMAGE:$VERSION" "${digests[@]}"
+          digest=$(node -e 'const m = require(process.argv[1]); const d = m["containerimage.descriptor"]?.digest ?? m["containerimage.digest"]; if (!d) process.exit(1); process.stdout.write(d);' "$RUNNER_TEMP/prerelease-image-metadata.json")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          finished=$(date +%s)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Pre-release manifest digest: $digest" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pre-release manifest merge timing: $((finished - started)) seconds" >> "$GITHUB_STEP_SUMMARY"
+          node -e 'const fs = require("node:fs"); const files = process.argv.slice(1); const rows = files.map(f => JSON.parse(fs.readFileSync(f, "utf8"))); for (const row of rows) console.log(`${row.platform} build timing: ${row.durationSeconds} seconds`);' "${timing_files[@]}" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.merge.outputs.digest }}
           push-to-registry: true
 
   release-smoke:
     name: Smoke test
-    needs: [validate, image]
+    needs: [validate, merge-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -109,11 +198,11 @@ jobs:
           echo "RIVIAMIGO_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$smoke_env"
           echo "PRERELEASE_SMOKE_ENV=$smoke_env" >> "$GITHUB_ENV"
       - name: Exercise published pre-release image stack
-        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-tag "${{ needs.validate.outputs.version }}"
+        run: node scripts/verify-fresh-install.mjs --mode production --production-env "$PRERELEASE_SMOKE_ENV" --image-ref "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.merge-image.outputs.digest }}"
 
   populated-upgrade:
     name: Populated upgrade (${{ matrix.platform }})
-    needs: [validate, image]
+    needs: [validate, merge-image]
     strategy:
       fail-fast: false
       matrix:
@@ -149,7 +238,7 @@ jobs:
     env:
       UPGRADE_DATABASE_URL: postgresql://riviamigo:devpassword@127.0.0.1:5432/riviamigo_upgrade_${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
       REDIS_URL: redis://127.0.0.1:6379
-      UPGRADE_IMAGE: ghcr.io/bballdavis/riviamigo:${{ needs.validate.outputs.version }}
+      UPGRADE_IMAGE: ghcr.io/bballdavis/riviamigo@${{ needs.merge-image.outputs.digest }}
       UPGRADE_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -178,7 +267,7 @@ jobs:
 
   create-release:
     name: Create release
-    needs: [validate, image, release-smoke, populated-upgrade]
+    needs: [validate, merge-image, release-smoke, populated-upgrade]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -187,13 +276,13 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
       - name: Verify published multi-architecture image
-        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.image.outputs.digest }}"
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.OWNER }}/riviamigo@${{ needs.merge-image.outputs.digest }}"
       - name: Create digest lock and GitHub pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.validate.outputs.version }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
-          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          IMAGE_DIGEST: ${{ needs.merge-image.outputs.digest }}
         shell: bash
         run: |
           echo "ghcr.io/bballdavis/riviamigo@${IMAGE_DIGEST}" > images.lock

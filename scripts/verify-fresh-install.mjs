@@ -18,6 +18,7 @@ const value = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : un
 const mode = value('--mode') ?? 'all';
 const productionEnv = value('--production-env');
 const imageTag = value('--image-tag');
+const imageRef = value('--image-ref');
 const sourceBuild = args.includes('--source-build');
 const project = `riviamigo-fresh-${Date.now().toString(36)}`;
 const port = String(18080 + Math.floor(Math.random() * 1000));
@@ -168,6 +169,8 @@ function sortJson(value) {
 async function verifyProduction() {
   if (!productionEnv || !existsSync(productionEnv))
     throw new Error('--production-env must point to a valid, ephemeral production env file.');
+  if (imageTag && imageRef)
+    throw new Error('--image-tag and --image-ref are mutually exclusive.');
   productionDataRoot = mkdtempSync(join(tmpdir(), 'riviamigo-fresh-data-'));
   const environment = {
     ...process.env,
@@ -175,6 +178,7 @@ async function verifyProduction() {
     RIVIAMIGO_ENV_FILE: resolve(productionEnv),
     RIVIAMIGO_DATA_DIR: productionDataRoot.replaceAll('\\', '/'),
     ...(imageTag ? { IMAGE_TAG: imageTag } : {}),
+    ...(imageRef ? { RIVIAMIGO_IMAGE: imageRef } : {}),
   };
   productionEnvironment = environment;
   run('docker', [...compose, '--env-file', productionEnv, 'config', '--quiet'], {

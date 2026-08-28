@@ -15,13 +15,27 @@ Stable releases use bare Calendar Versions: `YYYY.MM.PATCH`. The first release i
 1. Ensure `main` is the intended, validated release commit.
 2. Run **Release prep** from Actions. It calculates the next UTC monthly patch number and pushes the protected tag.
 3. **Release image** builds the unified image for `linux/amd64` and `linux/arm64`, pushes the exact version plus `latest`, records its provenance attestation, verifies the manifest, and creates the GitHub release with `images.lock`.
-4. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require repeatability should pin `IMAGE_TAG` to the exact Calendar Version.
+4. Treat the `images.lock` digests as the immutable release identifiers. `latest` is a moving convenience tag; self-hosters who require exact repeatability should set `RIVIAMIGO_IMAGE` to the digest-qualified reference from `images.lock`. Pinning `IMAGE_TAG` to the Calendar Version is stable for normal use but is not as strong as a digest.
 
 Before pushing a release tag, run `pnpm verify:release-image -- --no-cache`. It
 builds the same `linux/amd64,linux/arm64` image locally without pushing it and
 fails after 45 minutes instead of leaving a release check running indefinitely.
-The workflow uses native-platform Rust cross-compilation for ARM64 and a shared
-Actions cache; a clean build should complete well within that limit.
+In GitHub Actions, AMD64 and ARM64 build independently on native runners and
+push digest-addressed platform images. A final job verifies that both digests
+exist, assembles the version manifest (and `latest` for stable releases), and
+attests that merged multi-architecture digest before any release checks begin.
+The smoke and populated-upgrade gates both pull that exact digest rather than a
+mutable version tag, so release approval is bound to the manifest written to
+`images.lock`.
+
+Each platform has a durable GHCR BuildKit cache at
+`buildcache-amd64` or `buildcache-arm64`, with a small platform-scoped GitHub
+Actions cache as a fallback. The registry cache retains intermediate Rust
+layers across release tags; the fallback intentionally uses the minimal cache
+mode to avoid uploading the full Rust target directory to Actions storage.
+Platform build duration and manifest assembly duration are written to the
+workflow summary. Treat the first run after this cache layout changes as the
+cold-cache baseline and compare the following run to measure warm-cache gains.
 The published-image smoke verifier prints the app container's last 200 log lines
 when startup or endpoint verification fails, so runtime failures are visible in
 the Actions job instead of only appearing as a health-check timeout.
@@ -35,10 +49,11 @@ merges into `dev`. After the candidate has passed its pull-request checks,
 run **Preview image** from Actions and provide a version such as
 `2026.07.0-rc.1`, `2026.07.0-beta.1`, or `2026.07.0-alpha.1`.
 
-The workflow builds the current `dev` commit for `linux/amd64` and
-`linux/arm64`, pushes only the exact pre-release image tags, records
-provenance attestations, runs the published-image smoke test, and creates a
-GitHub pre-release. It never updates `latest`.
+The workflow builds the current `dev` commit on separate native AMD64 and ARM64
+runners, merges their digest-addressed outputs, pushes only the exact
+pre-release image tag, records provenance for the merged digest, runs the
+published-image smoke test, and creates a GitHub pre-release. It never updates
+`latest`.
 The GitHub pre-release tag is created at the exact `dev` commit used for the
 build.
 

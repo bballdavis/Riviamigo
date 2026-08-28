@@ -64,6 +64,8 @@ jobs:
         run: pnpm docs:check
       - name: Compose deployment contracts
         run: pnpm compose:check
+      - name: Release workflow contract
+        run: pnpm release-workflows:check
       - name: Render standard and Synology Compose files
         run: pnpm compose:render-check
       - name: Detect documentation-site changes
