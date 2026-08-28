@@ -753,7 +753,9 @@ mod tests {
         let mut unknown = valid();
         unknown["sources"][0]["params"]["metric"] = "not_a_metric".into();
         let errors = parse_and_validate(&unknown).expect_err("unknown metric");
-        assert!(errors.iter().any(|error| error.path.contains("params.metric")));
+        assert!(errors
+            .iter()
+            .any(|error| error.path.contains("params.metric")));
 
         let mut mismatched = valid();
         mismatched["series"][0]["y"]["field"] = "range_miles".into();
