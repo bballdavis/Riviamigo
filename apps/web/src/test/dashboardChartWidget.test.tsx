@@ -11,10 +11,11 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
-import { getDefaultBySlug, getWidget } from '@riviamigo/dashboards';
+import { getBundledChartDefinition, getDefaultBySlug, getWidget } from '@riviamigo/dashboards';
 import {
   getBatteryCapacityMileageYRange,
   getProjectedRangeMileageYRange,
+  usesBundledChartRenderer,
 } from '../../../../packages/dashboards/src/widgets/chart/DashboardChartWidget';
 
 const originalMatchMedia = window.matchMedia;
@@ -69,33 +70,41 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('uses battery capacity by mileage as the Overview app default', () => {
+  it('uses specialized rendering only for an unchanged bundled system definition', () => {
+    const bundled = getBundledChartDefinition('battery-capacity-mileage');
+    if (!bundled) throw new Error('battery capacity chart seed is missing');
+    const { slug, title, description, ...config } = bundled;
+    const seed = { id: 'system', ownerId: null, slug, name: title, description, isDefault: true, isLocked: false, isEnabled: true, config };
+    expect(usesBundledChartRenderer(seed)).toBe(true);
+    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(false);
+  });
+  it('uses projected range by mileage as the Overview app default', () => {
     const overview = getDefaultBySlug('dashboard');
     const chart = overview?.widgets.find((widget) => widget.definitionId === 'catalog');
 
-    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('battery-capacity-mileage');
+    expect((chart?.options as Record<string, unknown> | undefined)?.chartId).toBe('projected-range-mileage');
   });
 
-  it('uses battery capacity by mileage for new overview chart widgets', () => {
+  it('uses projected range by mileage for new overview chart widgets', () => {
     const chart = getWidget('chart', 'catalog');
 
     expect(chart?.defaultOptions).toMatchObject({
       page: 'overview',
-      chartId: 'battery-capacity-mileage',
+      chartId: 'projected-range-mileage',
     });
   });
 
-  it('falls back to battery capacity by mileage when an overview chart has no saved chart ID', () => {
+  it('falls back to projected range by mileage when an overview chart has no saved chart ID', () => {
     renderWidget({
       ...makeInstance('soc-history', true),
       options: {
-        chartIds: ['soc-history', 'battery-capacity-mileage'],
+        chartIds: ['soc-history', 'projected-range-mileage'],
         page: 'overview' as const,
         showPicker: true,
       },
     });
 
-    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Battery Capacity by Mileage');
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('Projected Range by Mileage');
   });
 
   it('registers the tire-pressure timeline through the shared catalog widget on Trips', () => {

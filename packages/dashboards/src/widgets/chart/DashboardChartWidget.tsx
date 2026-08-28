@@ -71,6 +71,7 @@ import {
   type DashboardChartPage,
   type DashboardChartSettingsCapabilities,
 } from '../../charts/catalog';
+import { getBundledChartDefinition } from '../../charts/defaults';
 import { ChartDefinitionRenderer } from './ChartDefinitionRenderer';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
@@ -158,7 +159,7 @@ function readOptions(instance: WidgetInstance): ResolvedDashboardChartOptions {
       .filter((id) => validIds.has(id)))]
     : [];
   const fallbackIds = chartIds.length > 0 ? chartIds : pageDefinitions.map((definition) => definition.id);
-  const pageDefaultChartId = page === 'overview' ? 'battery-capacity-mileage' : undefined;
+  const pageDefaultChartId = page === 'overview' ? 'projected-range-mileage' : undefined;
   const fallbackChartId = (pageDefaultChartId && fallbackIds.includes(pageDefaultChartId)
     ? pageDefaultChartId
     : fallbackIds[0]) ?? getChartDefinitions()[0]?.id ?? 'soc-history';
@@ -193,7 +194,8 @@ const EMPTY_CAPABILITIES: DashboardChartSettingsCapabilities = {
 
 export function DashboardChartWidget({ instance, ctx }: { instance: WidgetInstance; ctx: WidgetCtx }) {
   const options = readOptions(instance);
-  const assignedCatalog = useEffectiveCharts(options.catalogMode === 'assigned' ? ctx.dashboardSlug ?? null : null);
+  const assignedPlacement = options.page === 'overview' ? 'overview' : ctx.dashboardSlug ?? null;
+  const assignedCatalog = useEffectiveCharts(options.catalogMode === 'assigned' ? assignedPlacement : null);
   const chartOptions = getChartOptions(options.page).filter((option) => options.chartIds.includes(option.value));
   const defaultStorageKey = chartDefaultStorageKey(ctx, instance);
   const { data: favoriteResponse, isSuccess: favoritesLoaded } = useDashboardChartFavorites();
@@ -485,14 +487,28 @@ function AssignedChartRuntime({
     return <div className="flex h-full min-h-32 items-center justify-center rounded-lg border border-dashed border-border p-4 text-sm text-fg-tertiary">No enabled charts are assigned to this dashboard.</div>;
   }
 
-  const renderedChart = definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={height} loading={datasetState.isLoading} /> : null;
+  const usesBundledRenderer = usesBundledChartRenderer(active);
+  const renderedChart = usesBundledRenderer
+    ? <DashboardChartRenderer chartId={active.slug} ctx={ctx} height={height} settings={settings} />
+    : definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={height} loading={datasetState.isLoading} /> : null;
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
       {options.showPicker && chartOptions.length > 1 ? <ChartPicker value={active.slug} options={chartOptions} onChange={setChartId} searchValue={search} onSearchChange={setSearch} defaultValue={defaultChartIdState} onSetDefault={setChartAsDefault} /> : <div className="mb-2 flex shrink-0 items-center justify-between"><p className="text-sm font-medium uppercase tracking-wider text-fg-secondary">{active.name}</p><button type="button" aria-label="Expand chart" onClick={() => setViewerOpen(true)} className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-border text-fg-tertiary sm:hidden"><Maximize2 className="h-4 w-4" /></button></div>}
       {!viewerOpen ? <div ref={ref} className="min-h-0 flex-1 overflow-hidden">{renderedChart}</div> : null}
-      {viewerOpen ? <MobileChartViewer chartId={active.slug} chartTitle={active.name} chartOptions={chartOptions} onChartChange={setChartId} defaultChartId={defaultChartIdState} onSetDefault={setChartAsDefault} onClose={() => setViewerOpen(false)}>{(viewerHeight) => definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={viewerHeight} loading={datasetState.isLoading} presentation="mobile-viewer" /> : null}</MobileChartViewer> : null}
+      {viewerOpen ? <MobileChartViewer chartId={active.slug} chartTitle={active.name} chartOptions={chartOptions} onChartChange={setChartId} defaultChartId={defaultChartIdState} onSetDefault={setChartAsDefault} onClose={() => setViewerOpen(false)}>{(viewerHeight) => usesBundledRenderer ? <DashboardChartRenderer chartId={active.slug} ctx={ctx} height={viewerHeight} settings={settings} presentation="mobile-viewer" /> : definition ? <ChartDefinitionRenderer definition={definition} datasets={datasetState.datasets} height={viewerHeight} loading={datasetState.isLoading} presentation="mobile-viewer" /> : null}</MobileChartViewer> : null}
     </div>
   );
+}
+
+export function usesBundledChartRenderer(chart: ChartRecord) {
+  if (!chart.isDefault || getChartDefinition(chart.slug) == null) return false;
+  const bundled = getBundledChartDefinition(chart.slug);
+  if (!bundled) return false;
+  const definition = { ...bundled } as Partial<typeof bundled>;
+  delete definition.slug;
+  delete definition.title;
+  delete definition.description;
+  return JSON.stringify(chart.config) === JSON.stringify(definition);
 }
 
 export function DashboardChartRenderer({
@@ -2148,7 +2164,7 @@ registerWidget({
   minSize: { w: 4, h: 6 },
   defaultOptions: {
     page: 'overview',
-    chartId: 'battery-capacity-mileage',
+    chartId: 'projected-range-mileage',
     showPicker: true,
     timeFilter: DEFAULT_CHART_TIME_FILTER,
   },

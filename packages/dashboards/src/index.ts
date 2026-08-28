@@ -21,7 +21,7 @@ export * from './dashboardVisibility';
 export { getChartDefinition, getChartDefinitions, getChartOptions, getChartSettingsCapabilities } from './charts/catalog';
 export { parseSafeMathExpression, resolveSafeExpression, resolveSafeNumberPath } from './charts/expressions';
 export { BUNDLED_CHART_DEFINITIONS, BUNDLED_CHART_SLUGS, getBundledChartDefinition } from './charts/defaults';
-export { CHART_SOURCE_MANIFESTS, getChartSourceManifest } from './charts/sources';
+export { CHART_SOURCE_MANIFESTS, getChartSourceManifest, resolveChartSourceCapabilities } from './charts/sources';
 export { CHART_RENDERER_PLUGINS, getChartRenderer } from './charts/rendererRegistry';
 export {
   buildChartManagerEntries,

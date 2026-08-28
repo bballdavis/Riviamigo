@@ -4,8 +4,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-pub const BUNDLED_CHART_BASELINE_REVISION: i32 = 1;
-
+pub const BUNDLED_CHART_BASELINE_REVISION: i32 = 2;
 
 const BUNDLED_CHART_DEFAULTS: &str = include_str!("../../charts/defaults.json");
 
@@ -78,7 +77,6 @@ pub struct ChartManagerEntry {
     pub permissions: ChartPermissions,
 }
 
-
 pub fn merge_entries(
     mut rows: Vec<ChartRecord>,
     user_id: Uuid,
@@ -87,7 +85,6 @@ pub fn merge_entries(
     rows.sort_by(|a, b| {
         a.slug
             .cmp(&b.slug)
-
             .then_with(|| a.owner_id.is_some().cmp(&b.owner_id.is_some()))
     });
     let mut entries = Vec::new();
@@ -105,7 +102,6 @@ pub fn merge_entries(
         while rows.last().is_some_and(|candidate| candidate.slug == slug) {
             let candidate = rows.pop().expect("row exists");
             if candidate.owner_id.is_none() {
-
                 system_base = Some(candidate);
             } else if candidate.owner_id == Some(user_id) {
                 personal_override = Some(candidate);
@@ -114,7 +110,6 @@ pub fn merge_entries(
         if let Some(personal) = personal_override.clone() {
             effective = personal;
         } else if let Some(system) = system_base.clone() {
-
             effective = system;
         }
         let is_personal = effective.owner_id == Some(user_id);
@@ -132,7 +127,6 @@ pub fn merge_entries(
             } else {
                 "system"
             }
-
             .into(),
             permissions: ChartPermissions {
                 read: true,

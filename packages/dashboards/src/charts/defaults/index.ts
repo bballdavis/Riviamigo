@@ -112,13 +112,13 @@ export const BUNDLED_CHART_DEFINITIONS: ReadonlyArray<ChartDefinitionV1 & {
     slug: 'charge-session-curve',
     title: 'Charge Rate Curve',
     description: 'Charge rate over state of charge for the selected session.',
-    ...definition({ slug: 'charge-session-curve', placements: ['charging'], sourceId: 'charging.charge-curve', xField: 'elapsed_minutes', xKind: 'number', yUnit: 'kW', yFields: [{ field: 'power_kw', label: 'Charge Rate', unit: 'kW', color: accent }, { field: 'energy_kwh', label: 'Energy Added', unit: 'kWh', color: emerald }] }),
+    ...definition({ slug: 'charge-session-curve', placements: ['overview', 'charging'], sourceId: 'charging.charge-curve', xField: 'elapsed_minutes', xKind: 'number', yUnit: 'kW', yFields: [{ field: 'power_kw', label: 'Charge Rate', unit: 'kW', color: accent }, { field: 'energy_kwh', label: 'Energy Added', unit: 'kWh', color: emerald }] }),
   },
   {
     slug: 'charging-curve-analysis',
     title: 'DC Charging Curve Trend',
     description: 'Verified DC charge sessions by exact state of charge, with dense power-colored evidence points and an optional observed or best-observed local-regression trend line.',
-    ...definition({ slug: 'charging-curve-analysis', placements: ['charging'], sourceId: 'charging.curve-analysis', xField: 'soc_pct', xKind: 'number', yUnit: 'kW', yFields: [{ field: 'power_kw', label: 'Power', unit: 'kW', color: accent }], marks: ['scatter'] }),
+    ...definition({ slug: 'charging-curve-analysis', placements: ['overview', 'charging'], sourceId: 'charging.curve-analysis', xField: 'soc_pct', xKind: 'number', yUnit: 'kW', yFields: [{ field: 'power_kw', label: 'Power', unit: 'kW', color: accent }], marks: ['scatter'] }),
   },
   {
     slug: 'charging-sessions-energy',
@@ -142,7 +142,7 @@ export const BUNDLED_CHART_DEFINITIONS: ReadonlyArray<ChartDefinitionV1 & {
     slug: 'efficiency-tags',
     title: 'Efficiency by Tag',
     description: 'Distance-weighted driving efficiency grouped by shared trip tags.',
-    ...definition({ slug: 'efficiency-tags', placements: ['efficiency'], sourceId: 'efficiency.trip-tags', xField: 'tag_name', xKind: 'category', yUnit: 'Wh/mi', yFields: [{ field: 'avg_efficiency_wh_mi', label: 'Efficiency', unit: 'Wh/mi', color: violet }], marks: ['bar'] }),
+    ...definition({ slug: 'efficiency-tags', placements: ['overview', 'efficiency'], sourceId: 'efficiency.trip-tags', xField: 'tag_name', xKind: 'category', yUnit: 'Wh/mi', yFields: [{ field: 'avg_efficiency_wh_mi', label: 'Efficiency', unit: 'Wh/mi', color: violet }], marks: ['bar'] }),
   },
   {
     slug: 'efficiency-temperature',

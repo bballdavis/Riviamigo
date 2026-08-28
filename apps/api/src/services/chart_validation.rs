@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::routes::metrics::is_series_metric;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChartDefinitionV1 {
@@ -325,17 +327,14 @@ pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartV
                 "Unknown chart source ID",
             ));
         }
-        if source.source_id == "metrics.series"
-            && source
-                .params
-                .get("metric")
-                .and_then(Value::as_str)
-                .is_none()
-        {
-            errors.push(error(
-                &format!("config.sources.{}.params.metric", source.id),
-                "Metric series requires an allowlisted metric parameter",
-            ));
+        if source.source_id == "metrics.series" {
+            match source.params.get("metric").and_then(Value::as_str) {
+                Some(metric) if is_series_metric(metric) => {}
+                _ => errors.push(error(
+                    &format!("config.sources.{}.params.metric", source.id),
+                    "Metric series requires a known series-capable metric parameter",
+                )),
+            }
         }
         for filter in &source.filters {
             if !id(&filter.field)
@@ -516,10 +515,20 @@ fn validate_source_field(
         .iter()
         .find(|source| source.id == reference.source_binding_id)
     {
-        if !source_fields(&source.source_id).contains(&reference.field.as_str()) {
+        let valid = if source.source_id == "metrics.series" {
+            reference.field == "timestamp"
+                || source
+                    .params
+                    .get("metric")
+                    .and_then(Value::as_str)
+                    .is_some_and(|metric| metric == reference.field && is_series_metric(metric))
+        } else {
+            source_fields(&source.source_id).contains(&reference.field.as_str())
+        };
+        if !valid {
             errors.push(error(
                 path,
-                "Field is not available from the selected source",
+                "Field is not available from the selected source or does not match its metric parameter",
             ));
         }
     }
@@ -527,15 +536,7 @@ fn validate_source_field(
 
 fn source_fields(source_id: &str) -> &'static [&'static str] {
     match source_id {
-        "metrics.series" => &[
-            "timestamp",
-            "battery_level",
-            "range_miles",
-            "odometer_miles",
-            "power_kw",
-            "outside_temp_c",
-            "speed_mph",
-        ],
+        "metrics.series" => &["timestamp"],
         "battery.mileage" => &[
             "timestamp",
             "odometer_miles",
@@ -746,5 +747,17 @@ mod tests {
         value["sources"][0]["sourceId"] = "unknown.source".into();
         value["axes"]["y"]["domain"] = serde_json::json!({"mode":"fixed","min":2,"max":1});
         assert!(parse_and_validate(&value).is_err());
+    }
+    #[test]
+    fn rejects_unknown_or_mismatched_metric_series_bindings() {
+        let mut unknown = valid();
+        unknown["sources"][0]["params"]["metric"] = "not_a_metric".into();
+        let errors = parse_and_validate(&unknown).expect_err("unknown metric");
+        assert!(errors.iter().any(|error| error.path.contains("params.metric")));
+
+        let mut mismatched = valid();
+        mismatched["series"][0]["y"]["field"] = "range_miles".into();
+        let errors = parse_and_validate(&mismatched).expect_err("mismatched field");
+        assert!(errors.iter().any(|error| error.path.contains("series.0.y")));
     }
 }
