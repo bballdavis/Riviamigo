@@ -142,6 +142,11 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
     queryFn: () => api.getRivianStewardship(),
     enabled: isAdmin && collectorOpen,
   });
+  const acquisitionHealth = useQuery({
+    queryKey: ['vehicle-health', vehicleId, 'raw-acquisition'],
+    queryFn: () => api.getVehicleHealth(vehicleId),
+    enabled: isAdmin && collectorOpen && !!vehicleId,
+  });
 
   const samples = query.data?.samples ?? [];
   const selectedSample = samples.find((sample) => sample.ts === selectedSampleTime) ?? samples[0] ?? null;
@@ -326,7 +331,7 @@ export function RawTelemetryExplorer({ vehicles, isAdmin }: { vehicles: Vehicle[
         ) : null}
       </Card>
 
-      {isAdmin ? <CollectorDiagnostics open={collectorOpen} onToggle={() => setCollectorOpen((current) => !current)} data={stewardship.data} loading={stewardship.isLoading} onRefresh={() => void stewardship.refetch()} /> : null}
+      {isAdmin ? <CollectorDiagnostics open={collectorOpen} onToggle={() => setCollectorOpen((current) => !current)} data={stewardship.data} acquisition={acquisitionHealth.data?.extended_telemetry} loading={stewardship.isLoading || acquisitionHealth.isLoading} onRefresh={() => { void stewardship.refetch(); void acquisitionHealth.refetch(); }} /> : null}
     </div>
   );
 }
@@ -358,8 +363,8 @@ function CopyJson({ label, value }: { label: string; value: unknown }) {
   return <Button variant="secondary" size="sm" aria-label={copied ? `${label} copied` : label} iconLeft={<Clipboard className="h-3.5 w-3.5" />} onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(value, null, 2)); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }}>{copied ? 'Copied' : 'Copy'}</Button>;
 }
 
-function CollectorDiagnostics({ open, onToggle, data, loading, onRefresh }: { open: boolean; onToggle: () => void; data: Awaited<ReturnType<typeof api.getRivianStewardship>> | undefined; loading: boolean; onRefresh: () => void }) {
-  return <Card><CardHeader><div><CardTitle>Collector diagnostics</CardTitle><p className="mt-1 text-sm text-fg-tertiary">Installation-wide ingestion and duplicate-suppression health.</p></div><Button variant="secondary" size="sm" iconLeft={<SlidersHorizontal className="h-3.5 w-3.5" />} onClick={onToggle}>{open ? 'Hide diagnostics' : 'Show diagnostics'}</Button></CardHeader>{open ? <CardContent className="grid gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-fg-tertiary">Raw events retained: {formatCount(data?.raw_events_retained)} · Retention: {data?.retention_days ?? 7} days</p><Button variant="secondary" size="sm" loading={loading} onClick={onRefresh}>Refresh</Button></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['Active collectors', data?.active_collectors], ['Payload messages', data?.totals_24h.ws_payload_messages_received], ['Writes persisted', data?.totals_24h.telemetry_writes_persisted], ['Writes suppressed', data?.totals_24h.telemetry_writes_suppressed]].map(([label, value]) => <SummaryCard key={String(label)} label={String(label)} value={formatCount(value as number | undefined)} detail="Last 24 hours" />)}</div></CardContent> : null}</Card>;
+function CollectorDiagnostics({ open, onToggle, data, acquisition, loading, onRefresh }: { open: boolean; onToggle: () => void; data: Awaited<ReturnType<typeof api.getRivianStewardship>> | undefined; acquisition: Awaited<ReturnType<typeof api.getVehicleHealth>>['extended_telemetry'] | undefined; loading: boolean; onRefresh: () => void }) {
+  return <Card><CardHeader><div><CardTitle>Collector diagnostics</CardTitle><p className="mt-1 text-sm text-fg-tertiary">Normalized acquisition metadata and duplicate-suppression health. Parallax protobuf payloads and excluded network identifiers are never exposed here.</p></div><Button variant="secondary" size="sm" iconLeft={<SlidersHorizontal className="h-3.5 w-3.5" />} onClick={onToggle}>{open ? 'Hide diagnostics' : 'Show diagnostics'}</Button></CardHeader>{open ? <CardContent className="grid gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-fg-tertiary">Raw canonical events retained: {formatCount(data?.raw_events_retained)} · Retention: {data?.retention_days ?? 7} days</p><Button variant="secondary" size="sm" loading={loading} onClick={onRefresh}>Refresh</Button></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['Extended state', acquisition?.parallax?.status], ['Last meaningful frame', formatDate(acquisition?.parallax?.last_meaningful_frame_at)], ['Legacy frame', acquisition?.legacy_charging_session?.classification], ['Decode errors', acquisition?.parallax?.decode_error_count]].map(([label, value]) => <SummaryCard key={String(label)} label={String(label)} value={value == null ? 'Never observed' : String(value)} detail="Selected vehicle" />)}</div><div className="rounded-xl border border-border bg-bg-elevated/25 p-3"><p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Normalized charging topics</p><p className="mt-2 break-words font-mono text-xs text-fg-secondary">energy.high_voltage.battery_state · energy_edge_compute.graphs.charging_graph_global · energy_edge_compute.graphs.charge_session_breakdown · charging.session.time_estimation · charging.session.status</p></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['Active collectors', data?.active_collectors], ['Payload messages', data?.totals_24h.ws_payload_messages_received], ['Writes persisted', data?.totals_24h.telemetry_writes_persisted], ['Writes suppressed', data?.totals_24h.telemetry_writes_suppressed]].map(([label, value]) => <SummaryCard key={String(label)} label={String(label)} value={formatCount(value as number | undefined)} detail="Last 24 hours" />)}</div></CardContent> : null}</Card>;
 }
 
 function timeframeBounds(timeframe: Timeframe) {

@@ -697,6 +697,31 @@ describe('/health page cleanup', () => {
             last_error: null,
             updated_at: '2026-05-30T01:00:00Z',
           },
+          parallax: {
+            status: 'connected',
+            last_frame_at: '2026-05-30T01:00:00Z',
+            last_meaningful_frame_at: '2026-05-30T01:00:00Z',
+            reconnect_count: 2,
+            decode_error_count: 1,
+            empty_frame_count: 4,
+            ambiguity_count: 0,
+            last_error: null,
+          },
+          legacy_charging_session: {
+            classification: 'meaningful',
+            last_frame_at: '2026-05-30T01:00:00Z',
+            last_meaningful_frame_at: '2026-05-30T01:00:00Z',
+            null_count: 3,
+            missing_count: 0,
+            malformed_count: 0,
+            all_null_count: 8,
+            meaningful_count: 2,
+          },
+          session_repair: {
+            repair_key: 'active-tail-merge:a:b',
+            reason: 'telemetry_proven_restart_split',
+            created_at: '2026-05-30T00:30:00Z',
+          },
           network: {
             source_at: '2026-05-30T01:00:00Z',
             wifi_connected: true,
@@ -726,9 +751,12 @@ describe('/health page cleanup', () => {
     render(<HealthContent />);
 
     expect(screen.getByText('Extended Vehicle Telemetry')).toBeInTheDocument();
-    expect(screen.getByText('Collector connected')).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
     expect(screen.getByText('Rivian learned estimate')).toBeInTheDocument();
     expect(screen.getByText('Estimated vehicle mass')).toBeInTheDocument();
+    expect(screen.getByText('2 reconnects')).toBeInTheDocument();
+    expect(screen.getByText(/1 decode · 4 empty · 0 ambiguous/)).toBeInTheDocument();
+    expect(screen.getByText(/telemetry proven restart split/)).toBeInTheDocument();
     expect(screen.queryByText('Cold-weather impact')).not.toBeInTheDocument();
 
     const softwareHistory = screen.getByText('Software History');
@@ -738,7 +766,7 @@ describe('/health page cleanup', () => {
     ).toBeTruthy();
   });
 
-  it('hides extended telemetry when the Parallax collector is not running', () => {
+  it('keeps extended telemetry visible when the Parallax companion is not running', () => {
     mockUseVehicleHealth.mockReturnValueOnce({
       data: {
         ...healthDataBase,
@@ -751,6 +779,27 @@ describe('/health page cleanup', () => {
             last_error: 'Collector stopped',
             updated_at: '2026-05-30T01:00:00Z',
           },
+          parallax: {
+            status: 'duplicate_owner',
+            last_frame_at: null,
+            last_meaningful_frame_at: null,
+            reconnect_count: 0,
+            decode_error_count: 0,
+            empty_frame_count: 0,
+            ambiguity_count: 0,
+            last_error: 'Standalone collector lease is still fresh',
+          },
+          legacy_charging_session: {
+            classification: 'all_null',
+            last_frame_at: '2026-05-30T01:00:00Z',
+            last_meaningful_frame_at: null,
+            null_count: 0,
+            missing_count: 0,
+            malformed_count: 0,
+            all_null_count: 12,
+            meaningful_count: 0,
+          },
+          session_repair: null,
           network: null,
           efficiency: null,
           mass: null,
@@ -762,6 +811,8 @@ describe('/health page cleanup', () => {
 
     render(<HealthContent />);
 
-    expect(screen.queryByTestId('extended-vehicle-telemetry')).not.toBeInTheDocument();
+    expect(screen.getByTestId('extended-vehicle-telemetry')).toBeInTheDocument();
+    expect(screen.getByText('Duplicate owner')).toBeInTheDocument();
+    expect(screen.getByText(/canonical vehicle telemetry continues independently/i)).toBeInTheDocument();
   });
 });

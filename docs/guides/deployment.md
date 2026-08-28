@@ -104,10 +104,9 @@ docker compose --env-file .env -f compose/docker-compose.yml -f compose/docker-c
 
 Local development continues to use `pnpm dev:stack` and
 `compose/docker-compose.dev.yml`; production image consolidation does not
-change that workflow. The optional Parallax collector is available through the
-source-development commands and the `parallax` development Compose profile,
-but it is intentionally absent from both published and locally built
-production images.
+change that workflow. Extended Parallax acquisition is enabled inside the API
+by default. Set `PARALLAX_ENABLED=false` only for emergency rollback; production
+and development no longer launch a separate collector process or container.
 
 ## Stopping and recovery
 

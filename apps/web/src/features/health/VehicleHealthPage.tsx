@@ -97,7 +97,6 @@ export function VehicleHealthContent() {
 
   const diagnostics = summarizeDiagnostics(status);
   const extended = data?.extended_telemetry;
-  const parallaxCollectorRunning = extended?.collector?.running === true;
   const vehicleName = data?.vehicle?.name || data?.vehicle?.model || 'Rivian';
   const displayModel = [data?.vehicle?.model, data?.vehicle?.trim].filter(Boolean).join(' ');
   const freshness = getFreshness(data?.runtime?.last_event_at ?? data?.latest?.ts ?? null);
@@ -485,29 +484,27 @@ export function VehicleHealthContent() {
               </CardContent>
             </Card>
 
-            {parallaxCollectorRunning ? (
+            {
               <Card data-testid="extended-vehicle-telemetry">
                 <CardHeader>
                   <div>
                     <CardTitle>Extended Vehicle Telemetry</CardTitle>
                     <p className="mt-1 text-xs text-fg-tertiary">
-                      Privacy-filtered readings from the independent Parallax collector.
+                      Privacy-filtered readings from the in-process extended telemetry companion.
                     </p>
                   </div>
                   <Badge
-                    variant={extended?.collector?.status === 'connected' ? 'success' : 'default'}
+                    variant={(extended?.parallax?.status ?? extended?.collector?.status) === 'connected' ? 'success' : 'default'}
                     dot
                   >
-                    {extended?.collector?.status === 'connected'
-                      ? 'Collector connected'
-                      : 'Collector optional'}
+                    {formatParallaxState(extended?.parallax?.status ?? extended?.collector?.status)}
                   </Badge>
                 </CardHeader>
                 <CardContent>
                   {isLoading ? (
                     <HealthGridSkeleton />
                   ) : !extended?.network && !extended?.efficiency && !extended?.mass ? (
-                    <EmptyPanel text="Start the optional Parallax collector to populate connectivity, Rivian efficiency, and mass estimates." />
+                    <EmptyPanel text="Extended telemetry has not produced a meaningful frame yet. Canonical vehicle telemetry continues independently." />
                   ) : (
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       <ExtendedReading
@@ -567,20 +564,60 @@ export function VehicleHealthContent() {
                       ) : null}
                     </div>
                   )}
-                  {extended?.collector?.last_event_at ? (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <ExtendedReading
+                      icon={<Radio className="h-4 w-4" />}
+                      label="Acquisition"
+                      value="Operational state"
+                      detail={extended?.parallax?.last_meaningful_frame_at
+                        ? `${formatParallaxState(extended?.parallax?.status ?? extended?.collector?.status)} · meaningful frame ${formatAppDateTime(extended.parallax.last_meaningful_frame_at)}`
+                        : `${formatParallaxState(extended?.parallax?.status ?? extended?.collector?.status)} · ${extended?.parallax?.last_error ?? 'no meaningful frame observed'}`}
+                    />
+                    <ExtendedReading
+                      icon={<Activity className="h-4 w-4" />}
+                      label="Acquisition diagnostics"
+                      value={`${extended?.parallax?.reconnect_count ?? 0} reconnects`}
+                      detail={`${extended?.parallax?.decode_error_count ?? 0} decode · ${extended?.parallax?.empty_frame_count ?? 0} empty · ${extended?.parallax?.ambiguity_count ?? 0} ambiguous`}
+                    />
+                    <ExtendedReading
+                      icon={<Cable className="h-4 w-4" />}
+                      label="Legacy chargingSession"
+                      value={extended?.legacy_charging_session?.classification.replace('_', ' ') ?? 'not observed'}
+                      detail={extended?.legacy_charging_session?.last_meaningful_frame_at
+                        ? `Meaningful frame ${formatAppDateTime(extended.legacy_charging_session.last_meaningful_frame_at)}`
+                        : `${extended?.legacy_charging_session?.all_null_count ?? 0} all-null · ${extended?.legacy_charging_session?.malformed_count ?? 0} malformed`}
+                    />
+                  </div>
+                  {extended?.session_repair ? (
                     <p className="mt-3 text-xs text-fg-tertiary">
-                      Collector last received data{' '}
-                      {formatAppDateTime(extended.collector.last_event_at)}
+                      Last session repair: {extended.session_repair.reason.replaceAll('_', ' ')} ·{' '}
+                      {formatAppDateTime(extended.session_repair.created_at)}
                     </p>
-                  ) : null}
+                  ) : (
+                    <p className="mt-3 text-xs text-fg-tertiary">No automatic session repairs recorded.</p>
+                  )}
                 </CardContent>
               </Card>
-            ) : null}
+            }
           </>
         )}
       </PageLayout>
     </AppLayout>
   );
+}
+
+function formatParallaxState(status: string | undefined) {
+  switch (status) {
+    case 'connected': return 'Connected';
+    case 'reconnecting': return 'Reconnecting';
+    case 'stale': return 'Stale';
+    case 'disabled': return 'Disabled';
+    case 'duplicate_owner': return 'Duplicate owner';
+    case 'error': return 'Error';
+    case 'disconnected': return 'Disconnected';
+    case 'starting': return 'Starting';
+    default: return 'Never observed';
+  }
 }
 
 function HeroMetric({
