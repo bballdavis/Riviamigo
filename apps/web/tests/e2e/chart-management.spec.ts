@@ -92,7 +92,7 @@ async function installMocks(page: Page) {
 }
 
 function readJson<T>(path: string): T { return JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as T; }
-function authTokens() { return { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJlMmUtdXNlciJ9.', expires_in: 3600, default_vehicle_id: 'vehicle-1' }; }
+function authTokens() { return { access_token: 'test-access-token', expires_in: 3600, default_vehicle_id: 'vehicle-1' }; }
 function testVehicle() { return { id: 'vehicle-1', user_id: 'e2e-user', rivian_vehicle_id: 'rivian-vehicle-1', vin: null, model: 'R1T', year: 2025, trim: 'Adventure', color: 'Forest Green', battery_capacity_kwh: 135, display_name: 'Test R1T', created_at: '2026-01-01T00:00:00Z', images: null, membership_role: 'owner' }; }
 function unitPreferences() { return { mode: 'imperial', distance_unit: 'miles', speed_unit: 'mph', temperature_unit: 'fahrenheit', pressure_unit: 'psi', altitude_unit: 'feet', place_radius_unit: 'feet', efficiency_display: 'distance_per_energy' }; }
 function json(route: Route, body: unknown) { return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }); }
