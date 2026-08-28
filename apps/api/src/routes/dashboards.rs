@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_bundle_uses_battery_capacity_by_mileage_as_its_default_chart() {
+    fn overview_bundle_uses_projected_range_by_mileage_as_its_default_chart() {
         let id: Uuid = "00000000-0000-0000-0000-000000000001".parse().unwrap();
         let config = bundled_default_config(id).expect("overview default");
         let chart_id = config["widgets"]
@@ -848,7 +848,7 @@ mod tests {
             })
             .and_then(|widget| widget["options"]["chartId"].as_str());
 
-        assert_eq!(chart_id, Some("battery-capacity-mileage"));
+        assert_eq!(chart_id, Some("projected-range-mileage"));
     }
 
     #[test]
