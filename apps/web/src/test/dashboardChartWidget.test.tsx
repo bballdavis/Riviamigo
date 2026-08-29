@@ -72,14 +72,14 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('uses the specialized renderer only for unchanged bundled definitions', () => {
+  it('renders built-in charts through the standard dashboard renderer regardless of placement metadata', () => {
     const bundled = getBundledChartDefinition('battery-capacity-mileage');
     if (!bundled) throw new Error('battery capacity chart seed is missing');
     const { slug, title, description, ...config } = bundled;
     const seed = { id: 'system', ownerId: null, slug, name: title, description, isDefault: true, isLocked: false, isEnabled: true, config };
     expect(usesBundledChartRenderer(seed)).toBe(true);
     expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, placements: [{ dashboardSlug: 'overview' }] } })).toBe(true);
-    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(false);
+    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(true);
   });
   it('keeps the standard renderer when managed metadata is reordered', () => {
     const seed = chartRecord('battery-capacity-mileage');
