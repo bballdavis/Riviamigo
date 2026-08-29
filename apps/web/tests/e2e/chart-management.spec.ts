@@ -37,6 +37,10 @@ test('chart manager and editor remain usable at desktop and phone widths', async
   await page.getByRole('button', { name: 'curves' }).click();
   await expect(page.getByText('Plotted over', { exact: true })).toBeVisible();
   await page.getByText('Add curve', { exact: true }).click();
+  const curveAvailabilityFilter = page.getByRole('button', { name: 'Showing available curves only' });
+  await expect(curveAvailabilityFilter).toHaveAttribute('aria-pressed', 'true');
+  await curveAvailabilityFilter.click();
+  await expect(page.getByRole('button', { name: 'Showing all curves' })).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('textbox', { name: 'Search curves' }).fill('battery level');
   await expect(page.getByRole('button', { name: /Battery Level/ })).toBeVisible();
   await expect(page.getByText(/production chart renderer/)).toBeVisible();

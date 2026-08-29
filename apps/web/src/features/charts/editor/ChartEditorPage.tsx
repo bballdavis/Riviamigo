@@ -24,7 +24,7 @@ import {
 } from '@riviamigo/hooks';
 import type { ChartAxisDefinition, ChartColorToken, ChartDefinitionV1, ChartMark, ChartRecord, ChartSeriesDefinition, ChartSourceBinding, ChartSourceManifest, MetricCatalogEntry } from '@riviamigo/types';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Switch } from '@riviamigo/ui/primitives';
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Download, Save, Search, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Download, Filter, Save, Search, Trash2 } from 'lucide-react';
 
 type EditorSection = 'basics' | 'curves' | 'display' | 'advanced';
 
@@ -292,11 +292,63 @@ function BasicsSection({ draft, onChange }: { draft: ChartRecord; onChange: (pat
 
 function CurvesSection({ definition, manifests, metrics, onNotice, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; metrics: MetricCatalogEntry[]; onNotice: (notice: string | null) => void; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
   const [query, setQuery] = React.useState('');
+  const [availableOnly, setAvailableOnly] = React.useState(true);
   const domain = sharedDomain(definition, manifests);
   const catalog = buildCurveCatalog(manifests, metrics, definition);
   const mixed = isMixedDomain(definition, manifests);
-  const filtered = catalog.filter((option) => `${option.label} ${option.category} ${option.description}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="grid gap-4"><EditorCard title="Curves" description="Build the chart from searchable sensors and values. Each curve keeps its own mark, color, and axis."><div className="grid gap-4"><EditorField label="Timeframe"><select value={definition.timeframe.mode === 'relative' ? definition.timeframe.preset : definition.timeframe.mode} onChange={(event) => onChange((current) => ({ ...current, timeframe: event.target.value === 'dashboard' ? { mode: 'dashboard' } : event.target.value === 'lifetime' ? { mode: 'lifetime' } : { mode: 'relative', preset: event.target.value as '24h' | '7d' | '30d' | '90d' | '1y' } }))} className="editor-input"><option value="dashboard">Dashboard range</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="1y">Last year</option><option value="lifetime">Lifetime</option></select></EditorField><div className="rounded-lg border border-border bg-bg-elevated/30 p-3"><p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Plotted over</p><p className="mt-1 text-sm text-fg">{domain.label}{domain.unit ? ` · ${domain.unit}` : ''}</p>{mixed ? <p className="mt-1 text-xs text-warning">This chart uses mixed domains; curve changes are disabled. Use Advanced for exact bindings.</p> : null}</div><details className="rounded-lg border border-border bg-bg-elevated/20 p-3"><summary className="cursor-pointer text-sm font-medium">Add curve</summary><div className="mt-3 grid gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search curves" aria-label="Search curves" className="editor-input" /><div className="grid gap-1">{filtered.map((option) => <button key={option.id} type="button" disabled={!option.enabled || mixed} title={option.disabledReason} className="flex min-h-11 items-center justify-between rounded-md px-3 text-left text-sm hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-45" onClick={() => onChange((current) => addSeriesFromChoice(current, option.id, manifests, metrics, onNotice))}><span><span className="block">{option.label}</span><span className="block text-xs text-fg-tertiary">{option.category} · {option.description}</span>{!option.enabled || mixed ? <span className="block text-xs text-warning">{mixed ? 'Mixed-domain chart; edit in Advanced.' : option.disabledReason ?? 'Unavailable for this chart.'}</span> : null}</span></button>)}{filtered.length === 0 ? <p className="px-3 py-4 text-sm text-fg-tertiary">No matching curves.</p> : null}</div></div></details><CurvesListSection definition={definition} manifests={manifests} metrics={metrics} onNotice={onNotice} onChange={onChange} /></div></EditorCard></div>;
+  const normalizedQuery = query.toLowerCase();
+  const filtered = catalog.filter((option) => (
+    (!availableOnly || (option.enabled && !mixed))
+    && `${option.label} ${option.category} ${option.description}`.toLowerCase().includes(normalizedQuery)
+  ));
+
+  return (
+    <div className="grid gap-4">
+      <EditorCard title="Curves" description="Build the chart from searchable sensors and values. Each curve keeps its own mark, color, and axis.">
+        <div className="grid gap-4">
+          <EditorField label="Timeframe">
+            <select value={definition.timeframe.mode === 'relative' ? definition.timeframe.preset : definition.timeframe.mode} onChange={(event) => onChange((current) => ({ ...current, timeframe: event.target.value === 'dashboard' ? { mode: 'dashboard' } : event.target.value === 'lifetime' ? { mode: 'lifetime' } : { mode: 'relative', preset: event.target.value as '24h' | '7d' | '30d' | '90d' | '1y' } }))} className="editor-input">
+              <option value="dashboard">Dashboard range</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+              <option value="1y">Last year</option>
+              <option value="lifetime">Lifetime</option>
+            </select>
+          </EditorField>
+          <div className="rounded-lg border border-border bg-bg-elevated/30 p-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Plotted over</p>
+            <p className="mt-1 text-sm text-fg">{domain.label}{domain.unit ? ` · ${domain.unit}` : ''}</p>
+            {mixed ? <p className="mt-1 text-xs text-warning">This chart uses mixed domains; curve changes are disabled. Use Advanced for exact bindings.</p> : null}
+          </div>
+          <details className="rounded-lg border border-border bg-bg-elevated/20 p-3">
+            <summary className="cursor-pointer text-sm font-medium">Add curve</summary>
+            <div className="mt-3 grid gap-2">
+              <div className="flex items-center gap-2">
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search curves" aria-label="Search curves" className="editor-input min-w-0 flex-1" />
+                <button
+                  type="button"
+                  aria-label={availableOnly ? 'Showing available curves only' : 'Showing all curves'}
+                  title={availableOnly ? 'Show all curves' : 'Show available curves only'}
+                  aria-pressed={availableOnly}
+                  onClick={() => setAvailableOnly((current) => !current)}
+                  className={`icon-button shrink-0 ${availableOnly ? 'border-accent bg-accent/10 text-accent' : 'text-fg-tertiary'}`}
+                >
+                  <Filter className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="grid gap-1">
+                {filtered.map((option) => <button key={option.id} type="button" disabled={!option.enabled || mixed} title={option.disabledReason} className="flex min-h-11 items-center justify-between rounded-md px-3 text-left text-sm hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-45" onClick={() => onChange((current) => addSeriesFromChoice(current, option.id, manifests, metrics, onNotice))}><span><span className="block">{option.label}</span><span className="block text-xs text-fg-tertiary">{option.category} · {option.description}</span>{!option.enabled || mixed ? <span className="block text-xs text-warning">{mixed ? 'Mixed-domain chart; edit in Advanced.' : option.disabledReason ?? 'Unavailable for this chart.'}</span> : null}</span></button>)}
+                {filtered.length === 0 ? <p className="px-3 py-4 text-sm text-fg-tertiary">{availableOnly ? 'No available curves match your search.' : 'No matching curves.'}</p> : null}
+              </div>
+            </div>
+          </details>
+          <CurvesListSection definition={definition} manifests={manifests} metrics={metrics} onNotice={onNotice} onChange={onChange} />
+        </div>
+      </EditorCard>
+    </div>
+  );
 }
 
 function CurvesListSection({ definition, manifests, metrics, onNotice, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; metrics: MetricCatalogEntry[]; onNotice: (notice: string | null) => void; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
@@ -339,7 +391,7 @@ function PreviewPanel({ draft, errors, datasets, loading, sourceErrors, previewC
   const contextLabel = previewContext.lifetime
     ? 'Active vehicle · Lifetime'
     : `Active vehicle · ${previewContext.from?.slice(0, 10) ?? 'range start'} to ${previewContext.to?.slice(0, 10) ?? 'range end'}`;
-  return <aside className="grid content-start gap-4 lg:sticky lg:top-24 lg:self-start"><Card><CardHeader><CardTitle>Live preview</CardTitle><Badge variant={totalIssues ? 'warning' : 'success'} size="sm">{totalIssues ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'}` : 'Valid'}</Badge></CardHeader><CardContent><div className="min-h-56 rounded-xl border border-border bg-bg-elevated/30 p-2"><ManagedChartRuntime chart={draft} ctx={ctx} height={260} /></div><p className="mt-3 text-xs text-fg-tertiary">{contextLabel}. This preview uses the unsaved draft and the production chart renderer.</p></CardContent></Card><Card><CardHeader><CardTitle>Diagnostics</CardTitle></CardHeader><CardContent className="grid gap-2 text-xs">{errors.map((error) => <div key={`${error.path}-${error.message}`} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">{error.path}</strong><p className="mt-1 text-fg-secondary">{error.message}</p></div>)}{sourceErrors.map((error, index) => <div key={index} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">Data request</strong><p className="mt-1 text-fg-secondary">{error instanceof Error ? error.message : 'Data request failed.'}</p></div>)}{totalIssues === 0 ? <><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {usesBundledPreview ? 'Bundled dashboard renderer' : loading ? 'Loading data…' : `${datasets.length} data group${datasets.length === 1 ? '' : 's'}`}</div><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {draft.config.series.length} curves</div></> : null}</CardContent></Card></aside>;
+  return <aside className="grid content-start gap-4 lg:sticky lg:top-24 lg:self-start"><Card><CardHeader><CardTitle>Live preview</CardTitle><Badge variant={totalIssues ? 'warning' : 'success'} size="sm">{totalIssues ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'}` : 'Valid'}</Badge></CardHeader><CardContent><div className="mx-auto w-[95%]"><ManagedChartRuntime chart={draft} ctx={ctx} height={520} /></div><p className="mt-3 text-xs text-fg-tertiary">{contextLabel}. This preview uses the unsaved draft and the production chart renderer.</p></CardContent></Card><Card><CardHeader><CardTitle>Diagnostics</CardTitle></CardHeader><CardContent className="grid gap-2 text-xs">{errors.map((error) => <div key={`${error.path}-${error.message}`} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">{error.path}</strong><p className="mt-1 text-fg-secondary">{error.message}</p></div>)}{sourceErrors.map((error, index) => <div key={index} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">Data request</strong><p className="mt-1 text-fg-secondary">{error instanceof Error ? error.message : 'Data request failed.'}</p></div>)}{totalIssues === 0 ? <><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {usesBundledPreview ? 'Bundled dashboard renderer' : loading ? 'Loading data…' : `${datasets.length} data group${datasets.length === 1 ? '' : 's'}`}</div><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {draft.config.series.length} curves</div></> : null}</CardContent></Card></aside>;
 }
 
 function EditorCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) { return <Card><CardHeader><div><CardTitle>{title}</CardTitle><p className="mt-1 text-sm text-fg-tertiary">{description}</p></div></CardHeader><CardContent>{children}</CardContent></Card>; }
