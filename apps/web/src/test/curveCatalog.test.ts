@@ -43,4 +43,21 @@ describe('curve-first chart catalog', () => {
     expect(removed.sources.some((source) => source.id === 'extra')).toBe(false);
     expect(removed.sources.some((source) => source.id === definition.x.field.sourceBindingId)).toBe(true);
   });
+
+  it('rebases the global domain when the remaining curves have explicit x refs', () => {
+    const withExplicitDomain = {
+      ...definition,
+      sources: [
+        ...definition.sources,
+        { ...definition.sources[0]!, id: 'secondary', sourceId: 'battery.mileage' },
+      ],
+      series: [
+        { ...definition.series[0]!, id: 'global', y: { sourceBindingId: 'main', field: 'battery_level' } },
+        { ...definition.series[0]!, id: 'explicit', y: { sourceBindingId: 'secondary', field: 'battery_level' }, x: { sourceBindingId: 'secondary', field: 'odometer_miles' } },
+      ],
+    };
+    const removed = removeCurveAndUnusedSources(withExplicitDomain, 0);
+    expect(removed.x).toMatchObject({ field: { sourceBindingId: 'secondary', field: 'odometer_miles' } });
+    expect(removed.sources.map((source) => source.id)).toEqual(['secondary']);
+  });
 });

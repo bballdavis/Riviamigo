@@ -87,7 +87,18 @@ export function isMixedDomain(definition: ChartDefinitionV1, manifests: readonly
 }
 
 export function removeCurveAndUnusedSources(definition: ChartDefinitionV1, index: number): ChartDefinitionV1 {
+  const removedCurve = definition.series[index];
   const series = definition.series.filter((_, seriesIndex) => seriesIndex !== index);
-  const referenced = new Set([definition.x.field.sourceBindingId, ...series.flatMap((curve) => [curve.y.sourceBindingId, ...(curve.x ? [curve.x.sourceBindingId] : [])])]);
-  return { ...definition, series, sources: definition.sources.filter((source) => referenced.has(source.id)) };
+  const allCurvesHaveExplicitX = !removedCurve?.x && series.length > 0 && series.every((curve) => curve.x);
+  const rebasedX = allCurvesHaveExplicitX ? series[0]!.x : undefined;
+  const referenced = new Set([
+    ...(series.length > 0 ? [rebasedX?.sourceBindingId ?? definition.x.field.sourceBindingId] : []),
+    ...series.flatMap((curve) => [curve.y.sourceBindingId, ...(curve.x ? [curve.x.sourceBindingId] : [])]),
+  ]);
+  return {
+    ...definition,
+    ...(rebasedX ? { x: { ...definition.x, field: rebasedX } } : {}),
+    series,
+    sources: definition.sources.filter((source) => referenced.has(source.id)),
+  };
 }

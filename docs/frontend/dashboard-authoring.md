@@ -277,7 +277,7 @@ When a chart is presented on both a dashboard and a dedicated detail page, share
 
 Chart authoring is curve-first. The standard editor exposes **Basics**, **Curves**, **Display**, and **Advanced**; it does not ask authors to assemble source bindings or a domain separately. The first selected curve establishes the shared domain (for example, over time, by mileage, or by state of charge), subsequent choices reuse compatible data groups, and incompatible curves remain visible with an explanation. A chart may combine up to four data groups. Mixed-domain legacy/YAML definitions remain unchanged and are edited through Advanced rather than silently normalized.
 
-Preview the unsaved definition through `ManagedChartRuntime`, the same production registry used by assignment-driven dashboard catalogs. Known bundled slugs retain their established dashboard renderer regardless of placement; placement metadata only controls where the chart is eligible. Custom slugs use the generic definition renderer. Both paths must resolve chart tokens to concrete canvas colors and align multi-source values by their X coordinate.
+Preview the unsaved definition through `ManagedChartRuntime`, the same production registry used by assignment-driven dashboard catalogs. Unchanged bundled definitions retain their established dashboard renderer regardless of placement; same-slug overrides with render-affecting edits and custom slugs use the generic definition renderer. Placement metadata only controls where the chart is eligible. Both paths must resolve chart tokens to concrete canvas colors and align multi-source values by their X coordinate.
 
 ## File Placement Checklist
 

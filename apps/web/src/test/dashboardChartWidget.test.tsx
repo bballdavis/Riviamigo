@@ -72,14 +72,14 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('renders built-in charts through the standard dashboard renderer regardless of placement metadata', () => {
+  it('uses the specialized renderer only for unchanged bundled definitions', () => {
     const bundled = getBundledChartDefinition('battery-capacity-mileage');
     if (!bundled) throw new Error('battery capacity chart seed is missing');
     const { slug, title, description, ...config } = bundled;
     const seed = { id: 'system', ownerId: null, slug, name: title, description, isDefault: true, isLocked: false, isEnabled: true, config };
     expect(usesBundledChartRenderer(seed)).toBe(true);
     expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, placements: [{ dashboardSlug: 'overview' }] } })).toBe(true);
-    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(true);
+    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(false);
   });
   it('keeps the standard renderer when managed metadata is reordered', () => {
     const seed = chartRecord('battery-capacity-mileage');
@@ -116,13 +116,6 @@ describe('DashboardChartWidget - smoothing controls', () => {
 
   it('renders an assigned built-in chart with the same dashboard renderer used on its native page', () => {
     const assigned = chartRecord('battery-capacity-mileage');
-    assigned.config = {
-      ...assigned.config,
-      axes: {
-        ...assigned.config.axes,
-        y: { ...assigned.config.axes.y, label: 'Managed label' },
-      },
-    };
     mockEffectiveCharts.mockReturnValue({
       data: [assigned],
       isSuccess: true,
