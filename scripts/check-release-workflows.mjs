@@ -119,6 +119,11 @@ requireText(
 const runtime = read('.github/workflows/runtime.yml');
 requireText(
   runtime,
+  /RIVIAMIGO_ENV:\s*development/,
+  'runtime workflow must explicitly classify its local dependency stack as development',
+);
+requireText(
+  runtime,
   /cargo run --bin riviamigo-api/,
   'runtime workflow must select the API binary explicitly',
 );
@@ -131,6 +136,22 @@ requireText(
 if (/secrets\.FRESH_INSTALL_(?:JWT_SECRET|JWT_PUBLIC_KEY|AGE_ENCRYPTION_KEY)/.test(freshInstallWorkflow)) {
   fail('fresh-install workflow must validate generated key persistence without repository key secrets');
 }
+const backupRestoreS3 = read('scripts/verify-backup-restore-s3.mjs');
+requireText(
+  backupRestoreS3,
+  /chown 1001:1001 \/data\/backups \/data\/cache/,
+  'S3 drill must prepare disposable bind mounts for the production container user',
+);
+requireText(
+  backupRestoreS3,
+  /prepareDataDirectory\(sourceData\);[\s\S]*?startStack\(sourceProject/,
+  'S3 drill must prepare the source bind mount before starting its stack',
+);
+requireText(
+  backupRestoreS3,
+  /prepareDataDirectory\(targetData\);[\s\S]*?startStack\(targetProject/,
+  'S3 drill must prepare the target bind mount before starting its stack',
+);
 
 if (failures.length) {
   console.error(`Release workflow contract failed with ${failures.length} issue(s):`);
