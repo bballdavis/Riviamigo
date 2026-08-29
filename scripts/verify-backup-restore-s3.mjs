@@ -198,12 +198,23 @@ try {
   const deadline = Date.now() + 360000;
   let phase;
   while (Date.now() < deadline) {
+    let job;
     try {
-      const job = await fetch(`${targetUrl}/v1/restore-runtime/jobs/${started.job.id}`, { headers: { 'x-riviamigo-restore-token': started.capability_token } }).then((response) => response.json());
-      phase = job.phase;
-      if (phase === 'failed') throw new Error(job.error_message || 'Remote restore failed.');
-      if (phase === 'completed') break;
-    } catch (error) { if (String(error).includes('Remote restore failed')) throw error; }
+      const response = await fetch(`${targetUrl}/v1/restore-runtime/jobs/${started.job.id}`, { headers: { 'x-riviamigo-restore-token': started.capability_token } });
+      if (!response.ok) throw new Error(`restore job status returned HTTP ${response.status}`);
+      job = await response.json();
+    } catch {
+      // The target may briefly restart while the restore agent swaps the
+      // isolated candidate back into service. Keep polling during that
+      // expected transition; terminal job errors are handled below.
+      await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+      continue;
+    }
+    phase = job.phase;
+    if (phase === 'failed') {
+      throw new Error(`Remote restore failed: ${job.error_message || 'restore agent returned no error message'}`);
+    }
+    if (phase === 'completed') break;
     await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
   }
   if (phase !== 'completed') throw new Error(`Remote restore did not complete; final phase was ${phase ?? 'unknown'}.`);
