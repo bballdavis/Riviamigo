@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth, useMe, useResolvedVehicleSelection } from '@riviamigo/hooks';
-import { DateRangePicker, PageLayout, SelectPicker, Tooltip } from '@riviamigo/ui/primitives';
-import { getEfficiencyDisplay, getUnitPreferences, setEfficiencyDisplay, type EfficiencyDisplay } from '@riviamigo/ui/lib/utils';
+import { DateRangePicker, EfficiencyDisplayToggle, PageLayout, SelectPicker } from '@riviamigo/ui/primitives';
+import { getUnitPreferences } from '@riviamigo/ui/lib/utils';
 import {
   DashboardRenderer,
   findOwnedDashboardBySlug,
@@ -18,7 +18,6 @@ import {
 } from '@riviamigo/dashboards';
 import type { DashboardConfig, WidgetCtx } from '@riviamigo/dashboards';
 import { Edit2, Save, Trash2 } from 'lucide-react';
-import { PiSpeedometerFill, PiSpeedometerLight } from 'react-icons/pi';
 import { AppLayout } from '../layout/AppLayout';
 import { NoVehicleState } from '../layout/NoVehicleState';
 import {
@@ -199,7 +198,6 @@ function DashboardPageShellContent({
     () => storedTimeframe ?? DEFAULT_TIMEFRAME,
   );
   const [chargeSessionDayLocal, setChargeSessionDayLocal] = useState<string | null>(null);
-  const [efficiencyDisplay, setEfficiencyDisplayState] = useState<EfficiencyDisplay>(() => getEfficiencyDisplay());
   const [unitMode, setUnitMode] = useState(() => getUnitPreferences().mode);
   const range = useMemo(() => getTimeframeRange(timeframe), [timeframe]);
   const { from, to } = useMemo(() => timeframeToQuery(timeframe), [timeframe]);
@@ -277,7 +275,6 @@ function DashboardPageShellContent({
   useEffect(() => {
     const handleUnits = () => {
       setUnitMode(getUnitPreferences().mode);
-      setEfficiencyDisplayState(getEfficiencyDisplay());
     };
     window.addEventListener('rm-units-change', handleUnits as EventListener);
     window.addEventListener('storage', handleUnits);
@@ -371,35 +368,8 @@ function DashboardPageShellContent({
       }))}
     />
   ) : null;
-  const EfficiencyDisplayIcon = efficiencyDisplay === 'distance_per_energy' ? PiSpeedometerFill : PiSpeedometerLight;
-  const efficiencyDisplayLabel = efficiencyDisplay === 'distance_per_energy' ? 'mi/kWh' : 'Wh/mi';
-  const efficiencyDisplayTooltip = efficiencyDisplay === 'distance_per_energy'
-    ? 'Showing mi/kWh. Click to switch to Wh/mi.'
-    : 'Showing Wh/mi. Click to switch to mi/kWh.';
   const efficiencyDisplayAction = showEfficiencyDisplayToggle && !currentEditMode && unitMode !== 'custom' ? (
-    <Tooltip
-      content={(
-        <div className="grid gap-1">
-          <span className="text-xs font-medium text-fg">Efficiency units</span>
-          <span className="text-[11px] text-fg-secondary">{efficiencyDisplayTooltip}</span>
-        </div>
-      )}
-      contentClassName="w-60"
-    >
-      <button
-        type="button"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-bg-elevated text-fg-secondary transition-colors hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-        onClick={() => {
-          const next = efficiencyDisplay === 'distance_per_energy' ? 'energy_per_distance' : 'distance_per_energy';
-          setEfficiencyDisplay(next);
-          setEfficiencyDisplayState(next);
-        }}
-        aria-label={`Toggle efficiency units, currently ${efficiencyDisplayLabel}`}
-        aria-pressed={efficiencyDisplay === 'distance_per_energy'}
-      >
-        <EfficiencyDisplayIcon className="h-4 w-4" />
-      </button>
-    </Tooltip>
+    <EfficiencyDisplayToggle />
   ) : null;
   const dashboardEditActions = currentEditMode && canEditDashboard
     ? createDefaultDashboardEditActions({

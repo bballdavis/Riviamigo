@@ -104,7 +104,7 @@ treat key changes as a migration.
 | `RIVIAN_RAW_EVENT_RETENTION_DAYS` | `7` | Raw telemetry retention window in days. |
 | `RIVIAN_PERSIST_RAW_EVENTS` | `true` | Persists raw Rivian events for diagnostics and repair. |
 | `RIVIAN_SUPPRESS_DUPLICATE_TELEMETRY` | `true` | Avoids storing unchanged duplicate telemetry samples. |
-| `PARALLAX_ENABLED` | `true` | Runs the isolated in-process extended telemetry companion. Set `false` only for emergency rollback. |
+| `PARALLAX_ENABLED` | `true` | Runs the integrated in-process extended telemetry acquisition subsystem. Set `false` only for emergency rollback. |
 
 ## API rate limits
 

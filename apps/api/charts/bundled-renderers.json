@@ -1,0 +1,276 @@
+[
+  {
+    "slug": "battery-capacity-mileage",
+    "source": "battery_capacity_mileage",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "battery.mileage",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "battery.mileage",
+        "field": "usable_kwh"
+      },
+      {
+        "sourceId": "battery.mileage",
+        "field": "odometer_miles"
+      },
+      {
+        "sourceId": "battery.mileage",
+        "field": "range_mi"
+      },
+      {
+        "sourceId": "battery.mileage",
+        "field": "projected_max_range_mi"
+      },
+      {
+        "sourceId": "battery.mileage",
+        "field": "degradation_pct"
+      }
+    ],
+    "editing": "rich"
+  },
+  {
+    "slug": "battery-degradation",
+    "source": "battery_degradation",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "battery.degradation",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "battery.degradation",
+        "field": "capacity_pct"
+      }
+    ],
+    "editing": "rich"
+  },
+  {
+    "slug": "charge-level",
+    "source": "soc_history",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "metrics.series",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "metrics.series",
+        "field": "battery_level"
+      }
+    ],
+    "editing": "rich"
+  },
+  {
+    "slug": "charging-curve-analysis",
+    "source": "charging_curve_analysis",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "charging.curve-analysis",
+      "field": "soc_pct",
+      "kind": "number"
+    },
+    "curves": [
+      {
+        "sourceId": "charging.curve-analysis",
+        "field": "power_kw"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "charging-sessions-energy",
+    "source": "charging_sessions_energy",
+    "renderer": "daily-charge-sessions",
+    "x": {
+      "sourceId": "charging.sessions",
+      "field": "day_start",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "charging.sessions",
+        "field": "total_energy_kwh"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "charging-weekly-energy",
+    "source": "charging_weekly_energy",
+    "renderer": "daily-energy-bars",
+    "x": {
+      "sourceId": "charging.sessions",
+      "field": "day_start",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "charging.sessions",
+        "field": "total_energy_kwh"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "efficiency-mode",
+    "source": "efficiency_mode",
+    "renderer": "efficiency-pill-bars",
+    "x": {
+      "sourceId": "efficiency.drive-mode",
+      "field": "drive_mode",
+      "kind": "category"
+    },
+    "curves": [
+      {
+        "sourceId": "efficiency.drive-mode",
+        "field": "avg_efficiency_wh_mi"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "efficiency-tags",
+    "source": "efficiency_tags",
+    "renderer": "efficiency-pill-bars",
+    "x": {
+      "sourceId": "efficiency.trip-tags",
+      "field": "tag_name",
+      "kind": "category"
+    },
+    "curves": [
+      {
+        "sourceId": "efficiency.trip-tags",
+        "field": "avg_efficiency_wh_mi"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "efficiency-temperature",
+    "source": "efficiency_temperature",
+    "renderer": "efficiency-pill-bars",
+    "x": {
+      "sourceId": "efficiency.temperature",
+      "field": "temp_c_low",
+      "kind": "number"
+    },
+    "curves": [
+      {
+        "sourceId": "efficiency.temperature",
+        "field": "avg_efficiency_wh_mi"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "efficiency-trend",
+    "source": "efficiency_trend",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "efficiency.trend",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "efficiency.trend",
+        "field": "trip_efficiency_wh_mi"
+      },
+      {
+        "sourceId": "efficiency.trend",
+        "field": "rolling_24h_wh_mi"
+      }
+    ],
+    "editing": "rich"
+  },
+  {
+    "slug": "phantom-drain",
+    "source": "phantom_drain",
+    "renderer": "phantom-drain",
+    "x": {
+      "sourceId": "battery.idle-drain",
+      "field": "day_start",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "battery.idle-drain",
+        "field": "soc_lost_pct"
+      }
+    ],
+    "editing": "color"
+  },
+  {
+    "slug": "projected-range-mileage",
+    "source": "projected_range_mileage",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "battery.mileage",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "battery.mileage",
+        "field": "projected_max_range_mi"
+      },
+      {
+        "sourceId": "battery.mileage",
+        "field": "odometer_miles"
+      }
+    ],
+    "editing": "rich"
+  },
+  {
+    "slug": "soc-history",
+    "source": "soc_history",
+    "renderer": "rich-time-series",
+    "x": {
+      "sourceId": "metrics.series",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "metrics.series",
+        "field": "battery_level"
+      }
+    ],
+    "editing": "rich"
+  },
+  {
+    "slug": "tire-pressure-trips",
+    "source": "tire_pressure_trips",
+    "renderer": "tire-pressure-timeline",
+    "x": {
+      "sourceId": "trips.tire-pressure-timeline",
+      "field": "timestamp",
+      "kind": "time"
+    },
+    "curves": [
+      {
+        "sourceId": "trips.tire-pressure-timeline",
+        "field": "front_left_psi"
+      },
+      {
+        "sourceId": "trips.tire-pressure-timeline",
+        "field": "front_right_psi"
+      },
+      {
+        "sourceId": "trips.tire-pressure-timeline",
+        "field": "rear_left_psi"
+      },
+      {
+        "sourceId": "trips.tire-pressure-timeline",
+        "field": "rear_right_psi"
+      }
+    ],
+    "editing": "color"
+  }
+]

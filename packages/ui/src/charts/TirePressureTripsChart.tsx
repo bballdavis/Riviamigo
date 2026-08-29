@@ -16,6 +16,25 @@ export interface TirePressureTripsChartProps {
   emptyTitle?: string;
   interactionMode?: 'standard' | 'touch-explore';
   onTripClick?: (tripId: string) => void;
+  seriesStyles?: TirePressureSeriesStyle[];
+  yRange?: [number, number];
+  showLegend?: boolean;
+  showGrid?: boolean;
+  showTooltip?: boolean;
+  showPoints?: boolean;
+  yAxisLabel?: string;
+}
+
+export interface TirePressureSeriesStyle {
+  field: 'tire_fl_psi' | 'tire_fr_psi' | 'tire_rl_psi' | 'tire_rr_psi';
+  key: string;
+  label: string;
+  color: string;
+  mode?: 'line' | 'area' | 'bar' | 'scatter';
+  interpolation?: 'step';
+  showInLegend?: boolean;
+  pointSize?: number;
+  strokeWidth?: number;
 }
 
 const TIRE_SERIES = [
@@ -56,6 +75,13 @@ export function TirePressureTripsChart({
   emptyTitle = 'No tire pressure or trip data for this period',
   interactionMode = 'standard',
   onTripClick,
+  seriesStyles,
+  yRange,
+  showLegend,
+  showGrid,
+  showTooltip,
+  showPoints,
+  yAxisLabel,
 }: TirePressureTripsChartProps) {
   const points = React.useMemo(() => {
     const timestamps = new Set<string>();
@@ -81,25 +107,30 @@ export function TirePressureTripsChart({
     color: CHART_COLORS.violet,
   })), [trips]);
 
-  const series = TIRE_SERIES.map((tire) => ({
-    key: tire.key,
-    label: tire.label,
-    color: tire.color,
-    strokeWidth: 2.5,
-    values: points.map((point) => convertedPressure(samplesByTimestamp.get(point.ts)?.[tire.key] ?? null, pressureFactor)),
+  const baseSeries: TirePressureSeriesStyle[] = seriesStyles ?? TIRE_SERIES.map((tire) => ({ ...tire, field: tire.key }));
+  const series = baseSeries.map((tire) => ({
+    ...tire,
+    strokeWidth: tire.strokeWidth ?? 2.5,
+    values: points.map((point) => convertedPressure(samplesByTimestamp.get(point.ts)?.[tire.field] ?? null, pressureFactor)),
     tooltipFormatter: (value: number | null | undefined) => value == null ? '—' : `${formatNumber(value, 0)} ${pressureUnit}`,
   }));
 
   return (
     <RichTimeSeriesChart
+      rendererId="tire-pressure-timeline"
       points={points}
       series={series}
       height={height}
       loading={loading}
       emptyTitle={emptyTitle}
       yUnit={pressureUnit}
+      yRange={yRange}
+      showLegend={showLegend}
+      showGrid={showGrid}
+      showTooltip={showTooltip}
+      showPoints={showPoints}
+      yAxisLabel={yAxisLabel}
       yValueFormatter={(value, unit) => value == null ? '—' : `${formatNumber(value, 0)} ${unit ?? pressureUnit}`}
-      yRange={undefined}
       mode="line"
       timeFilter="raw"
       smoothness="straight"

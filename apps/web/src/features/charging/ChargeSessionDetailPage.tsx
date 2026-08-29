@@ -5,7 +5,7 @@ import type { ChargeSessionUpdate, Place } from '@riviamigo/types';
 import {
   PageLayout, Card, CardContent, CardHeader, CardTitle, Button, Input, SelectPicker,
 } from '@riviamigo/ui/primitives';
-import { DashboardChartWidget, SensorChipSummary } from '@riviamigo/dashboards';
+import { ChargeSessionCurveDetail, SensorChipSummary } from '@riviamigo/dashboards';
 import { AppLayout } from '../../components/layout/AppLayout';
 import { NoVehicleState } from '../../components/layout/NoVehicleState';
 import { formatKwh, formatDuration, formatCurrency, formatDistanceKm, formatPercent } from '@riviamigo/ui/lib/utils';
@@ -38,22 +38,6 @@ function ChargeSessionContentInner() {
   const [showSourceDetails, setShowSourceDetails] = useState(false);
   const hasVehicle = !!effectiveVehicleId;
   const isPlacesLoading = placesLoading || placesFetching;
-
-  const chargeCurveInstance = {
-    id: `charge-session-curve-${sessionId}`,
-    componentType: 'chart' as const,
-    definitionId: 'catalog',
-    title: 'Charge Curve',
-    layout: { x: 0, y: 0, w: 12, h: 8 },
-    options: {
-      page: 'charging',
-      chartId: 'charge-session-curve',
-      chartIds: ['charge-session-curve'],
-      showPicker: false,
-      timeFilter: '15m',
-      headerSubtitle: 'Charge rate (kW) and cumulative energy (kWh) over time',
-    },
-  };
 
   const title = session
     ? (() => {
@@ -175,30 +159,37 @@ function ChargeSessionContentInner() {
               />
             </div>
 
-            {/* Charge curve + cumulative energy on a shared time axis.
-                DashboardChartWidget renders its own compact header (title +
-                settings button) so the card only needs to host the widget. */}
-            <div className="bg-bg-surface border border-border rounded-xl p-5">
-              <div style={{ height: 400 }}>
-                {session && (
-                  <DashboardChartWidget
-                    instance={chargeCurveInstance}
-                    ctx={{
-                      vehicleId: effectiveVehicleId,
-                      timeframe: {
-                        kind: 'custom',
-                        from: new Date(session.started_at),
-                        to: new Date(session.ended_at ?? session.started_at),
-                      },
-                      from: session.started_at,
-                      to: session.ended_at ?? session.started_at,
-                      chargeSessionId: sessionId,
-                      chargeSessionEnergyKwh: session.energy_added_kwh ?? null,
-                    }}
-                  />
-                )}
-              </div>
-            </div>
+            <Card>
+              <CardHeader>
+                <div className="min-w-0">
+                  <CardTitle>Session charging trace</CardTitle>
+                  <p className="mt-1 text-sm text-fg-tertiary">
+                    Charge rate (kW) and cumulative energy (kWh) over time
+                  </p>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div style={{ height: 400 }}>
+                  {session && (
+                    <ChargeSessionCurveDetail
+                      height={400}
+                      ctx={{
+                        vehicleId: effectiveVehicleId,
+                        timeframe: {
+                          kind: 'custom',
+                          from: new Date(session.started_at),
+                          to: new Date(session.ended_at ?? session.started_at),
+                        },
+                        from: session.started_at,
+                        to: session.ended_at ?? session.started_at,
+                        chargeSessionId: sessionId,
+                        chargeSessionEnergyKwh: session.energy_added_kwh ?? null,
+                      }}
+                    />
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           </>
         )}
       </PageLayout>

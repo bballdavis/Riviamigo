@@ -69,7 +69,7 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
       label: definitionSeries.label,
       color: definitionSeries.color.mode === 'token' ? getChartColor(definitionSeries.color.token) : isDark ? definitionSeries.color.dark : definitionSeries.color.light,
       values: numericValuesForDomain(dataset, definitionSeries.y.field, domain, xField),
-      mode: definitionSeries.mark === 'histogram' ? 'bar' as const : definitionSeries.mark === 'scatter' ? 'scatter' as const : definitionSeries.mark === 'bar' ? 'bar' as const : definitionSeries.mark === 'area' ? 'area' as const : 'line' as const,
+      mode: definitionSeries.mark === 'histogram' ? 'bar' as const : definitionSeries.mark === 'scatter' ? 'scatter' as const : definitionSeries.mark === 'bar' ? 'bar' as const : definitionSeries.mark === 'area' || ((definitionSeries.mark === 'line' || definitionSeries.mark === 'step') && definitionSeries.fill === true) ? 'area' as const : 'line' as const,
       pointSize: definitionSeries.pointSize,
       strokeWidth: definitionSeries.strokeWidth,
       yScale: definitionSeries.yAxis,

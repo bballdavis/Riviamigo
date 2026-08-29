@@ -98,6 +98,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'frontend/dashboard-authoring',
+        'frontend/chart-compatibility-testing',
         'branding',
         { type: 'link', label: 'Security implementation', href: '/docs/security/' },
       ],

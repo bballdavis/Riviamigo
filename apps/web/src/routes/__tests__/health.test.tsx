@@ -684,7 +684,7 @@ describe('/health page cleanup', () => {
     expect(screen.getByText('Full history (1 entries)')).toBeInTheDocument();
   });
 
-  it('renders privacy-filtered extended telemetry with Rivian estimate labels', () => {
+  it('renders compact telemetry with tooltip-only diagnostics and unit controls', () => {
     mockUseVehicleHealth.mockReturnValueOnce({
       data: {
         ...healthDataBase,
@@ -742,7 +742,12 @@ describe('/health page cleanup', () => {
             source_at: '2026-05-30T01:00:00Z',
             estimated_mass_kg: 3160,
           },
-          cold_weather: null,
+          cold_weather: {
+            source_at: '2026-05-30T01:00:00Z',
+            available_soc_pct: 74,
+            cold_limited_soc_pct: 68,
+            cold_range_impact_km: 12.4,
+          },
         },
       },
       isLoading: false,
@@ -750,23 +755,41 @@ describe('/health page cleanup', () => {
 
     render(<HealthContent />);
 
-    expect(screen.getByText('Extended Vehicle Telemetry')).toBeInTheDocument();
-    expect(screen.getByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Rivian learned estimate')).toBeInTheDocument();
-    expect(screen.getByText('Estimated vehicle mass')).toBeInTheDocument();
-    expect(screen.getByText('2 reconnects')).toBeInTheDocument();
-    expect(screen.getByText(/1 decode · 4 empty · 0 ambiguous/)).toBeInTheDocument();
-    expect(screen.getByText(/telemetry proven restart split/)).toBeInTheDocument();
-    expect(screen.queryByText('Cold-weather impact')).not.toBeInTheDocument();
+    expect(screen.queryByText('Vehicle telemetry')).not.toBeInTheDocument();
+    expect(screen.getByText('Connectivity')).toBeInTheDocument();
+    expect(screen.getByText('Wi-Fi signal')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Wi-Fi strength: Good' })).toBeInTheDocument();
+    expect(screen.getByText('Throughput')).toBeInTheDocument();
+    expect(screen.getByText('117 Mbps')).toBeInTheDocument();
+    expect(screen.getByText('Wi-Fi status')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Wi-Fi connection details' })).not.toBeInTheDocument();
+    expect(screen.getByText(/-56 dBm/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Toggle efficiency units/ })).toBeInTheDocument();
+    expect(screen.getByText('Est. Efficiency')).toBeInTheDocument();
+    expect(screen.getByText('Vehicle mass')).toBeInTheDocument();
+    expect(screen.getByText('Cold-weather impact')).toBeInTheDocument();
+    expect(screen.getAllByText('Connected')).toHaveLength(2);
+    expect(screen.getByText('Acquisition')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'About acquisition status' })).toBeInTheDocument();
+    expect(screen.queryByText(/2 reconnects/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 decode · 4 empty · 0 ambiguous/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Generated from the latest stored telemetry/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Acquisition diagnostics')).not.toBeInTheDocument();
+    expect(screen.queryByText('Legacy chargingSession')).not.toBeInTheDocument();
+    expect(screen.queryByText(/telemetry proven restart split/)).not.toBeInTheDocument();
 
     const softwareHistory = screen.getByText('Software History');
-    const extendedTelemetry = screen.getByTestId('extended-vehicle-telemetry');
-    expect(
-      softwareHistory.compareDocumentPosition(extendedTelemetry) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    const telemetrySummary = screen.getByTestId('vehicle-telemetry-summary');
+    const signalFreshness = screen.getByText('Signal Freshness');
+    const toggle = screen.getByRole('button', { name: /Toggle efficiency units/ });
+    const vehiclePicker = screen.getByRole('combobox', { name: 'Select vehicle' });
+    expect(toggle.compareDocumentPosition(vehiclePicker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(telemetrySummary.compareDocumentPosition(softwareHistory) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(telemetrySummary.compareDocumentPosition(signalFreshness) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('extended-vehicle-telemetry')).not.toBeInTheDocument();
   });
 
-  it('keeps extended telemetry visible when the Parallax companion is not running', () => {
+  it('keeps compact telemetry visible when the Parallax companion is not running', () => {
     mockUseVehicleHealth.mockReturnValueOnce({
       data: {
         ...healthDataBase,
@@ -811,8 +834,9 @@ describe('/health page cleanup', () => {
 
     render(<HealthContent />);
 
-    expect(screen.getByTestId('extended-vehicle-telemetry')).toBeInTheDocument();
-    expect(screen.getByText('Duplicate owner')).toBeInTheDocument();
+    expect(screen.getByTestId('vehicle-telemetry-summary')).toBeInTheDocument();
+    expect(screen.getByText('Disconnected')).toBeInTheDocument();
     expect(screen.getByText(/canonical vehicle telemetry continues independently/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('extended-vehicle-telemetry')).not.toBeInTheDocument();
   });
 });

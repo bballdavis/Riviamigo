@@ -90,6 +90,7 @@ pub struct ChartSeriesDefinition {
     pub y: ChartFieldRef,
     pub x: Option<ChartFieldRef>,
     pub mark: String,
+    pub fill: Option<bool>,
     pub y_axis: String,
     pub color: ChartColorDefinition,
     pub stroke_width: Option<f64>,
@@ -159,6 +160,7 @@ pub struct ChartAxisDefinition {
 pub enum ChartAxisDomain {
     #[serde(rename = "auto")]
     Auto {
+        #[serde(rename = "includeZero")]
         include_zero: Option<bool>,
         padding: Option<f64>,
     },
@@ -230,6 +232,33 @@ const FORBIDDEN_KEYS: &[&str] = &[
     "templatehtml",
     "css",
 ];
+const BUNDLED_RENDERER_CAPABILITIES: &str = include_str!("../../charts/bundled-renderers.json");
+const BUNDLED_CHART_DEFAULTS: &str = include_str!("../../charts/defaults.json");
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledRendererCapability {
+    slug: String,
+    renderer: String,
+    editing: String,
+    x: BundledRendererX,
+    curves: Vec<BundledRendererCurve>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledRendererX {
+    source_id: String,
+    field: String,
+    kind: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledRendererCurve {
+    source_id: String,
+    field: String,
+}
 
 fn id(value: &str) -> bool {
     !value.is_empty()
@@ -485,6 +514,247 @@ pub fn parse_and_validate(value: &Value) -> Result<ChartDefinitionV1, Vec<ChartV
     }
 }
 
+pub fn parse_and_validate_for_slug(
+    slug: &str,
+    value: &Value,
+) -> Result<ChartDefinitionV1, Vec<ChartValidationError>> {
+    let definition = parse_and_validate(value)?;
+    let mut errors = validate_bundled_renderer_definition(slug, value, &definition);
+    if errors.is_empty() {
+        Ok(definition)
+    } else {
+        Err(std::mem::take(&mut errors))
+    }
+}
+
+fn validate_bundled_renderer_definition(
+    slug: &str,
+    value: &Value,
+    definition: &ChartDefinitionV1,
+) -> Vec<ChartValidationError> {
+    let capabilities: Vec<BundledRendererCapability> =
+        serde_json::from_str(BUNDLED_RENDERER_CAPABILITIES)
+            .expect("bundled renderer capability manifest must be valid");
+    let Some(capability) = capabilities.iter().find(|candidate| candidate.slug == slug) else {
+        return Vec::new();
+    };
+    let mut errors = Vec::new();
+    let x_binding = definition
+        .sources
+        .iter()
+        .find(|source| source.id == definition.x.field.source_binding_id);
+    if !x_binding.is_some_and(|source| {
+        source.source_id == capability.x.source_id
+            && definition.x.field.field == capability.x.field
+            && definition.x.kind == capability.x.kind
+    }) {
+        errors.push(error(
+            "config.x",
+            &format!(
+                "The {slug} production renderer requires {} X data from {}.{}.",
+                capability.x.kind, capability.x.source_id, capability.x.field
+            ),
+        ));
+    }
+    let defaults: Vec<Value> =
+        serde_json::from_str(BUNDLED_CHART_DEFAULTS).expect("bundled chart defaults must be valid");
+    let canonical = defaults
+        .iter()
+        .find(|chart| chart["slug"] == slug)
+        .and_then(|chart| chart.get("definition"))
+        .expect("every bundled renderer capability must have a default definition");
+    if value.get("timeframe") != canonical.get("timeframe") {
+        errors.push(error(
+            "config.timeframe",
+            "Bundled charts inherit the active dashboard timeframe so preview and dashboard data stay identical.",
+        ));
+    }
+    for axis_id in ["x", "y", "y2"] {
+        let pointer = format!("/axes/{axis_id}/unit");
+        if value.pointer(&pointer) != canonical.pointer(&pointer) {
+            errors.push(error(
+                &format!("config.axes.{axis_id}.unit"),
+                "Bundled renderer units are owned by the production data adapter.",
+            ));
+        }
+    }
+    if value.pointer("/display/emptyTitle") != canonical.pointer("/display/emptyTitle")
+        || value.pointer("/display/emptyDescription")
+            != canonical.pointer("/display/emptyDescription")
+    {
+        errors.push(error(
+            "config.display.emptyTitle",
+            "Bundled empty-state copy is owned by the production renderer.",
+        ));
+    }
+    if value.get("rendererId") != canonical.get("rendererId") {
+        errors.push(error(
+            "config.rendererId",
+            "Bundled renderer selection cannot be changed.",
+        ));
+    }
+    if capability.editing != "rich" {
+        if value.get("sources") != canonical.get("sources") {
+            errors.push(error(
+                "config.sources",
+                "This bundled renderer owns its data bindings; duplicate the chart to build a custom source configuration.",
+            ));
+        }
+        if series_without_colors(value) != series_without_colors(canonical) {
+            errors.push(error(
+                "config.series",
+                "This bundled renderer supports curve color edits only; its curve order, labels, marks, and axes are fixed.",
+            ));
+        }
+        if value.get("x") != canonical.get("x") {
+            errors.push(error(
+                "config.x",
+                "This bundled renderer owns its X-axis encoding.",
+            ));
+        }
+        let mut comparable_axes = value.get("axes").cloned().unwrap_or(Value::Null);
+        let canonical_axes = canonical.get("axes").cloned().unwrap_or(Value::Null);
+        if matches!(
+            capability.renderer.as_str(),
+            "daily-charge-sessions"
+                | "daily-energy-bars"
+                | "phantom-drain"
+                | "tire-pressure-timeline"
+        ) {
+            comparable_axes["y"]["domain"] = canonical_axes["y"]["domain"].clone();
+        }
+        if comparable_axes != canonical_axes {
+            errors.push(error(
+                "config.axes",
+                "This bundled renderer supports only its production axis contract; use dashboard chart settings for a temporary range.",
+            ));
+        }
+        if value.get("display") != canonical.get("display") {
+            errors.push(error(
+                "config.display",
+                "This bundled renderer owns its legend, grid, tooltip, and smoothing presentation.",
+            ));
+        }
+        if value.get("interaction") != canonical.get("interaction") {
+            errors.push(error(
+                "config.interaction",
+                "This bundled renderer owns its interaction behavior.",
+            ));
+        }
+    }
+    for (index, series) in definition.series.iter().enumerate() {
+        let binding = definition
+            .sources
+            .iter()
+            .find(|source| source.id == series.y.source_binding_id);
+        if !binding.is_some_and(|source| {
+            capability
+                .curves
+                .iter()
+                .any(|curve| curve.source_id == source.source_id && curve.field == series.y.field)
+        }) {
+            errors.push(error(
+                &format!("config.series.{index}.y"),
+                &format!("The {slug} production renderer does not support this curve."),
+            ));
+        }
+        if series.x.is_some() {
+            errors.push(error(
+                &format!("config.series.{index}.x"),
+                "Per-series X fields are supported only by independent custom charts.",
+            ));
+        }
+        if series
+            .transforms
+            .iter()
+            .any(|transform| !matches!(transform, ChartTransformDefinition::None))
+        {
+            errors.push(error(
+                &format!("config.series.{index}.transforms"),
+                "Transforms are not supported by bundled production renderers.",
+            ));
+        }
+        if series.stack_id.is_some() && !matches!(series.mark.as_str(), "bar" | "histogram") {
+            errors.push(error(
+                &format!("config.series.{index}.stackId"),
+                "Stacking is supported only for bar or histogram curves.",
+            ));
+        }
+        if series.connect_gaps.is_some() {
+            errors.push(error(
+                &format!("config.series.{index}.connectGaps"),
+                "Use the chart-level connectGaps setting for bundled charts.",
+            ));
+        }
+        if series.value_format.is_some() {
+            errors.push(error(
+                &format!("config.series.{index}.valueFormat"),
+                "Per-curve value formatting is not supported by bundled production renderers.",
+            ));
+        }
+    }
+    if definition
+        .annotations
+        .as_ref()
+        .is_some_and(|annotations| !annotations.is_empty())
+    {
+        errors.push(error(
+            "config.annotations",
+            "Annotations are supported only by independent custom charts.",
+        ));
+    }
+    if definition.display.data_smoothing.is_some() {
+        errors.push(error(
+            "config.display.dataSmoothing",
+            "Use curve smoothness for bundled production renderers.",
+        ));
+    }
+    if !definition.interaction.pan_zoom {
+        errors.push(error(
+            "config.interaction.panZoom",
+            "Bundled production charts require pan and zoom.",
+        ));
+    }
+    if !definition.interaction.touch_explore {
+        errors.push(error(
+            "config.interaction.touchExplore",
+            "Bundled production charts require touch exploration.",
+        ));
+    }
+    for (axis_id, axis) in [
+        ("x", Some(&definition.axes.x)),
+        ("y", Some(&definition.axes.y)),
+        ("y2", definition.axes.y2.as_ref()),
+    ] {
+        let Some(axis) = axis else { continue };
+        if axis.scale == "log" {
+            errors.push(error(
+                &format!("config.axes.{axis_id}.scale"),
+                "Logarithmic axes are not supported by bundled production renderers.",
+            ));
+        }
+        if axis.tick_format.is_some() {
+            errors.push(error(
+                &format!("config.axes.{axis_id}.tickFormat"),
+                "Custom tick formats are not supported by bundled production renderers.",
+            ));
+        }
+    }
+    errors
+}
+
+fn series_without_colors(value: &Value) -> Value {
+    let mut series = value.get("series").cloned().unwrap_or(Value::Null);
+    if let Some(items) = series.as_array_mut() {
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                object.remove("color");
+            }
+        }
+    }
+    series
+}
+
 fn error(path: &str, message: &str) -> ChartValidationError {
     ChartValidationError {
         path: path.into(),
@@ -733,6 +1003,13 @@ mod tests {
         assert!(parse_and_validate(&valid()).is_ok());
     }
     #[test]
+    fn accepts_optional_series_fill_metadata() {
+        let mut value = valid();
+        value["series"][0]["fill"] = true.into();
+        let parsed = parse_and_validate(&value).expect("fill is backward-compatible metadata");
+        assert_eq!(parsed.series[0].fill, Some(true));
+    }
+    #[test]
     fn rejects_unknown_schema_and_forbidden_keys() {
         let mut value = valid();
         value["schemaVersion"] = 2.into();
@@ -761,5 +1038,103 @@ mod tests {
         mismatched["series"][0]["y"]["field"] = "range_miles".into();
         let errors = parse_and_validate(&mismatched).expect_err("mismatched field");
         assert!(errors.iter().any(|error| error.path.contains("series.0.y")));
+    }
+
+    #[test]
+    fn bundled_renderer_rejects_configuration_it_cannot_apply() {
+        let defaults: Vec<Value> =
+            serde_json::from_str(include_str!("../../charts/defaults.json")).unwrap();
+        let mut config = defaults
+            .iter()
+            .find(|chart| chart["slug"] == "battery-capacity-mileage")
+            .unwrap()["definition"]
+            .clone();
+        assert!(parse_and_validate_for_slug("battery-capacity-mileage", &config).is_ok());
+
+        config["timeframe"] = serde_json::json!({ "mode": "relative", "preset": "7d" });
+        config["x"]["kind"] = "number".into();
+        config["axes"]["y"]["unit"] = "percent".into();
+        config["display"]["emptyTitle"] = "Edited empty state".into();
+        config["rendererId"] = "other-renderer".into();
+        config["series"][0]["transforms"] = serde_json::json!([{ "kind": "scale", "factor": 2.0 }]);
+        let errors = parse_and_validate_for_slug("battery-capacity-mileage", &config)
+            .expect_err("unsupported bundled geometry must not be silently accepted");
+        assert!(errors.iter().any(|error| error.path == "config.x"));
+        assert!(errors.iter().any(|error| error.path == "config.timeframe"));
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "config.axes.y.unit"));
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "config.display.emptyTitle"));
+        assert!(errors.iter().any(|error| error.path == "config.rendererId"));
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "config.series.0.transforms"));
+
+        assert!(parse_and_validate_for_slug("independent-custom-chart", &config).is_ok());
+    }
+
+    #[test]
+    fn aggregate_bundled_renderer_rejects_no_op_visual_edits() {
+        let defaults: Vec<Value> = serde_json::from_str(BUNDLED_CHART_DEFAULTS).unwrap();
+        let mut config = defaults
+            .iter()
+            .find(|chart| chart["slug"] == "charging-weekly-energy")
+            .unwrap()["definition"]
+            .clone();
+        config["series"][0]["label"] = "Edited label".into();
+        config["display"]["grid"] = (!config["display"]["grid"].as_bool().unwrap()).into();
+        let errors = parse_and_validate_for_slug("charging-weekly-energy", &config)
+            .expect_err("ignored aggregate visual edits must be rejected");
+        assert!(
+            errors.iter().any(|error| error.path == "config.series"),
+            "unexpected errors: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.path == "config.display"),
+            "unexpected errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn charging_curve_analysis_rejects_fixed_geometry_edits() {
+        let defaults: Vec<Value> = serde_json::from_str(BUNDLED_CHART_DEFAULTS).unwrap();
+        let mut config = defaults
+            .iter()
+            .find(|chart| chart["slug"] == "charging-curve-analysis")
+            .unwrap()["definition"]
+            .clone();
+        config["series"][0]["mark"] = "line".into();
+        config["series"][0]["fill"] = true.into();
+        let errors = parse_and_validate_for_slug("charging-curve-analysis", &config)
+            .expect_err("constructed charge-curve geometry must remain fixed");
+        assert!(
+            errors.iter().any(|error| error.path == "config.series"),
+            "unexpected errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bundled_renderer_manifest_matches_seed_inventory() {
+        let defaults: Vec<Value> =
+            serde_json::from_str(include_str!("../../charts/defaults.json")).unwrap();
+        let capabilities: Vec<BundledRendererCapability> =
+            serde_json::from_str(BUNDLED_RENDERER_CAPABILITIES).unwrap();
+        let default_slugs = defaults
+            .iter()
+            .map(|chart| chart["slug"].as_str().unwrap())
+            .collect::<HashSet<_>>();
+        let capability_slugs = capabilities
+            .iter()
+            .map(|capability| capability.slug.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(default_slugs, capability_slugs);
+        assert_eq!(capability_slugs.len(), capabilities.len());
+        for chart in &defaults {
+            let slug = chart["slug"].as_str().unwrap();
+            parse_and_validate_for_slug(slug, &chart["definition"])
+                .unwrap_or_else(|errors| panic!("invalid bundled default {slug}: {errors:?}"));
+        }
     }
 }

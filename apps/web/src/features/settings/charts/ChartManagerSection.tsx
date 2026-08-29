@@ -2,8 +2,8 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import {
   CHART_SOURCE_MANIFESTS,
-  exportChartYaml,
-  importChartYaml,
+  exportChartJson,
+  importChartJson,
 } from '@riviamigo/dashboards';
 import {
   useChartManager as useChartManagerApi,
@@ -25,7 +25,7 @@ import { Download, Ellipsis, Pencil, Plus, Upload, Copy, Search, LockKeyhole, Ro
 type ChartFilter = 'all' | 'defaults' | 'mine' | 'customized' | 'disabled' | 'unassigned';
 
 function downloadText(filename: string, contents: string) {
-  const blob = new Blob([contents], { type: 'application/yaml;charset=utf-8' });
+  const blob = new Blob([contents], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -35,7 +35,7 @@ function downloadText(filename: string, contents: string) {
 }
 
 function recordExport(record: ChartRecord) {
-  return exportChartYaml(record);
+  return exportChartJson(record);
 }
 
 export function ChartManagerSection() {
@@ -88,7 +88,7 @@ export function ChartManagerSection() {
     event.target.value = '';
     if (!file) return;
     try {
-      const imported = await importChartYaml(await file.text());
+      const imported = await importChartJson(await file.text());
       const conflict = (charts.data ?? []).some((entry) => entry.effective.slug === imported.slug);
       const slug = conflict ? `${imported.slug}-copy` : imported.slug;
       await createChart.mutateAsync({ ...imported, slug });
@@ -188,7 +188,7 @@ export function ChartManagerSection() {
               <p className="mt-1 text-sm text-fg-tertiary">Manage bundled chart defaults, personal copies, and dashboard placement.</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <input ref={importInputRef} type="file" accept=".yaml,.yml,.json,.riviamigo-chart.yaml" className="sr-only" onChange={handleImport} />
+              <input ref={importInputRef} type="file" accept=".json,.riviamigo-chart.json" className="sr-only" onChange={handleImport} />
               <Button variant="secondary" size="sm" iconLeft={<Upload className="h-4 w-4" />} aria-label="Import chart" onClick={() => importInputRef.current?.click()}>Import</Button>
               <Button variant="primary" size="sm" iconLeft={<Plus className="h-4 w-4" />} onClick={() => navigate({ to: '/settings/charts/new' })}>Create chart</Button>
             </div>
@@ -234,7 +234,7 @@ export function ChartManagerSection() {
                   }}
                   onEdit={() => navigate({ to: '/settings/charts/$chartId', params: { chartId: entry.effective.id } })}
                   onDuplicate={() => { void handleDuplicate(entry); }}
-                  onExport={() => downloadText(`${entry.effective.slug}.riviamigo-chart.yaml`, recordExport(entry.effective))}
+                  onExport={() => downloadText(`${entry.effective.slug}.riviamigo-chart.json`, recordExport(entry.effective))}
                   onToggle={() => { void saveEffectiveUpdate(entry, { isEnabled: !entry.effective.isEnabled }).catch((error) => setMutationError(error instanceof Error ? error.message : 'Unable to update chart.')); }}
                   onDelete={() => { void handleDelete(entry); }}
                   {...(entry.permissions.lock ? { onLock: () => { void handleLock(entry); } } : {})}

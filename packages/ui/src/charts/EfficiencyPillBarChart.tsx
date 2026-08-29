@@ -24,6 +24,8 @@ export interface EfficiencyPillBarChartProps {
   speedUnit?: string;
   /** Opt in to extra label room for categorical names; existing chart layouts stay compact. */
   wideLabels?: boolean;
+  /** Optional definition-driven bar color. Omitted preserves the accent token. */
+  seriesColor?: string;
 }
 
 const SEGMENT_COUNT = 28;
@@ -43,6 +45,7 @@ export function EfficiencyPillBarChart({
   distanceUnit = 'mi',
   speedUnit = 'mph',
   wideLabels = false,
+  seriesColor,
 }: EfficiencyPillBarChartProps) {
   const [selectedLabel, setSelectedLabel] = React.useState<string | null>(null);
   if (loading) return <ChartSkeleton height={height} />;
@@ -68,7 +71,7 @@ export function EfficiencyPillBarChart({
     : wideLabels ? COLS_BASIC_WIDE_LABELS : COLS_BASIC;
 
   return (
-    <div className="h-full overflow-y-auto rounded-lg border border-border bg-surface-1 p-3 sm:p-4" style={{ maxHeight: height }}>
+    <div data-chart-renderer="efficiency-pill-bars" className="h-full overflow-y-auto rounded-lg border border-border bg-surface-1 p-3 sm:p-4" style={{ maxHeight: height }}>
       <div className={`mb-2 hidden items-center gap-x-4 text-[10px] font-medium uppercase tracking-wider text-fg-tertiary sm:grid ${cols}`}>
         <div>Category</div>
         <div>Driving efficiency</div>
@@ -123,7 +126,7 @@ export function EfficiencyPillBarChart({
               >
                 <span className="min-w-0 truncate text-sm font-medium text-fg">{item.label}</span>
                 <span className="whitespace-nowrap text-right font-mono text-sm font-medium tabular-nums text-fg">{formattedValue}</span>
-                <span className="col-span-2 mt-2 min-w-0"><PillSegments filledCount={filledCount} tone={item.tone} /></span>
+                <span className="col-span-2 mt-2 min-w-0"><PillSegments filledCount={filledCount} tone={item.tone} {...(seriesColor ? { seriesColor } : {})} /></span>
                 {meta.length > 0 ? <span className="col-span-2 mt-1 text-xs text-fg-tertiary">{meta.join(' · ')}</span> : null}
               </button>
             </div>
@@ -134,14 +137,15 @@ export function EfficiencyPillBarChart({
   );
 }
 
-function PillSegments({ filledCount, tone = 'accent' }: { filledCount: number; tone?: EfficiencyPillBarDatum['tone'] }) {
+function PillSegments({ filledCount, tone = 'accent', seriesColor }: { filledCount: number; tone?: EfficiencyPillBarDatum['tone']; seriesColor?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-[2px]" data-efficiency-pill-bar="true" data-efficiency-pill-tone={tone}>
       {Array.from({ length: SEGMENT_COUNT }, (_, i) => (
         <span
           key={i}
           aria-hidden="true"
-          className={`h-[14px] min-w-0 flex-1 rounded-[3px] ${i < filledCount ? tone === 'neutral' ? 'bg-fg-tertiary/70' : 'bg-accent/85' : 'bg-bg-elevated'}`}
+          className={`h-[14px] min-w-0 flex-1 rounded-[3px] ${i < filledCount ? tone === 'neutral' ? 'bg-fg-tertiary/70' : seriesColor ? '' : 'bg-accent/85' : 'bg-bg-elevated'}`}
+          style={i < filledCount && tone !== 'neutral' && seriesColor ? { backgroundColor: seriesColor } : undefined}
         />
       ))}
     </span>
