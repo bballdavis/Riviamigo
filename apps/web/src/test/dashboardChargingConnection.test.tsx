@@ -29,16 +29,6 @@ const chargingMocks = vi.hoisted(() => ({
   },
 }));
 
-// Keep Iconify's async network/update timers out of this integration-style
-// dashboard suite. A file-local mock is hoisted before the dashboard package is
-// imported, so React cannot receive a late icon update after jsdom is torn down.
-vi.mock('@iconify/react', () => ({
-  Icon: () => null,
-  InlineIcon: () => null,
-  addAPIProvider: vi.fn(),
-  _api: { setFetch: vi.fn() },
-}));
-
 vi.mock('@riviamigo/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/hooks')>();
   return {

@@ -9,6 +9,13 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    alias: {
+      // Resolve Iconify to a synchronous test double before Vitest evaluates
+      // the dashboard package. A setup-file mock can be bypassed by a
+      // pre-bundled workspace dependency, leaving Iconify timers alive after
+      // jsdom teardown on CI.
+      '@iconify/react': path.resolve(__dirname, './src/test/mocks/iconify-react.ts'),
+    },
     css: false,
     exclude: ['tests/e2e/**', 'node_modules/**', 'dist/**'],
     coverage: {
