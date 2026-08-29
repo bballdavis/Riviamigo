@@ -17,7 +17,6 @@ on:
       - 'pnpm-workspace.yaml'
       - 'turbo.json'
       - 'scripts/check-docs.mjs'
-      - 'scripts/generate-synology-compose.mjs'
       - 'compose/**'
       - '.github/workflows/publish-docs.yml'
 
