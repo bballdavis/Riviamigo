@@ -607,6 +607,11 @@ async fn execute_job(
     }
     tokio::spawn(async move {
         if let Err(error) = perform_restore(&state.config, job_id).await {
+            tracing::error!(
+                job_id = %job_id,
+                error = ?error,
+                "restore agent job failed"
+            );
             let _ = restore_jobs::fail(&state.config, job_id, &error).await;
             let _ = fs::remove_file(restore_marker_path()).await;
             if let Ok(job) = restore_jobs::read(&state.config, job_id).await {
