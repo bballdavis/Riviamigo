@@ -99,8 +99,14 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     metricCatalog.data ?? [],
   ), [metricCatalog.data, sources.data]);
   const { effectiveVehicleId } = useResolvedVehicleSelection();
-  const previewContext = previewRange(draft?.config.timeframe ?? { mode: 'dashboard' });
-  const previewData = useChartDatasets(draft?.config ?? null, {
+  const previewTimeframe = draft?.config.timeframe;
+  const previewPreset = previewTimeframe?.mode === 'relative' ? previewTimeframe.preset : undefined;
+  const previewContext = React.useMemo(
+    () => previewRange(previewTimeframe ?? { mode: 'dashboard' }),
+    [previewTimeframe?.mode, previewPreset],
+  );
+  const usesBundledPreview = !!draft && !!getBundledChartDefinition(draft.slug);
+  const previewData = useChartDatasets(usesBundledPreview ? null : draft?.config ?? null, {
     vehicleId: effectiveVehicleId,
     from: previewContext.from,
     to: previewContext.to,
@@ -247,7 +253,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
         </div>
       </header>
       <main className="mx-auto grid max-w-[1500px] gap-5 p-4 md:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(22rem,30rem)] lg:items-start">
-        <PreviewPanel draft={draft} errors={validationErrors} datasets={previewData.datasets} loading={previewData.isLoading} sourceErrors={previewData.errors} previewContext={previewContext} vehicleId={effectiveVehicleId} />
+        <PreviewPanel draft={draft} errors={validationErrors} datasets={previewData.datasets} loading={previewData.isLoading} sourceErrors={previewData.errors} previewContext={previewContext} vehicleId={effectiveVehicleId} usesBundledPreview={usesBundledPreview} />
         <section className="min-w-0 lg:col-start-2 lg:row-start-1">
           <nav aria-label="Chart editor sections" className="mb-4 flex gap-1 overflow-x-auto rounded-xl border border-border bg-bg-surface p-1">
             {(['basics', 'curves', 'display', 'advanced'] as EditorSection[]).map((item) => <button key={item} type="button" onClick={() => setSection(item)} className={`min-h-10 shrink-0 rounded-lg px-3 text-left text-sm capitalize transition-colors ${section === item ? 'bg-bg-elevated font-medium text-fg' : 'text-fg-secondary hover:bg-bg-elevated/70'}`}>{item}</button>)}
@@ -327,13 +333,13 @@ function AdvancedSection({ value, onChange }: { value: string; onChange: (value:
   return <EditorCard title="Advanced definition" description="JSON is validated by the same schema used for visual controls. Unsupported executable content is rejected."><textarea value={value} onChange={(event) => onChange(event.target.value)} spellCheck={false} rows={24} className="min-h-[30rem] w-full rounded-lg border border-border bg-bg-elevated p-3 font-mono text-xs text-fg outline-none focus:border-accent" /></EditorCard>;
 }
 
-function PreviewPanel({ draft, errors, datasets, sourceErrors, previewContext, vehicleId }: { draft: ChartRecord; errors: Array<{ path: string; message: string }>; datasets: import('@riviamigo/types').ChartDataset[]; loading: boolean; sourceErrors: unknown[]; previewContext: { from: string | null; to: string | null; lifetime: boolean }; vehicleId: string | null }) {
+function PreviewPanel({ draft, errors, datasets, loading, sourceErrors, previewContext, vehicleId, usesBundledPreview }: { draft: ChartRecord; errors: Array<{ path: string; message: string }>; datasets: import('@riviamigo/types').ChartDataset[]; loading: boolean; sourceErrors: unknown[]; previewContext: { from: string | null; to: string | null; lifetime: boolean }; vehicleId: string | null; usesBundledPreview: boolean }) {
   const totalIssues = errors.length + sourceErrors.length;
   const ctx = { vehicleId, from: previewContext.from, to: previewContext.to };
   const contextLabel = previewContext.lifetime
     ? 'Active vehicle · Lifetime'
     : `Active vehicle · ${previewContext.from?.slice(0, 10) ?? 'range start'} to ${previewContext.to?.slice(0, 10) ?? 'range end'}`;
-  return <aside className="grid content-start gap-4 lg:sticky lg:top-24 lg:self-start"><Card><CardHeader><CardTitle>Live preview</CardTitle><Badge variant={totalIssues ? 'warning' : 'success'} size="sm">{totalIssues ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'}` : 'Valid'}</Badge></CardHeader><CardContent><div className="min-h-56 rounded-xl border border-border bg-bg-elevated/30 p-2"><ManagedChartRuntime chart={draft} ctx={ctx} height={260} /></div><p className="mt-3 text-xs text-fg-tertiary">{contextLabel}. This preview uses the unsaved draft and the production chart renderer.</p></CardContent></Card><Card><CardHeader><CardTitle>Diagnostics</CardTitle></CardHeader><CardContent className="grid gap-2 text-xs">{errors.map((error) => <div key={`${error.path}-${error.message}`} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">{error.path}</strong><p className="mt-1 text-fg-secondary">{error.message}</p></div>)}{sourceErrors.map((error, index) => <div key={index} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">Data request</strong><p className="mt-1 text-fg-secondary">{error instanceof Error ? error.message : 'Data request failed.'}</p></div>)}{totalIssues === 0 ? <><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {datasets.length} data group{datasets.length === 1 ? '' : 's'}</div><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {draft.config.series.length} curves</div></> : null}</CardContent></Card></aside>;
+  return <aside className="grid content-start gap-4 lg:sticky lg:top-24 lg:self-start"><Card><CardHeader><CardTitle>Live preview</CardTitle><Badge variant={totalIssues ? 'warning' : 'success'} size="sm">{totalIssues ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'}` : 'Valid'}</Badge></CardHeader><CardContent><div className="min-h-56 rounded-xl border border-border bg-bg-elevated/30 p-2"><ManagedChartRuntime chart={draft} ctx={ctx} height={260} /></div><p className="mt-3 text-xs text-fg-tertiary">{contextLabel}. This preview uses the unsaved draft and the production chart renderer.</p></CardContent></Card><Card><CardHeader><CardTitle>Diagnostics</CardTitle></CardHeader><CardContent className="grid gap-2 text-xs">{errors.map((error) => <div key={`${error.path}-${error.message}`} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">{error.path}</strong><p className="mt-1 text-fg-secondary">{error.message}</p></div>)}{sourceErrors.map((error, index) => <div key={index} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">Data request</strong><p className="mt-1 text-fg-secondary">{error instanceof Error ? error.message : 'Data request failed.'}</p></div>)}{totalIssues === 0 ? <><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {usesBundledPreview ? 'Bundled dashboard renderer' : loading ? 'Loading data…' : `${datasets.length} data group${datasets.length === 1 ? '' : 's'}`}</div><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {draft.config.series.length} curves</div></> : null}</CardContent></Card></aside>;
 }
 
 function EditorCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) { return <Card><CardHeader><div><CardTitle>{title}</CardTitle><p className="mt-1 text-sm text-fg-tertiary">{description}</p></div></CardHeader><CardContent>{children}</CardContent></Card>; }
