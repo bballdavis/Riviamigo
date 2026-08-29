@@ -182,18 +182,26 @@ async fn run_current_migrations_locked(
             let public = read_ledger(connection, "public").await?;
             let legacy = read_ledger(connection, "riviamigo").await?;
             validate_ledger_prefix(&public).context("validate public migration ledger")?;
-            validate_ledger_prefix(&legacy).context("validate legacy migration ledger")?;
             require_baseline_schema(schema_has_users, &public)?;
-            if public != legacy {
-                bail!(
-                    "public and legacy SQLx migration ledgers disagree; refusing automatic repair"
-                );
+            if legacy.is_empty() {
+                sqlx::query("DROP TABLE riviamigo._sqlx_migrations")
+                    .execute(&mut *connection)
+                    .await
+                    .context("remove empty legacy migration ledger")?;
+                MigrationLedgerAction::RemovedRedundantLegacy
+            } else {
+                validate_ledger_prefix(&legacy).context("validate legacy migration ledger")?;
+                if public != legacy {
+                    bail!(
+                        "public and legacy SQLx migration ledgers disagree; refusing automatic repair"
+                    );
+                }
+                sqlx::query("DROP TABLE riviamigo._sqlx_migrations")
+                    .execute(&mut *connection)
+                    .await
+                    .context("remove redundant legacy migration ledger")?;
+                MigrationLedgerAction::RemovedRedundantLegacy
             }
-            sqlx::query("DROP TABLE riviamigo._sqlx_migrations")
-                .execute(&mut *connection)
-                .await
-                .context("remove redundant legacy migration ledger")?;
-            MigrationLedgerAction::RemovedRedundantLegacy
         }
     };
 
@@ -781,6 +789,46 @@ mod tests {
             .expect("read canonical public ledger"),
             expected
         );
+
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable PostgreSQL DATABASE_URL with CREATEDB permission"]
+    async fn valid_public_ledger_removes_empty_legacy_ledger() {
+        let database = DisposableDatabase::new().await;
+        run_current_migrations(&database.pool)
+            .await
+            .expect("initialize disposable database");
+        sqlx::query(
+            r#"
+            CREATE TABLE riviamigo._sqlx_migrations (
+                version BIGINT PRIMARY KEY,
+                description TEXT NOT NULL,
+                installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
+                success BOOLEAN NOT NULL,
+                checksum BYTEA NOT NULL,
+                execution_time BIGINT NOT NULL
+            )
+            "#,
+        )
+        .execute(&database.pool)
+        .await
+        .expect("create empty legacy SQLx ledger");
+
+        let summary = run_current_migrations(&database.pool)
+            .await
+            .expect("remove empty legacy ledger while retaining public ledger");
+        assert_eq!(
+            summary.ledger_action,
+            MigrationLedgerAction::RemovedRedundantLegacy
+        );
+        let legacy_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('riviamigo._sqlx_migrations') IS NOT NULL")
+                .fetch_one(&database.pool)
+                .await
+                .expect("inspect removed legacy SQLx ledger");
+        assert!(!legacy_exists, "empty legacy ledger must be removed");
 
         database.cleanup().await;
     }

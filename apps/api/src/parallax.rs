@@ -367,8 +367,7 @@ pub async fn run(database_url: &str) -> Result<()> {
         .connect(database_url)
         .await
         .context("connect Parallax collector to Riviamigo database")?;
-    crate::db::migrations::MIGRATOR
-        .run(&pool)
+    crate::db::migrations::run_current_migrations(&pool)
         .await
         .context("apply Parallax telemetry migrations")?;
 
