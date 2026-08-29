@@ -117,6 +117,15 @@ requireText(
   /cargo run --bin riviamigo-api/,
   'runtime workflow must select the API binary explicitly',
 );
+const freshInstallWorkflow = read('.github/workflows/fresh-install.yml');
+requireText(
+  freshInstallWorkflow,
+  /pnpm verify:fresh-install -- --mode "\$\{\{ inputs\.mode \|\| 'production' \}\}" --production-env "\$fresh_env" --source-build/,
+  'fresh-install workflow must exercise the production acceptance path',
+);
+if (/secrets\.FRESH_INSTALL_(?:JWT_SECRET|JWT_PUBLIC_KEY|AGE_ENCRYPTION_KEY)/.test(freshInstallWorkflow)) {
+  fail('fresh-install workflow must validate generated key persistence without repository key secrets');
+}
 
 if (failures.length) {
   console.error(`Release workflow contract failed with ${failures.length} issue(s):`);

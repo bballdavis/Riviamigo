@@ -55,5 +55,4 @@ jobs:
           sed -i 's|REDIS_PASSWORD=.*|REDIS_PASSWORD=fresh-install-redis-password|' "$fresh_env"
           sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://fresh-install.example.test|' "$fresh_env"
           echo "RIVIAMIGO_SETUP_TOKEN=$(openssl rand -hex 32)" >> "$fresh_env"
-          printf '\nJWT_SECRET=%s\nJWT_PUBLIC_KEY=%s\nAGE_ENCRYPTION_KEY=%s\n' "${{ secrets.FRESH_INSTALL_JWT_SECRET }}" "${{ secrets.FRESH_INSTALL_JWT_PUBLIC_KEY }}" "${{ secrets.FRESH_INSTALL_AGE_ENCRYPTION_KEY }}" >> "$fresh_env"
           pnpm verify:fresh-install -- --mode "${{ inputs.mode || 'production' }}" --production-env "$fresh_env" --source-build
