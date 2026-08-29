@@ -442,6 +442,7 @@ vi.mock('lucide-react', () => ({
   AlertCircle: () => <svg data-testid="icon-alert-circle" />,
   Braces: () => <svg data-testid="icon-braces" />,
   Car: () => <svg data-testid="icon-car" />,
+  ChartLine: () => <svg data-testid="icon-chart-line" />,
   CircleHelp: () => <svg data-testid="icon-help" />,
   Circle: () => <svg data-testid="icon-circle" />,
   Clipboard: () => <svg data-testid="icon-clipboard" />,
@@ -553,6 +554,11 @@ describe('Settings page', () => {
   it('renders the Vehicles section heading', () => {
     renderSettings();
     expect(screen.getAllByText('Vehicles').length).toBeGreaterThan(0);
+  });
+
+  it('uses a chart icon for the Charts settings section', () => {
+    renderSettings();
+    expect(screen.getByTestId('icon-chart-line')).toBeInTheDocument();
   });
 
   it('renders the connected vehicle display name', () => {
