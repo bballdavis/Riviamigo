@@ -11,7 +11,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { formatTemp } from '@riviamigo/ui/lib/utils';
-import { getBundledChartDefinition, getDefaultBySlug, getWidget, SPECIALIZED_RENDERER_COMPATIBILITY } from '@riviamigo/dashboards';
+import { getBundledChartDefinition, getDefaultBySlug, getWidget } from '@riviamigo/dashboards';
 import {
   getBatteryCapacityMileageYRange,
   getProjectedRangeMileageYRange,
@@ -72,20 +72,19 @@ vi.mock('uplot', () => {
 });
 
 describe('DashboardChartWidget - smoothing controls', () => {
-  it('keeps specialized rendering when only dashboard placement changes', () => {
+  it('renders built-in charts through the standard dashboard renderer regardless of placement metadata', () => {
     const bundled = getBundledChartDefinition('battery-capacity-mileage');
     if (!bundled) throw new Error('battery capacity chart seed is missing');
     const { slug, title, description, ...config } = bundled;
     const seed = { id: 'system', ownerId: null, slug, name: title, description, isDefault: true, isLocked: false, isEnabled: true, config };
     expect(usesBundledChartRenderer(seed)).toBe(true);
     expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, placements: [{ dashboardSlug: 'overview' }] } })).toBe(true);
-    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(false);
+    expect(usesBundledChartRenderer({ ...seed, config: { ...seed.config, axes: { ...seed.config.axes, y: { ...seed.config.axes.y, label: 'Edited label' } } } })).toBe(true);
   });
-  it('keeps specialized rendering when compatible object keys are reordered', () => {
+  it('keeps the standard renderer when managed metadata is reordered', () => {
     const seed = chartRecord('battery-capacity-mileage');
     const reordered = { ...seed, config: { interaction: seed.config.interaction, display: seed.config.display, axes: seed.config.axes, series: seed.config.series, x: seed.config.x, sources: seed.config.sources, timeframe: seed.config.timeframe, placements: seed.config.placements, schemaVersion: seed.config.schemaVersion } };
     expect(usesBundledChartRenderer(reordered)).toBe(true);
-    expect(SPECIALIZED_RENDERER_COMPATIBILITY.find((renderer) => renderer.chartSlug === seed.slug)?.supportedDefinitionControls).toEqual([]);
   });
 
   it('keeps assigned Overview loading and errors from falling back to the fixed catalog', () => {
@@ -113,6 +112,53 @@ describe('DashboardChartWidget - smoothing controls', () => {
     mockEffectiveCharts.mockReturnValue({ data: [], isSuccess: true, isLoading: false, isError: false });
     renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
     expect(screen.getByText('No enabled charts are assigned to this dashboard.')).toBeInTheDocument();
+  });
+
+  it('renders an assigned built-in chart with the same dashboard renderer used on its native page', () => {
+    const assigned = chartRecord('battery-capacity-mileage');
+    assigned.config = {
+      ...assigned.config,
+      axes: {
+        ...assigned.config.axes,
+        y: { ...assigned.config.axes.y, label: 'Managed label' },
+      },
+    };
+    mockEffectiveCharts.mockReturnValue({
+      data: [assigned],
+      isSuccess: true,
+      isLoading: false,
+      isError: false,
+    });
+
+    renderWidget({
+      ...assignedOverviewInstance(),
+      options: {
+        chartId: 'battery-capacity-mileage',
+        chartIds: ['battery-capacity-mileage'],
+        page: 'overview' as const,
+        showPicker: true,
+      },
+    }, { ...CTX, dashboardSlug: 'dashboard' });
+
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-series', 'Usable Capacity|Mileage');
+    expect(screen.getByTestId('rich-chart')).toHaveAttribute('data-series-modes', 'Usable Capacity:area|Mileage:line');
+  });
+
+  it('keeps an assigned Overview chart selection active across parent rerenders', () => {
+    const instance = assignedOverviewInstance();
+    const charts = [chartRecord('soc-history'), chartRecord('projected-range-mileage')];
+    mockEffectiveCharts.mockReturnValue({ data: charts, isSuccess: true, isLoading: false, isError: false });
+    const rendered = renderWidget(instance, { ...CTX, dashboardSlug: 'dashboard' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chart' }));
+    fireEvent.click(screen.getByRole('option', { name: 'State of Charge' }));
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
+
+    rendered.rerender(
+      <DashboardChartWidget instance={{ ...instance }} ctx={{ ...CTX, dashboardSlug: 'dashboard' }} />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Chart' })).toHaveTextContent('State of Charge');
   });
   it('uses projected range by mileage as the Overview app default', () => {
     const overview = getDefaultBySlug('dashboard');

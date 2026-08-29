@@ -23,7 +23,7 @@ export { parseSafeMathExpression, resolveSafeExpression, resolveSafeNumberPath }
 export { BUNDLED_CHART_DEFINITIONS, BUNDLED_CHART_SLUGS, getBundledChartDefinition } from './charts/defaults';
 export { CHART_SOURCE_MANIFESTS, getChartSourceManifest, resolveChartSourceCapabilities } from './charts/sources';
 export { buildCurveCatalog, domainSignature, isMixedDomain, removeCurveAndUnusedSources, sharedDomain } from './charts/curveCatalog';
-export { CHART_RENDERER_PLUGINS, SPECIALIZED_RENDERER_COMPATIBILITY, getChartRenderer, supportsSpecializedChartRenderer } from './charts/rendererRegistry';
+export { CHART_RENDERER_PLUGINS, getChartRenderer } from './charts/rendererRegistry';
 export {
   buildChartManagerEntries,
   chartHasPlacement,
