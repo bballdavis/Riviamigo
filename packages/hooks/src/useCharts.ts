@@ -224,7 +224,7 @@ export function useSetChartEnabled() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, isEnabled }: ChartEnabledUpdate) =>
-      api.apiFetch('PATCH', `${CHARTS_BASE}/${id}/enabled`, { isEnabled }),
+      api.apiFetch('PATCH', `${CHARTS_BASE}/${id}`, { isEnabled }),
     onSuccess: () => invalidateChartCatalogs(queryClient),
   });
 }

@@ -41,6 +41,12 @@ struct ChartPatch {
     config: Option<Value>,
 }
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloneInput {
+    slug: Option<String>,
+    name: Option<String>,
+}
+#[derive(Debug, Deserialize)]
 struct LockInput {
     locked: bool,
 }
@@ -185,14 +191,21 @@ async fn remove(
 async fn clone_chart(
     State(state): State<AppState>,
     auth: AuthUser,
-
     Path(id): Path<Uuid>,
+    Json(body): Json<CloneInput>,
 ) -> Result<(StatusCode, Json<ChartRecord>), AppError> {
     let source = get_chart(&state, id).await?;
     check_read(&source, auth.user_id)?;
-    let slug = format!("{}-copy-{}", source.slug, Uuid::new_v4().simple());
+    let slug = body
+        .slug
+        .unwrap_or_else(|| format!("{}-copy-{}", source.slug, Uuid::new_v4().simple()));
+    validate_slug(&slug)?;
+    let name = body
+        .name
+        .unwrap_or_else(|| format!("{} (copy)", source.name));
+    validate_name(&name)?;
     let row = sqlx::query_as::<_, ChartRecord>("INSERT INTO riviamigo.charts (owner_id,slug,name,description,is_default,is_locked,is_enabled,config) VALUES ($1,$2,$3,$4,FALSE,FALSE,$5,$6) RETURNING id,owner_id,slug,name,description,is_default,is_locked,is_enabled,config,baseline_revision,created_at,updated_at")
-        .bind(auth.user_id).bind(slug).bind(format!("{} (copy)",source.name)).bind(source.description).bind(source.is_enabled).bind(source.config).fetch_one(&state.pool).await?;
+        .bind(auth.user_id).bind(slug).bind(name).bind(source.description).bind(source.is_enabled).bind(source.config).fetch_one(&state.pool).await.map_err(map_conflict)?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
