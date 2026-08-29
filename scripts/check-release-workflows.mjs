@@ -162,6 +162,11 @@ requireText(
   /run\?\.status === 'succeeded'[\s\S]*?storage_type === 'local'[\s\S]*?storage_type === 's3'/,
   'S3 drill must require both local and S3 artifacts from the completed run',
 );
+requireText(
+  backupRestoreS3,
+  /phase === 'failed'[\s\S]*?job\.error_message/,
+  'S3 drill must surface terminal restore-agent errors instead of swallowing them',
+);
 
 if (failures.length) {
   console.error(`Release workflow contract failed with ${failures.length} issue(s):`);
