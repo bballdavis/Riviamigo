@@ -71,8 +71,7 @@ import {
   type DashboardChartPage,
   type DashboardChartSettingsCapabilities,
 } from '../../charts/catalog';
-import { getBundledChartDefinition } from '../../charts/defaults';
-import { getChartRenderer, supportsSpecializedChartRenderer } from '../../charts/rendererRegistry';
+import { getChartRenderer } from '../../charts/rendererRegistry';
 import { registerWidget } from '../../registry';
 import type { WidgetCtx, WidgetInstance } from '../../registry';
 import { useMeasuredWidgetHeight } from '../useMeasuredWidgetHeight';
@@ -333,6 +332,7 @@ function AssignedChartRuntime({
   charts: ChartRecord[];
 }) {
   const available = charts.filter((chart) => chart.isEnabled || options.requiredChartSlugs.includes(chart.slug));
+  const chartIdsSignature = available.map((chart) => chart.slug).join('|');
   const chartOptions = available.map((chart) => ({ value: chart.slug, label: chart.name }));
   const defaultChartId = options.chartId && available.some((chart) => chart.slug === options.chartId)
     ? options.chartId
@@ -346,17 +346,22 @@ function AssignedChartRuntime({
   const updateFavorite = useUpdateDashboardChartFavorite();
   const storageKey = chartDefaultStorageKey(ctx, instance);
   const favorite = favoriteResponse?.chart_favorites?.[storageKey];
+  const resolvedFavorite = favoritesLoaded && favorite && available.some((chart) => chart.slug === favorite)
+    ? favorite
+    : defaultChartId;
+  const favoriteInitializationRef = React.useRef<string | null>(null);
 
   React.useEffect(() => setDraftChartSettings(options.chartSettings), [options.chartSettings]);
 
   React.useEffect(() => {
     if (!available.length) return;
-    const next = favoritesLoaded && favorite && available.some((chart) => chart.slug === favorite)
-      ? favorite
-      : defaultChartId;
-    setChartId(next);
-    setDefaultChartId(next);
-  }, [available, defaultChartId, favorite, favoritesLoaded]);
+    const initializationKey = `${storageKey}|${chartIdsSignature}|${defaultChartId}`;
+    setDefaultChartId(resolvedFavorite);
+    if (favoriteInitializationRef.current !== initializationKey) {
+      setChartId(resolvedFavorite);
+      favoriteInitializationRef.current = initializationKey;
+    }
+  }, [chartIdsSignature, defaultChartId, resolvedFavorite, storageKey, available.length]);
 
   const active = available.find((chart) => chart.slug === chartId) ?? available[0];
   const settings = resolveChartDisplaySettings(draftChartSettings, active?.slug ?? '', options.legacyTimeFilter, options.legacySmoothness);
@@ -399,14 +404,7 @@ function AssignedChartRuntime({
 }
 
 export function usesBundledChartRenderer(chart: ChartRecord) {
-  if (getChartDefinition(chart.slug) == null) return false;
-  const bundled = getBundledChartDefinition(chart.slug);
-  if (!bundled) return false;
-  const bundledConfig = { ...bundled } as Partial<typeof bundled>;
-  delete bundledConfig.slug;
-  delete bundledConfig.title;
-  delete bundledConfig.description;
-  return supportsSpecializedChartRenderer(chart.slug, chart.config, bundledConfig as ChartRecord['config']);
+  return getChartDefinition(chart.slug) != null;
 }
 
 export function ManagedChartRuntime({ chart, ctx, height, settings, presentation = 'embedded', onResolvedAxisRanges }: {
