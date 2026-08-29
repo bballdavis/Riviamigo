@@ -1025,19 +1025,25 @@ async fn stop_api_process() -> anyhow::Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    if !Path::new(&format!("/proc/{}", pid.trim())).exists() {
+    let pid = pid
+        .trim()
+        .parse::<u32>()
+        .context("Riviamigo API pid file is invalid")?;
+    if !Path::new(&format!("/proc/{pid}")).exists() {
         return Ok(());
     }
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.trim())
+    // The production image guarantees /bin/sh through its process supervisor,
+    // but intentionally does not install procps' external `kill` executable.
+    let status = Command::new("/bin/sh")
+        .args(["-c", "kill -TERM \"$1\"", "riviamigo-restore-agent"])
+        .arg(pid.to_string())
         .status()
         .await?;
     if !status.success() {
         anyhow::bail!("could not stop the Riviamigo API process");
     }
     for _ in 0..300 {
-        if !Path::new(&format!("/proc/{}", pid.trim())).exists() {
+        if !Path::new(&format!("/proc/{pid}")).exists() {
             return Ok(());
         }
         sleep(Duration::from_millis(100)).await;
