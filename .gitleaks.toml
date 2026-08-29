@@ -11,7 +11,7 @@ description = "Known non-signable JWT-shaped token in the chart E2E fixture hist
 condition = "AND"
 regexTarget = "secret"
 regexes = ['''^eyJhbGciOiJub25lIn0\.eyJzdWIiOiJlMmUtdXNlciJ9\.$''']
-paths = ['''^apps/web/tests/e2e/chart-management\.spec\.ts$''']
+paths = ['''^apps/web/tests/e2e/(?:chart-management|dashboard-editability)\.spec\.ts$''']
 
 [[rules]]
 id = "generic-api-key"
@@ -21,4 +21,31 @@ description = "Known non-signable JWT-shaped token in the chart E2E fixture hist
 condition = "AND"
 regexTarget = "secret"
 regexes = ['''^eyJhbGciOiJub25lIn0\.eyJzdWIiOiJlMmUtdXNlciJ9\.$''']
-paths = ['''^apps/web/tests/e2e/chart-management\.spec\.ts$''']
+paths = ['''^apps/web/tests/e2e/(?:chart-management|dashboard-editability)\.spec\.ts$''']
+
+[[rules.allowlists]]
+description = "Known documentation and chart-series placeholder values in repository history"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^(?:degradation-(?:10-20|20-30)|rmigo_[0-9a-f]{32})$''']
+paths = ['''^(?:docs/wiki-drafts/13-API-Keys\.md|packages/dashboards/src/widgets/chart/DashboardChartWidget\.tsx)$''']
+
+[[rules]]
+id = "age-secret-key"
+
+[[rules.allowlists]]
+description = "Known non-functional Age identity used by historical route tests"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^AGE-SECRET-KEY-1Q+$''']
+paths = ['''^apps/api/src/routes/[a-z_]+\.rs$''']
+
+[[rules]]
+id = "curl-auth-header"
+
+[[rules.allowlists]]
+description = "Known API-key placeholder in historical documentation"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^rmigo_[0-9a-f]{32}$''']
+paths = ['''^docs/wiki-drafts/13-API-Keys\.md$''']

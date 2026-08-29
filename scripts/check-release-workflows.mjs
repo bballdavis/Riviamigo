@@ -111,6 +111,12 @@ requireText(compose, /image: \$\{RIVIAMIGO_IMAGE:-/, 'production Compose must ac
 const freshInstall = read('scripts/verify-fresh-install.mjs');
 requireText(freshInstall, /const imageRef = value\('--image-ref'\)/, 'fresh-install verification must accept --image-ref');
 requireText(freshInstall, /RIVIAMIGO_IMAGE: imageRef/, 'fresh-install verification must pass the exact image reference to Compose');
+const runtime = read('.github/workflows/runtime.yml');
+requireText(
+  runtime,
+  /cargo run --bin riviamigo-api/,
+  'runtime workflow must select the API binary explicitly',
+);
 
 if (failures.length) {
   console.error(`Release workflow contract failed with ${failures.length} issue(s):`);
