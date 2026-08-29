@@ -23,32 +23,23 @@ pub struct ReconcileStats {
 
 /// Attach previously unassociated Parallax graph points only when their source
 /// timestamp belongs to exactly one closed canonical session. The persisted
-/// cursor keeps startup work bounded and makes retries idempotent.
+/// checked marker and batch limit keep startup work bounded; the cursor records
+/// the high-water mark without excluding late-arriving historical samples.
 pub async fn reconcile_unassociated_parallax_samples(
     pool: &PgPool,
     vehicle_id: Uuid,
     limit: i64,
 ) -> Result<ReconcileStats> {
     let mut tx = pool.begin().await?;
-    let cursor = sqlx::query_as::<_, (Option<chrono::DateTime<chrono::Utc>>, i32)>(
-        "SELECT cursor_ts,cursor_segment_index FROM riviamigo.charge_session_repair_cursor WHERE vehicle_id=$1",
-    )
-    .bind(vehicle_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or((None, -1));
     let rows = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, i32)>(
         r#"SELECT source_at,segment_index
            FROM timeseries.parallax_charge_curve_points
            WHERE vehicle_id=$1 AND charge_session_id IS NULL
-             AND ((reconciliation_checked_at IS NULL
-                   AND ($2::timestamptz IS NULL OR (source_at,segment_index)>($2,$3)))
+             AND (reconciliation_checked_at IS NULL
                   OR reconciliation_checked_at<now()-interval '1 hour')
-           ORDER BY reconciliation_checked_at NULLS FIRST,source_at,segment_index LIMIT $4"#,
+           ORDER BY reconciliation_checked_at NULLS FIRST,source_at,segment_index LIMIT $2"#,
     )
     .bind(vehicle_id)
-    .bind(cursor.0)
-    .bind(cursor.1)
     .bind(limit.clamp(1, 1000))
     .fetch_all(&mut *tx)
     .await?;
@@ -702,6 +693,19 @@ mod tests {
                 .attached,
             1
         );
+
+        sqlx::query("INSERT INTO timeseries.parallax_charge_curve_points(vehicle_id,source_at,segment_index,power_kw) VALUES($1,'2026-08-28T15:30:00Z',0,7)")
+            .bind(vehicle).execute(&pool).await.unwrap();
+        assert_eq!(
+            reconcile_unassociated_parallax_samples(&pool, vehicle, 10)
+                .await
+                .unwrap()
+                .attached,
+            1,
+            "late historical samples before the cursor must still be reconciled"
+        );
+        assert_eq!(sqlx::query_scalar::<_, Option<Uuid>>("SELECT charge_session_id FROM timeseries.parallax_charge_curve_points WHERE vehicle_id=$1 AND source_at='2026-08-28T15:30:00Z'")
+            .bind(vehicle).fetch_one(&pool).await.unwrap(), Some(unique));
 
         let newer_observed_at: DateTime<Utc> =
             "2026-08-28T19:00:00Z".parse().expect("newer timestamp");
