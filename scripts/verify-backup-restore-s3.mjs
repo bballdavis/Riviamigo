@@ -108,6 +108,26 @@ function runDataCommand(dataDir, script) {
   run('docker', ['run', '--rm', '--user', '0:0', '--mount', `type=bind,source=${dataDir},target=/data`, 'alpine:3.22.1', 'sh', '-ceu', script]);
 }
 
+async function waitForBackupCompletion(baseUrl, token, runId) {
+  const deadline = Date.now() + 360000;
+  while (Date.now() < deadline) {
+    const overview = await request(baseUrl, '/v1/admin/backups?per_page=100', { token });
+    const run = overview.recent_runs?.find((candidate) => candidate.id === runId);
+    if (run?.status === 'failed' || run?.status === 'canceled') {
+      throw new Error(`Backup run ${runId} ${run.status}: ${run.error_message || 'no error message'}`);
+    }
+    if (run?.status === 'succeeded') {
+      const artifacts = overview.artifacts?.filter((artifact) => artifact.run_id === runId) ?? [];
+      if (artifacts.some((artifact) => artifact.storage_type === 'local') && artifacts.some((artifact) => artifact.storage_type === 's3')) {
+        return { run, artifacts };
+      }
+      throw new Error(`Backup run ${runId} succeeded without both local and S3 artifacts.`);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+  }
+  throw new Error(`Backup run ${runId} did not complete before the timeout.`);
+}
+
 function prepareDataDirectory(dataDir) {
   // Docker creates missing bind-mounted subdirectories as root. The API image
   // intentionally runs as UID 1001, so prepare the disposable drill paths
@@ -152,7 +172,7 @@ try {
   await request(sourceUrl, '/v1/admin/backups/settings', { token: sourceToken, method: 'PUT', body: backupSettings(endpoint) });
   await request(sourceUrl, '/v1/admin/backups/s3/test', { token: sourceToken, method: 'POST', body: backupSettings(endpoint) });
   const backup = await request(sourceUrl, '/v1/admin/backups/run', { token: sourceToken, method: 'POST' });
-  if (!backup.artifacts?.some((artifact) => artifact.storage_type === 'local') || !backup.artifacts?.some((artifact) => artifact.storage_type === 's3')) throw new Error('Combined backup did not publish both Local and S3 artifacts.');
+  await waitForBackupCompletion(sourceUrl, sourceToken, backup.run.id);
   removeLocalPackages(sourceData);
 
   const targetData = join(tempRoot, 'target');
