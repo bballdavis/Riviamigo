@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use axum::{
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
@@ -160,7 +161,10 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
             );
         }
     }
-    backups::reconcile_local_catalog(&current_pool, config).await?;
+    // The standalone path may have just initialized a fresh database above;
+    // resolve persisted keys only after system_config is guaranteed to exist.
+    let config = config_with_active_keys(config, &current_pool).await?;
+    backups::reconcile_local_catalog(&current_pool, &config).await?;
     let plan = restore_compatibility::plan_restore(
         &validated.manifest,
         &validated.checksum_sha256,
@@ -197,7 +201,7 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
     extract_package(&staged_package, &staging).await?;
     ensure_recovery_free_space(&staging, config.recovery.min_free_bytes)?;
     let prepared = prepare_restore_database(
-        config,
+        &config,
         job_id,
         &staging.join("database.dump"),
         &validated.manifest,
@@ -218,7 +222,7 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
         .map(|transform| transform.id.as_str())
         .collect::<Vec<_>>();
     if planned_transforms != applied_transforms {
-        let _ = drop_database(config, &prepared.candidate_database).await;
+        let _ = drop_database(&config, &prepared.candidate_database).await;
         current_pool.close().await;
         anyhow::bail!(
             "candidate compatibility transforms changed after preflight: planned={planned_transforms:?}, actual={applied_transforms:?}"
@@ -227,21 +231,21 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
     if prepared.validation_report.target_schema.schema_fingerprint
         != plan.target.schema_fingerprint.clone().unwrap_or_default()
     {
-        let _ = drop_database(config, &prepared.candidate_database).await;
+        let _ = drop_database(&config, &prepared.candidate_database).await;
         current_pool.close().await;
         anyhow::bail!("candidate final schema contract differs from the preflight target contract");
     }
     let safety_and_merge = async {
         backups::run_backup_now(
             &current_pool,
-            config,
+            &config,
             None,
             backups::BackupRunTrigger::PreRestore,
         )
         .await?;
-        backups::reconcile_local_catalog(&current_pool, config).await?;
+        backups::reconcile_local_catalog(&current_pool, &config).await?;
         let final_target_history = restore_jobs::snapshot_catalog(&current_pool).await?;
-        let candidate_config = config_with_database(config, &prepared.candidate_database)?;
+        let candidate_config = config_with_database(&config, &prepared.candidate_database)?;
         let candidate_pool =
             riviamigo_api::db::pool::create_pool(&candidate_config.database_url).await?;
         restore_jobs::merge_catalog_snapshot(&candidate_pool, &final_target_history).await?;
@@ -250,7 +254,7 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
     }
     .await;
     if let Err(error) = safety_and_merge {
-        let _ = drop_database(config, &prepared.candidate_database).await;
+        let _ = drop_database(&config, &prepared.candidate_database).await;
         current_pool.close().await;
         return Err(error);
     }
@@ -275,7 +279,7 @@ async fn host_restore_inner(config: &Config, package: &Path, force: bool) -> any
     }
     .await
     {
-        let _ = drop_database(config, &state.candidate_database).await;
+        let _ = drop_database(&config, &state.candidate_database).await;
         let _ = fs::remove_dir_all(&state.staging).await;
         return Err(error);
     }
@@ -624,16 +628,31 @@ async fn execute_job(
 
 async fn perform_restore(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
     let lock_pool = riviamigo_api::db::pool::create_pool(&config.database_url).await?;
+    let config = config_with_active_keys(config, &lock_pool).await?;
     let lock = backups::acquire_recovery_mutation_lock(&lock_pool).await?;
     let result = tokio::time::timeout(
         Duration::from_secs(config.recovery.restore_deadline_seconds),
-        perform_restore_inner(config, job_id),
+        perform_restore_inner(&config, job_id),
     )
     .await
     .map_err(|_| anyhow::anyhow!("restore exceeded the four hour deadline"))?;
     lock.release().await;
     lock_pool.close().await;
     result
+}
+
+async fn config_with_active_keys(config: &Config, pool: &sqlx::PgPool) -> anyhow::Result<Config> {
+    let active_keys = riviamigo_api::keys::bootstrap_keys(
+        pool,
+        config.jwt_secret.clone(),
+        config.jwt_public_key.clone(),
+        config.age_encryption_key.clone(),
+    )
+    .await
+    .context("bootstrap restore cryptographic keys")?;
+    let mut config = config.clone();
+    config.age_encryption_key = Some(active_keys.age_key);
+    Ok(config)
 }
 
 async fn perform_restore_inner(config: &Config, job_id: Uuid) -> anyhow::Result<()> {
