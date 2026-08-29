@@ -167,6 +167,11 @@ requireText(
   /phase === 'failed'[\s\S]*?job\.error_message/,
   'S3 drill must surface terminal restore-agent errors instead of swallowing them',
 );
+requireText(
+  backupRestoreS3,
+  /RUST_LOG=riviamigo_api=info,riviamigo_restore_agent=error,tower_http=info/,
+  'S3 drill must retain restore-agent error diagnostics',
+);
 
 if (failures.length) {
   console.error(`Release workflow contract failed with ${failures.length} issue(s):`);

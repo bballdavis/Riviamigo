@@ -57,7 +57,7 @@ function environmentFile(name, port) {
     'COOKIE_INSECURE=true',
     'BACKUP_ARTIFACT_DIR=/backups',
     'VEHICLE_IMAGE_CACHE_DIR=/data/cache/riviamigo/vehicle-images',
-    'RUST_LOG=riviamigo_api=info,tower_http=info',
+    'RUST_LOG=riviamigo_api=info,riviamigo_restore_agent=error,tower_http=info',
   ].join('\n') + '\n');
   return path;
 }
