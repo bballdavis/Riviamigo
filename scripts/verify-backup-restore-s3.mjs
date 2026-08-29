@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,17 @@ function runDataCommand(dataDir, script) {
   run('docker', ['run', '--rm', '--user', '0:0', '--mount', `type=bind,source=${dataDir},target=/data`, 'alpine:3.22.1', 'sh', '-ceu', script]);
 }
 
+function prepareDataDirectory(dataDir) {
+  // Docker creates missing bind-mounted subdirectories as root. The API image
+  // intentionally runs as UID 1001, so prepare the disposable drill paths
+  // before the service starts instead of weakening the production image.
+  mkdirSync(dataDir, { recursive: true });
+  runDataCommand(
+    dataDir,
+    'mkdir -p /data/backups /data/cache && (chown 1001:1001 /data/backups /data/cache && chmod 0770 /data/backups /data/cache || chmod 0777 /data/backups /data/cache)'
+  );
+}
+
 function createArtworkSentinel(dataDir) {
   runDataCommand(dataDir, `mkdir -p /data/cache/riviamigo/vehicle-images/drill && printf %s '${nonce}' > /data/cache/riviamigo/vehicle-images/drill/sentinel.txt`);
 }
@@ -132,6 +143,7 @@ try {
 
   const sourceData = join(tempRoot, 'source');
   const sourceEnv = environmentFile('source', sourcePort);
+  prepareDataDirectory(sourceData);
   startStack(sourceProject, sourceData, sourceEnv, sourcePort);
   const sourceUrl = `http://localhost:${sourcePort}`;
   await waitFor(`${sourceUrl}/health`);
@@ -145,6 +157,7 @@ try {
 
   const targetData = join(tempRoot, 'target');
   const targetEnv = environmentFile('target', targetPort);
+  prepareDataDirectory(targetData);
   startStack(targetProject, targetData, targetEnv, targetPort);
   const targetUrl = `http://localhost:${targetPort}`;
   await waitFor(`${targetUrl}/health`);
