@@ -122,6 +122,7 @@ async function verifyOwnerSetup(baseUrl) {
   });
   if (closed.status !== 403)
     throw new Error(`Registration remained open after owner setup (status ${closed.status}).`);
+  return accessToken;
 }
 
 async function verifyBundledDashboards(baseUrl, accessToken) {
@@ -190,16 +191,16 @@ async function verifyProduction() {
     { env: environment }
   );
   productionStarted = true;
-  await verifyOwnerSetup(`http://localhost:${port}`);
+  const baseUrl = `http://localhost:${port}`;
+  const accessToken = await verifyOwnerSetup(baseUrl);
   run('docker', [...compose, '--env-file', productionEnv, 'restart', 'riviamigo'], {
     env: productionEnvironment,
   });
-  await waitFor(`http://localhost:${port}/health`);
-  const persistedSetup = await fetch(`http://localhost:${port}/v1/auth/setup`).then((response) =>
-    response.json()
-  );
+  await waitFor(`${baseUrl}/health`);
+  const persistedSetup = await fetch(`${baseUrl}/v1/auth/setup`).then((response) => response.json());
   if (persistedSetup.setup_required)
     throw new Error(`${composeFile} restart did not preserve the first owner.`);
+  await verifyBundledDashboards(baseUrl, accessToken);
 }
 
 function printProductionLogs() {
