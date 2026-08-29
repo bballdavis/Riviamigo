@@ -2,12 +2,16 @@ import React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import {
   CHART_SOURCE_MANIFESTS,
-  ChartDefinitionRenderer,
+  ManagedChartRuntime,
   ChartDefinitionV1Schema,
   downloadChartYaml,
   getBundledChartDefinition,
   resolveChartSourceCapabilities,
   validateChartDefinitionAgainstSources,
+  buildCurveCatalog,
+  isMixedDomain,
+  removeCurveAndUnusedSources,
+  sharedDomain,
 } from '@riviamigo/dashboards';
 import {
   useChartManager,
@@ -18,11 +22,11 @@ import {
   useCreateChart,
   useUpdateChart,
 } from '@riviamigo/hooks';
-import type { ChartAxisDefinition, ChartColorToken, ChartDefinitionV1, ChartMark, ChartRecord, ChartSeriesDefinition, ChartSourceManifest, MetricCatalogEntry } from '@riviamigo/types';
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, SelectPicker, Switch } from '@riviamigo/ui/primitives';
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Download, Plus, Save, Search, Trash2 } from 'lucide-react';
+import type { ChartAxisDefinition, ChartColorToken, ChartDefinitionV1, ChartMark, ChartRecord, ChartSeriesDefinition, ChartSourceBinding, ChartSourceManifest, MetricCatalogEntry } from '@riviamigo/types';
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Switch } from '@riviamigo/ui/primitives';
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Download, Save, Search, Trash2 } from 'lucide-react';
 
-type EditorSection = 'basics' | 'sources' | 'domain' | 'series' | 'display' | 'advanced';
+type EditorSection = 'basics' | 'curves' | 'display' | 'advanced';
 
 const TOKEN_COLORS: Array<{ token: ChartColorToken; label: string }> = [
   { token: 'accent', label: 'Accent' },
@@ -56,6 +60,14 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : 'Unable to save chart.';
 }
 
+function previewRange(policy: ChartDefinitionV1['timeframe']) {
+  if (policy.mode === 'lifetime') return { from: null, to: null, lifetime: true };
+  const days = policy.mode === 'relative' ? ({ '1h': 1 / 24, '6h': 0.25, '24h': 1, '7d': 7, '30d': 30, '90d': 90, '1y': 365 }[policy.preset] ?? 30) : 30;
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86_400_000);
+  return { from: from.toISOString(), to: to.toISOString(), lifetime: false };
+}
+
 export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chartId?: string }) {
   const navigate = useNavigate();
   const manager = useChartManager();
@@ -86,11 +98,12 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     metricCatalog.data ?? [],
   ), [metricCatalog.data, sources.data]);
   const { effectiveVehicleId } = useResolvedVehicleSelection();
+  const previewContext = previewRange(draft?.config.timeframe ?? { mode: 'dashboard' });
   const previewData = useChartDatasets(draft?.config ?? null, {
     vehicleId: effectiveVehicleId,
-    from: null,
-    to: null,
-    lifetime: draft?.config.timeframe.mode === 'lifetime',
+    from: previewContext.from,
+    to: previewContext.to,
+    lifetime: previewContext.lifetime,
   });
 
   React.useEffect(() => {
@@ -177,7 +190,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     if (!draft) return;
     if (validationErrors.length > 0) {
       setSaveError(`Fix ${validationErrors.length} validation error${validationErrors.length === 1 ? '' : 's'} before saving.`);
-      setSection(validationErrors[0]?.path.startsWith('config.sources') ? 'sources' : validationErrors[0]?.path.startsWith('config.series') ? 'series' : validationErrors[0]?.path.startsWith('config.axes') ? 'display' : 'basics');
+      setSection(validationErrors[0]?.path.startsWith('config.sources') || validationErrors[0]?.path.startsWith('config.series') ? 'curves' : 'display');
       return;
     }
     try {
@@ -225,17 +238,15 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
         </div>
       </header>
       <main className="mx-auto grid max-w-[1500px] gap-5 p-4 md:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(22rem,30rem)] lg:items-start">
-        <PreviewPanel draft={draft} errors={validationErrors} datasets={previewData.datasets} loading={previewData.isLoading} sourceErrors={previewData.errors} />
+        <PreviewPanel draft={draft} errors={validationErrors} datasets={previewData.datasets} loading={previewData.isLoading} sourceErrors={previewData.errors} previewContext={previewContext} vehicleId={effectiveVehicleId} />
         <section className="min-w-0 lg:col-start-2 lg:row-start-1">
           <nav aria-label="Chart editor sections" className="mb-4 flex gap-1 overflow-x-auto rounded-xl border border-border bg-bg-surface p-1">
-            {(['basics', 'sources', 'domain', 'series', 'display', 'advanced'] as EditorSection[]).map((item) => <button key={item} type="button" onClick={() => setSection(item)} className={`min-h-10 shrink-0 rounded-lg px-3 text-left text-sm capitalize transition-colors ${section === item ? 'bg-bg-elevated font-medium text-fg' : 'text-fg-secondary hover:bg-bg-elevated/70'}`}>{item}</button>)}
+            {(['basics', 'curves', 'display', 'advanced'] as EditorSection[]).map((item) => <button key={item} type="button" onClick={() => setSection(item)} className={`min-h-10 shrink-0 rounded-lg px-3 text-left text-sm capitalize transition-colors ${section === item ? 'bg-bg-elevated font-medium text-fg' : 'text-fg-secondary hover:bg-bg-elevated/70'}`}>{item}</button>)}
           </nav>
           {saveError ? <div role="alert" className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{saveError}</div> : null}
           {sourceNotice ? <div role="status" className="mb-4 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-fg-secondary">{sourceNotice}</div> : null}
           {section === 'basics' && <BasicsSection draft={draft} onChange={updateDraft} />}
-          {section === 'sources' && <SourcesSection definition={draft.config} manifests={manifests} metrics={metricCatalog.data ?? []} onNotice={setSourceNotice} onChange={updateDefinition} />}
-          {section === 'domain' && <DomainSection definition={draft.config} manifests={manifests} onChange={updateDefinition} />}
-          {section === 'series' && <SeriesSection definition={draft.config} manifests={manifests} metrics={metricCatalog.data ?? []} onNotice={setSourceNotice} onChange={updateDefinition} />}
+          {section === 'curves' && <CurvesSection definition={draft.config} manifests={manifests} metrics={metricCatalog.data ?? []} onNotice={setSourceNotice} onChange={updateDefinition} />}
           {section === 'display' && <DisplaySection definition={draft.config} onChange={updateDefinition} />}
           {section === 'advanced' && <AdvancedSection value={advancedText} onChange={(value) => { setAdvancedText(value); try { updateDefinition(() => ChartDefinitionV1Schema.parse(JSON.parse(value)) as ChartDefinitionV1); } catch { setDirty(true); } }} />}
         </section>
@@ -249,23 +260,39 @@ function BasicsSection({ draft, onChange }: { draft: ChartRecord; onChange: (pat
   return <EditorCard title="Basics" description="Stable slugs keep favorites and dashboard settings attached to the same chart."><div className="grid gap-4"><EditorField label="Name"><input value={draft.name} onChange={(event) => onChange({ name: event.target.value })} className="editor-input" /></EditorField><EditorField label="Slug" hint="Locked after first save in the production editor."><input value={draft.slug} disabled={!!draft.id} onChange={(event) => onChange({ slug: event.target.value })} className="editor-input disabled:opacity-60" /></EditorField><EditorField label="Description"><textarea value={draft.description ?? ''} onChange={(event) => onChange({ description: event.target.value })} rows={3} className="editor-input py-2" /></EditorField><ToggleRow label="Enabled" description="Disabled charts remain saved but are hidden from assigned dashboards." checked={draft.isEnabled} onCheckedChange={(checked) => onChange({ isEnabled: checked })} /></div></EditorCard>;
 }
 
-function SourcesSection({ definition, manifests, metrics, onNotice, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; metrics: MetricCatalogEntry[]; onNotice: (notice: string | null) => void; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
-  const source = definition.sources[0];
-  const activeManifest = manifests.find((manifest) => manifest.id === source?.sourceId);
-  return <EditorCard title="Data sources" description="Only allowlisted Riviamigo sources can be used by a saved chart."><div className="grid gap-4"><EditorField label="Primary source"><SelectPicker value={source?.sourceId ?? ''} options={manifests.map((manifest) => ({ value: manifest.id, label: manifest.label, description: manifest.category }))} onChange={(sourceId) => { const manifest = manifests.find((candidate) => candidate.id === sourceId); if (!manifest) return; onChange((current) => replacePrimarySource(current, manifest, metrics)); onNotice(`Source changed to ${manifest.label}. Incompatible domain and series bindings were updated.`); }} aria-label="Primary chart source" className="w-full" /></EditorField><div className="rounded-lg border border-border bg-bg-elevated/30 p-3 text-sm text-fg-secondary">{activeManifest?.description ?? 'Source capability metadata is loading.'}<p className="mt-2 text-xs text-fg-tertiary">{definition.sources.length} of 4 source bindings used.</p></div><ToggleRow label="Inherit active vehicle" checked={source?.inherit.vehicle ?? true} onCheckedChange={(checked) => onChange((current) => ({ ...current, sources: current.sources.map((binding, index) => index === 0 ? { ...binding, inherit: { ...binding.inherit, vehicle: checked } } : binding) }))} /><ToggleRow label="Inherit dashboard timeframe" checked={source?.inherit.timeframe ?? true} onCheckedChange={(checked) => onChange((current) => ({ ...current, sources: current.sources.map((binding, index) => index === 0 ? { ...binding, inherit: { ...binding.inherit, timeframe: checked } } : binding) }))} /></div></EditorCard>;
+function CurvesSection({ definition, manifests, metrics, onNotice, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; metrics: MetricCatalogEntry[]; onNotice: (notice: string | null) => void; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
+  const [query, setQuery] = React.useState('');
+  const domain = sharedDomain(definition, manifests);
+  const catalog = buildCurveCatalog(manifests, metrics, definition);
+  const mixed = isMixedDomain(definition, manifests);
+  const filtered = catalog.filter((option) => `${option.label} ${option.category} ${option.description}`.toLowerCase().includes(query.toLowerCase()));
+  return <div className="grid gap-4"><EditorCard title="Curves" description="Build the chart from searchable sensors and values. Each curve keeps its own mark, color, and axis."><div className="grid gap-4"><EditorField label="Timeframe"><select value={definition.timeframe.mode === 'relative' ? definition.timeframe.preset : definition.timeframe.mode} onChange={(event) => onChange((current) => ({ ...current, timeframe: event.target.value === 'dashboard' ? { mode: 'dashboard' } : event.target.value === 'lifetime' ? { mode: 'lifetime' } : { mode: 'relative', preset: event.target.value as '24h' | '7d' | '30d' | '90d' | '1y' } }))} className="editor-input"><option value="dashboard">Dashboard range</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="1y">Last year</option><option value="lifetime">Lifetime</option></select></EditorField><div className="rounded-lg border border-border bg-bg-elevated/30 p-3"><p className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">Plotted over</p><p className="mt-1 text-sm text-fg">{domain.label}{domain.unit ? ` · ${domain.unit}` : ''}</p>{mixed ? <p className="mt-1 text-xs text-warning">This chart uses mixed domains; curve changes are disabled. Use Advanced for exact bindings.</p> : null}</div><details className="rounded-lg border border-border bg-bg-elevated/20 p-3"><summary className="cursor-pointer text-sm font-medium">Add curve</summary><div className="mt-3 grid gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search curves" aria-label="Search curves" className="editor-input" /><div className="grid gap-1">{filtered.map((option) => <button key={option.id} type="button" disabled={!option.enabled || mixed} title={option.disabledReason} className="flex min-h-11 items-center justify-between rounded-md px-3 text-left text-sm hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-45" onClick={() => onChange((current) => addSeriesFromChoice(current, option.id, manifests, metrics, onNotice))}><span><span className="block">{option.label}</span><span className="block text-xs text-fg-tertiary">{option.category} · {option.description}</span>{!option.enabled || mixed ? <span className="block text-xs text-warning">{mixed ? 'Mixed-domain chart; edit in Advanced.' : option.disabledReason ?? 'Unavailable for this chart.'}</span> : null}</span></button>)}{filtered.length === 0 ? <p className="px-3 py-4 text-sm text-fg-tertiary">No matching curves.</p> : null}</div></div></details><CurvesListSection definition={definition} manifests={manifests} metrics={metrics} onNotice={onNotice} onChange={onChange} /></div></EditorCard></div>;
 }
 
-function DomainSection({ definition, manifests, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
-  const binding = definition.sources.find((source) => source.id === definition.x.field.sourceBindingId) ?? definition.sources[0];
-  const manifest = manifests.find((candidate) => candidate.id === binding?.sourceId);
-  const fields = manifest?.fields.filter((field) => field.roles.includes('x')) ?? [];
-  const selected = fields.find((field) => field.id === definition.x.field.field);
-  return <EditorCard title="X axis and domain" description="Choose from the fields exposed by the selected trusted source."><div className="grid gap-4"><EditorField label="X field"><SearchPicker value={definition.x.field.field} options={fields.map((field) => ({ value: field.id, label: field.label, description: [field.kind, field.unit].filter(Boolean).join(' · ') }))} onChange={(fieldId) => { const field = fields.find((candidate) => candidate.id === fieldId); if (!field || !binding) return; onChange((current) => ({ ...current, x: { ...current.x, field: { sourceBindingId: binding.id, field: field.id }, kind: field.kind, ...(field.unit ? { unit: field.unit } : {}) } })); }} ariaLabel="X axis field" /></EditorField><div className="grid gap-3 sm:grid-cols-2"><ReadOnlyFact label="Domain kind" value={selected?.kind ?? definition.x.kind} /><ReadOnlyFact label="Unit" value={selected?.unit ?? 'None'} /></div><EditorField label="Timeframe policy"><select value={definition.timeframe.mode === 'relative' ? definition.timeframe.preset : definition.timeframe.mode} onChange={(event) => onChange((current) => ({ ...current, timeframe: event.target.value === 'dashboard' ? { mode: 'dashboard' } : event.target.value === 'lifetime' ? { mode: 'lifetime' } : { mode: 'relative', preset: event.target.value as '24h' | '7d' | '30d' | '90d' | '1y' } }))} className="editor-input"><option value="dashboard">Dashboard</option><option value="24h">Relative 24 hours</option><option value="7d">Relative 7 days</option><option value="30d">Relative 30 days</option><option value="90d">Relative 90 days</option><option value="1y">Relative 1 year</option><option value="lifetime">Lifetime</option></select></EditorField><p className="text-xs text-fg-tertiary">Binding: {binding?.id ?? 'none'} · Source: {manifest?.label ?? 'Unavailable'}</p></div></EditorCard>;
-}
-
-function SeriesSection({ definition, manifests, metrics, onNotice, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; metrics: MetricCatalogEntry[]; onNotice: (notice: string | null) => void; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
-  const choices = buildSeriesChoices(definition, manifests, metrics);
-  return <EditorCard title="Series" description="Search every queryable metric or choose a field from a specialized source."><div className="grid gap-3">{definition.series.map((series, index) => <div key={series.id} className="grid gap-3 rounded-xl border border-border p-3"><div className="flex items-center justify-between gap-2"><strong className="text-sm">Series {index + 1}</strong><div className="flex gap-1"><button type="button" aria-label="Move series up" disabled={index === 0} onClick={() => onChange((current) => ({ ...current, series: moveItem(current.series, index, index - 1) }))} className="icon-button"><ChevronUp className="h-4 w-4" /></button><button type="button" aria-label="Move series down" disabled={index === definition.series.length - 1} onClick={() => onChange((current) => ({ ...current, series: moveItem(current.series, index, index + 1) }))} className="icon-button"><ChevronDown className="h-4 w-4" /></button><button type="button" aria-label="Remove series" disabled={definition.series.length === 1} onClick={() => onChange((current) => ({ ...current, series: current.series.filter((_, seriesIndex) => seriesIndex !== index) }))} className="icon-button text-danger"><Trash2 className="h-4 w-4" /></button></div></div><div className="grid gap-3"><EditorField label="Sensor or value"><SearchPicker value={choiceValueForSeries(series, definition)} options={choices} onChange={(choice) => onChange((current) => applySeriesChoice(current, index, choice, manifests, metrics, onNotice))} ariaLabel={`Series ${index + 1} sensor or value`} /></EditorField><EditorField label="Label"><input value={series.label} onChange={(event) => patchSeries(onChange, index, { label: event.target.value })} className="editor-input" /></EditorField><div className="grid gap-3 sm:grid-cols-2"><EditorField label="Mark"><select value={series.mark} onChange={(event) => patchSeries(onChange, index, { mark: event.target.value as ChartMark })} className="editor-input">{MARKS.map((mark) => <option key={mark} value={mark}>{mark}</option>)}</select></EditorField><EditorField label="Y axis"><select value={series.yAxis} onChange={(event) => patchSeries(onChange, index, { yAxis: event.target.value as 'y' | 'y2' })} className="editor-input"><option value="y">Left axis</option><option value="y2">Right axis</option></select></EditorField><EditorField label="Color"><select value={series.color.mode === 'token' ? series.color.token : 'accent'} onChange={(event) => patchSeries(onChange, index, { color: { mode: 'token', token: event.target.value as ChartColorToken } })} className="editor-input">{TOKEN_COLORS.map((color) => <option key={color.token} value={color.token}>{color.label}</option>)}</select></EditorField></div></div></div>)}<Button variant="secondary" size="sm" iconLeft={<Plus className="h-4 w-4" />} disabled={choices.length === 0} onClick={() => onChange((current) => addSeriesFromChoice(current, choices[0]?.value, manifests, metrics, onNotice))}>Add series</Button><p className="text-xs text-fg-tertiary">Metric series create reusable trusted bindings. A chart can use up to four source bindings.</p></div></EditorCard>;
+function CurvesListSection({ definition, manifests, metrics, onNotice, onChange }: { definition: ChartDefinitionV1; manifests: ChartSourceManifest[]; metrics: MetricCatalogEntry[]; onNotice: (notice: string | null) => void; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
+  const mixed = isMixedDomain(definition, manifests);
+  const replacementDefinition = definition.series.length === 1 ? { ...definition, series: [] } : definition;
+  const catalog = buildCurveCatalog(manifests, metrics, replacementDefinition);
+  return <div className="grid gap-3">{definition.series.map((series, index) => {
+    const binding = definition.sources.find((candidate) => candidate.id === series.y.sourceBindingId);
+    const manifest = manifests.find((candidate) => candidate.id === binding?.sourceId);
+    const valueOptions: SearchOption[] = catalog.map((option) => ({
+      value: option.id,
+      label: option.label,
+      description: `${option.category} · ${option.description}`,
+      disabled: mixed || !option.enabled,
+      ...((mixed || option.disabledReason) ? { disabledReason: mixed ? 'Mixed-domain chart; edit exact values in Advanced.' : option.disabledReason! } : {}),
+    }));
+    const inheritanceKeys: Array<'vehicle' | 'timeframe' | 'tripTags'> = ['vehicle', 'timeframe', ...(manifest?.supportsTripTagInheritance ? ['tripTags' as const] : [])];
+    return <div key={series.id} className="grid gap-3 rounded-xl border border-border p-3">
+      <div className="flex items-center justify-between gap-2"><strong className="text-sm">Curve {index + 1}</strong><div className="flex gap-1"><button type="button" aria-label="Move curve up" disabled={index === 0} onClick={() => onChange((current) => ({ ...current, series: moveItem(current.series, index, index - 1) }))} className="icon-button"><ChevronUp className="h-4 w-4" /></button><button type="button" aria-label="Move curve down" disabled={index === definition.series.length - 1} onClick={() => onChange((current) => ({ ...current, series: moveItem(current.series, index, index + 1) }))} className="icon-button"><ChevronDown className="h-4 w-4" /></button><button type="button" aria-label="Remove curve" disabled={definition.series.length === 1} onClick={() => onChange((current) => removeCurveAndUnusedSources(current, index))} className="icon-button text-danger"><Trash2 className="h-4 w-4" /></button></div></div>
+      <EditorField label="Value"><SearchPicker value={choiceValueForSeries(series, definition)} options={valueOptions} onChange={(choice) => onChange((current) => applySeriesChoice(current, index, choice, manifests, metrics, onNotice))} ariaLabel={`Curve ${index + 1} value`} /></EditorField>
+      <EditorField label="Label"><input value={series.label} onChange={(event) => patchSeries(onChange, index, { label: event.target.value })} className="editor-input" /></EditorField>
+      <div className="grid gap-3 sm:grid-cols-2"><EditorField label="Mark"><select value={series.mark} onChange={(event) => patchSeries(onChange, index, { mark: event.target.value as ChartMark })} className="editor-input">{MARKS.map((mark) => <option key={mark} value={mark}>{mark}</option>)}</select></EditorField><EditorField label="Axis"><select value={series.yAxis} onChange={(event) => patchSeries(onChange, index, { yAxis: event.target.value as 'y' | 'y2' })} className="editor-input"><option value="y">Left axis</option><option value="y2">Right axis</option></select></EditorField><EditorField label="Color"><select value={series.color.mode === 'token' ? series.color.token : 'accent'} onChange={(event) => patchSeries(onChange, index, { color: { mode: 'token', token: event.target.value as ChartColorToken } })} className="editor-input">{TOKEN_COLORS.map((color) => <option key={color.token} value={color.token}>{color.label}</option>)}</select></EditorField></div>
+      <ToggleRow label="Show in legend" checked={series.visibleInLegend !== false} onCheckedChange={(checked) => patchSeries(onChange, index, { visibleInLegend: checked })} />
+      <details className="rounded-lg border border-border bg-bg-elevated/20 p-2"><summary className="cursor-pointer text-sm font-medium">Data settings</summary><div className="mt-3 grid gap-3">{binding ? <>{inheritanceKeys.map((key) => <ToggleRow key={key} label={key === 'tripTags' ? 'Use trip filters' : key === 'vehicle' ? 'Use active vehicle' : 'Use selected timeframe'} checked={binding.inherit[key] ?? false} onCheckedChange={(checked) => onChange((current) => ({ ...current, sources: current.sources.map((candidate) => candidate.id === binding.id ? { ...candidate, inherit: { ...candidate.inherit, [key]: checked } } : candidate) }))} />)}{manifest?.requiredContext.includes('chargeSession') ? <p className="rounded-lg border border-border bg-bg-elevated/30 p-3 text-xs text-fg-tertiary">Uses the active charging session when this chart is viewed in a charging-session context.</p> : null}</> : <p className="text-xs text-warning">This curve's data settings are unavailable. Choose another value or repair it in Advanced.</p>}</div></details>
+    </div>;
+  })}</div>;
 }
 
 function DisplaySection({ definition, onChange }: { definition: ChartDefinitionV1; onChange: (mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) => void }) {
@@ -276,90 +303,93 @@ function AdvancedSection({ value, onChange }: { value: string; onChange: (value:
   return <EditorCard title="Advanced definition" description="JSON is validated by the same schema used for visual controls. Unsupported executable content is rejected."><textarea value={value} onChange={(event) => onChange(event.target.value)} spellCheck={false} rows={24} className="min-h-[30rem] w-full rounded-lg border border-border bg-bg-elevated p-3 font-mono text-xs text-fg outline-none focus:border-accent" /></EditorCard>;
 }
 
-function PreviewPanel({ draft, errors, datasets, loading, sourceErrors }: { draft: ChartRecord; errors: Array<{ path: string; message: string }>; datasets: import('@riviamigo/types').ChartDataset[]; loading: boolean; sourceErrors: unknown[] }) {
+function PreviewPanel({ draft, errors, datasets, sourceErrors, previewContext, vehicleId }: { draft: ChartRecord; errors: Array<{ path: string; message: string }>; datasets: import('@riviamigo/types').ChartDataset[]; loading: boolean; sourceErrors: unknown[]; previewContext: { from: string | null; to: string | null; lifetime: boolean }; vehicleId: string | null }) {
   const totalIssues = errors.length + sourceErrors.length;
-  return <aside className="grid content-start gap-4 lg:sticky lg:top-24 lg:self-start"><Card><CardHeader><CardTitle>Live preview</CardTitle><Badge variant={totalIssues ? 'warning' : 'success'} size="sm">{totalIssues ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'}` : 'Valid'}</Badge></CardHeader><CardContent><div className="min-h-56 rounded-xl border border-border bg-bg-elevated/30 p-2"><ChartDefinitionRenderer definition={draft.config} datasets={datasets} height={260} loading={loading} /></div><p className="mt-3 text-xs text-fg-tertiary">Preview requests use the active vehicle and are kept separate from the saved definition.</p></CardContent></Card><Card><CardHeader><CardTitle>Diagnostics</CardTitle></CardHeader><CardContent className="grid gap-2 text-xs">{errors.map((error) => <div key={`${error.path}-${error.message}`} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">{error.path}</strong><p className="mt-1 text-fg-secondary">{error.message}</p></div>)}{sourceErrors.map((error, index) => <div key={index} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">Source request</strong><p className="mt-1 text-fg-secondary">{error instanceof Error ? error.message : 'Source request failed.'}</p></div>)}{totalIssues === 0 ? <><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {datasets.length} normalized dataset{datasets.length === 1 ? '' : 's'}</div><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {draft.config.series.length} rendered series</div><p className="text-fg-tertiary">Source point counts and stale/partial state are available in the normalized dataset metadata.</p></> : null}</CardContent></Card></aside>;
+  const ctx = { vehicleId, from: previewContext.from, to: previewContext.to };
+  const contextLabel = previewContext.lifetime
+    ? 'Active vehicle · Lifetime'
+    : `Active vehicle · ${previewContext.from?.slice(0, 10) ?? 'range start'} to ${previewContext.to?.slice(0, 10) ?? 'range end'}`;
+  return <aside className="grid content-start gap-4 lg:sticky lg:top-24 lg:self-start"><Card><CardHeader><CardTitle>Live preview</CardTitle><Badge variant={totalIssues ? 'warning' : 'success'} size="sm">{totalIssues ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'}` : 'Valid'}</Badge></CardHeader><CardContent><div className="min-h-56 rounded-xl border border-border bg-bg-elevated/30 p-2"><ManagedChartRuntime chart={draft} ctx={ctx} height={260} /></div><p className="mt-3 text-xs text-fg-tertiary">{contextLabel}. This preview uses the unsaved draft and the production chart renderer.</p></CardContent></Card><Card><CardHeader><CardTitle>Diagnostics</CardTitle></CardHeader><CardContent className="grid gap-2 text-xs">{errors.map((error) => <div key={`${error.path}-${error.message}`} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">{error.path}</strong><p className="mt-1 text-fg-secondary">{error.message}</p></div>)}{sourceErrors.map((error, index) => <div key={index} className="rounded-lg border border-danger/30 bg-danger/10 p-2"><strong className="text-danger">Data request</strong><p className="mt-1 text-fg-secondary">{error instanceof Error ? error.message : 'Data request failed.'}</p></div>)}{totalIssues === 0 ? <><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {datasets.length} data group{datasets.length === 1 ? '' : 's'}</div><div className="flex items-center gap-2 text-success"><Check className="h-4 w-4" /> {draft.config.series.length} curves</div></> : null}</CardContent></Card></aside>;
 }
 
 function EditorCard({ title, description, children }: { title: string; description: string; children: React.ReactNode }) { return <Card><CardHeader><div><CardTitle>{title}</CardTitle><p className="mt-1 text-sm text-fg-tertiary">{description}</p></div></CardHeader><CardContent>{children}</CardContent></Card>; }
 function EditorField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="grid gap-1"><span className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">{label}</span>{children}{hint ? <span className="text-xs text-fg-tertiary">{hint}</span> : null}</label>; }
 function ToggleRow({ label, description, checked, onCheckedChange }: { label: string; description?: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) { return <div className="flex min-h-11 items-center justify-between gap-4 rounded-lg border border-border bg-bg-elevated/30 px-3 py-2"><div><p className="text-sm font-medium text-fg">{label}</p>{description ? <p className="mt-0.5 text-xs text-fg-tertiary">{description}</p> : null}</div><Switch checked={checked} onChange={onCheckedChange} aria-label={label} /></div>; }
-function ReadOnlyFact({ label, value }: { label: string; value: string }) { return <div className="rounded-lg border border-border bg-bg-elevated/30 px-3 py-2"><span className="text-[11px] font-medium uppercase tracking-wide text-fg-tertiary">{label}</span><p className="mt-1 text-sm text-fg">{value}</p></div>; }
-
-type SearchOption = { value: string; label: string; description?: string };
+type SearchOption = { value: string; label: string; description?: string; disabled?: boolean; disabledReason?: string };
 function SearchPicker({ value, options, onChange, ariaLabel }: { value: string; options: SearchOption[]; onChange: (value: string) => void; ariaLabel: string }) {
   const [query, setQuery] = React.useState('');
   const [open, setOpen] = React.useState(false);
   const selected = options.find((option) => option.value === value);
   const filtered = options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="relative"><button type="button" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className="editor-input flex min-h-10 items-center justify-between gap-2 text-left"><span className="min-w-0"><span className="block truncate text-sm text-fg">{selected?.label ?? 'Choose a field'}</span>{selected?.description ? <span className="block truncate text-xs text-fg-tertiary">{selected.description}</span> : null}</span><Search className="h-4 w-4 shrink-0 text-fg-tertiary" /></button>{open ? <div className="absolute inset-x-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-border bg-bg-surface shadow-lg"><div className="border-b border-border p-2"><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }} placeholder="Search…" aria-label={`Search ${ariaLabel}`} className="editor-input" /></div><div role="listbox" aria-label={ariaLabel} className="max-h-64 overflow-y-auto p-1">{filtered.map((option) => <button key={option.value} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setQuery(''); setOpen(false); }} className={`block w-full rounded-md px-3 py-2 text-left ${option.value === value ? 'bg-accent/10 text-accent' : 'text-fg hover:bg-bg-elevated'}`}><span className="block text-sm font-medium">{option.label}</span>{option.description ? <span className="block text-xs text-fg-tertiary">{option.description}</span> : null}</button>)}{filtered.length === 0 ? <p className="px-3 py-5 text-center text-sm text-fg-tertiary">No matching fields</p> : null}</div></div> : null}</div>;
+  return <div className="relative"><button type="button" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} className="editor-input flex min-h-10 items-center justify-between gap-2 text-left"><span className="min-w-0"><span className="block truncate text-sm text-fg">{selected?.label ?? 'Choose a field'}</span>{selected?.description ? <span className="block truncate text-xs text-fg-tertiary">{selected.description}</span> : null}</span><Search className="h-4 w-4 shrink-0 text-fg-tertiary" /></button>{open ? <div className="absolute inset-x-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-border bg-bg-surface shadow-lg"><div className="border-b border-border p-2"><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }} placeholder="Search…" aria-label={`Search ${ariaLabel}`} className="editor-input" /></div><div role="listbox" aria-label={ariaLabel} className="max-h-64 overflow-y-auto p-1">{filtered.map((option) => <button key={option.value} type="button" role="option" disabled={option.disabled} title={option.disabledReason} aria-selected={option.value === value} onClick={() => { if (option.disabled) return; onChange(option.value); setQuery(''); setOpen(false); }} className={`block w-full rounded-md px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-45 ${option.value === value ? 'bg-accent/10 text-accent' : 'text-fg hover:bg-bg-elevated'}`}><span className="block text-sm font-medium">{option.label}</span>{option.description ? <span className="block text-xs text-fg-tertiary">{option.description}</span> : null}{option.disabledReason ? <span className="block text-xs text-warning">{option.disabledReason}</span> : null}</button>)}{filtered.length === 0 ? <p className="px-3 py-5 text-center text-sm text-fg-tertiary">No matching fields</p> : null}</div></div> : null}</div>;
 }
 
-function compatibleFields(manifest: ChartSourceManifest, role: 'x' | 'y') { return manifest.fields.filter((field) => field.roles.includes(role)); }
-function replacePrimarySource(definition: ChartDefinitionV1, manifest: ChartSourceManifest, metrics: MetricCatalogEntry[]): ChartDefinitionV1 {
-  const current = definition.sources[0];
-  const xFields = compatibleFields(manifest, 'x');
-  const yFields = compatibleFields(manifest, 'y');
-  const x = xFields.find((field) => definition.x.field.sourceBindingId === current?.id && field.id === definition.x.field.field) ?? xFields[0];
-  const currentPrimarySeries = definition.series.find((series) => series.y.sourceBindingId === current?.id);
-  const y = yFields.find((field) => field.id === currentPrimarySeries?.y.field) ?? yFields[0];
-  if (!current || !x || !y) return definition;
-  const metric = manifest.id === 'metrics.series' ? metrics.find((candidate) => candidate.id === y.id && candidate.supports_series) : undefined;
-  const baseInheritance = { vehicle: current.inherit.vehicle, timeframe: current.inherit.timeframe };
-  const source = { ...current, sourceId: manifest.id, params: metric ? { metric: metric.id } : {}, filters: [], inherit: { ...baseInheritance, ...(manifest.supportsTripTagInheritance && current.inherit.tripTags !== undefined ? { tripTags: current.inherit.tripTags } : {}) } };
-  return {
-    ...definition,
-    sources: [source, ...definition.sources.slice(1)],
-    x: definition.x.field.sourceBindingId === current.id ? { ...definition.x, field: { sourceBindingId: source.id, field: x.id }, kind: x.kind, ...(x.unit ? { unit: x.unit } : {}) } : definition.x,
-    series: definition.series.map((series) => {
-      if (series.y.sourceBindingId !== current.id) return series;
-      const compatible = manifest.id === 'metrics.series' ? y : yFields.find((field) => field.id === series.y.field) ?? y;
-      const next = { ...series };
-      if (next.x?.sourceBindingId === current.id) delete next.x;
-      return { ...next, label: compatible.label, y: { sourceBindingId: source.id, field: compatible.id } };
-    }),
-  };
-}
-
-function metricDescription(metric: MetricCatalogEntry) { return [metric.source, metric.unit ?? 'unitless'].join(' · '); }
-function buildSeriesChoices(definition: ChartDefinitionV1, manifests: ChartSourceManifest[], metrics: MetricCatalogEntry[]): SearchOption[] {
-  const specialized = definition.sources.flatMap((binding) => {
-    if (binding.sourceId === 'metrics.series') return [];
-    const manifest = manifests.find((candidate) => candidate.id === binding.sourceId);
-    return (manifest ? compatibleFields(manifest, 'y') : []).map((field) => ({ value: `field:${binding.id}:${field.id}`, label: field.label, description: `${manifest?.category ?? 'source'} · ${field.unit ?? 'unitless'}` }));
-  });
-  const metricChoices = metrics.filter((metric) => metric.supports_series).map((metric) => ({ value: `metric:${metric.id}`, label: metric.label, description: metricDescription(metric) }));
-  return [...metricChoices, ...specialized];
-}
 function choiceValueForSeries(series: ChartSeriesDefinition, definition: ChartDefinitionV1) {
   const binding = definition.sources.find((source) => source.id === series.y.sourceBindingId);
-  return binding?.sourceId === 'metrics.series' ? `metric:${String(binding.params.metric ?? series.y.field)}` : `field:${series.y.sourceBindingId}:${series.y.field}`;
+  return binding?.sourceId === 'metrics.series' ? `metric:${String(binding.params.metric ?? series.y.field)}` : `field:${binding?.sourceId ?? series.y.sourceBindingId}:${series.y.field}`;
 }
 function makeMetricBinding(metric: MetricCatalogEntry, index: number) { return { id: `metric-${metric.id}-${index + 1}`, sourceId: 'metrics.series', params: { metric: metric.id }, filters: [], inherit: { vehicle: true, timeframe: true } }; }
 function applySeriesChoice(definition: ChartDefinitionV1, index: number, choice: string, manifests: ChartSourceManifest[], metrics: MetricCatalogEntry[], onNotice: (notice: string | null) => void): ChartDefinitionV1 {
-  if (choice.startsWith('field:')) {
-    const [, sourceBindingId, field] = choice.split(':');
-    const binding = definition.sources.find((source) => source.id === sourceBindingId);
-    const manifest = manifests.find((candidate) => candidate.id === binding?.sourceId);
-    const fieldDefinition = manifest?.fields.find((candidate) => candidate.id === field);
-    if (!sourceBindingId || !field || !fieldDefinition) return definition;
-    return { ...definition, series: definition.series.map((series, seriesIndex) => seriesIndex === index ? { ...series, label: fieldDefinition.label, y: { sourceBindingId, field } } : series) };
+  const changesSharedDomain = definition.series.length === 1;
+  const compatibilityDefinition = changesSharedDomain ? { ...definition, series: [] } : definition;
+  const selected = buildCurveCatalog(manifests, metrics, compatibilityDefinition).find((option) => option.id === choice);
+  if (!selected || !selected.enabled || !selected.field) {
+    onNotice(selected?.disabledReason ?? 'That curve is not available for this chart.');
+    return definition;
   }
-  const metricId = choice.replace(/^metric:/, '');
-  const metric = metrics.find((candidate) => candidate.id === metricId && candidate.supports_series);
-  if (!metric) return definition;
-  let binding = definition.sources.find((source) => source.sourceId === 'metrics.series' && source.params.metric === metric.id);
+
+  let binding: ChartSourceBinding | undefined = selected.sourceId === 'metrics.series'
+    ? definition.sources.find((source) => source.sourceId === selected.sourceId && source.params.metric === selected.field)
+    : definition.sources.find((source) => source.sourceId === selected.sourceId);
   let sources = definition.sources;
   if (!binding) {
-    if (sources.length >= 4) { onNotice('This chart already uses the four-source limit. Remove or reuse a source before selecting another metric.'); return definition; }
-    binding = makeMetricBinding(metric, sources.length);
+    if (sources.length >= 4) {
+      onNotice('This chart can combine up to four data groups. Remove a curve that uses another group before adding this one.');
+      return definition;
+    }
+    if (selected.sourceId === 'metrics.series') {
+      const metric = metrics.find((candidate) => candidate.id === selected.field && candidate.supports_series);
+      if (!metric) return definition;
+      binding = makeMetricBinding(metric, sources.length);
+    } else {
+      const manifest = manifests.find((candidate) => candidate.id === selected.sourceId);
+      binding = {
+        id: `source-${selected.sourceId}-${sources.length + 1}`,
+        sourceId: selected.sourceId,
+        params: {},
+        filters: [],
+        inherit: { vehicle: true, timeframe: true, ...(manifest?.supportsTripTagInheritance ? { tripTags: true } : {}) },
+      };
+    }
     sources = [...sources, binding];
   }
+
+  const resolvedBinding = binding;
+  const series = definition.series.map((curve, seriesIndex) => seriesIndex === index ? {
+    ...curve,
+    label: selected.label,
+    x: { sourceBindingId: resolvedBinding.id, field: selected.domainKey },
+    y: { sourceBindingId: resolvedBinding.id, field: selected.field! },
+  } : curve);
+  const xWithoutUnit = { ...definition.x };
+  delete xWithoutUnit.unit;
+  const x = changesSharedDomain ? {
+    ...xWithoutUnit,
+    field: { sourceBindingId: resolvedBinding.id, field: selected.domainKey },
+    kind: selected.domainKind,
+    ...(selected.domainUnit ? { unit: selected.domainUnit } : {}),
+  } : definition.x;
+  const referenced = new Set([x.field.sourceBindingId, ...series.flatMap((curve) => [curve.y.sourceBindingId, ...(curve.x ? [curve.x.sourceBindingId] : [])])]);
   onNotice(null);
-  return { ...definition, sources, series: definition.series.map((series, seriesIndex) => seriesIndex === index ? { ...series, label: metric.label, y: { sourceBindingId: binding!.id, field: metric.id }, x: { sourceBindingId: binding!.id, field: 'timestamp' } } : series) };
+  return { ...definition, x, sources: sources.filter((source) => referenced.has(source.id)), series };
 }
 function addSeriesFromChoice(definition: ChartDefinitionV1, choice: string | undefined, manifests: ChartSourceManifest[], metrics: MetricCatalogEntry[], onNotice: (notice: string | null) => void) {
   if (!choice) return definition;
+  const selected = buildCurveCatalog(manifests, metrics, definition).find((option) => option.id === choice);
+  if (!selected?.enabled) {
+    onNotice(selected?.disabledReason ?? 'That curve is not available for this chart.');
+    return definition;
+  }
   const seed = newSeries(definition, definition.series[0]?.y.field ?? 'value', definition.series.length);
   return applySeriesChoice({ ...definition, series: [...definition.series, seed] }, definition.series.length, choice, manifests, metrics, onNotice);
 }

@@ -27,6 +27,16 @@ describe('RichTimeSeriesChart paths', () => {
     expect(supporting.paths).toBeUndefined();
   });
 
+  it('applies step interpolation to only the curve that requests it', () => {
+    const [line, step] = buildRichTimeSeriesUPlotSeries([
+      { key: 'line', label: 'Line', values: [1, 2, 3] },
+      { key: 'step', label: 'Step', values: [1, 2, 3], interpolation: 'step' },
+    ], { smoothness: 'straight' }).slice(1);
+
+    expect(line?.paths).toBeUndefined();
+    expect(step?.paths).toBeDefined();
+  });
+
   it('configures dense curved data without inspecting every point during path selection', () => {
     const denseValues = Array.from({ length: 50_000 }, (_, index) => index % 97);
     const series = buildRichTimeSeriesUPlotSeries(

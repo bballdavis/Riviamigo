@@ -29,10 +29,8 @@ export const CHART_COLOR_OPTIONS = [
 export type ChartColorKey = (typeof CHART_COLOR_OPTIONS)[number]['value'];
 
 export function getChartColor(value: string | null | undefined) {
-  return (
-    CHART_COLOR_OPTIONS.find((option) => option.value === value)?.color ??
-    CHART_COLOR_OPTIONS[0].color
-  );
+  if (value === 'accent') return CHART_COLORS.accent;
+  return CHART_COLORS[value as keyof typeof CHART_COLORS] ?? CHART_COLORS.accent;
 }
 
 export const CHART_MARGINS = {

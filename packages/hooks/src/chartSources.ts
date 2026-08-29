@@ -71,12 +71,34 @@ function valueFor(row: Record<string, unknown>, field: string, binding: ChartSou
   return typeof metric === 'string' && metric === field ? row.value : null;
 }
 
-function normalizeDataset(raw: unknown, binding: ChartSourceBinding, definition: ChartDefinitionV1): ChartDataset {
+export function normalizeChartDataset(raw: unknown, binding: ChartSourceBinding, definition: ChartDefinitionV1): ChartDataset {
   const rows = rowsFrom(raw);
-  const xField = definition.x.field.field;
-  const domainValues = rows.map((row) => valueFor(row, xField, binding)).filter((value): value is string | number => typeof value === 'string' || typeof value === 'number');
+  const bindingSeries = definition.series.filter((series) => series.y.sourceBindingId === binding.id);
+  const xField = definition.x.field.sourceBindingId === binding.id
+    ? definition.x.field.field
+    : bindingSeries.find((series) => series.x?.sourceBindingId === binding.id)?.x?.field ?? definition.x.field.field;
+  const requiredFields = new Set<string>([xField, ...bindingSeries.map((series) => series.y.field)]);
+  for (const series of definition.series) {
+    if (series.x?.sourceBindingId === binding.id) requiredFields.add(series.x.field);
+  }
+  const normalizedRows = rows.filter((row) => {
+    const value = valueFor(row, xField, binding);
+    return typeof value === 'string' || typeof value === 'number';
+  });
+  const domainValues = normalizedRows.map((row) => valueFor(row, xField, binding) as string | number);
   const fields: Record<string, ChartDatasetField> = {};
-  for (const series of definition.series) fields[series.y.field] = { kind: 'number', values: rows.map((row) => { const value = valueFor(row, series.y.field, binding); return typeof value === 'string' || typeof value === 'number' ? value : null; }) };
+  for (const fieldName of requiredFields) {
+    const series = definition.series.find((candidate) => candidate.y.field === fieldName);
+    const xSeries = definition.series.find((candidate) => candidate.x?.field === fieldName && candidate.x.sourceBindingId === binding.id);
+    const kind = xSeries ? definition.x.kind : series ? 'number' : definition.x.kind;
+    fields[fieldName] = {
+      kind,
+      values: normalizedRows.map((row) => {
+        const value = valueFor(row, fieldName, binding);
+        return typeof value === 'string' || typeof value === 'number' ? value : null;
+      }),
+    };
+  }
   return { sourceBindingId: binding.id, domain: { kind: definition.x.kind, field: xField, values: domainValues }, fields, meta: { sourceId: binding.sourceId, sampled: false, partial: false, sourcePointCount: rows.length } };
 }
 
@@ -94,6 +116,6 @@ export function useChartDatasets(definition: ChartDefinitionV1 | null, context: 
     staleTime: 2 * 60 * 1000,
     meta: { persist: false },
   })) });
-  const datasets = results.map((result, index) => result.data === undefined || !definition ? null : normalizeDataset(result.data, bindings[index]!, definition)).filter((dataset): dataset is ChartDataset => dataset !== null);
+  const datasets = results.map((result, index) => result.data === undefined || !definition ? null : normalizeChartDataset(result.data, bindings[index]!, definition)).filter((dataset): dataset is ChartDataset => dataset !== null);
   return { datasets, results, isLoading: results.some((result) => result.isLoading), isFetching: results.some((result) => result.isFetching), isPartial: results.some((result) => result.isError), errors: results.map((result) => result.error).filter(Boolean) };
 }

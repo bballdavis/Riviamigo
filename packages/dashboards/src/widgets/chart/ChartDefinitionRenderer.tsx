@@ -9,17 +9,34 @@ export interface ChartDefinitionRendererProps {
   datasets: ChartDataset[];
   height: number;
   loading?: boolean;
+  partial?: boolean;
+  refreshing?: boolean;
+  error?: boolean;
   presentation?: 'embedded' | 'mobile-viewer';
 }
 
-function domainKey(value: string | number): string {
-  return typeof value === 'number' ? `n:${value}` : `s:${value}`;
+function domainKey(value: string | number, kind: ChartDefinitionV1['x']['kind']): string {
+  if (kind === 'time') {
+    const parsed = typeof value === 'number' ? value : Date.parse(value);
+    if (Number.isFinite(parsed)) return `t:${parsed > 10_000_000_000 ? parsed : parsed * 1000}`;
+  }
+  if (kind === 'number') {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (Number.isFinite(parsed)) return `n:${parsed}`;
+  }
+  return `${typeof value === 'number' ? 'n' : 's'}:${value}`;
 }
 
 function compareDomainValues(left: string | number, right: string | number, kind: ChartDefinitionV1['x']['kind']) {
   if (kind === 'category') return 0;
-  const leftValue = typeof left === 'number' ? left : Date.parse(left);
-  const rightValue = typeof right === 'number' ? right : Date.parse(right);
+  const normalize = (value: string | number) => {
+    const parsed = typeof value === 'number' ? value : Date.parse(value);
+    if (!Number.isFinite(parsed)) return parsed;
+    if (kind === 'time') return parsed > 10_000_000_000 ? parsed / 1000 : parsed;
+    return parsed;
+  };
+  const leftValue = normalize(left);
+  const rightValue = normalize(right);
   return Number.isFinite(leftValue) && Number.isFinite(rightValue) ? leftValue - rightValue : String(left).localeCompare(String(right));
 }
 
@@ -27,19 +44,19 @@ function numericValuesForDomain(dataset: ChartDataset, fieldName: string, domain
   const field = dataset.fields[fieldName];
   if (!field) return [];
   const sourceDomain = xField ? dataset.fields[xField]?.values : dataset.domain.values;
-  const byX = new Map((sourceDomain ?? []).flatMap((value, index) => value == null ? [] : [[domainKey(value), field.values[index]] as const]));
+  const byX = new Map((sourceDomain ?? []).flatMap((value, index) => value == null ? [] : [[domainKey(value, dataset.domain.kind), field.values[index]] as const]));
   return domain.map((value) => {
-    const candidate = byX.get(domainKey(value));
+    const candidate = byX.get(domainKey(value, dataset.domain.kind));
     return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : null;
   });
 }
 
-export function ChartDefinitionRenderer({ definition, datasets, height, loading = false, presentation = 'embedded' }: ChartDefinitionRendererProps) {
+export function ChartDefinitionRenderer({ definition, datasets, height, loading = false, partial = false, refreshing = false, error = false, presentation = 'embedded' }: ChartDefinitionRendererProps) {
   const isDark = useDocumentTheme();
   const primary = datasets[0];
   // Keep one shared X domain for uPlot, retaining samples from every source and
   // filling gaps rather than pairing values by array index.
-  const domain = Array.from(new Map(datasets.flatMap((dataset) => dataset.domain.values).map((value) => [domainKey(value), value])).values());
+  const domain = Array.from(new Map(datasets.flatMap((dataset) => dataset.domain.values).map((value) => [domainKey(value, definition.x.kind), value])).values());
   if (definition.x.kind !== 'category') domain.sort((left, right) => compareDomainValues(left, right, definition.x.kind));
   const points = domain.map((value) => ({ ts: value }));
   const series = definition.series.flatMap((definitionSeries) => {
@@ -58,15 +75,16 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
       yScale: definitionSeries.yAxis,
       stackId: definitionSeries.stackId,
       showInLegend: definitionSeries.visibleInLegend,
+      interpolation: definitionSeries.mark === 'step' ? 'step' as const : undefined,
     }];
   }) as unknown as RichSeries[];
   if (!primary || series.length === 0) {
-    return <div className="flex items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary" style={{ height }}>{loading ? 'Loading chart data…' : definition.display.emptyTitle ?? 'No chart data available'}</div>;
+    return <div role={error ? 'alert' : 'status'} className="flex items-center justify-center rounded-lg border border-dashed border-border text-xs text-fg-tertiary" style={{ height }}>{loading ? 'Loading chart data…' : error ? 'Unable to load chart data.' : definition.display.emptyTitle ?? 'No chart data available'}</div>;
   }
   const numericRange = (axis: ChartDefinitionV1['axes'][keyof ChartDefinitionV1['axes']]) => (
     axis?.domain.mode === 'fixed' ? [axis.domain.min, axis.domain.max] as [number, number] : undefined
   );
-  return <RichTimeSeriesChart
+  return <div className="relative"><RichTimeSeriesChart
     points={points}
     series={series}
     height={height}
@@ -89,7 +107,6 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
     showPoints={definition.display.showPoints ?? false}
     emptyTitle={definition.display.emptyTitle}
     emptyDescription={definition.display.emptyDescription}
-    stepInterpolation={definition.series.some((item) => item.mark === 'step')}
     connectGaps={definition.interaction.connectGaps}
     referenceLines={(definition.annotations ?? []).filter((item) => item.kind === 'horizontal_reference_line').map((item) => ({
       value: item.value,
@@ -97,5 +114,5 @@ export function ChartDefinitionRenderer({ definition, datasets, height, loading 
       color: item.color.mode === 'token' ? getChartColor(item.color.token) : isDark ? item.color.dark : item.color.light,
     }))}
     interactionMode={presentation === 'mobile-viewer' ? 'touch-explore' : 'standard'}
-  />;
+  />{partial || refreshing ? <div role="status" className="pointer-events-none absolute right-2 top-2 rounded-md border border-border bg-bg-surface/90 px-2 py-1 text-[11px] text-fg-tertiary shadow-sm">{partial ? 'Some data is unavailable' : 'Updating chart…'}</div> : null}</div>;
 }

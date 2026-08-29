@@ -275,6 +275,10 @@ Bad examples:
 
 When a chart is presented on both a dashboard and a dedicated detail page, share the typed chart component and data transform. Both surfaces should consume the same validated source rows and timeframe rather than maintaining separate chart-only aggregation paths.
 
+Chart authoring is curve-first. The standard editor exposes **Basics**, **Curves**, **Display**, and **Advanced**; it does not ask authors to assemble source bindings or a domain separately. The first selected curve establishes the shared domain (for example, over time, by mileage, or by state of charge), subsequent choices reuse compatible data groups, and incompatible curves remain visible with an explanation. A chart may combine up to four data groups. Mixed-domain legacy/YAML definitions remain unchanged and are edited through Advanced rather than silently normalized.
+
+Preview the unsaved definition through `ManagedChartRuntime`, the same production registry used by fixed and assignment-driven dashboard catalogs. A bundled definition may use its specialized renderer only when the complete render-affecting definition is compatible; placements and other catalog metadata do not affect that decision. Custom or edited definitions fall back to the generic definition renderer. Both paths must resolve chart tokens to concrete canvas colors and align multi-source values by their X coordinate.
+
 ## File Placement Checklist
 
 ### New built-in dashboard page

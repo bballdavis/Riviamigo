@@ -136,6 +136,7 @@ If multiple widgets need shared derived data, move that derivation to a hook or 
 
 The shared chart widget owns reusable chart display controls.
 
+- Fixed and assignment-driven catalogs are data providers for one shared chart frame; they must not fork picker, settings, measured plot, mobile viewer, or focus behavior. The persisted Overview slug `dashboard` resolves chart assignments through the runtime placement `overview`, but that mapping does not authorize Overview-specific chart chrome or rendering.
 - Persist chart display settings per chart ID inside widget `options.chartSettings`, not as route-local state.
 - Keep legacy `curveSmoothing` read compatibility, but write new edits through the per-chart settings map.
 - The shared settings panel groups display filtering, curve shaping, and supported axis ranges into collapsible sections. Display filtering and smoothing apply to every compatible curve in the active chart; a series may opt out only when its data semantics require it.

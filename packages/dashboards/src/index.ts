@@ -5,7 +5,7 @@ export { DashboardRenderer } from './DashboardRenderer';
 export { DashboardGrid } from './DashboardGrid';
 export { WidgetHost } from './WidgetHost';
 export { WidgetChrome } from './WidgetChrome';
-export { DashboardChartWidget, DashboardChartRenderer } from './widgets/chart/DashboardChartWidget';
+export { DashboardChartWidget, DashboardChartRenderer, ManagedChartRuntime } from './widgets/chart/DashboardChartWidget';
 export { ChartDefinitionRenderer } from './widgets/chart/ChartDefinitionRenderer';
 export { TripTagPicker } from './widgets/table/TripTagPicker';
 export { PhantomDrainChart, buildPhantomDrainDailySeries } from './widgets/chart/PhantomDrainChart';
@@ -22,7 +22,8 @@ export { getChartDefinition, getChartDefinitions, getChartOptions, getChartSetti
 export { parseSafeMathExpression, resolveSafeExpression, resolveSafeNumberPath } from './charts/expressions';
 export { BUNDLED_CHART_DEFINITIONS, BUNDLED_CHART_SLUGS, getBundledChartDefinition } from './charts/defaults';
 export { CHART_SOURCE_MANIFESTS, getChartSourceManifest, resolveChartSourceCapabilities } from './charts/sources';
-export { CHART_RENDERER_PLUGINS, getChartRenderer } from './charts/rendererRegistry';
+export { buildCurveCatalog, domainSignature, isMixedDomain, removeCurveAndUnusedSources, sharedDomain } from './charts/curveCatalog';
+export { CHART_RENDERER_PLUGINS, SPECIALIZED_RENDERER_COMPATIBILITY, getChartRenderer, supportsSpecializedChartRenderer } from './charts/rendererRegistry';
 export {
   buildChartManagerEntries,
   chartHasPlacement,
