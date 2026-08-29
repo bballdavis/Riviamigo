@@ -87,6 +87,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     config: defaultDefinition(),
   } : null);
   const [advancedText, setAdvancedText] = React.useState('');
+  const [advancedError, setAdvancedError] = React.useState<{ path: string; message: string } | null>(null);
   const [dirty, setDirty] = React.useState(mode === 'new');
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [discardRequested, setDiscardRequested] = React.useState(false);
@@ -111,12 +112,13 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     const next = configRecord(entry.effective);
     setDraft(next);
     setAdvancedText(JSON.stringify(next.config, null, 2));
+    setAdvancedError(null);
   }, [dirty, entry, mode]);
 
   React.useEffect(() => {
-    if (!draft || advancedText) return;
+    if (!draft) return;
     setAdvancedText(JSON.stringify(draft.config, null, 2));
-  }, [advancedText, draft]);
+  }, [draft]);
 
   React.useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
@@ -151,14 +153,19 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
 
   const validationErrors = React.useMemo(() => {
     if (!draft) return [{ path: 'chart', message: 'Chart draft is not available.' }];
+    if (advancedError) return [advancedError, ...validateDraftConfig(draft.config, manifests)];
+    return validateDraftConfig(draft.config, manifests);
+  }, [advancedError, draft, manifests]);
+
+  function validateDraftConfig(config: ChartDefinitionV1, sourceManifests: typeof manifests) {
     try {
-      const parsed = ChartDefinitionV1Schema.safeParse(draft.config);
+      const parsed = ChartDefinitionV1Schema.safeParse(config);
       if (!parsed.success) return parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message }));
-      return validateChartDefinitionAgainstSources(draft.config, manifests);
+      return validateChartDefinitionAgainstSources(config, sourceManifests);
     } catch (error) {
       return [{ path: 'config', message: errorText(error) }];
     }
-  }, [draft, manifests]);
+  }
 
   function updateDraft(patch: Partial<ChartRecord>) {
     setDraft((current) => current ? { ...current, ...patch } : current);
@@ -168,6 +175,7 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
 
   function updateDefinition(mutator: (definition: ChartDefinitionV1) => ChartDefinitionV1) {
     setDraft((current) => current ? { ...current, config: mutator(current.config) } : current);
+    setAdvancedError(null);
     setDirty(true);
     setSaveError(null);
   }
@@ -190,7 +198,8 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
     if (!draft) return;
     if (validationErrors.length > 0) {
       setSaveError(`Fix ${validationErrors.length} validation error${validationErrors.length === 1 ? '' : 's'} before saving.`);
-      setSection(validationErrors[0]?.path.startsWith('config.sources') || validationErrors[0]?.path.startsWith('config.series') ? 'curves' : 'display');
+      const firstPath = validationErrors[0]?.path ?? '';
+      setSection(firstPath === 'advanced' ? 'advanced' : firstPath.startsWith('config.sources') || firstPath.startsWith('config.series') ? 'curves' : 'display');
       return;
     }
     try {
@@ -248,7 +257,22 @@ export function ChartEditorPage({ mode, chartId }: { mode: 'new' | 'edit'; chart
           {section === 'basics' && <BasicsSection draft={draft} onChange={updateDraft} />}
           {section === 'curves' && <CurvesSection definition={draft.config} manifests={manifests} metrics={metricCatalog.data ?? []} onNotice={setSourceNotice} onChange={updateDefinition} />}
           {section === 'display' && <DisplaySection definition={draft.config} onChange={updateDefinition} />}
-          {section === 'advanced' && <AdvancedSection value={advancedText} onChange={(value) => { setAdvancedText(value); try { updateDefinition(() => ChartDefinitionV1Schema.parse(JSON.parse(value)) as ChartDefinitionV1); } catch { setDirty(true); } }} />}
+          {section === 'advanced' && <AdvancedSection value={advancedText} onChange={(value) => {
+            setAdvancedText(value);
+            try {
+              const parsed = ChartDefinitionV1Schema.safeParse(JSON.parse(value));
+              if (!parsed.success) {
+                setAdvancedError({ path: 'advanced', message: parsed.error.issues.map((issue) => `${issue.path.join('.') || 'config'}: ${issue.message}`).join('; ') });
+                setDirty(true);
+                return;
+              }
+              setAdvancedError(null);
+              updateDefinition(() => parsed.data as ChartDefinitionV1);
+            } catch (error) {
+              setAdvancedError({ path: 'advanced', message: error instanceof Error ? error.message : 'Invalid JSON.' });
+              setDirty(true);
+            }
+          }} />}
         </section>
       </main>
       {discardRequested ? <div className="fixed inset-0 z-[70] flex items-stretch justify-center bg-bg-page/85 sm:items-center sm:p-4"><div ref={discardDialogRef} role="dialog" aria-modal="true" aria-labelledby="discard-chart-title" className="flex min-h-[100dvh] w-full flex-col bg-bg-surface p-[max(1.25rem,env(safe-area-inset-top))] shadow-lg sm:min-h-0 sm:max-w-md sm:rounded-xl sm:border sm:border-border sm:p-5"><h2 id="discard-chart-title" className="text-base font-semibold">Discard unsaved changes?</h2><p className="mt-2 text-sm text-fg-tertiary">Your chart draft will not be saved.</p><div className="mt-auto flex flex-col-reverse gap-2 pt-6 sm:mt-5 sm:flex-row sm:justify-end"><Button type="button" variant="secondary" size="md" onClick={() => setDiscardRequested(false)}>Keep editing</Button><Button type="button" variant="danger" size="md" onClick={discardAndGoBack}>Discard changes</Button></div></div></div> : null}
