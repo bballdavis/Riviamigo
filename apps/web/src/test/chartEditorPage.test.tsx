@@ -1,5 +1,5 @@
 import React from 'react';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChartEditorPage } from '../features/charts/editor/ChartEditorPage';
 
@@ -24,7 +24,7 @@ vi.mock('@riviamigo/dashboards', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@riviamigo/dashboards')>();
   return {
     ...actual,
-    ManagedChartRuntime: ({ chart }: { chart: { slug: string } }) => <div data-testid="managed-chart-runtime">{chart.slug}</div>,
+    ManagedChartRuntime: ({ chart, height }: { chart: { slug: string }; height: number }) => <div data-testid="managed-chart-runtime" data-chart-height={height}>{chart.slug}</div>,
   };
 });
 
@@ -66,5 +66,26 @@ describe('ChartEditorPage preview data flow', () => {
 
     expect(chartDatasetMock.mock.calls.at(-1)?.[0]).toBeNull();
     view.unmount();
+  });
+
+  it('renders the live preview at double height inside a 95 percent-width wrapper', () => {
+    render(<ChartEditorPage mode="new" />);
+
+    const chart = screen.getByTestId('managed-chart-runtime');
+    expect(chart).toHaveAttribute('data-chart-height', '520');
+    expect(chart.parentElement).toHaveClass('mx-auto', 'w-[95%]');
+  });
+
+  it('defaults the add-curve list to available curves and allows showing all', () => {
+    render(<ChartEditorPage mode="new" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'curves' }));
+    fireEvent.click(screen.getByText('Add curve'));
+
+    const filter = screen.getByRole('button', { name: 'Showing available curves only' });
+    expect(filter).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(filter);
+    expect(screen.getByRole('button', { name: 'Showing all curves' })).toHaveAttribute('aria-pressed', 'false');
   });
 });
